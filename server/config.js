@@ -21,6 +21,31 @@ export const PROVIDERS = [
 /** Providers that will not start without a base URL of their own. */
 const NEEDS_BASE_URL = new Set(['custom', 'azureOpenAI']);
 
+export const VIEWPORT_PRESETS = {
+	desktop:      { width: 1440, height: 900,  label: 'Desktop',  icon: '🖥️' },
+	tablet:       { width: 768,  height: 1024, label: 'Tablet',   icon: '📋' },
+	mobile:       { width: 375,  height: 812,  label: 'Mobile',   icon: '📱' },
+	mobile_small: { width: 320,  height: 568,  label: 'Mobile S', icon: '📱' }
+};
+
+/** Resolve a viewport string ('desktop') or object ({width,height}) to a concrete {width,height,label}. */
+export function resolveViewport(vp) {
+	if (!vp) return { ...VIEWPORT_PRESETS.desktop };
+	if (typeof vp === 'string') {
+		return VIEWPORT_PRESETS[vp] ? { ...VIEWPORT_PRESETS[vp] } : { ...VIEWPORT_PRESETS.desktop };
+	}
+	if (vp.width && vp.height) {
+		const match = Object.values(VIEWPORT_PRESETS).find(p => p.width === vp.width && p.height === vp.height);
+		return { ...vp, label: match?.label ?? `${vp.width}×${vp.height}`, icon: match?.icon ?? '📐' };
+	}
+	return { ...VIEWPORT_PRESETS.desktop };
+}
+
+/** Return all viewport presets as an array (for UI dropdowns). */
+export function listViewportPresets() {
+	return Object.entries(VIEWPORT_PRESETS).map(([key, vp]) => ({ key, ...vp }));
+}
+
 let stored;
 
 function readStored() {
@@ -48,7 +73,14 @@ function fromEnv() {
 		headless: process.env.QASE_HEADLESS === undefined ? undefined : process.env.QASE_HEADLESS !== 'false',
 		apiToken: process.env.QASE_API_TOKEN,
 		concurrentRuns: process.env.QASE_PARALLEL ? Number(process.env.QASE_PARALLEL) : undefined,
-		retriesCount: process.env.QASE_RETRIES ? Number(process.env.QASE_RETRIES) : undefined
+		retriesCount: process.env.QASE_RETRIES ? Number(process.env.QASE_RETRIES) : undefined,
+		autoSaveWorkflow: process.env.QASE_AUTO_SAVE_WORKFLOW === undefined ? undefined : process.env.QASE_AUTO_SAVE_WORKFLOW !== 'false',
+		autoGenerateTests: process.env.QASE_AUTO_GEN_TESTS === undefined ? undefined : process.env.QASE_AUTO_GEN_TESTS !== 'false',
+		autoSmokeRun: process.env.QASE_AUTO_SMOKE_RUN === undefined ? undefined : process.env.QASE_AUTO_SMOKE_RUN === 'true',
+		autoCreateSchedule: process.env.QASE_AUTO_CREATE_SCHEDULE === undefined ? undefined : process.env.QASE_AUTO_CREATE_SCHEDULE !== 'false',
+		autoDevReport: process.env.QASE_AUTO_DEV_REPORT === undefined ? undefined : process.env.QASE_AUTO_DEV_REPORT !== 'false',
+		exploreViewports: process.env.QASE_EXPLORE_VIEWPORTS === undefined ? undefined : process.env.QASE_EXPLORE_VIEWPORTS !== 'false',
+		defaultScheduleCron: process.env.QASE_DEFAULT_CRON
 	};
 }
 
@@ -61,7 +93,14 @@ const DEFAULTS = {
 	maxTurns: 120,
 	headless: true,
 	concurrentRuns: 3,
-	retriesCount: 1
+	retriesCount: 1,
+	autoSaveWorkflow: true,
+	autoGenerateTests: true,
+	autoSmokeRun: false,
+	autoCreateSchedule: true,
+	autoDevReport: true,
+	exploreViewports: true,
+	defaultScheduleCron: '0 9 * * *'
 };
 
 /** The effective settings the agent runs with. Includes the key — server only. */
@@ -112,6 +151,14 @@ export function getPublicConfig() {
 		headless: config.headless,
 		concurrentRuns: config.concurrentRuns,
 		retriesCount: config.retriesCount,
+		autoSaveWorkflow: config.autoSaveWorkflow,
+		autoGenerateTests: config.autoGenerateTests,
+		autoSmokeRun: config.autoSmokeRun,
+		autoCreateSchedule: config.autoCreateSchedule,
+		autoDevReport: config.autoDevReport,
+		exploreViewports: config.exploreViewports,
+		viewportPresets: listViewportPresets(),
+		defaultScheduleCron: config.defaultScheduleCron,
 		hasApiKey: Boolean(config.apiKey),
 		apiKeyHint: config.apiKey ? `••••${config.apiKey.slice(-4)}` : '',
 		apiKeyFromEnv: Boolean(fromEnv().apiKey) && !readStored().apiKey,
@@ -165,6 +212,14 @@ export function saveConfig(patch) {
 	}
 	if (patch.retriesCount !== undefined) {
 		next.retriesCount = Math.max(0, Math.min(5, Number(patch.retriesCount) || 0));
+	}
+	for (const boolKey of ['autoSaveWorkflow', 'autoGenerateTests', 'autoSmokeRun', 'autoCreateSchedule', 'autoDevReport', 'exploreViewports']) {
+		if (patch[boolKey] !== undefined) {
+			next[boolKey] = Boolean(patch[boolKey]);
+		}
+	}
+	if (typeof patch.defaultScheduleCron === 'string' && patch.defaultScheduleCron.trim()) {
+		next.defaultScheduleCron = patch.defaultScheduleCron.trim();
 	}
 	if (next.provider && !PROVIDERS.includes(next.provider)) {
 		throw new Error(`Unknown provider: ${next.provider}`);

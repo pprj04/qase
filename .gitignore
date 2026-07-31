@@ -26,3 +26,7 @@ npm-debug.log*
 
 # Test screenshots (root)
 /*.png
+
+# Project archive exports (not source)
+qase-project.tar.gz
+qase-project.zip

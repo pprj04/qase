@@ -9,7 +9,7 @@
  * browser, no agent runtime.  The task is structured-data generation.
  */
 
-import { getModelTier } from './config.js';
+import { getModelTier, VIEWPORT_PRESETS } from './config.js';
 
 /* ── Prompt construction ────────────────────────────────────────── */
 
@@ -34,6 +34,15 @@ You must produce 1-5 test cases. Group actions that test a single user flow into
   - preconditions: array of strings (e.g. "User must be logged out")
   - steps: array of { action, target, value, description } — the replay steps
   - assertions: array of { type, target, expected, description }
+  - viewport: the primary viewport for this test ("desktop", "tablet", "mobile", or "mobile_small")
+  - viewports: array of additional viewports to also run this test at (for multi-viewport coverage)
+
+Viewport presets: desktop (1440×900), tablet (768×1024), mobile (375×812), mobile_small (320×568).
+Rules for viewport assignment:
+  - Default to "desktop" if the flow is a standard web interaction.
+  - If the workflow was captured at a specific viewport (e.g. mobile), set that as primary.
+  - For navigation and layout-critical flows, add "tablet" and "mobile" to the viewports array for cross-device coverage.
+  - For forms and input-heavy flows, default to desktop only.
 
 Assertion types you can use:
   - url_is: current URL must exactly match expected
@@ -70,6 +79,8 @@ Respond with ONLY a JSON array of test cases. No markdown, no explanation, just 
 
 Captured workflow: "${workflow.name}" (${workflow.steps.length} steps)
 ${workflowSummary}
+
+Workflow viewport: ${workflow.viewport ? `${workflow.viewport.label ?? JSON.stringify(workflow.viewport)} (${workflow.viewport.width}×${workflow.viewport.height})` : 'desktop (1440×900)'}
 
 Known findings from the original session:
 ${findingsSummary}
@@ -193,27 +204,37 @@ export async function generateTestCasesFromWorkflow(workflow, findings = []) {
 	const parsed = parseTestCases(raw);
 
 	// Normalise each record.
-	return parsed.map(tc => ({
-		name: String(tc.name ?? 'Untitled test case').trim(),
-		severity: ['critical', 'high', 'medium', 'low'].includes(tc.severity) ? tc.severity : 'medium',
-		preconditions: Array.isArray(tc.preconditions)
-			? tc.preconditions.map(String)
-			: typeof tc.preconditions === 'string' ? [tc.preconditions] : [],
-		steps: Array.isArray(tc.steps)
-			? tc.steps.map(s => ({
-				action: String(s.action ?? 'snapshot'),
-				target: s.target ? String(s.target) : undefined,
-				value: s.value !== undefined && s.value !== null ? String(s.value) : undefined,
-				description: String(s.description ?? '')
-			}))
-			: [],
-		assertions: Array.isArray(tc.assertions)
-			? tc.assertions.map(a => ({
-				type: String(a.type ?? 'custom'),
-				target: a.target ? String(a.target) : undefined,
-				expected: String(a.expected ?? ''),
-				description: String(a.description ?? '')
-			}))
-			: []
-	}));
+	return parsed.map(tc => {
+		// Validate viewport against presets
+		const vpKey = typeof tc.viewport === 'string' && VIEWPORT_PRESETS[tc.viewport]
+			? tc.viewport : 'desktop';
+		const extraViewports = Array.isArray(tc.viewports)
+			? tc.viewports.filter(v => typeof v === 'string' && VIEWPORT_PRESETS[v] && v !== vpKey)
+			: [];
+		return {
+			name: String(tc.name ?? 'Untitled test case').trim(),
+			severity: ['critical', 'high', 'medium', 'low'].includes(tc.severity) ? tc.severity : 'medium',
+			preconditions: Array.isArray(tc.preconditions)
+				? tc.preconditions.map(String)
+				: typeof tc.preconditions === 'string' ? [tc.preconditions] : [],
+			steps: Array.isArray(tc.steps)
+				? tc.steps.map(s => ({
+					action: String(s.action ?? 'snapshot'),
+					target: s.target ? String(s.target) : undefined,
+					value: s.value !== undefined && s.value !== null ? String(s.value) : undefined,
+					description: String(s.description ?? '')
+				}))
+				: [],
+			assertions: Array.isArray(tc.assertions)
+				? tc.assertions.map(a => ({
+					type: String(a.type ?? 'custom'),
+					target: a.target ? String(a.target) : undefined,
+					expected: String(a.expected ?? ''),
+					description: String(a.description ?? '')
+				}))
+				: [],
+			viewport: vpKey,
+			viewports: extraViewports
+		};
+	});
 }

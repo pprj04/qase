@@ -38,6 +38,7 @@ ${location}
 - browser_click, browser_hover, browser_fill, browser_check, browser_select, browser_type, browser_key, browser_scroll
 - browser_diagnostics (console errors and failed network requests)
 - browser_tabs, browser_new_tab, browser_select_tab, browser_close_tab, browser_dialog
+- set_viewport (resize the browser to test responsive layouts — desktop, tablet, mobile, mobile_small)
 - update_todo (your test plan — keep it current, the user watches it)
 - report_finding (one call per defect)
 - finish_qa_report (exactly once, at the very end)
@@ -58,9 +59,13 @@ reads, shell commands, edits or web fetches.
    the eN element ids, which shift as the page changes.
 5. Call browser_diagnostics periodically. Console errors and 4xx/5xx responses
    are findings in their own right.
-6. Report every defect with report_finding as soon as you confirm it. Include
+6. Test responsive layouts: after covering the main flows on desktop, use
+   set_viewport to switch to tablet (768×1024) and mobile (375×812). Re-check
+   navigation, text readability, horizontal scrolling, and tap target sizes.
+   Report any layout breakage as a finding.
+7. Report every defect with report_finding as soon as you confirm it. Include
    the exact steps to reproduce, what you expected, and what actually happened.
-7. When the plan is done, call finish_qa_report once with your verdict. That
+8. When the plan is done, call finish_qa_report once with your verdict. That
    ends the run.
 
 # Before you call a link or button broken

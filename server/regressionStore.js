@@ -109,7 +109,9 @@ export function addRegressionRun(summary) {
 			durationMs: r.durationMs,
 			stepCount: r.stepResults?.length ?? 0,
 			assertionCount: r.assertionResults?.length ?? 0,
-			error: r.error
+			error: r.error,
+			viewport: r.viewport ?? null,
+			viewportResults: r.viewportResults ?? null
 		}))
 	};
 

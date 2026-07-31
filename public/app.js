@@ -70,6 +70,8 @@ const el = {
 	tcEditUrl: $('tc-edit-url'),
 	tcEditSuite: $('tc-edit-suite'),
 	tcEditTags: $('tc-edit-tags'),
+	tcEditViewport: $('tc-edit-viewport'),
+	tcEditViewports: $('tc-edit-viewports'),
 	tcEditPrecond: $('tc-edit-precond'),
 	tcStepsList: $('tc-steps-list'),
 	tcAddStep: $('tc-add-step'),
@@ -102,7 +104,11 @@ const el = {
 	bugEditSteps: $('bug-edit-steps'),
 	bugEditExpected: $('bug-edit-expected'),
 	bugEditActual: $('bug-edit-actual'),
-	bugEditEvidence: $('bug-edit-evidence')
+	bugEditEvidence: $('bug-edit-evidence'),
+	pipelinePanel: $('pipeline-panel'),
+	pipelineStages: $('pipeline-stages'),
+	pipelineSummary: $('pipeline-summary'),
+	pipelineRerun: $('pipeline-rerun')
 };
 
 const state = {
@@ -286,6 +292,22 @@ async function selectSession(id) {
 	const session = await api(`/sessions/${id}`);
 	state.session = session;
 
+	// Lazy-load heavy arrays if stripped (large sessions).
+	if (!session.messages && session.messageCount > 0) {
+		const [messages, steps, findings] = await Promise.all([
+			api(`/sessions/${id}/detail?field=messages`).catch(() => []),
+			api(`/sessions/${id}/detail?field=capturedSteps`).catch(() => []),
+			api(`/sessions/${id}/detail?field=findings`).catch(() => [])
+		]);
+		session.messages = messages;
+		session.capturedSteps = steps;
+		session.findings = findings;
+	} else if (!session.messages) {
+		session.messages = session.messages ?? [];
+	}
+	if (!session.capturedSteps) session.capturedSteps = [];
+	if (!session.findings) session.findings = [];
+
 	renderHeader();
 	renderTranscript();
 	resetThinking();
@@ -298,6 +320,8 @@ async function selectSession(id) {
 	await loadTestCases();
 	await loadRegression();
 	await loadMetrics();
+	await loadPipelineFromSession(id);
+	await loadDevIntelFromSession(id);
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -1189,6 +1213,13 @@ const SEVERITY_COLORS = {
 	critical: '#ff4444', high: '#ff8c00', medium: '#0a84ff', low: '#8e8e93'
 };
 
+const VP_PRESETS = {
+	desktop:      { width: 1440, height: 900,  label: 'Desktop',  icon: '🖥️' },
+	tablet:       { width: 768,  height: 1024, label: 'Tablet',   icon: '📋' },
+	mobile:       { width: 375,  height: 812,  label: 'Mobile',   icon: '📱' },
+	mobile_small: { width: 320,  height: 568,  label: 'Mobile S', icon: '📱' }
+};
+
 const ASSERTION_ICONS = {
 	url_is: '🔗', url_contains: '🔗', element_visible: '👁️', element_hidden: '🚫',
 	element_text: '📝', element_enabled: '⚡', no_console_errors: '🖥️',
@@ -1291,9 +1322,32 @@ function renderTestCases() {
 	toolbar.append(runAllBtn);
 	el.testcasePane.append(toolbar);
 
-	for (const tc of visible) {
-		el.testcasePane.append(renderTestCaseCard(tc));
+	// Render test case cards in batches for performance.
+	const RENDER_BATCH = 25;
+	let shown = 0;
+
+	function renderBatch() {
+		const fragment = document.createDocumentFragment();
+		const end = Math.min(shown + RENDER_BATCH, visible.length);
+		for (let i = shown; i < end; i++) {
+			fragment.append(renderTestCaseCard(visible[i]));
+		}
+		shown = end;
+		el.testcasePane.append(fragment);
+
+		// Add "Load more" if there are remaining cards.
+		if (shown < visible.length) {
+			const loadMore = document.createElement('div');
+			loadMore.className = 'tc-load-more';
+			const btn = document.createElement('button');
+			btn.className = 'btn btn-ghost btn-sm';
+			btn.textContent = `Load more (${visible.length - shown} remaining)`;
+			btn.onclick = () => { loadMore.remove(); renderBatch(); };
+			loadMore.append(btn);
+			el.testcasePane.append(loadMore);
+		}
 	}
+	renderBatch();
 }
 
 function renderTestCaseCard(tc) {
@@ -1401,9 +1455,27 @@ function renderTestCaseCard(tc) {
 	};
 	card._checkBaselines();
 
-	// Tags + move-to-suite
+	// Tags + viewport + move-to-suite
 	const metaRow = document.createElement('div');
 	metaRow.className = 'tc-meta-row';
+
+	// Viewport badge
+	const vpKey = tc.viewport;
+	const multiVps = tc.viewports ?? [];
+	if (vpKey || multiVps.length > 0) {
+		const vpBadges = document.createElement('span');
+		vpBadges.className = 'tc-viewport-badges';
+		const vps = multiVps.length > 0 ? multiVps : (vpKey ? [vpKey] : []);
+		for (const v of vps) {
+			const vpBadge = document.createElement('span');
+			vpBadge.className = 'tc-vp-badge';
+			const vpMeta = VP_PRESETS[v] || VP_PRESETS.desktop;
+			vpBadge.textContent = vpMeta.icon;
+			vpBadge.title = `${vpMeta.label} (${vpMeta.width}×${vpMeta.height})`;
+			vpBadges.append(vpBadge);
+		}
+		metaRow.append(vpBadges);
+	}
 
 	if (tc.tags?.length > 0) {
 		for (const tag of tc.tags) {
@@ -1845,6 +1917,27 @@ function renderRunResult(container, result) {
 	banner.innerHTML = bannerHtml;
 	container.append(banner);
 
+	// Multi-viewport results
+	if (result.viewportResults?.length > 0) {
+		const vpRow = document.createElement('div');
+		vpRow.className = 'tc-viewport-results';
+		for (const vpr of result.viewportResults) {
+			const vp = vpr.viewport;
+			const vpMeta = VP_PRESETS[vp?.label?.toLowerCase?.()] || VP_PRESETS[Object.keys(VP_PRESETS).find(k => VP_PRESETS[k].label === vp?.label)] || {};
+			const chip = document.createElement('span');
+			chip.className = `tc-vp-result vpr-${vpr.result}`;
+			chip.textContent = `${vpMeta.icon || '📐'} ${vp?.label || ''}: ${vpr.result === 'pass' ? '✓' : '✗'} ${Math.round(vpr.durationMs / 1000)}s`;
+			vpRow.append(chip);
+		}
+		container.append(vpRow);
+	} else if (result.viewport?.label) {
+		// Single viewport — show a badge
+		const vpBadge = document.createElement('div');
+		vpBadge.className = 'tc-viewport-single';
+		vpBadge.textContent = `${result.viewport.icon || '📐'} ${result.viewport.label} (${result.viewport.width}×${result.viewport.height})`;
+		container.append(vpBadge);
+	}
+
 	// Error message
 	if (result.error) {
 		const errEl = document.createElement('div');
@@ -2131,6 +2224,14 @@ function openTcEditor(existingTc) {
 		el.tcEditUrl.value = existingTc.targetUrl ?? '';
 		el.tcEditSuite.value = existingTc.suiteId ?? '';
 		el.tcEditTags.value = (existingTc.tags ?? []).join(', ');
+		el.tcEditViewport.value = existingTc.viewport ?? '';
+		// Multi-select viewports
+		if (el.tcEditViewports) {
+			const vps = existingTc.viewports ?? [];
+			for (const opt of el.tcEditViewports.options) {
+				opt.selected = vps.includes(opt.value);
+			}
+		}
 		el.tcEditPrecond.value = (existingTc.preconditions ?? []).join('\n');
 		state.editorSteps = (existingTc.steps ?? []).map(s => ({ ...s }));
 		state.editorAssertions = (existingTc.assertions ?? []).map(a => ({ ...a }));
@@ -2141,6 +2242,10 @@ function openTcEditor(existingTc) {
 		el.tcEditUrl.value = state.session?.targetUrl ?? '';
 		el.tcEditSuite.value = '';
 		el.tcEditTags.value = '';
+		el.tcEditViewport.value = '';
+		if (el.tcEditViewports) {
+			for (const opt of el.tcEditViewports.options) opt.selected = false;
+		}
 		el.tcEditPrecond.value = '';
 		state.editorSteps = [];
 		state.editorAssertions = [];
@@ -2341,6 +2446,8 @@ el.tcEditorSave.onclick = async () => {
 		targetUrl: el.tcEditUrl.value.trim(),
 		suiteId: el.tcEditSuite.value || null,
 		tags: el.tcEditTags.value.split(',').map(t => t.trim()).filter(Boolean),
+		viewport: el.tcEditViewport.value || null,
+		viewports: el.tcEditViewports ? Array.from(el.tcEditViewports.selectedOptions).map(o => o.value) : [],
 		preconditions: el.tcEditPrecond.value.split('\n').map(p => p.trim()).filter(Boolean),
 		steps: state.editorSteps,
 		assertions: state.editorAssertions
@@ -2788,6 +2895,38 @@ function handleEvent(event) {
 			toast('Report published.', 'good');
 			break;
 
+		case 'pipeline_start':
+			pipelineState.stages = {};
+			for (const stage of (event.stages ?? [])) {
+				pipelineState.stages[stage.key] = { status: 'pending', info: stage };
+			}
+			renderPipeline();
+			break;
+
+		case 'pipeline_progress': {
+			if (!pipelineState.stages) pipelineState.stages = {};
+			pipelineState.stages[event.stage] = {
+				status: event.status,
+				detail: event.detail,
+				result: event.result
+			};
+			renderPipeline();
+			break;
+		}
+
+		case 'pipeline_complete': {
+			pipelineState.summary = event.summary;
+			pipelineState.stages = event.stages;
+			renderPipeline();
+			break;
+		}
+
+		case 'dev_intelligence_complete': {
+			devIntelState.data = event.devIntelligence;
+			renderDevIntel();
+			break;
+		}
+
 		case 'workflow_step':
 			state.capturedSteps.push(event.step);
 			renderWorkflows();
@@ -2850,6 +2989,13 @@ const cfg = {
 	apiToken: $('cfg-api-token'),
 	apiTokenNote: $('cfg-api-token-note'),
 	apiTokenClear: $('cfg-api-token-clear'),
+	autoSaveWorkflow: $('cfg-auto-save-workflow'),
+	autoGenTests: $('cfg-auto-gen-tests'),
+	autoSmokeRun: $('cfg-auto-smoke-run'),
+	autoCreateSchedule: $('cfg-auto-create-schedule'),
+	autoDevReport: $('cfg-auto-dev-report'),
+	exploreViewports: $('cfg-explore-viewports'),
+	defaultCron: $('cfg-default-cron'),
 	test: $('cfg-test'),
 	testBtn: $('cfg-test-btn'),
 	saveBtn: $('cfg-save')
@@ -2889,6 +3035,13 @@ function fillSettings(config) {
 	cfg.headless.checked = config.headless !== false;
 	cfg.concurrentRuns.value = config.concurrentRuns ?? 3;
 	cfg.retriesCount.value = config.retriesCount ?? 1;
+	cfg.autoSaveWorkflow.checked = config.autoSaveWorkflow !== false;
+	cfg.autoGenTests.checked = config.autoGenerateTests !== false;
+	cfg.autoSmokeRun.checked = config.autoSmokeRun === true;
+	cfg.autoCreateSchedule.checked = config.autoCreateSchedule !== false;
+	cfg.autoDevReport.checked = config.autoDevReport !== false;
+	cfg.exploreViewports.checked = config.exploreViewports !== false;
+	cfg.defaultCron.value = config.defaultScheduleCron ?? '0 9 * * *';
 
 	// API Token — never sent to browser; leaving the box empty keeps it.
 	cfg.apiToken.value = '';
@@ -2931,7 +3084,14 @@ function readSettings() {
 		executionModel: cfg.executionModel.value.trim(),
 		headless: cfg.headless.checked,
 		concurrentRuns: Number(cfg.concurrentRuns.value) || 3,
-		retriesCount: Number(cfg.retriesCount.value) || 0
+		retriesCount: Number(cfg.retriesCount.value) || 0,
+		autoSaveWorkflow: cfg.autoSaveWorkflow.checked,
+		autoGenerateTests: cfg.autoGenTests.checked,
+		autoSmokeRun: cfg.autoSmokeRun.checked,
+		autoCreateSchedule: cfg.autoCreateSchedule.checked,
+		autoDevReport: cfg.autoDevReport.checked,
+		exploreViewports: cfg.exploreViewports.checked,
+		defaultScheduleCron: cfg.defaultCron.value.trim()
 	};
 	if (cfg.key.value.trim()) {
 		patch.apiKey = cfg.key.value.trim();
@@ -3280,6 +3440,290 @@ document.addEventListener('click', event => {
 	handleExport(btn.dataset.export);
 });
 
+/* ── Autonomy Pipeline (Phase 12) ──────────────────────────────── */
+
+const pipelineState = {
+	stages: null,
+	summary: null
+};
+
+const PIPELINE_STAGE_META = [
+	{ key: 'workflow_save',   icon: '📋', label: 'Workflow' },
+	{ key: 'test_generation', icon: '🧪', label: 'Tests' },
+	{ key: 'smoke_run',       icon: '💨', label: 'Smoke' },
+	{ key: 'schedule_create', icon: '📅', label: 'Schedule' },
+	{ key: 'dev_intelligence',icon: '🧠', label: 'Dev Report' }
+];
+
+const STATUS_ICONS = {
+	pending: '–', running: '⟳', done: '✓', skipped: '⊘', failed: '✕'
+};
+
+function renderPipeline() {
+	if (!pipelineState.stages) {
+		el.pipelinePanel.hidden = true;
+		return;
+	}
+
+	el.pipelinePanel.hidden = false;
+	el.pipelineStages.innerHTML = '';
+
+	for (let i = 0; i < PIPELINE_STAGE_META.length; i++) {
+		const meta = PIPELINE_STAGE_META[i];
+		const stage = pipelineState.stages[meta.key] ?? { status: 'pending', detail: 'Not run yet' };
+
+		if (i > 0) {
+			const arrow = document.createElement('span');
+			arrow.className = 'pipeline-arrow';
+			arrow.textContent = '→';
+			el.pipelineStages.append(arrow);
+		}
+
+		const chip = document.createElement('div');
+		chip.className = `pipeline-stage stage-${stage.status ?? 'pending'}`;
+
+		const icon = document.createElement('span');
+		icon.className = 'pipeline-stage-icon';
+		if (stage.status === 'running') {
+			icon.classList.add('spinning');
+			icon.textContent = '⟳';
+		} else {
+			icon.textContent = STATUS_ICONS[stage.status] ?? '–';
+		}
+
+		const text = document.createElement('span');
+		text.innerHTML = `<span class="pipeline-stage-label">${meta.icon} ${meta.label}</span>`;
+		if (stage.detail) {
+			text.innerHTML += `<div class="pipeline-stage-detail">${escapeHtml(stage.detail)}</div>`;
+		}
+
+		chip.append(icon, text);
+		el.pipelineStages.append(chip);
+	}
+
+	if (pipelineState.summary) {
+		const s = pipelineState.summary;
+		const parts = [];
+		if (s.workflowId) parts.push('Workflow saved');
+		if (s.testCaseCount) parts.push(`${s.testCaseCount} tests generated`);
+		if (s.smokeResults) parts.push(`Smoke: ${s.smokeResults.passed}/${s.smokeResults.total} passed`);
+		if (s.scheduleId) parts.push('Schedule created');
+		if (s.devIntelligence?.findingsAnalyzed) parts.push(`Dev report: ${s.devIntelligence.findingsAnalyzed} analyzed`);
+		el.pipelineSummary.textContent = parts.join(' · ');
+	} else {
+		el.pipelineSummary.textContent = '';
+	}
+}
+
+async function loadPipelineFromSession(sessionId) {
+	try {
+		const pipeline = await api(`/sessions/${sessionId}/pipeline-status`);
+		if (pipeline) {
+			pipelineState.stages = pipeline.stages;
+			pipelineState.summary = pipeline.summary;
+			renderPipeline();
+		} else {
+			pipelineState.stages = null;
+			pipelineState.summary = null;
+			el.pipelinePanel.hidden = true;
+		}
+	} catch {
+		el.pipelinePanel.hidden = true;
+	}
+}
+
+el.pipelineRerun?.addEventListener('click', async () => {
+	if (!state.sessionId) return;
+	try {
+		await api(`/sessions/${state.sessionId}/run-pipeline`, { method: 'POST' });
+		toast('Pipeline triggered');
+	} catch (error) {
+		fail(error);
+	}
+});
+
+/* ── Dev Intelligence (Phase 13) ──────────────────────────────────── */
+
+const devIntelState = {
+	data: null,
+	sessionId: null
+};
+
+const devIntelElements = {
+	panel: $('dev-intel-panel'),
+	body: $('dev-intel-body'),
+	refresh: $('dev-intel-refresh'),
+	download: $('dev-intel-download'),
+	copyPrompt: $('dev-intel-copy-prompt')
+};
+
+function renderDevIntel() {
+	if (!devIntelElements.panel) return;
+
+	const data = devIntelState.data;
+	if (!data || (!data.results?.length && !data.appReport)) {
+		devIntelElements.panel.hidden = true;
+		return;
+	}
+
+	devIntelElements.panel.hidden = false;
+	const html = [];
+
+	// App-level improvement report
+	if (data.appReport) {
+		const report = data.appReport;
+
+		// Priority actions
+		if (report.priority?.length) {
+			html.push('<div class="dev-intel-priority">');
+			html.push('<h4>🎯 Priority Actions</h4>');
+			report.priority.forEach((item, i) => {
+				html.push(`<div class="dev-intel-priority-item">`);
+				html.push(`<span class="dev-intel-priority-num">${i + 1}</span>`);
+				html.push(`<div>`);
+				html.push(`<div class="dev-intel-priority-action">${escapeHtml(item.action || '')}</div>`);
+				html.push(`<div class="dev-intel-priority-meta">${escapeHtml(item.rationale || '')} · Impact: ${escapeHtml(item.impact || '—')}</div>`);
+				html.push(`</div></div>`);
+			});
+			html.push('</div>');
+		}
+
+		// Improvement categories
+		const cats = [
+			['ux', 'UX Issues'],
+			['accessibility', 'Accessibility'],
+			['performance', 'Performance'],
+			['security', 'Security']
+		];
+		for (const [key, label] of cats) {
+			const items = report[key];
+			if (items?.length) {
+				html.push(`<div class="dev-intel-category">`);
+				html.push(`<h4>${label}</h4>`);
+				items.forEach(item => {
+					html.push(`<div class="dev-intel-category-item">`);
+					html.push(`<div class="dev-intel-category-issue">${escapeHtml(item.issue || '')}</div>`);
+					html.push(`<div class="dev-intel-category-rec">${escapeHtml(item.recommendation || '')}</div>`);
+					html.push(`</div>`);
+				});
+				html.push('</div>');
+			}
+		}
+
+		// Recurring patterns
+		if (report.patterns?.length) {
+			html.push('<div class="dev-intel-category">');
+			html.push('<h4>🔁 Recurring Patterns</h4>');
+			report.patterns.forEach(p => {
+				html.push(`<div class="dev-intel-category-item">`);
+				html.push(`<div class="dev-intel-category-issue">${escapeHtml(p.pattern || '')} (${p.occurrences || 0}×)</div>`);
+				html.push(`<div class="dev-intel-category-rec">${escapeHtml(p.recommendation || '')}</div>`);
+				html.push(`</div>`);
+			});
+			html.push('</div>');
+		}
+	}
+
+	// Per-finding fix suggestions
+	if (data.results?.length) {
+		html.push('<div class="dev-intel-category">');
+		html.push('<h4>🔧 Fix Suggestions</h4>');
+		for (const r of data.results) {
+			if (r.status === 'failed') continue;
+			const f = r.finding;
+			const intel = r.intelligence;
+			if (!intel) continue;
+			html.push(`<div class="dev-intel-finding severity-${escapeHtml(f.severity || 'low')}">`);
+			html.push(`<div class="dev-intel-finding-title">${escapeHtml(f.title || 'Untitled')}</div>`);
+			html.push(`<div class="dev-intel-finding-cause"><strong>Root cause:</strong> ${escapeHtml(intel.rootCause || '—')}</div>`);
+			html.push(`<div class="dev-intel-finding-fix"><strong>Fix:</strong> ${escapeHtml(intel.fixApproach || '—')}</div>`);
+			html.push(`<div class="dev-intel-finding-meta">`);
+			html.push(`<span>${escapeHtml(intel.affectedArea || '—')}</span>`);
+			html.push(`<span>${escapeHtml(intel.estimatedComplexity || '—')}</span>`);
+			html.push(`<span>${Math.round((intel.confidence || 0) * 100)}% confidence</span>`);
+			html.push(`<span class="dev-intel-finding-copy" data-finding-id="${escapeHtml(f.id)}">📋 Copy fix prompt</span>`);
+			html.push(`</div></div>`);
+		}
+		html.push('</div>');
+	}
+
+	if (html.length === 0) {
+		html.push('<div class="dev-intel-empty">No dev intelligence available yet.</div>');
+	}
+
+	devIntelElements.body.innerHTML = html.join('');
+}
+
+async function loadDevIntelFromSession(sessionId) {
+	devIntelState.sessionId = sessionId;
+	try {
+		const data = await api(`/sessions/${sessionId}/dev-intelligence`);
+		devIntelState.data = data;
+		renderDevIntel();
+	} catch {
+		devIntelState.data = null;
+		if (devIntelElements.panel) devIntelElements.panel.hidden = true;
+	}
+}
+
+devIntelElements.refresh?.addEventListener('click', async () => {
+	if (!state.sessionId) return;
+	devIntelElements.body.innerHTML = '<div class="dev-intel-empty">Analyzing findings…</div>';
+	try {
+		const data = await api(`/sessions/${state.sessionId}/analyze-dev`, { method: 'POST' });
+		devIntelState.data = data;
+		renderDevIntel();
+		toast('Dev intelligence updated');
+	} catch (error) {
+		fail(error);
+	}
+});
+
+devIntelElements.download?.addEventListener('click', async () => {
+	if (!state.sessionId) return;
+	try {
+		const res = await fetch(`/api/sessions/${state.sessionId}/dev-report`);
+		if (!res.ok) throw new Error('Report not available. Run analysis first.');
+		const blob = await res.blob();
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `dev-intelligence-${state.sessionId.slice(0, 8)}.md`;
+		a.click();
+		URL.revokeObjectURL(url);
+	} catch (error) {
+		toast(error.message, 'bad');
+	}
+});
+
+devIntelElements.copyPrompt?.addEventListener('click', async () => {
+	if (!state.sessionId) return;
+	try {
+		const res = await fetch(`/api/sessions/${state.sessionId}/app-improvement-prompt`);
+		const text = await res.text();
+		await navigator.clipboard.writeText(text);
+		toast('AI improvement prompt copied to clipboard');
+	} catch (error) {
+		toast('Failed to copy prompt', 'bad');
+	}
+});
+
+// Copy per-finding fix prompt
+document.addEventListener('click', async (e) => {
+	const target = e.target.closest('[data-finding-id]');
+	if (!target || !target.classList.contains('dev-intel-finding-copy')) return;
+	e.stopPropagation();
+	const findingId = target.dataset.findingId;
+	try {
+		const res = await fetch(`/api/findings/${findingId}/fix-prompt`);
+		const text = await res.text();
+		await navigator.clipboard.writeText(text);
+		toast('Fix prompt copied to clipboard');
+	} catch {
+		toast('Failed to copy', 'bad');
+	}
+});
+
 /* ── Bugs Hub ─────────────────────────────────────────────────────── */
 
 const bugState = {
@@ -3410,6 +3854,24 @@ async function openBugDetail(id) {
 	}
 }
 
+async function loadBugDevIntel(bug, container, force = false) {
+	const btn = container.querySelector('button');
+	if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+	try {
+		if (force) {
+			await fetch(`/api/findings/${bug.id}/dev-analysis?force=1`);
+		}
+		const intel = await api(`/findings/${bug.id}/dev-analysis`);
+		if (intel) {
+			const updated = await api(`/findings/${bug.id}`);
+			renderBugDetail(updated);
+		}
+	} catch (err) {
+		if (btn) { btn.disabled = false; btn.textContent = '🧠 Analyze this finding'; }
+		toast('Analysis failed — try again later', 'bad');
+	}
+}
+
 function renderBugDetail(bug) {
 	el.bugDetailTitle.textContent = bug.title;
 
@@ -3531,6 +3993,50 @@ function renderBugDetail(bug) {
 	commentRow.append(commentInput, commentBtn);
 	commentsSection.append(commentRow);
 	body.append(commentsSection);
+
+	// Dev Intelligence section (Phase 13) — lazy, user-initiated.
+	const devSection = document.createElement('div');
+	devSection.className = 'bug-detail-section';
+	devSection.innerHTML = '<h4>🧠 Dev Intelligence</h4>';
+
+	if (bug.devIntelligence) {
+		// Already analyzed — show cached results.
+		const intel = bug.devIntelligence;
+		const devContent = document.createElement('div');
+		devContent.className = 'bug-dev-intel-content';
+		devContent.innerHTML = `
+			<div class="bug-dev-intel-cause"><strong>Root cause:</strong> ${escapeHtml(intel.rootCause || '—')}</div>
+			<div class="bug-dev-intel-fix"><strong>Fix:</strong> ${escapeHtml(intel.fixApproach || '—')}</div>
+			<div class="bug-dev-intel-meta">${escapeHtml(intel.affectedArea || '—')} · ${escapeHtml(intel.estimatedComplexity || '—')} · ${Math.round((intel.confidence || 0) * 100)}% confidence</div>
+		`;
+		const copyBtn = document.createElement('button');
+		copyBtn.className = 'btn btn-ghost btn-sm';
+		copyBtn.textContent = '📋 Copy fix prompt';
+		copyBtn.addEventListener('click', async () => {
+			try {
+				const res = await fetch(`/api/findings/${bug.id}/fix-prompt`);
+				const text = await res.text();
+				await navigator.clipboard.writeText(text);
+				toast('Fix prompt copied');
+			} catch {
+				toast('Failed to copy', 'bad');
+			}
+		});
+		const reBtn = document.createElement('button');
+		reBtn.className = 'btn btn-ghost btn-sm';
+		reBtn.textContent = '↻ Re-analyze';
+		reBtn.addEventListener('click', () => loadBugDevIntel(bug, devSection, true));
+		devContent.append(copyBtn, reBtn);
+		devSection.append(devContent);
+	} else {
+		// No intelligence yet — show a "Analyze" button.
+		const analyzeBtn = document.createElement('button');
+		analyzeBtn.className = 'btn btn-ghost btn-sm';
+		analyzeBtn.textContent = '🧠 Analyze this finding';
+		analyzeBtn.addEventListener('click', () => loadBugDevIntel(bug, devSection));
+		devSection.append(analyzeBtn);
+	}
+	body.append(devSection);
 
 	// History.
 	if (bug.history?.length) {

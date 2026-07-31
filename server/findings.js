@@ -219,6 +219,7 @@ export function updateFinding(id, patch) {
 	if (typeof patch.assignee === 'string') f.assignee = patch.assignee || null;
 	if (Array.isArray(patch.tags)) f.tags = patch.tags;
 	if (Array.isArray(patch.steps)) f.steps = patch.steps.map(String);
+	if (patch.devIntelligence !== undefined) f.devIntelligence = patch.devIntelligence;
 
 	persistSoon();
 	return f;

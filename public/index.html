@@ -70,6 +70,29 @@
       <div class="thinking-body" id="thinking-body"></div>
     </div>
 
+    <!-- Pipeline progress (Phase 12) -->
+    <div class="pipeline-panel" id="pipeline-panel" hidden>
+      <div class="pipeline-head">
+        <span class="pipeline-title">⚡ Autonomy Pipeline</span>
+        <button class="btn btn-ghost btn-sm pipeline-rerun" id="pipeline-rerun">↻ Re-run</button>
+      </div>
+      <div class="pipeline-stages" id="pipeline-stages"></div>
+      <div class="pipeline-summary" id="pipeline-summary"></div>
+    </div>
+
+    <!-- Dev Intelligence (Phase 13) -->
+    <div class="dev-intel-panel" id="dev-intel-panel" hidden>
+      <div class="dev-intel-head">
+        <span class="dev-intel-title">🧠 Developer Intelligence</span>
+        <div class="dev-intel-actions">
+          <button class="btn btn-ghost btn-sm" id="dev-intel-refresh" title="Re-analyze">↻</button>
+          <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">⬇ Report</button>
+          <button class="btn btn-ghost btn-sm" id="dev-intel-copy-prompt" title="Copy AI improvement prompt">📋 AI Prompt</button>
+        </div>
+      </div>
+      <div class="dev-intel-body" id="dev-intel-body"></div>
+    </div>
+
     <div class="question-slot" id="question-slot"></div>
 
     <form class="composer" id="composer">
@@ -364,6 +387,47 @@
       </div>
 
       <hr class="cfg-divider">
+
+      <div class="cfg-section-title">⚡ Autonomy Pipeline</div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <span>Auto-save workflow after report</span>
+          <input type="checkbox" id="cfg-auto-save-workflow" checked>
+          <small>Saves captured steps as a named workflow when the agent finishes.</small>
+        </label>
+        <label class="field">
+          <span>Auto-generate test cases</span>
+          <input type="checkbox" id="cfg-auto-gen-tests" checked>
+          <small>Generates replayable test cases via LLM from the saved workflow.</small>
+        </label>
+        <label class="field">
+          <span>Run smoke validation</span>
+          <input type="checkbox" id="cfg-auto-smoke-run">
+          <small>Quick single-thread test run to validate generated tests. (Default off)</small>
+        </label>
+        <label class="field">
+          <span>Auto-create regression schedule</span>
+          <input type="checkbox" id="cfg-auto-create-schedule" checked>
+          <small>Creates a daily regression schedule from generated test cases.</small>
+        </label>
+        <label class="field">
+          <span>Auto-generate dev intelligence report</span>
+          <input type="checkbox" id="cfg-auto-dev-report" checked>
+          <small>Analyses findings for root cause + fix suggestions and builds an app-level improvement report.</small>
+        </label>
+        <label class="field">
+          <span>Explore responsive viewports</span>
+          <input type="checkbox" id="cfg-explore-viewports" checked>
+          <small>Agent tests at tablet + mobile viewports and reports layout issues. Adds a set_viewport tool.</small>
+        </label>
+        <label class="field">
+          <span>Default schedule cron</span>
+          <input id="cfg-default-cron" type="text" value="0 9 * * *" placeholder="0 9 * * *">
+          <small>Cron expression for auto-created schedules (default: daily 9am).</small>
+        </label>
+      </div>
+
+      <hr class="cfg-divider">
         <div class="cfg-token-row">
           <input id="cfg-api-token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty for local use">
           <button class="btn btn-ghost btn-sm" type="button" id="cfg-api-token-clear" title="Clear token">Clear</button>
@@ -420,6 +484,28 @@
         <span>Tags (comma-separated)</span>
         <input type="text" id="tc-edit-tags" placeholder="smoke, auth, checkout">
       </label>
+
+      <div class="tc-edit-row">
+        <label class="field">
+          <span>Viewport</span>
+          <select id="tc-edit-viewport">
+            <option value="">Default (Desktop)</option>
+            <option value="desktop">🖥️ Desktop (1440×900)</option>
+            <option value="tablet">📋 Tablet (768×1024)</option>
+            <option value="mobile">📱 Mobile (375×812)</option>
+            <option value="mobile_small">📱 Mobile Small (320×568)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Multi-viewport run (Ctrl/Cmd+click)</span>
+          <select id="tc-edit-viewports" multiple style="height:80px">
+            <option value="desktop">🖥️ Desktop</option>
+            <option value="tablet">📋 Tablet</option>
+            <option value="mobile">📱 Mobile</option>
+            <option value="mobile_small">📱 Mobile Small</option>
+          </select>
+        </label>
+      </div>
 
       <label class="field">
         <span>Preconditions (one per line)</span>

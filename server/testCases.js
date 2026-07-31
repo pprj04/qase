@@ -24,11 +24,13 @@ function loadTestCases() {
 	try {
 		if (existsSync(TEST_CASES_FILE)) {
 			testCases = JSON.parse(readFileSync(TEST_CASES_FILE, 'utf-8'));
-			// Backfill Phase 8 fields on load.
+			// Backfill Phase 8 + Phase 14 fields on load.
 			for (const tc of testCases) {
-		tc.tags = tc.tags ?? [];
-		tc.suiteId = tc.suiteId ?? null;
-		tc.findingIds = tc.findingIds ?? [];
+			tc.tags = tc.tags ?? [];
+			tc.suiteId = tc.suiteId ?? null;
+			tc.findingIds = tc.findingIds ?? [];
+			tc.viewport = tc.viewport ?? null;
+			tc.viewports = tc.viewports ?? [];
 			}
 		}
 	} catch {
@@ -125,6 +127,8 @@ export function createTestCase(data) {
 		assertions: Array.isArray(data.assertions) ? data.assertions : [],
 		severity: data.severity ?? 'medium',
 		tags: Array.isArray(data.tags) ? data.tags : [],
+		viewport: data.viewport ?? null,
+		viewports: Array.isArray(data.viewports) ? data.viewports : [],
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		lastRun: undefined
@@ -181,6 +185,8 @@ export function updateTestCase(id, patch) {
 	if (Array.isArray(patch.tags)) tc.tags = patch.tags;
 	if (Array.isArray(patch.findingIds)) tc.findingIds = patch.findingIds;
 	if (patch.suiteId !== undefined) tc.suiteId = patch.suiteId;
+	if (patch.viewport !== undefined) tc.viewport = patch.viewport;
+	if (Array.isArray(patch.viewports)) tc.viewports = patch.viewports;
 
 	tc.updatedAt = Date.now();
 	persistSoon();
@@ -207,7 +213,9 @@ export function cloneTestCase(id) {
 		steps: (original.steps ?? []).map(s => ({ ...s })),
 		assertions: (original.assertions ?? []).map(a => ({ ...a })),
 		severity: original.severity,
-		tags: [...(original.tags ?? [])]
+		tags: [...(original.tags ?? [])],
+		viewport: original.viewport ?? null,
+		viewports: [...(original.viewports ?? [])]
 	});
 
 	return clone;

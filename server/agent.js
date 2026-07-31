@@ -31,7 +31,8 @@ const ALLOWED_TOOLS = new Set([
 	'browser_hover', 'browser_scroll', 'browser_screenshot',
 	'browser_snapshot', 'browser_diagnostics', 'browser_wait',
 	'browser_navigate_back', 'browser_tabs',
-	'update_todo', 'ask_question', 'report_finding', 'finish_qa_report'
+	'update_todo', 'ask_question', 'report_finding', 'finish_qa_report',
+	'set_viewport'
 ]);
 
 /** Display labels for activity feed entries. */
@@ -54,7 +55,8 @@ const ACTIVITY_LABELS = {
 	update_todo: 'Updating plan',
 	ask_question: 'Asking',
 	report_finding: 'Filing finding',
-	finish_qa_report: 'Finishing report'
+	finish_qa_report: 'Finishing report',
+	set_viewport: 'Resizing viewport'
 };
 
 /**

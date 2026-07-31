@@ -3,6 +3,8 @@ import { emit } from './store.js';
 import { redact } from './secrets.js';
 import { notifyReport } from './webhooks.js';
 import { syncSessionFinding } from './findings.js';
+import { runAutonomyPipeline } from './pipeline.js';
+import { getConfig, VIEWPORT_PRESETS } from './config.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -100,9 +102,62 @@ export function createQaTools(session) {
 			session.report = report;
 			emit(session, 'report', { report });
 			notifyReport(session); // fire-and-forget webhook
+			// Phase 12: trigger the autonomy pipeline (fire-and-forget).
+			runAutonomyPipeline(session, {}).catch(() => {});
 			return { success: true, published: true, verdict: report.verdict, findings: report.findings };
 		}
 	};
 
-	return [reportFinding, finishReport];
+	const setViewport = {
+		name: 'set_viewport',
+		description: `Resizes the browser viewport to test responsive layouts. Pass one of: ${Object.keys(VIEWPORT_PRESETS).join(', ')}. Or pass explicit width/height. After resizing, take a browser_snapshot to see how the layout changed.`,
+		category: 'qa',
+		parametersSchema: {
+			type: 'object',
+			properties: {
+				preset: { type: 'string', enum: Object.keys(VIEWPORT_PRESETS), description: 'Named viewport preset (desktop, tablet, mobile, mobile_small).' },
+				width: { type: 'number', description: 'Custom viewport width in pixels (use with height instead of preset).' },
+				height: { type: 'number', description: 'Custom viewport height in pixels (use with width instead of preset).' }
+			}
+		},
+		async run(input) {
+			const config = getConfig();
+			if (config.exploreViewports === false) {
+				return { success: false, error: 'Viewport exploration is disabled in settings.' };
+			}
+
+			let width, height, label;
+			if (input.preset && VIEWPORT_PRESETS[input.preset]) {
+				width = VIEWPORT_PRESETS[input.preset].width;
+				height = VIEWPORT_PRESETS[input.preset].height;
+				label = VIEWPORT_PRESETS[input.preset].label;
+			} else if (input.width && input.height) {
+				width = Number(input.width);
+				height = Number(input.height);
+				label = `${width}×${height}`;
+			} else {
+				return { success: false, error: `Pass preset (${Object.keys(VIEWPORT_PRESETS).join(', ')}) or width+height.` };
+			}
+
+			// Record the viewport on the session so the UI can show what was explored.
+			session.viewportsExplored ??= [];
+			if (!session.viewportsExplored.some(v => v.width === width && v.height === height)) {
+				session.viewportsExplored.push({ width, height, label, ts: Date.now() });
+				emit(session, 'viewport_explored', { width, height, label });
+			}
+
+			// The browser bridge monkey-patches the SDK service; its activePage is
+			// the Playwright Page the agent is driving. Resize it in-place.
+			const { liveFor } = await import('./store.js');
+			const record = liveFor(session.id);
+			const page = record?.bridge?.service?.activePage;
+			if (page && !page.isClosed?.()) {
+				await page.setViewportSize({ width, height });
+				return { success: true, width, height, label, message: `Viewport resized to ${label} (${width}×${height}). Take a browser_snapshot to inspect the layout.` };
+			}
+			return { success: true, width, height, label, message: `Viewport will be set to ${label} (${width}×${height}) on next page open.` };
+		}
+	};
+
+	return [reportFinding, finishReport, setViewport];
 }

@@ -45,7 +45,9 @@ export function buildJUnitXml(summary, opts = {}) {
 	];
 
 	for (const result of results) {
-		const name = escapeXml(result.testCaseName ?? 'Unknown test');
+		const vp = result.viewport;
+		const vpPrefix = vp && vp.label ? `[${vp.label}] ` : '';
+		const name = escapeXml(vpPrefix + (result.testCaseName ?? 'Unknown test'));
 		const className = escapeXml(opts.suiteName ?? 'qase');
 		const testTime = ((result.durationMs ?? 0) / 1000).toFixed(3);
 

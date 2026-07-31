@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { getConfig } from './config.js';
+import { getConfig, resolveViewport } from './config.js';
 import { getBaseline, setBaseline, autoCaptureBaselines } from './baselines.js';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
@@ -471,7 +471,7 @@ async function evaluateVisualMatch(page, assertion, runContext) {
  * @param {object} options   — { credentials, onProgress }
  * @returns {Promise<ReplayResult>}
  */
-export async function runTestCase(testCase, { credentials, onProgress, attempt = 1 } = {}) {
+export async function runTestCase(testCase, { credentials, onProgress, attempt = 1, viewport } = {}) {
 	const startTime = Date.now();
 	const collector = createCollector();
 	const stepResults = [];
@@ -487,6 +487,7 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 		result: 'pass',
 		flaky: false,
 		attempt,
+		viewport: resolveViewport(viewport ?? testCase.viewport),
 		durationMs: 0,
 		stepResults,
 		assertionResults,
@@ -501,8 +502,9 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 	try {
 		browser = await launchBrowser();
 		// Use a context so we can enable trace recording.
+		const vp = resolveViewport(viewport ?? testCase.viewport);
 		context = await browser.newContext({
-			viewport: { width: 1440, height: 900 }
+			viewport: { width: vp.width, height: vp.height }
 		});
 		await context.tracing.start({
 			screenshots: true,
@@ -641,7 +643,7 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
  *
  * @returns {Promise<object>} final result with attempt/flaky fields set.
  */
-async function runWithRetry(testCase, { credentials, onProgress, retries = 0 }) {
+async function runWithRetry(testCase, { credentials, onProgress, retries = 0, viewport } = {}) {
 	const maxAttempts = retries + 1;
 	let lastResult;
 
@@ -649,7 +651,8 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0 }) 
 		lastResult = await runTestCase(testCase, {
 			credentials,
 			onProgress,
-			attempt
+			attempt,
+			viewport
 		});
 
 		// Pass → done. If it took more than 1 attempt, mark flaky.
@@ -692,8 +695,22 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 	const poolSize = Math.max(1, concurrency ?? Number(process.env.QASE_PARALLEL) ?? 3);
 	const retryCount = Math.max(0, retries ?? Number(process.env.QASE_RETRIES) ?? 1);
 
+	// Expand test cases: if a test case has viewports[], run once per viewport.
+	// Each expanded entry is { testCase, viewport, originalIndex }.
+	const expanded = [];
+	for (let i = 0; i < testCases.length; i++) {
+		const tc = testCases[i];
+		if (Array.isArray(tc.viewports) && tc.viewports.length > 0) {
+			for (const vp of tc.viewports) {
+				expanded.push({ testCase: tc, viewport: vp, originalIndex: i });
+			}
+		} else {
+			expanded.push({ testCase: tc, viewport: tc.viewport ?? null, originalIndex: i });
+		}
+	}
+
 	// Pre-allocate results array to maintain stable ordering.
-	const results = new Array(testCases.length);
+	const results = new Array(expanded.length);
 
 	// Worker pool: processes indices from a shared queue.
 	let nextIndex = 0;
@@ -701,12 +718,14 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 	async function worker() {
 		while (true) {
 			const myIndex = nextIndex++;
-			if (myIndex >= testCases.length) return;
+			if (myIndex >= expanded.length) return;
 
-			const result = await runWithRetry(testCases[myIndex], {
+			const entry = expanded[myIndex];
+			const result = await runWithRetry(entry.testCase, {
 				credentials,
-				onProgress: data => onProgress?.({ testCaseIndex: myIndex, ...data }),
-				retries: retryCount
+				onProgress: data => onProgress?.({ testCaseIndex: entry.originalIndex, subIndex: myIndex, ...data }),
+				retries: retryCount,
+				viewport: entry.viewport
 			});
 			results[myIndex] = result;
 		}
@@ -714,20 +733,56 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 
 	// Launch `poolSize` workers and wait for all to finish.
 	const workers = [];
-	for (let i = 0; i < Math.min(poolSize, testCases.length); i++) {
+	for (let i = 0; i < Math.min(poolSize, expanded.length); i++) {
 		workers.push(worker());
 	}
 	await Promise.all(workers);
 
+	// Aggregate: if a test case was expanded into multiple viewports,
+	// group them into a single result with viewportResults[].
+	const viewportResultsMap = new Map(); // originalIndex → results[]
+	const finalResults = [];
+
+	for (let i = 0; i < expanded.length; i++) {
+		const origIdx = expanded[i].originalIndex;
+		if (!viewportResultsMap.has(origIdx)) {
+			viewportResultsMap.set(origIdx, []);
+		}
+		viewportResultsMap.get(origIdx).push(results[i]);
+	}
+
+	for (let i = 0; i < testCases.length; i++) {
+		const vr = viewportResultsMap.get(i) ?? [];
+		if (vr.length > 1) {
+			// Multi-viewport: aggregate into a single result.
+			// Overall result is fail if ANY viewport fails (conservative).
+			const anyFail = vr.some(r => r.result === 'fail');
+			const anyError = vr.some(r => r.result === 'error');
+			const aggregated = {
+				...vr[0],
+				result: anyError ? 'error' : (anyFail ? 'fail' : 'pass'),
+				viewportResults: vr.map(r => ({
+					viewport: r.viewport,
+					result: r.result,
+					durationMs: r.durationMs,
+					flaky: r.flaky
+				}))
+			};
+			finalResults.push(aggregated);
+		} else if (vr.length === 1) {
+			finalResults.push(vr[0]);
+		}
+	}
+
 	const summary = {
 		id: randomUUID(),
 		total: testCases.length,
-		passed: results.filter(r => r.result === 'pass').length,
-		failed: results.filter(r => r.result === 'fail').length,
-		errored: results.filter(r => r.result === 'error').length,
-		flaky: results.filter(r => r.flaky).length,
+		passed: finalResults.filter(r => r.result === 'pass').length,
+		failed: finalResults.filter(r => r.result === 'fail').length,
+		errored: finalResults.filter(r => r.result === 'error').length,
+		flaky: finalResults.filter(r => r.flaky).length,
 		durationMs: Date.now() - startTime,
-		results
+		results: finalResults
 	};
 
 	return summary;

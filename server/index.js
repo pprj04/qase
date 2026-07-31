@@ -45,6 +45,12 @@ import {
 	exportFindingsBulkGitHub, exportFindingsBulkJira, exportFindingsBulkLinear,
 	exportFindingsBulkMarkdown
 } from './bugExporters.js';
+import { runAutonomyPipeline } from './pipeline.js';
+import {
+	analyzeFinding, analyzeSessionFindings,
+	buildAppImprovementReport, buildFixPrompt, buildAppImprovementPromptText
+} from './devIntelligence.js';
+import { buildDevReportMarkdown } from './devReport.js';
 import {
 	createSuite, listSuites, getSuite, updateSuite, deleteSuite
 } from './suites.js';
@@ -215,12 +221,40 @@ app.get('/api/sessions/:id', (request, response) => {
 		return;
 	}
 	const record = liveFor(session.id);
-	response.json({
-		...session,
+
+	// For "done" or "idle" sessions, strip heavy arrays from the initial response.
+	// The frontend lazy-loads messages, steps, and findings as needed.
+	const isHeavy = session.messages.length > 50 || session.capturedSteps.length > 30;
+	const stripHeavy = request.query.summary === '1' || (isHeavy && request.query.full !== '1');
+
+	const payload = {
+		id: session.id,
+		title: session.title,
+		projectId: session.projectId,
+		status: session.status,
+		targetUrl: session.targetUrl,
+		createdAt: session.createdAt,
+		updatedAt: session.updatedAt,
+		findingCount: (session.findings ?? []).length,
+		messageCount: (session.messages ?? []).length,
+		stepCount: (session.capturedSteps ?? []).length,
 		secretNames: secretNames(session.id),
 		running: Boolean(record.running),
-		frame: record.bridge?.getLastFrame?.()
-	});
+		frame: record.bridge?.getLastFrame?.(),
+		pipeline: session.pipeline ?? null,
+		devIntelligence: session.devIntelligence ?? null
+	};
+
+	if (!stripHeavy) {
+		// Include everything for active sessions or small sessions.
+		Object.assign(payload, {
+			messages: session.messages,
+			capturedSteps: session.capturedSteps,
+			findings: session.findings
+		});
+	}
+
+	response.json(payload);
 });
 
 app.delete('/api/sessions/:id', (request, response) => {
@@ -345,12 +379,121 @@ app.post('/api/sessions/:id/stop', (request, response) => {
 	response.json({ ok: true });
 });
 
+/** Lazy-load heavy session arrays (messages, steps, findings) for large sessions. */
+app.get('/api/sessions/:id/detail', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const field = request.query.field; // 'messages' | 'capturedSteps' | 'findings'
+	if (field === 'messages') return response.json(session.messages ?? []);
+	if (field === 'capturedSteps') return response.json(session.capturedSteps ?? []);
+	if (field === 'findings') return response.json(session.findings ?? []);
+	response.json({
+		messages: session.messages ?? [],
+		capturedSteps: session.capturedSteps ?? [],
+		findings: session.findings ?? []
+	});
+});
+
 app.get('/api/sessions/:id/report.md', (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
 	}
 	response.type('text/markdown').send(buildReportMarkdown(session));
+});
+
+/* ── Pipeline routes (Phase 12) ──────────────────────────────────── */
+
+app.post('/api/sessions/:id/run-pipeline', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) {
+		return;
+	}
+	// Fire-and-forget; progress flows via SSE events.
+	runAutonomyPipeline(session, { force: true }).catch(() => {});
+	response.json({ ok: true, message: 'Pipeline triggered' });
+});
+
+app.get('/api/sessions/:id/pipeline-status', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) {
+		return;
+	}
+	response.json(session.pipeline ?? null);
+});
+
+/* ── Dev Intelligence routes (Phase 13) ──────────────────────────── */
+
+/**
+ * Trigger per-finding and app-level intelligence analysis for a session.
+ */
+app.post('/api/sessions/:id/analyze-dev', async (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+
+	try {
+		const dev = await analyzeSessionFindings(session.findings ?? [], { targetUrl: session.targetUrl });
+		session.devIntelligence = dev;
+		emit(session, 'dev_intelligence_complete', { devIntelligence: dev });
+		response.json(dev);
+	} catch (err) {
+		console.error('[analyze-dev] error:', err.message);
+		response.status(500).json({ error: 'Dev intelligence analysis failed', message: err.message });
+	}
+});
+
+/** Fetch persisted dev intelligence for a session. */
+app.get('/api/sessions/:id/dev-intelligence', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	response.json(session.devIntelligence ?? null);
+});
+
+/** Per-finding intelligence: structured fix suggestion. */
+app.get('/api/findings/:id/dev-analysis', async (request, response) => {
+	const finding = getFinding(request.params.id);
+	if (!finding) return response.status(404).json({ error: 'Finding not found' });
+	if (!finding.devIntelligence || request.query.force === '1') {
+		try {
+			const intel = await analyzeFinding(finding, {}, request.query.force === '1');
+			return response.json(intel);
+		} catch (err) {
+			return response.status(500).json({ error: 'Analysis failed', message: err.message });
+		}
+	}
+	response.json(finding.devIntelligence);
+});
+
+/** Per-finding AI-ready fix prompt. */
+app.get('/api/findings/:id/fix-prompt', (request, response) => {
+	const finding = getFinding(request.params.id);
+	if (!finding) return response.status(404).json({ error: 'Finding not found' });
+	const prompt = buildFixPrompt(finding, finding.devIntelligence ?? finding.intelligence ?? null);
+	response.type('text/markdown').send(prompt);
+});
+
+/** App-level AI-ready improvement prompt (all findings in a session). */
+app.get('/api/sessions/:id/app-improvement-prompt', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const prompt = buildAppImprovementPromptText(session.findings ?? [], session.devIntelligence?.appReport ?? null);
+	response.type('text/markdown').send(prompt);
+});
+
+/** Full developer intelligence markdown report. */
+app.get('/api/sessions/:id/dev-report', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	if (!session.devIntelligence) return response.status(404).json({ error: 'No dev intelligence for this session yet. Trigger analysis first.' });
+	const format = request.query.format || 'markdown';
+	if (format === 'json') {
+		return response.json({
+			session: { id: session.id, targetUrl: session.targetUrl },
+			devIntelligence: session.devIntelligence
+		});
+	}
+	const md = buildDevReportMarkdown(session, session.devIntelligence);
+	response.type('text/markdown').send(md);
 });
 
 /* ── Workflow routes ────────────────────────────────────────────── */
@@ -474,7 +617,9 @@ app.post('/api/test-cases', (request, response) => {
 		steps: data.steps,
 		assertions: data.assertions,
 		severity: data.severity,
-		tags: data.tags
+		tags: data.tags,
+		viewport: data.viewport,
+		viewports: data.viewports
 	});
 	response.status(201).json(tc);
 });
