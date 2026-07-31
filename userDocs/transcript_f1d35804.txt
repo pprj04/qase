@@ -1,0 +1,294 @@
+
+Misha
+23:03
+Hello? Hello? Just give me one minute. My WhatsApp is not working in my laptop. Just give me one minute, one minute. I'll join through my laptop.
+
+MM
+Mishal Muneer
+23:05
+Hello? Am I audible? Okay. I'll share my screen. Is my screen visible? Hello? K. So this is the platform. It's it's a simple platform. So this is the left, left bar where we can track the projects that's that are being run. This is the place where we interact with the agent. This is where the right this is the live live browser view. Where the user can track the agent's activity So these are the activities that agent does. It's like an log agent log. So these are the plans that agent what do I say? The agent while before testing. And these are the findings of the agents. It's like bug I'll get started. I'll start a new run. As you can see, the agent has replied, I am is an autonomous QA engineer. I test live websites in real browser and report what I find. Which site would you like me to test? In this, you can this is an autonomous QA engineer. You can test whatever link or website you would like to So we'll start with Tritus. Provide the URLs. As you can see, there is activity The agent does opened the page it will come in the browser view in a short time. The agent is reading the page. 79 elements on Writer's AI studio is found on the login page. That this is the reasoning of the agent The site trigger directs to login page, I can see login form, Google, GitHub, sign up link, forgot password link, and a report an issue with it. Report an issue which it is, I think, the small the fire thing. Now the reason is testing each buttons. As you can see, console is healthy. No Only info logs. Note that the UI hint that the password input lacks an autocomplete attribute. The agent is doing like, negative part testing like testing whether, like, will will the input forms so, like, accepts other than it's something than an email. It's trying to do all the negative testing, empty submit. It is trying to test by not giving an email. As you can see, put invalid email or password, please try again, is shown, which is a good generic error. But note, it is also showed this error for an obviously malformed email, not an email. More help for UX would be specific format error current behavior isn't a defect. It's like reasoning. It's a valid security choice. However, the submit did nothing at all. No client said required message. Let me confirm. It has already found an issue. Login forms allow empty submission and returns misleading. In misleading invalid email or password error.
+
+AU
+Abhishek U
+23:10
+Yeah.
+
+MM
+Mishal Muneer
+23:10
+If you click this issue, we can expand it. We can get the complete report. This is these are the steps to recreate that issue. This is the expected behavior. This is the actual behavior. And this is where I think this is, like, the proof Yeah. We can copy as a ticket, and we can report it or we can fix it. Whatever is Oh, it has found empty submit on forward password does nothing. No error form not submitted. It's an email type input, but no visible message. Let me check with a random real looking email to be safe. So right now, it's testing the login page. If we want, we can skip this part and we can start testing the platform directly. Or if you're okay with the login page, we can continue with this. Alright. These are the last credential. It won't save the credential. It will just save for that instance. So for that iteration. Oh, yeah. It's testing the login page because once we give the URL, the first page, it goes as to the login page. Oh, yes. The sign up page is it's inside the login page itself. So it's like exploring the complete We can guide the agent, or we can give instruction agent. Like, if we don't want the complete platform to be tested, we can just tell the agent what to test. So that the agent only tests that's that particular feature and just finds all the bugs from that particular feature. So that we can fix it. Alright. It will go step by step, but, like, each model has its own, like, what do I say, memory capacity or context limit. Once it hits the context limit, it'll just stop, and we can continue it by starting a new or a new run. Just found two issues in the login page. Sign up submit gives no feedback when required. Fields are empty or terms are unchecked. Has found one more issue. Terms of service and privacy policy links to sign up page are nonfunctional. I think the links the blue links over here, it is not functional, I guess. Right now right now, right now, I have made a dynamic cause, like, the agent knows it's limit. So the agent plans by itself before hitting the limit. So right now, it's it's only testing the login page. So once we start testing, the agent calculates what all workflows it should test within the context limit. Right now, it's testing the work report. Instead of running a complete run with it's better to, like, test each features or, like, guide the agent to test particular functions It's asking for the credentials. This is what he wanted. Yeah. This is what he wanted. An agent that tests autonomously without human intervention. And, like, everything else is, like, we can build on top of this. Oh, yes. Yes. I have changed the architecture. No. Me and Pushkar, we are working. I've completed I've built the agent. Now will work on the features. To add on top of this to the UI polish. Like, we don't have, like, a bug table we can store the findings. It's just a simple UI. We just have to make it better. But the core agent is working. So that that's my I think the agenda's gone idle. Like, after, I think, after testing the login page has gone idle. Logic what do I say? The logic is like, there isn't like, since Thomas wanted an autonomous agent, the agent agent calculates all the possibilities and calculates all the plans. And it's it tests it tests by itself unless we give agent and correct instruction to test like, we tell them to test the meeting function or the mic and the meeting function. They didn't test that. They didn't like, creates another plan to how to test the complete and it will report the findings that has found. Right now, I have given the agent complete freedom like, I just told to test the URL. That's why it's it's doing it doing it by it soon. Yes, yes. Or else we can just we can just the ticket management system, it won't it should be more complicated. We can just add a feature in this project itself, to build a table. And we can set up cron jobs. And, we can track the bugs We can add, like, authentication credentials and those like, we can give, like, a role based access yes. Yes. Right. Are we Avié So our result Yeah. Yes. Yes. Oh, yes. We have to implement that. It's like, actually, the agent itself can run the cron job. If it understands the flow. Can test we can schedule a time so that the agent test every time, like, on that specific set. Okay. Okay. No, yo sé en cron job. Yes. I think for that, we just have to instruct the agent and the agent, recreates that bug. And once that bug is recreated, we can we can, like, set a cron job. Like, it can keep on testing that particular path And if that issue is resolved, we can, like, tell the agent to update it or something. It'll get stored to a table. And we set up a cron job. That's it. But the issue was the agent was not performing well. The architecture was, it's, like, flawed. See, like, if the if the agent is smart, we can do cron job because the agent itself will test We can either but the issue is we can either do script based based testing or, like, agent based testing But the issue is, like, if we use agent for testing or doing cron job, like, the number of tokens or, like, the expenses, it'll be, like, very high. But if we set up a script, yes. Oh, yes. Like, if we report like, if we teach the agent, like, to test this issue, like, particular like, every day like, every one hour or two hour. And if that issue is is not resolved, we just we just notify the QA engineer the issue is still not resolved. And we have to either manually report it to the dev team or we have to bridge that gap of like, right now, we do it manually. That we can have we can talk to the dev team, we can know update about each bug. If it's resolved or not. But The flow flow is oh, yeah. It just stores it what we are planning right now. There is no flow in this. It just finds all the repo findings. We can store that's what I said. We can it in our table. We can set up cron job. And if that issue is not resolved, the agent should notify the QA engineer so that the QA engineer can take up the issue to the dev team and that dev team will fix it. And once again, the cron job is being run, if that issue is fixed, then the agent again notifies the user. Like, it's fixed and we moved we moved the bug bug to the fixed thing. If you want to run a test or, like, if you want to run cron job, we can do that too. That is it's up to us, you know, like, how many times we want to set up we can either set it, like, every one hour or, like, once in a day or once in two days. And if Oh, yes. Yes. Yes. Yes. That that I should calc look into it, then I'll tell you.
+
+PP
+Pushkaraj Potdar
+23:31
+Actually, we yes. It's been us tool. We calculate the bug calculated tokens it actually burns, like, around $1 like, 50¢ something it bounced in one go.
+
+MM
+Mishal Muneer
+23:32
+Like, for one workflow or complete test, complete run.
+
+PP
+Pushkaraj Potdar
+23:32
+Yeah. Yeah. I wish it we can do one thing. Like okay. For her for the first time application, we can use the hire model So it will go to that deep and depth search it. Then once it found that found panel, So so we can switch it to the lowest model So it can test, like, if there is a high there is a we are using focus too. 4.7.
+
+MM
+Mishal Muneer
+23:32
+I'm using 4.7. Cloud. We can we can use, like, smaller models. We can use, like, open source model. It'll cost less, but the reasoning won't be that good. The agent might test test Oh, yes. ZLM is also we can use that also. Oh, yes. Can try. Hello? Yes. Yes. Like, cycle, we can set it to over here. Like, as you can see, there is, like, max turns 500. The agent has, like, I think, 500 actions or, like, 500 instances it can do. That's the maximum capacity of each agent. So once this 500 limit hit, the agent holds and we have to start the new session because that context context memory is No, no, no, I think. We can go inside, and we can test couple more features. 500. Complete testing. I don't I don't think we can do it in one go. We have to separate it. We have to separate the feature. Or else or else if we have, like, really good models like Fable or like, GPT's whole, like, with trillion parameters, we can test it in one go. But it's very expensive. Yeah. That's Yes. Yes.
+
+PP
+Pushkaraj Potdar
+23:37
+We can do that. We can handle.
+
+MM
+Mishal Muneer
+23:37
+Like, you want you want to continue the testing in one go. Yes. I guess. We'll run a new run. I'll skip the login page. And I'll tell I'll tell the agent to, like, jump directly to the platform and start testing. So you you you'll get an idea. Oh, yes. Yes. I want you to bypass the login page. Ask the user credential. Start testing the platform do I skip this thing?
+
+PP
+Pushkaraj Potdar
+23:40
+The login thing.
+
+MM
+Mishal Muneer
+23:40
+No. No. No. Like, how do I move out of that function 11 f 11? Okay. Oh, the agent is hallucinating. I'll start a neuron. I'll I'll forgot to give the URL. Bypass the login page and start testing Got it. Okay. User for redemptions. The agent is inside the platform right now. As you can see, it has already set up a plan. So, like, I didn't I didn't instruct the agent to, like, do a particular type of testing. So the agent itself has set up a plan. Explore main navigation and map the reachable authenticated page. Does the chat course to your features and message observe response, empty, submit, long, input, check forms and validation on any settings, profile pages, read only no destructive changes. Exercise login form validation submit invalid email from it's testing the login form again. Check console plus network type for error. But if you tell the agent test in a particular way, the agent will test it in a particular It depends upon the QA engineer, like, what kind of test we want the agent to do. Now, the agent like, we didn't tell specific to I just told the agent to bypass the login page and start testing the platform directly. So the agent itself, it'll create a plan, and it will to that plan and it first. Yes. Yes. For that yeah. Yeah. For that for that, we need an QA engineer to control this agent. That's the whole point. Like, like, a chat because what right now, this all plan the agent itself reasoned and create created this plan. But we the engineers just have to, like, guide the agent Like, Yeah. Yes. Your your you're specifically you're talking about functional testing. Right? Your phage functions is working on it. Yeah. But, like, there are other kinds of testing too. Like security testing, load testing, regression testing. So it's like a testing it's like a wide range not yeah. Yeah. What what you are saying is that we have to set a goal for each each run to test every, like, possible test give a report.
+
+PP
+Pushkaraj Potdar
+23:49
+Yep. Sure, Vishay. We will, like, create a road map or a document on it. Before living or around one or two, we we can share with you.
+
+MM
+Mishal Muneer
+23:50
+One functional testing. What like, depends. Yes. Yes. But, Abhishek, if we set a goal, the autonomous thing the there's no point in building an autonomous thing. Could have Yeah. Yes. If Yes. Okay. Okay. We'll plan we'll plan accordingly. Right now, the Oh, yes. Yes. Okay. Okay. Oh, yes. Fine. Fine. We'll we'll make a yeah. We'll make a plan, and we'll show this to Thomas as well. Let's see what Thomas also has to say. Yes. Yes. That we showed up.
+
+PP
+Pushkaraj Potdar
+23:54
+No. We can report it, like, using the email or using a like, ticketing system.
+
+MM
+Mishal Muneer
+23:54
+If we can order automate that process to.
+
+PP
+Pushkaraj Potdar
+23:54
+We I yeah. We can automate the process. Yeah. Okay.
+
+MM
+Mishal Muneer
+23:54
+Yeah. But I think I think the best would be, like, weird stick to the manual reporting. Because we can like, if it's manual, we can check if that issue is or not. And we can recreate that issue manually. We can send it to the dev team. We can get live what do I say? Live feedback Yes. Yes. Yes. Yes. Yeah. RV of working. Yeah. Sure. Sure. Sure.
+
+PP
+Pushkaraj Potdar
+23:56
+Do one thing. The transcript and send it to the codex. And generate the whole idea. Okay?
+
+MM
+Mishal Muneer
+23:56
+Okay. I'll I'll send you the.
+
+PP
+Pushkaraj Potdar
+23:56
+Because the board is knows yeah. Yeah. Send me the ZIP file.
+
+MM
+Mishal Muneer
+23:56
+I'll send you the code, bro. Yeah.
+
+PP
+Pushkaraj Potdar
+23:56
+Yeah. Send me the code. And, yeah, I will send you the transcript. Of this.
+
+MM
+Mishal Muneer
+23:56
+On top of bro, I have built the engine for you, man. Now build everything else on top of this, bro.
+
+PP
+Pushkaraj Potdar
+23:56
+Yeah. Yeah. Yeah. Oh, yeah. No.
+
+MM
+Mishal Muneer
+23:56
+Now it is your.
+
+PP
+Pushkaraj Potdar
+23:57
+That's actually that's actually great job, boss.
+
+MM
+Mishal Muneer
+23:57
+Yep.
+
+PP
+Pushkaraj Potdar
+23:57
+The main, the main system is done.
+
+MM
+Mishal Muneer
+23:57
+Main? Oh, yes. Yes.
+
+PP
+Pushkaraj Potdar
+23:57
+Now we can what we can do, Ram okay. Listen. What we can do Okay. It's generating, the bugs. Okay? But the main for our, for us, the main is, like, the workflow.
+
+MM
+Mishal Muneer
+23:57
+Yes. Yes.
+
+PP
+Pushkaraj Potdar
+23:57
+It generated the workflow. Okay? Once it's tested, it will generate the workflow. Based on that workflow, it will create the test cases. It will test test each cases. Right? Yeah. Right.
+
+MM
+Mishal Muneer
+23:57
+The Chrome jobs. Yes. Yes.
+
+PP
+Pushkaraj Potdar
+23:57
+And the bugs will be on the also. But there is accept exception. Like, we need to test whole application again. We can do two in two times in a week. Or multiple times in a week. Or we can do one times in a week. So the can be reduced and.
+
+MM
+Mishal Muneer
+23:57
+Oh, yes, yes. And then the.
+
+PP
+Pushkaraj Potdar
+23:58
+Wait. Yeah. And.
+
+MM
+Mishal Muneer
+23:58
+El el send you this in file, bro.
+
+PP
+Pushkaraj Potdar
+23:58
+Yeah. Right.
+
+MM
+Mishal Muneer
+23:58
+You and this on your ID, start working on it.
+
+PP
+Pushkaraj Potdar
+23:58
+Yeah. So I will share, the transcript with you.
+
+MM
+Mishal Muneer
+23:58
+Okay. Yes. This one. Right? Case complete source. Everyone left below? Left trade?
+
+PP
+Pushkaraj Potdar
+23:58
+I don't... No, no.
+
+MM
+Mishal Muneer
+23:58
+No. And.
+
+PP
+Pushkaraj Potdar
+23:58
+No,.
+
+MM
+Mishal Muneer
+23:58
+They're not saying it.
+
+PP
+Pushkaraj Potdar
+23:58
+There.
+
+MM
+Mishal Muneer
+23:58
+Such a long conversation. What all question? He's asking for? Okay. Matt, when.
+
+SA
+S S Niharikaa Aitam
+23:59
+Same point for asking, like, you you want those So he is asking, is it possible to teach teacher? What would you want to test the planning mode? Can we give possible to test only that plan again? That's what he is asking.
+
+MM
+Mishal Muneer
+23:59
+Okay. I'm sharing the file to group. If you all want to work on it, you can work on it.
+
+PP
+Pushkaraj Potdar
+23:59
+We can go through the.
+
+MM
+Mishal Muneer
+00:00
+Oh, yes. Yes. Yes. I'll do that. It tells first, I'll share the I saved it. Right?
+
+SA
+S S Niharikaa Aitam
+00:00
+Okay. This is.
+
+MM
+Mishal Muneer
+00:00
+Okay. Oh, I've sent the ZIP file. Run this code.
+
+PP
+Pushkaraj Potdar
+00:01
+Okay.
+
+MM
+Mishal Muneer
+00:01
+I think you have to download some dependencies and run this code.
+
+PP
+Pushkaraj Potdar
+00:01
+Okay. Okay.
+
+MM
+Mishal Muneer
+00:01
+Think API key is also added, I guess. And start working on it. Okay. Fine, guys. I'll go.
+
+PP
+Pushkaraj Potdar
+00:01
+Okay.

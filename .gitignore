@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Runtime data and artifacts
+.qase/
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Playwright
+/playwright/.cache/
+
+# Build/test artifacts
+.playwright-mcp/
+
+# Test screenshots (root)
+/*.png
