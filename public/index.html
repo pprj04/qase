@@ -6,232 +6,296 @@
 <title>Qase — autonomous QA agent</title>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<script>
+  // Apply saved theme before paint to prevent flash.
+  (function() {
+    var t = localStorage.getItem('qase.theme');
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 </head>
 <body>
 
-<div class="app">
-
-  <!-- ── Left: runs ─────────────────────────────────────────────── -->
-  <aside class="panel runs">
-    <header class="panel-head">
-      <div class="brand">
-        <span class="brand-mark">Qase</span>
-        <button class="brand-sub" id="model-badge" title="Model settings">…</button>
-      </div>
-      <div class="project-bar">
-        <select id="project-select" class="project-select" title="Active project"></select>
-        <button id="new-project" class="btn btn-ghost btn-sm" title="New project">+</button>
-      </div>
-      <button id="new-run" class="btn btn-primary" title="New run  (⌘N)">New run</button>
-      <button id="open-bugs" class="btn btn-ghost btn-sm bugs-btn" title="Bugs Hub">
-        <span class="bug-icon">🐛</span> Bugs <span class="count" id="count-bugs"></span>
-      </button>
-    </header>
-    <div class="run-list" id="run-list"></div>
-    <footer class="panel-foot">
-      <span class="dot" id="conn-dot"></span>
-      <span id="conn-label">connecting…</span>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
-    </footer>
-  </aside>
-
-  <!-- ── Middle: agent chat ─────────────────────────────────────── -->
-  <main class="panel chat">
-    <header class="panel-head">
-      <div class="chat-id">
-        <h1 id="chat-title">No run selected</h1>
-        <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
-      </div>
-      <div class="head-actions">
-        <span class="status-chip" id="status-chip" data-status="idle">idle</span>
-        <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
-      </div>
-    </header>
-
-    <div class="transcript" id="transcript">
-      <div class="empty-state" id="chat-empty">
-        <h2>Autonomous website QA</h2>
-        <p>Paste the URL of the site you want tested. Qase opens it in a real
-           browser, writes a test plan, works through it, and files what breaks.</p>
-        <p class="empty-note">If the site needs a login, the agent stops and asks.
-           Credentials you provide stay on this machine and are swapped in at the
-           keyboard — the model never sees them.</p>
-      </div>
+<!-- ── Top Navigation Bar ─────────────────────────────────────── -->
+<nav class="topnav">
+  <div class="topnav-left">
+    <a class="topnav-brand" href="#/runs">
+      <span class="brand-mark">Qase</span>
+    </a>
+    <a class="topnav-link" data-nav="runs" href="#/runs">Runs</a>
+    <a class="topnav-link" data-nav="tests" href="#/tests">Tests</a>
+    <a class="topnav-link" data-nav="bugs" href="#/bugs">
+      Bugs <span class="count" id="nav-count-bugs"></span>
+    </a>
+  </div>
+  <div class="topnav-right">
+    <div class="topnav-project">
+      <select id="project-select" class="project-select" title="Active project"></select>
+      <button id="new-project" class="btn btn-ghost btn-sm" title="New project">+</button>
     </div>
+    <button class="brand-sub" id="model-badge" title="Model settings">…</button>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle theme">🌙</button>
+    <button class="btn btn-ghost btn-sm" id="open-settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</nav>
 
-    <!-- Live state while the agent works; hidden the moment it replies. -->
-    <div class="thinking-strip" id="thinking-strip" hidden>
-      <button class="thinking-head" id="thinking-head" type="button">
-        <span class="thinking-dots"><i></i><i></i><i></i></span>
-        <span class="thinking-label" id="thinking-label">Working</span>
-        <span class="thinking-peek" id="thinking-peek"></span>
-        <span class="thinking-caret" id="thinking-caret" hidden>▸</span>
-      </button>
-      <div class="thinking-body" id="thinking-body"></div>
-    </div>
+<!-- ── Page: Runs (agent workspace) ───────────────────────────── -->
+<div class="page" id="page-runs">
+  <div class="app">
 
-    <!-- Pipeline progress (Phase 12) -->
-    <div class="pipeline-panel" id="pipeline-panel" hidden>
-      <div class="pipeline-head">
-        <span class="pipeline-title">⚡ Autonomy Pipeline</span>
-        <button class="btn btn-ghost btn-sm pipeline-rerun" id="pipeline-rerun">↻ Re-run</button>
-      </div>
-      <div class="pipeline-stages" id="pipeline-stages"></div>
-      <div class="pipeline-summary" id="pipeline-summary"></div>
-    </div>
+    <!-- ── Left: runs ─────────────────────────────────────────────── -->
+    <aside class="panel runs">
+      <header class="panel-head">
+        <button id="new-run" class="btn btn-primary" title="New run  (⌘N)">New run</button>
+      </header>
+      <div class="run-list" id="run-list"></div>
+      <footer class="panel-foot">
+        <span class="dot" id="conn-dot"></span>
+        <span id="conn-label">connecting…</span>
+      </footer>
+    </aside>
 
-    <!-- Dev Intelligence (Phase 13) -->
-    <div class="dev-intel-panel" id="dev-intel-panel" hidden>
-      <div class="dev-intel-head">
-        <span class="dev-intel-title">🧠 Developer Intelligence</span>
-        <div class="dev-intel-actions">
-          <button class="btn btn-ghost btn-sm" id="dev-intel-refresh" title="Re-analyze">↻</button>
-          <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">⬇ Report</button>
-          <button class="btn btn-ghost btn-sm" id="dev-intel-copy-prompt" title="Copy AI improvement prompt">📋 AI Prompt</button>
+    <!-- ── Middle: agent chat ─────────────────────────────────────── -->
+    <main class="panel chat">
+      <header class="panel-head">
+        <div class="chat-id">
+          <h1 id="chat-title">No run selected</h1>
+          <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
+        </div>
+        <div class="head-actions">
+          <span class="status-chip" id="status-chip" data-status="idle">idle</span>
+          <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
+        </div>
+      </header>
+
+      <div class="transcript" id="transcript">
+        <div class="empty-state" id="chat-empty">
+          <h2>Autonomous website QA</h2>
+          <p>Paste the URL of the site you want tested. Qase opens it in a real
+             browser, writes a test plan, works through it, and files what breaks.</p>
+          <p class="empty-note">If the site needs a login, the agent stops and asks.
+             Credentials you provide stay on this machine and are swapped in at the
+             keyboard — the model never sees them.</p>
         </div>
       </div>
-      <div class="dev-intel-body" id="dev-intel-body"></div>
-    </div>
 
-    <div class="question-slot" id="question-slot"></div>
-
-    <form class="composer" id="composer">
-      <textarea id="composer-input" rows="1" placeholder="https://example.com — or an instruction for the agent" autocomplete="off"></textarea>
-      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
-    </form>
-  </main>
-
-  <!-- ── Right: live browser + activity ─────────────────────────── -->
-  <aside class="panel viewer">
-    <header class="panel-head">
-      <div class="urlbar">
-        <span class="dot" id="browser-dot"></span>
-        <span class="url" id="browser-url">about:blank</span>
+      <!-- Live state while the agent works; hidden the moment it replies. -->
+      <div class="thinking-strip" id="thinking-strip" hidden>
+        <button class="thinking-head" id="thinking-head" type="button">
+          <span class="thinking-dots"><i></i><i></i><i></i></span>
+          <span class="thinking-label" id="thinking-label">Working</span>
+          <span class="thinking-peek" id="thinking-peek"></span>
+          <span class="thinking-caret" id="thinking-caret" hidden>▸</span>
+        </button>
+        <div class="thinking-body" id="thinking-body"></div>
       </div>
-      <span class="subtle" id="browser-title"></span>
-    </header>
 
-    <div class="stage" id="stage">
-      <div class="stage-inner" id="stage-inner" hidden>
-        <img id="frame" alt="Live view of the site under test">
-        <div class="overlay" id="overlay">
-          <div class="target-box" id="target-box"></div>
-          <div class="cursor" id="cursor">
-            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-              <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
-                    fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/>
-            </svg>
-            <span class="ripple" id="ripple"></span>
-            <span class="cursor-label" id="cursor-label"></span>
+      <!-- Pipeline progress (Phase 12) -->
+      <div class="pipeline-panel" id="pipeline-panel" hidden>
+        <div class="pipeline-head">
+          <span class="pipeline-title">⚡ Autonomy Pipeline</span>
+          <button class="btn btn-ghost btn-sm pipeline-rerun" id="pipeline-rerun">↻ Re-run</button>
+        </div>
+        <div class="pipeline-stages" id="pipeline-stages"></div>
+        <div class="pipeline-summary" id="pipeline-summary"></div>
+      </div>
+
+      <!-- Dev Intelligence (Phase 13) -->
+      <div class="dev-intel-panel" id="dev-intel-panel" hidden>
+        <div class="dev-intel-head">
+          <span class="dev-intel-title">🧠 Developer Intelligence</span>
+          <div class="dev-intel-actions">
+            <button class="btn btn-ghost btn-sm" id="dev-intel-refresh" title="Re-analyze">↻</button>
+            <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">⬇ Report</button>
+            <button class="btn btn-ghost btn-sm" id="dev-intel-copy-prompt" title="Copy AI improvement prompt">📋 AI Prompt</button>
           </div>
         </div>
+        <div class="dev-intel-body" id="dev-intel-body"></div>
       </div>
-      <div class="stage-empty" id="stage-empty">
-        <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true">
-          <rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="6" cy="5" r="1.2" fill="currentColor"/>
-          <circle cx="10.5" cy="5" r="1.2" fill="currentColor"/>
-          <circle cx="15" cy="5" r="1.2" fill="currentColor"/>
-          <path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <span>No browser yet</span>
-        <small>The live view appears when the agent opens the site</small>
+
+      <div class="question-slot" id="question-slot"></div>
+
+      <form class="composer" id="composer">
+        <textarea id="composer-input" rows="1" placeholder="https://example.com — or an instruction for the agent" autocomplete="off"></textarea>
+        <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+      </form>
+    </main>
+
+    <!-- ── Right: live browser + activity ─────────────────────────── -->
+    <aside class="panel viewer">
+      <header class="panel-head">
+        <div class="urlbar">
+          <span class="dot" id="browser-dot"></span>
+          <span class="url" id="browser-url">about:blank</span>
+        </div>
+        <span class="subtle" id="browser-title"></span>
+      </header>
+
+      <div class="stage" id="stage">
+        <div class="stage-inner" id="stage-inner" hidden>
+          <img id="frame" alt="Live view of the site under test">
+          <div class="overlay" id="overlay">
+            <div class="target-box" id="target-box"></div>
+            <div class="cursor" id="cursor">
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
+                      fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/>
+              </svg>
+              <span class="ripple" id="ripple"></span>
+              <span class="cursor-label" id="cursor-label"></span>
+            </div>
+          </div>
+        </div>
+        <div class="stage-empty" id="stage-empty">
+          <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true">
+            <rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/>
+            <circle cx="6" cy="5" r="1.2" fill="currentColor"/>
+            <circle cx="10.5" cy="5" r="1.2" fill="currentColor"/>
+            <circle cx="15" cy="5" r="1.2" fill="currentColor"/>
+            <path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>No browser yet</span>
+          <small>The live view appears when the agent opens the site</small>
+        </div>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-tab="activity">Activity</button>
+        <button class="tab" data-tab="plan">Plan <span class="count" id="count-plan"></span></button>
+        <button class="tab" data-tab="report">Report</button>
+      </nav>
+
+      <div class="tab-body">
+        <section class="tab-pane is-active" data-pane="activity"><div class="feed" id="activity-feed"></div></section>
+        <section class="tab-pane" data-pane="plan"><div class="feed" id="plan-list"></div></section>
+        <section class="tab-pane" data-pane="report">
+          <div class="metrics-overview" id="metrics-overview"></div>
+          <div class="feed" id="report-view"></div>
+        </section>
+      </div>
+    </aside>
+
+  </div><!-- /.app -->
+</div><!-- /#page-runs -->
+
+<!-- Hidden containers for session-specific content rendered by JS.
+     These live outside the runs page because their tabs were moved to
+     dedicated pages (Bugs, Tests) or removed for simplicity. -->
+<div id="findings-list" hidden></div>
+<div id="workflow-pane" hidden></div>
+<div id="regression-pane" hidden></div>
+<span id="count-findings" hidden></span>
+<span id="count-workflows" hidden></span>
+<span id="count-testcases" hidden></span>
+<span id="count-regression" hidden></span>
+
+<!-- ── Page: Tests ──────────────────────────────────────────────── -->
+<div class="page" id="page-tests" hidden>
+  <div class="tests-page">
+    <!-- Header -->
+    <header class="tests-header">
+      <div class="tests-header-left">
+        <h2>Test Cases</h2>
+        <div class="tests-stats" id="tests-stats"></div>
+      </div>
+      <div class="tests-header-right">
+        <input type="text" id="tests-search" class="tests-search-input" placeholder="Search tests…" autocomplete="off">
+        <select id="tests-filter-severity" class="tests-filter-select">
+          <option value="">All severities</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟠 High</option>
+          <option value="medium">🟡 Medium</option>
+          <option value="low">🔵 Low</option>
+        </select>
+        <select id="tests-filter-viewport" class="tests-filter-select">
+          <option value="">All viewports</option>
+          <option value="desktop">🖥️ Desktop</option>
+          <option value="tablet">📋 Tablet</option>
+          <option value="mobile">📱 Mobile</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="tests-toolbar" id="testcases-toolbar">
+      <button class="btn btn-primary btn-sm" id="btn-new-testcase">+ New Test Case</button>
+      <button class="btn btn-ghost btn-sm" id="btn-new-suite">+ Suite</button>
+      <button class="btn btn-ghost btn-sm tc-run-all" id="btn-run-all-tests">▶ Run All</button>
+      <div class="export-group">
+        <span class="export-label">Export:</span>
+        <button class="btn btn-ghost btn-sm" data-export="testcases-json">JSON</button>
+        <button class="btn btn-ghost btn-sm" data-export="testcases-csv">CSV</button>
       </div>
     </div>
 
-    <nav class="tabs" id="tabs">
-      <button class="tab is-active" data-tab="activity">Activity</button>
-      <button class="tab" data-tab="plan">Plan <span class="count" id="count-plan"></span></button>
-      <button class="tab" data-tab="findings">Findings <span class="count" id="count-findings"></span></button>
-      <button class="tab" data-tab="workflows">Workflows <span class="count" id="count-workflows"></span></button>
-      <button class="tab" data-tab="testcases">Tests <span class="count" id="count-testcases"></span></button>
-      <button class="tab" data-tab="regression">Regression <span class="count" id="count-regression"></span></button>
-      <button class="tab" data-tab="report">Report</button>
-    </nav>
-
-    <div class="tab-body">
-      <section class="tab-pane is-active" data-pane="activity"><div class="feed" id="activity-feed"></div></section>
-      <section class="tab-pane" data-pane="plan"><div class="feed" id="plan-list"></div></section>
-      <section class="tab-pane" data-pane="findings">
-        <div class="pane-toolbar" id="findings-toolbar">
-          <div class="export-group">
-            <span class="export-label">Export:</span>
-            <button class="btn btn-ghost btn-sm" data-export="findings-markdown">Markdown</button>
-            <button class="btn btn-ghost btn-sm" data-export="findings-github">GitHub</button>
-            <button class="btn btn-ghost btn-sm" data-export="findings-jira">JIRA</button>
-            <button class="btn btn-ghost btn-sm" data-export="findings-linear">Linear</button>
-          </div>
-        </div>
-        <div class="feed" id="findings-list"></div>
-      </section>
-      <section class="tab-pane" data-pane="workflows"><div class="feed" id="workflow-pane"></div></section>
-      <section class="tab-pane" data-pane="testcases">
-        <div class="pane-toolbar" id="testcases-toolbar">
-          <button class="btn btn-primary btn-sm" id="btn-new-testcase">+ New Test Case</button>
-          <button class="btn btn-ghost btn-sm" id="btn-new-suite">+ Suite</button>
-          <div class="export-group">
-            <span class="export-label">Export:</span>
-            <button class="btn btn-ghost btn-sm" data-export="testcases-json">JSON</button>
-            <button class="btn btn-ghost btn-sm" data-export="testcases-csv">CSV</button>
-          </div>
-        </div>
+    <!-- Body: sidebar + grid -->
+    <div class="tests-body">
+      <aside class="tests-sidebar" id="tests-sidebar">
         <div class="suite-tree" id="suite-tree"></div>
+      </aside>
+      <main class="tests-main">
+        <div class="tc-tag-bar-wrap" id="tc-tag-bar-wrap"></div>
         <div class="feed" id="testcase-pane"></div>
-      </section>
-      <section class="tab-pane" data-pane="regression"><div class="feed" id="regression-pane"></div></section>
-      <section class="tab-pane" data-pane="report">
-        <div class="metrics-overview" id="metrics-overview"></div>
-        <div class="feed" id="report-view"></div>
-      </section>
+      </main>
     </div>
-  </aside>
-
+  </div>
 </div>
 
-<!-- ── Bugs Hub ─────────────────────────────────────────────────── -->
-<div class="bugs-hub" id="bugs-hub" hidden>
-  <div class="bugs-hub-inner">
-    <header class="bugs-hub-head">
-      <h2>🐛 Bugs Hub</h2>
-      <div class="bugs-hub-actions">
-        <button class="btn btn-primary btn-sm" id="btn-new-bug">+ New Bug</button>
-        <div class="export-group">
-          <span class="export-label">Export:</span>
-          <button class="btn btn-ghost btn-sm" data-bug-export="markdown">Markdown</button>
-          <button class="btn btn-ghost btn-sm" data-bug-export="github">GitHub</button>
-          <button class="btn btn-ghost btn-sm" data-bug-export="jira">JIRA</button>
-          <button class="btn btn-ghost btn-sm" data-bug-export="linear">Linear</button>
-        </div>
-        <button class="btn btn-ghost btn-sm" id="close-bugs">✕ Close</button>
+<!-- ── Page: Bugs (placeholder — full build in Phase 15E) ─────── -->
+<div class="page" id="page-bugs" hidden>
+  <div class="bugs-page">
+    <!-- Sticky header -->
+    <header class="bugs-header">
+      <div class="bugs-header-left">
+        <h2>🐛 Bugs</h2>
+        <div class="bugs-stats-row" id="bugs-stats"></div>
+      </div>
+      <div class="bugs-header-right">
+        <input type="text" id="bug-search" class="bugs-search-input" placeholder="Search bugs…" autocomplete="off">
+        <select id="bug-filter-severity" class="bugs-filter-select">
+          <option value="">All severities</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟠 High</option>
+          <option value="medium">🟡 Medium</option>
+          <option value="low">🔵 Low</option>
+          <option value="info">⚪ Info</option>
+        </select>
+        <select id="bug-filter-status" class="bugs-filter-select">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_testing">In Testing</option>
+          <option value="resolved">Resolved</option>
+          <option value="closed">Closed</option>
+        </select>
+        <select id="bug-filter-category" class="bugs-filter-select">
+          <option value="">All categories</option>
+        </select>
       </div>
     </header>
 
-    <div class="bugs-hub-stats" id="bugs-stats"></div>
-
-    <div class="bugs-hub-filters">
-      <input type="text" id="bug-search" class="bug-search-input" placeholder="Search bugs…">
-      <select id="bug-filter-severity" class="bug-filter-select">
-        <option value="">All severities</option>
-        <option value="critical">🔴 Critical</option>
-        <option value="high">🟠 High</option>
-        <option value="medium">🟡 Medium</option>
-        <option value="low">🔵 Low</option>
-        <option value="info">⚪ Info</option>
-      </select>
-      <select id="bug-filter-status" class="bug-filter-select">
-        <option value="">All statuses</option>
-        <option value="open">Open</option>
-        <option value="in_testing">In Testing</option>
-        <option value="resolved">Resolved</option>
-        <option value="closed">Closed</option>
-      </select>
-      <select id="bug-filter-category" class="bug-filter-select">
-        <option value="">All categories</option>
-      </select>
+    <!-- Toolbar -->
+    <div class="bugs-toolbar">
+      <button class="btn btn-primary btn-sm" id="btn-new-bug">+ New Bug</button>
+      <div class="bugs-view-toggle">
+        <button class="btn btn-ghost btn-sm bugs-view-btn is-active" data-view="grid" id="bug-view-grid">⊞ Grid</button>
+        <button class="btn btn-ghost btn-sm bugs-view-btn" data-view="list" id="bug-view-list">☰ List</button>
+      </div>
+      <div class="export-group">
+        <span class="export-label">Export:</span>
+        <button class="btn btn-ghost btn-sm" data-bug-export="markdown">Markdown</button>
+        <button class="btn btn-ghost btn-sm" data-bug-export="github">GitHub</button>
+        <button class="btn btn-ghost btn-sm" data-bug-export="jira">JIRA</button>
+        <button class="btn btn-ghost btn-sm" data-bug-export="linear">Linear</button>
+      </div>
     </div>
 
-    <div class="bugs-hub-board" id="bugs-board"></div>
+    <!-- Board -->
+    <div class="bugs-board-wrap">
+      <div class="bugs-hub-board" id="bugs-board"></div>
+    </div>
   </div>
 </div>
 
@@ -277,7 +341,7 @@
       </div>
       <label class="field">
         <span>URL</span>
-        <input type="text" id="bug-edit-url" placeholder="https://...">
+        <input type="text" id="bug-edit-url" placeholder="https://..."></input>
       </label>
       <label class="field">
         <span>Steps to reproduce (one per line)</span>
