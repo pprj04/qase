@@ -121,8 +121,6 @@ button, input, textarea, select { font: inherit; color: inherit; }
 
 .panel {
 	background: var(--glass);
-	backdrop-filter: var(--blur);
-	-webkit-backdrop-filter: var(--blur);
 	display: flex;
 	flex-direction: column;
 	min-width: 0;
@@ -170,8 +168,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .btn {
 	border: 1px solid var(--hair);
 	background: var(--glass-2);
-	backdrop-filter: blur(12px);
-	-webkit-backdrop-filter: blur(12px);
 	border-radius: 9px;
 	padding: 6px 13px;
 	font-size: 12.5px;
@@ -352,8 +348,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	overflow-wrap: anywhere;
 	font-size: 13.5px;
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 12px rgba(0, 0, 0, .16);
-	backdrop-filter: blur(10px);
-	-webkit-backdrop-filter: blur(10px);
 }
 
 .msg.user { align-self: flex-end; align-items: flex-end; }
@@ -415,8 +409,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	margin: 0 22px 8px;
 	border: 1px solid var(--hair-soft);
 	background: rgba(255, 255, 255, .03);
-	backdrop-filter: blur(12px);
-	-webkit-backdrop-filter: blur(12px);
 	border-radius: var(--radius);
 	overflow: hidden;
 	animation: fade .22s var(--ease);
@@ -501,8 +493,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .question {
 	border: 1px solid rgba(255, 159, 10, .34);
 	background: rgba(255, 159, 10, .1);
-	backdrop-filter: var(--blur);
-	-webkit-backdrop-filter: var(--blur);
 	border-radius: var(--radius);
 	padding: 15px;
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), 0 8px 30px rgba(0, 0, 0, .3);
@@ -670,8 +660,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	left: 20px;
 	top: 20px;
 	background: rgba(14, 14, 16, .82);
-	backdrop-filter: blur(14px) saturate(180%);
-	-webkit-backdrop-filter: blur(14px) saturate(180%);
 	border: 1px solid var(--hair);
 	color: var(--text);
 	font: 10.5px/1.4 var(--mono);
@@ -815,8 +803,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	border-radius: 12px;
 	margin-bottom: 8px;
 	background: var(--glass-2);
-	backdrop-filter: blur(10px);
-	-webkit-backdrop-filter: blur(10px);
 	overflow: hidden;
 	animation: fade .26s var(--ease);
 }
@@ -1009,9 +995,7 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	pointer-events: none;
 }
 .toast {
-	background: rgba(18, 18, 20, .8);
-	backdrop-filter: saturate(180%) blur(28px);
-	-webkit-backdrop-filter: saturate(180%) blur(28px);
+	background: rgba(18, 18, 20, .92);
 	border: 1px solid var(--hair);
 	border-left: 3px solid var(--accent);
 	border-radius: 13px;
@@ -2417,7 +2401,6 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	inset: 0;
 	z-index: 200;
 	background: var(--bg-deep);
-	backdrop-filter: blur(40px);
 	display: flex;
 	flex-direction: column;
 	overflow-y: auto;
@@ -4226,4 +4209,385 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 }
 .bs-status-dot.is-off {
 	background: var(--text-secondary, rgba(255,255,255,0.3));
+}
+
+/* ════════════════════════════════════════════════════════════════
+   UI SPRINT — Mission Experience, Activity Feed, Pipeline Polish,
+   CSS Performance, Demo-Ready Empty States
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Mission Phase Tracker ──────────────────────────────────────── */
+.mission-phases {
+	display: flex;
+	align-items: center;
+	gap: 0;
+	padding: 6px 16px;
+	background: var(--glass);
+	border-bottom: 1px solid var(--hair-soft);
+	font-size: 12px;
+}
+.mission-phase {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-faint);
+	transition: color .3s var(--ease);
+	white-space: nowrap;
+}
+.mission-phase-dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--text-faint);
+	transition: all .3s var(--ease);
+	flex-shrink: 0;
+}
+.mission-phase-label {
+	font-weight: 500;
+	letter-spacing: .02em;
+}
+.mission-phase.is-active {
+	color: var(--accent);
+}
+.mission-phase.is-active .mission-phase-dot {
+	background: var(--accent);
+	box-shadow: 0 0 0 3px rgba(10,132,255,.25);
+	animation: phase-pulse 1.8s var(--ease) infinite;
+}
+.mission-phase.is-done {
+	color: var(--ok);
+}
+.mission-phase.is-done .mission-phase-dot {
+	background: var(--ok);
+}
+.mission-phase-line {
+	flex: 1;
+	min-width: 16px;
+	height: 2px;
+	background: var(--hair);
+	margin: 0 8px;
+	transition: background .3s var(--ease);
+}
+.mission-phase.is-done + .mission-phase-line {
+	background: var(--ok);
+}
+@keyframes phase-pulse {
+	0%, 100% { box-shadow: 0 0 0 3px rgba(10,132,255,.25); }
+	50%      { box-shadow: 0 0 0 6px rgba(10,132,255,.08); }
+}
+
+/* ── Enhanced Activity Feed ─────────────────────────────────────── */
+.act {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 12px;
+	border-radius: 8px;
+	transition: background .2s var(--ease);
+}
+.act:hover {
+	background: var(--glass-2);
+}
+.act-icon {
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 13px;
+	flex-shrink: 0;
+	background: var(--glass-2);
+	transition: all .2s var(--ease);
+}
+.act.running .act-icon {
+	background: rgba(10,132,255,.15);
+	color: var(--accent);
+}
+.act.running .act-icon.spinning {
+	animation: act-spin 1s linear infinite;
+}
+@keyframes act-spin {
+	to { transform: rotate(360deg); }
+}
+.act.completed .act-icon {
+	background: rgba(48,209,88,.1);
+	color: var(--ok);
+}
+.act.failed .act-icon {
+	background: rgba(255,69,58,.1);
+	color: var(--danger);
+}
+.act-main {
+	flex: 1;
+	min-width: 0;
+}
+.act-label {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.act-detail {
+	font-size: 11px;
+	color: var(--text-dim);
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.act-time {
+	font-size: 10px;
+	color: var(--text-faint);
+	font-family: var(--mono);
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+
+/* ── Enhanced Pipeline Visualization ────────────────────────────── */
+.pipeline-panel {
+	background: var(--glass);
+	border: 1px solid var(--hair);
+	border-radius: 12px;
+	padding: 14px 16px;
+	margin: 0 16px;
+	overflow: hidden;
+}
+.pipeline-stages {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+.pipeline-stage {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border-radius: 8px;
+	background: var(--glass-2);
+	border: 1px solid var(--hair-soft);
+	font-size: 12px;
+	transition: all .35s var(--ease);
+	position: relative;
+	overflow: hidden;
+}
+.pipeline-stage.stage-running {
+	border-color: var(--accent);
+	background: rgba(10,132,255,.08);
+	box-shadow: 0 0 0 2px rgba(10,132,255,.1);
+}
+.pipeline-stage.stage-running::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(90deg, transparent, rgba(10,132,255,.06), transparent);
+	animation: pipeline-shimmer 2s linear infinite;
+}
+@keyframes pipeline-shimmer {
+	to { transform: translateX(100%); }
+}
+.pipeline-stage.stage-done {
+	border-color: rgba(48,209,88,.3);
+	background: rgba(48,209,88,.06);
+}
+.pipeline-stage.stage-failed {
+	border-color: rgba(255,69,58,.3);
+	background: rgba(255,69,58,.06);
+}
+.pipeline-stage-icon {
+	width: 18px;
+	height: 18px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	flex-shrink: 0;
+}
+.pipeline-stage-icon.spinning {
+	animation: act-spin 1s linear infinite;
+	color: var(--accent);
+}
+.stage-done .pipeline-stage-icon { color: var(--ok); }
+.stage-failed .pipeline-stage-icon { color: var(--danger); }
+.pipeline-stage-label {
+	font-weight: 500;
+}
+.pipeline-stage-detail {
+	font-size: 10px;
+	color: var(--text-dim);
+	margin-top: 1px;
+}
+.pipeline-arrow {
+	color: var(--text-faint);
+	font-size: 10px;
+}
+.stage-done + .pipeline-arrow { color: var(--ok); }
+
+/* ── Enhanced Empty States ──────────────────────────────────────── */
+.stage-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	color: var(--text-faint);
+}
+.stage-empty-art {
+	color: var(--text-faint);
+	opacity: .4;
+	transition: opacity .3s var(--ease);
+}
+.stage-empty:hover .stage-empty-art {
+	opacity: .6;
+}
+.stage-empty span {
+	font-size: 13px;
+	font-weight: 500;
+}
+.stage-empty small {
+	font-size: 11px;
+	color: var(--text-faint);
+}
+.feed-empty {
+	color: var(--text-faint);
+	font-size: 12px;
+	text-align: center;
+	padding: 24px 16px;
+}
+
+/* ── Status chip enhancements ───────────────────────────────────── */
+.status-chip {
+	transition: all .3s var(--ease);
+}
+.status-chip[data-status="running"] {
+	background: rgba(10,132,255,.12);
+	color: var(--accent);
+	border: 1px solid rgba(10,132,255,.25);
+}
+.status-chip[data-status="done"] {
+	background: rgba(48,209,88,.1);
+	color: var(--ok);
+	border: 1px solid rgba(48,209,88,.2);
+}
+.status-chip[data-status="error"] {
+	background: rgba(255,69,58,.1);
+	color: var(--danger);
+	border: 1px solid rgba(255,69,58,.2);
+}
+.status-chip[data-status="interrupted"] {
+	background: rgba(255,159,10,.1);
+	color: var(--warn);
+	border: 1px solid rgba(255,159,10,.2);
+}
+.status-chip[data-status="awaiting_input"] {
+	background: rgba(255,159,10,.12);
+	color: var(--warn);
+	border: 1px solid rgba(255,159,10,.25);
+	animation: chip-pulse 2s var(--ease) infinite;
+}
+@keyframes chip-pulse {
+	0%, 100% { opacity: 1; }
+	50%      { opacity: .7; }
+}
+
+/* ── Run list enhancements ──────────────────────────────────────── */
+.run {
+	transition: all .2s var(--ease);
+	border: 1px solid transparent;
+}
+.run:hover {
+	background: var(--glass-2);
+	border-color: var(--hair-soft);
+}
+.run.is-active {
+	background: var(--glass-3);
+	border-color: rgba(10,132,255,.2);
+}
+.run-status-dot {
+	transition: all .3s var(--ease);
+}
+.run-status-dot[data-status="running"] {
+	background: var(--accent);
+	box-shadow: 0 0 6px rgba(10,132,255,.4);
+	animation: dot-pulse 1.5s ease infinite;
+}
+.run-status-dot[data-status="done"] {
+	background: var(--ok);
+}
+.run-status-dot[data-status="error"] {
+	background: var(--danger);
+}
+.run-status-dot[data-status="interrupted"] {
+	background: var(--warn);
+}
+@keyframes dot-pulse {
+	0%, 100% { transform: scale(1); }
+	50%      { transform: scale(1.15); }
+}
+
+/* ── CSS Performance: remove expensive backdrop-filter from non-essential elements ─ */
+/* Only keep blur on topnav and modals; replace the rest with solid-ish backgrounds */
+
+/* Thinking strip: no blur, just a gradient */
+.thinking-strip {
+	background: linear-gradient(180deg, var(--glass-2) 0%, var(--glass) 100%);
+}
+
+/* Dev intel panel: no blur */
+.dev-intel-panel {
+	background: var(--glass);
+}
+
+/* ── Browser preview loading state ──────────────────────────────── */
+.stage {
+	position: relative;
+	overflow: hidden;
+}
+.stage::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(135deg, var(--glass) 0%, transparent 50%, var(--glass) 100%);
+	opacity: .3;
+	pointer-events: none;
+}
+
+/* ── Smooth scrolling for feeds ─────────────────────────────────── */
+.feed, .transcript {
+	scroll-behavior: smooth;
+}
+
+/* ── Global quality-of-life ─────────────────────────────────────── */
+.btn {
+	transition: all .15s var(--ease);
+}
+.btn:hover {
+	transform: translateY(-1px);
+}
+.btn:active {
+	transform: translateY(0);
+}
+.btn-primary {
+	box-shadow: 0 1px 3px rgba(10,132,255,.2);
+}
+
+/* ── Transcript message polish ──────────────────────────────────── */
+.msg {
+	animation: msg-fadein .3s var(--ease);
+}
+@keyframes msg-fadein {
+	from { opacity: 0; transform: translateY(8px); }
+	to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Page transition polish ─────────────────────────────────────── */
+.page {
+	animation: page-fadein .25s var(--ease);
+}
+@keyframes page-fadein {
+	from { opacity: 0; }
+	to   { opacity: 1; }
 }

@@ -84,6 +84,24 @@
         </div>
       </div>
 
+      <!-- Live mission phase tracker (visible while agent is working) -->
+      <div class="mission-phases" id="mission-phases" hidden>
+        <div class="mission-phase is-active" data-phase="explore">
+          <span class="mission-phase-dot"></span>
+          <span class="mission-phase-label">Explore</span>
+        </div>
+        <div class="mission-phase-line"></div>
+        <div class="mission-phase" data-phase="test">
+          <span class="mission-phase-dot"></span>
+          <span class="mission-phase-label">Test</span>
+        </div>
+        <div class="mission-phase-line"></div>
+        <div class="mission-phase" data-phase="report">
+          <span class="mission-phase-dot"></span>
+          <span class="mission-phase-label">Report</span>
+        </div>
+      </div>
+
       <!-- Live state while the agent works; hidden the moment it replies. -->
       <div class="thinking-strip" id="thinking-strip" hidden>
         <button class="thinking-head" id="thinking-head" type="button">

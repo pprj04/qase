@@ -156,6 +156,44 @@ function setStatus(status) {
 	updateThinkingStrip();
 }
 
+/* ── Mission phase tracker ─────────────────────────────────────────── */
+
+const missionEl = () => document.getElementById('mission-phases');
+
+function updateMissionPhase(status, activityLabel) {
+	const phases = missionEl();
+	if (!phases) return;
+
+	if (status === 'idle' || status === 'done' || status === 'error' || status === 'interrupted') {
+		phases.hidden = true;
+		return;
+	}
+
+	phases.hidden = false;
+
+	// Infer phase from the activity or status
+	const text = (activityLabel || status || '').toLowerCase();
+	let phase = 'explore';
+	if (text.includes('test') || text.includes('assert') || text.includes('form') ||
+		text.includes('click') || text.includes('fill') || text.includes('login')) {
+		phase = 'test';
+	}
+	if (text.includes('report') || text.includes('finding') || text.includes('summary')) {
+		phase = 'report';
+	}
+
+	const order = ['explore', 'test', 'report'];
+	const currentIdx = order.indexOf(phase);
+
+	for (let i = 0; i < order.length; i++) {
+		const el = phases.querySelector(`[data-phase="${order[i]}"]`);
+		if (!el) continue;
+		el.classList.remove('is-active', 'is-done');
+		if (i < currentIdx) el.classList.add('is-done');
+		if (i === currentIdx) el.classList.add('is-active');
+	}
+}
+
 /* ── Transcript ──────────────────────────────────────────────────── */
 
 function renderTranscript() {
@@ -506,11 +544,18 @@ function renderActivity(activity) {
 	node.className = `act ${activity.status}`;
 	node.dataset.id = activity.id;
 
+	// Use action-type icon when available, falling back to status icon
 	const icon = document.createElement('span');
 	icon.className = 'act-icon';
-	if (activity.status === 'running') icon.textContent = '⟳';
-	else if (activity.status === 'failed') icon.textContent = '⚠';
-	else icon.textContent = '✓';
+	const actionIcon = inferActivityIcon(activity.label);
+	if (activity.status === 'running') {
+		icon.classList.add('spinning');
+		icon.textContent = actionIcon || '⟳';
+	} else if (activity.status === 'failed') {
+		icon.textContent = '⚠';
+	} else {
+		icon.textContent = actionIcon || '✓';
+	}
 
 	const main = document.createElement('div');
 	main.className = 'act-main';
@@ -534,6 +579,24 @@ function renderActivity(activity) {
 
 	node.append(icon, main, time);
 	return node;
+}
+
+/** Maps activity labels to contextual icons for better visual scanning. */
+function inferActivityIcon(label) {
+	const text = (label || '').toLowerCase();
+	if (text.includes('navigate') || text.includes('goto') || text.includes('url')) return '🧭';
+	if (text.includes('click') || text.includes('tap')) return '👆';
+	if (text.includes('fill') || text.includes('type') || text.includes('input')) return '✏️';
+	if (text.includes('screenshot') || text.includes('snapshot')) return '📸';
+	if (text.includes('form') || text.includes('submit')) return '📝';
+	if (text.includes('login') || text.includes('auth')) return '🔐';
+	if (text.includes('explore') || text.includes('discover')) return '🔍';
+	if (text.includes('test') || text.includes('assert')) return '🧪';
+	if (text.includes('report') || text.includes('finding')) return '📋';
+	if (text.includes('error') || text.includes('console')) return '⚠';
+	if (text.includes('scroll')) return '📜';
+	if (text.includes('hover')) return '🖱️';
+	return null;
 }
 
 function scrollFeed(feed) {
@@ -1426,6 +1489,7 @@ function handleEvent(event) {
 
 		case 'status':
 			setStatus(event.status);
+			updateMissionPhase(event.status, event.activity);
 			if (event.status !== 'running') {
 				void refreshRuns();
 			}
