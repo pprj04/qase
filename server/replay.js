@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { getConfig, resolveViewport } from './config.js';
 import { getBaseline, setBaseline, autoCaptureBaselines } from './baselines.js';
+import { isSelectorFailure, capturePageDom, analyzeFailure, patchTestCase, createHealRecord } from './selfHeal.js';
+import { updateTestCase } from './testCases.js';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 
@@ -64,8 +66,38 @@ function resolveValue(value, credentials) {
 
 /* ── Browser launch ─────────────────────────────────────────────── */
 
-async function launchBrowser() {
+const BROWSERSTACK_OS_MAP = {
+	chrome: { browser: 'chrome', os: 'OS X', os_version: 'Sonoma' },
+	firefox: { browser: 'firefox', os: 'OS X', os_version: 'Sonoma' },
+	safari: { browser: 'Safari', os: 'OS X', os_version: 'Sonoma' }
+};
+
+async function launchBrowser(opts = {}) {
 	const config = getConfig();
+
+	// ── BrowserStack CDP path ──
+	if (config.browserstackEnabled && config.browserstackUser && config.browserstackKey) {
+		const browserType = opts.browser || 'chrome';
+		const osInfo = BROWSERSTACK_OS_MAP[browserType] || BROWSERSTACK_OS_MAP.chrome;
+		const caps = {
+			browser: osInfo.browser,
+			os: osInfo.os,
+			os_version: osInfo.os_version,
+			'browserstack.user': config.browserstackUser,
+			'browserstack.key': config.browserstackKey,
+			'name': opts.testName || `Qase test run`,
+			'browserstack.local': 'false'
+		};
+		const cdpUrl = `wss://cdp.browserstack.com/playwright?caps=${encodeURIComponent(JSON.stringify(caps))}`;
+		try {
+			const browser = await chromium.connectOverCDP(cdpUrl);
+			return browser;
+		} catch (error) {
+			console.warn(`[BrowserStack] CDP connection failed, falling back to local: ${error.message}`);
+		}
+	}
+
+	// ── Local Chromium path (default / fallback) ──
 	const launchOptions = {
 		headless: config.headless !== false,
 		args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -471,7 +503,7 @@ async function evaluateVisualMatch(page, assertion, runContext) {
  * @param {object} options   — { credentials, onProgress }
  * @returns {Promise<ReplayResult>}
  */
-export async function runTestCase(testCase, { credentials, onProgress, attempt = 1, viewport } = {}) {
+export async function runTestCase(testCase, { credentials, onProgress, attempt = 1, viewport, browser: browserType } = {}) {
 	const startTime = Date.now();
 	const collector = createCollector();
 	const stepResults = [];
@@ -488,6 +520,7 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 		flaky: false,
 		attempt,
 		viewport: resolveViewport(viewport ?? testCase.viewport),
+		browser: browserType || 'chromium',
 		durationMs: 0,
 		stepResults,
 		assertionResults,
@@ -500,7 +533,7 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 	let context;
 
 	try {
-		browser = await launchBrowser();
+		browser = await launchBrowser({ testName: testCase.name, browser: browserType });
 		// Use a context so we can enable trace recording.
 		const vp = resolveViewport(viewport ?? testCase.viewport);
 		context = await browser.newContext({
@@ -544,6 +577,18 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 				} catch {
 					// Screenshot capture is best-effort.
 				}
+
+				// Capture DOM snapshot for potential self-healing.
+				if (isSelectorFailure(stepResult)) {
+					try {
+						result._domSnapshot = await capturePageDom(page);
+						result._failedStepIndex = i;
+						result._failedStep = { ...step };
+					} catch {
+						// DOM capture is best-effort.
+					}
+				}
+
 				result.result = 'fail';
 				break;
 			}
@@ -643,16 +688,28 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
  *
  * @returns {Promise<object>} final result with attempt/flaky fields set.
  */
-async function runWithRetry(testCase, { credentials, onProgress, retries = 0, viewport } = {}) {
+/** Removes internal healing artifacts from the result before returning. */
+function cleanHealArtifacts(result) {
+	if (!result) return result;
+	delete result._domSnapshot;
+	delete result._failedStepIndex;
+	delete result._failedStep;
+	return result;
+}
+
+async function runWithRetry(testCase, { credentials, onProgress, retries = 0, viewport, browser } = {}) {
 	const maxAttempts = retries + 1;
 	let lastResult;
+	let healingApplied = false;
+	let healedSteps = null;
 
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		lastResult = await runTestCase(testCase, {
 			credentials,
 			onProgress,
 			attempt,
-			viewport
+			viewport,
+			browser
 		});
 
 		// Pass → done. If it took more than 1 attempt, mark flaky.
@@ -660,12 +717,57 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0, vi
 			if (attempt > 1) {
 				lastResult.flaky = true;
 			}
+			// Persist healed selectors if healing was applied and test now passes.
+			if (healingApplied && healedSteps && testCase.id) {
+				try {
+					updateTestCase(testCase.id, { steps: healedSteps });
+					lastResult.healed = true;
+					console.log(`[selfHeal] Persisted healed selectors to test case "${testCase.name}".`);
+				} catch (error) {
+					console.warn(`[selfHeal] Failed to persist healed selectors: ${error.message}`);
+				}
+			}
+			cleanHealArtifacts(lastResult);
 			return lastResult;
 		}
 
 		// Error → infrastructure issue, don't retry.
 		if (lastResult.result === 'error') {
+			cleanHealArtifacts(lastResult);
 			return lastResult;
+		}
+
+		// Fail → attempt self-healing before retry (first failure only).
+		if (attempt === 1 && lastResult._domSnapshot && lastResult._failedStep) {
+			const config = getConfig();
+			if (config.selfHealEnabled !== false) {
+				try {
+					console.log(`[selfHeal] Analyzing failure for "${testCase.name}" step ${lastResult._failedStepIndex}…`);
+					const analysis = await analyzeFailure(
+						testCase,
+						lastResult._failedStep,
+						lastResult._domSnapshot,
+						lastResult.stepResults[lastResult._failedStepIndex]?.error || 'Unknown error'
+					);
+
+					const threshold = config.selfHealThreshold ?? 0.8;
+					if (analysis.newSelector && analysis.confidence >= threshold) {
+						console.log(`[selfHeal] Healed selector: "${lastResult._failedStep.target}" → "${analysis.newSelector}" (confidence: ${analysis.confidence})`);
+						// Patch the test case for the retry.
+						testCase = patchTestCase(testCase, lastResult._failedStepIndex, analysis.newSelector);
+						// Track for persistence on success.
+						healingApplied = true;
+						healedSteps = testCase.steps;
+						// Record the healing event.
+						if (!lastResult.healRecords) lastResult.healRecords = [];
+						lastResult.healRecords.push(createHealRecord(lastResult._failedStep, analysis, lastResult._failedStepIndex));
+					} else {
+						console.log(`[selfHeal] Confidence ${analysis.confidence} < threshold ${threshold}, skipping heal.`);
+					}
+				} catch (error) {
+					console.warn(`[selfHeal] Healing attempt failed: ${error.message}`);
+				}
+			}
 		}
 
 		// Fail → retry if attempts remain.
@@ -675,6 +777,7 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0, vi
 	}
 
 	// All attempts exhausted — return last failure.
+	cleanHealArtifacts(lastResult);
 	return lastResult;
 }
 
@@ -690,22 +793,25 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0, vi
  * @param {number} [options.retries] — retries per failed test (default: QASE_RETRIES or 1)
  * @returns {Promise<object>} { id, total, passed, failed, errored, flaky, durationMs, results }
  */
-export async function runTestSuite(testCases, { credentials, onProgress, concurrency, retries } = {}) {
+export async function runTestSuite(testCases, { credentials, onProgress, concurrency, retries, browsers } = {}) {
 	const startTime = Date.now();
 	const poolSize = Math.max(1, concurrency ?? Number(process.env.QASE_PARALLEL) ?? 3);
 	const retryCount = Math.max(0, retries ?? Number(process.env.QASE_RETRIES) ?? 1);
 
+	// Resolve browser list: explicit param > config > none (local).
+	const config = getConfig();
+	const browserList = browsers || (config.browserstackEnabled ? (config.browserstackBrowsers || 'chrome').split(',').map(b => b.trim()).filter(Boolean) : [null]);
+
 	// Expand test cases: if a test case has viewports[], run once per viewport.
-	// Each expanded entry is { testCase, viewport, originalIndex }.
+	// Each expanded entry is { testCase, viewport, originalIndex, browser }.
 	const expanded = [];
 	for (let i = 0; i < testCases.length; i++) {
 		const tc = testCases[i];
-		if (Array.isArray(tc.viewports) && tc.viewports.length > 0) {
-			for (const vp of tc.viewports) {
-				expanded.push({ testCase: tc, viewport: vp, originalIndex: i });
+		const viewports = (Array.isArray(tc.viewports) && tc.viewports.length > 0) ? tc.viewports : [tc.viewport ?? null];
+		for (const vp of viewports) {
+			for (const br of browserList) {
+				expanded.push({ testCase: tc, viewport: vp, originalIndex: i, browser: br });
 			}
-		} else {
-			expanded.push({ testCase: tc, viewport: tc.viewport ?? null, originalIndex: i });
 		}
 	}
 
@@ -725,7 +831,8 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 				credentials,
 				onProgress: data => onProgress?.({ testCaseIndex: entry.originalIndex, subIndex: myIndex, ...data }),
 				retries: retryCount,
-				viewport: entry.viewport
+				viewport: entry.viewport,
+				browser: entry.browser
 			});
 			results[myIndex] = result;
 		}

@@ -12,6 +12,8 @@ import { initRouter, navigate, currentPage } from './router.js';
 import { loadTestCases, renderTestCases, initTestsWiring } from './tests.js';
 import { loadBugs, openBugDetail, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
+import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
+import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 
 async function refreshRuns() {
 	const query = state.projectId ? `?projectId=${state.projectId}` : '';
@@ -35,7 +37,8 @@ function renderRun(run) {
 	const meta = document.createElement('div');
 	meta.className = 'run-meta';
 	const dot = document.createElement('span');
-	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
+	dot.className = 'run-status-dot';
+	dot.dataset.status = run.status || 'idle';
 	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
 	if (run.findingCount > 0) {
 		const badge = document.createElement('span');
@@ -505,7 +508,9 @@ function renderActivity(activity) {
 
 	const icon = document.createElement('span');
 	icon.className = 'act-icon';
-	icon.textContent = activity.status === 'running' ? '◉' : activity.status === 'failed' ? '✕' : '●';
+	if (activity.status === 'running') icon.textContent = '⟳';
+	else if (activity.status === 'failed') icon.textContent = '⚠';
+	else icon.textContent = '✓';
 
 	const main = document.createElement('div');
 	main.className = 'act-main';
@@ -1478,6 +1483,13 @@ const cfg = {
 	autoDevReport: $('cfg-auto-dev-report'),
 	exploreViewports: $('cfg-explore-viewports'),
 	defaultCron: $('cfg-default-cron'),
+	browserstackEnabled: $('cfg-browserstack-enabled'),
+	browserstackBrowsers: $('cfg-browserstack-browsers'),
+	browserstackUser: $('cfg-browserstack-user'),
+	browserstackKey: $('cfg-browserstack-key'),
+	browserstackKeyClear: $('cfg-browserstack-key-clear'),
+	selfHealEnabled: $('cfg-self-heal-enabled'),
+	selfHealThreshold: $('cfg-self-heal-threshold'),
 	test: $('cfg-test'),
 	testBtn: $('cfg-test-btn'),
 	saveBtn: $('cfg-save')
@@ -1524,6 +1536,17 @@ function fillSettings(config) {
 	cfg.autoDevReport.checked = config.autoDevReport !== false;
 	cfg.exploreViewports.checked = config.exploreViewports !== false;
 	cfg.defaultCron.value = config.defaultScheduleCron ?? '0 9 * * *';
+
+	// BrowserStack
+	cfg.browserstackEnabled.checked = config.browserstackEnabled === true;
+	cfg.browserstackBrowsers.value = config.browserstackBrowsers ?? 'chrome';
+	cfg.browserstackUser.value = config.browserstackUser ?? '';
+	cfg.browserstackKey.value = '';
+	cfg.browserstackKey.placeholder = config.hasBrowserstackKey ? '•••• (set — leave blank to keep)' : 'your-access-key';
+
+	// Self-Healing
+	cfg.selfHealEnabled.checked = config.selfHealEnabled !== false;
+	cfg.selfHealThreshold.value = config.selfHealThreshold ?? 0.8;
 
 	// API Token — never sent to browser; leaving the box empty keeps it.
 	cfg.apiToken.value = '';
@@ -1573,7 +1596,12 @@ function readSettings() {
 		autoCreateSchedule: cfg.autoCreateSchedule.checked,
 		autoDevReport: cfg.autoDevReport.checked,
 		exploreViewports: cfg.exploreViewports.checked,
-		defaultScheduleCron: cfg.defaultCron.value.trim()
+		defaultScheduleCron: cfg.defaultCron.value.trim(),
+		browserstackEnabled: cfg.browserstackEnabled.checked,
+		browserstackBrowsers: cfg.browserstackBrowsers.value.trim(),
+		browserstackUser: cfg.browserstackUser.value.trim(),
+		selfHealEnabled: cfg.selfHealEnabled.checked,
+		selfHealThreshold: Number(cfg.selfHealThreshold.value)
 	};
 	if (cfg.key.value.trim()) {
 		patch.apiKey = cfg.key.value.trim();
@@ -1583,7 +1611,13 @@ function readSettings() {
 	} else if (cfg.apiToken.dataset.cleared === '1') {
 		patch.apiToken = '';
 	}
+	if (cfg.browserstackKey.value.trim()) {
+		patch.browserstackKey = cfg.browserstackKey.value.trim();
+	} else if (cfg.browserstackKey.dataset.cleared === '1') {
+		patch.browserstackKey = '';
+	}
 	delete cfg.apiToken.dataset.cleared;
+	delete cfg.browserstackKey.dataset.cleared;
 	return patch;
 }
 
@@ -1594,6 +1628,13 @@ cfg.apiTokenClear.onclick = () => {
 	cfg.apiToken.dataset.cleared = '1';
 	cfg.apiToken.value = '';
 	cfg.apiTokenNote.textContent = 'Token will be cleared on Save.';
+};
+
+cfg.browserstackKeyClear.onclick = () => {
+	cfg.browserstackKey.value = ' ';
+	cfg.browserstackKey.dataset.cleared = '1';
+	cfg.browserstackKey.value = '';
+	cfg.browserstackKey.placeholder = 'Key will be cleared on Save.';
 };
 
 async function openSettings() {
@@ -1933,21 +1974,30 @@ document.addEventListener('click', event => {
 		const page = e.detail.page;
 		if (page === 'bugs') loadBugs();
 		if (page === 'tests') loadTestCases();
+		if (page === 'workflows') loadWorkflowsPage();
+		if (page === 'schedules') loadSchedulesPage();
 	});
 	initRouter();
 
 	// Wire up event listeners.
 	initBugsWiring();
 	initTestsWiring();
+	initWorkflowsWiring();
+	initSchedulesWiring();
 	initThemeToggle();
 
-	const config = await api('/config').catch(() => undefined);
+	// Fire independent boot requests in parallel (config + projects).
+	const [config, projects] = await Promise.all([
+		api('/config').catch(() => undefined),
+		api('/projects').catch(() => [])
+	]);
+
 	if (config) {
 		paintConfig(config);
 	}
 
-	// Load projects and restore remembered selection.
-	await loadProjects();
+	// Resolve project selection from parallel-fetched data.
+	state.projects = projects;
 	const rememberedProject = localStorage.getItem('qase.project');
 	if (rememberedProject && state.projects.some(p => p.id === rememberedProject)) {
 		state.projectId = rememberedProject;
@@ -1956,6 +2006,7 @@ document.addEventListener('click', event => {
 	}
 	renderProjectSelect();
 
+	// Sessions depend on projectId — fetch after project resolution.
 	const runs = await api(`/sessions${state.projectId ? `?projectId=${state.projectId}` : ''}`).catch(() => []);
 	const remembered = localStorage.getItem('qase.session');
 	const target = runs.find(run => run.id === remembered) ?? runs[0];

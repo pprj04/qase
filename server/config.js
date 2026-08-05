@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { atomicWrite } from './atomicWrite.js';
 
 /**
  * Model settings, resolved from the settings file first and the environment
@@ -80,7 +81,13 @@ function fromEnv() {
 		autoCreateSchedule: process.env.QASE_AUTO_CREATE_SCHEDULE === undefined ? undefined : process.env.QASE_AUTO_CREATE_SCHEDULE !== 'false',
 		autoDevReport: process.env.QASE_AUTO_DEV_REPORT === undefined ? undefined : process.env.QASE_AUTO_DEV_REPORT !== 'false',
 		exploreViewports: process.env.QASE_EXPLORE_VIEWPORTS === undefined ? undefined : process.env.QASE_EXPLORE_VIEWPORTS !== 'false',
-		defaultScheduleCron: process.env.QASE_DEFAULT_CRON
+		defaultScheduleCron: process.env.QASE_DEFAULT_CRON,
+		browserstackEnabled: process.env.QASE_BROWSERSTACK_ENABLED === undefined ? undefined : process.env.QASE_BROWSERSTACK_ENABLED === 'true',
+		browserstackUser: process.env.QASE_BROWSERSTACK_USER,
+		browserstackKey: process.env.QASE_BROWSERSTACK_KEY,
+		browserstackBrowsers: process.env.QASE_BROWSERSTACK_BROWSERS,
+		selfHealEnabled: process.env.QASE_SELF_HEAL === undefined ? undefined : process.env.QASE_SELF_HEAL !== 'false',
+		selfHealThreshold: process.env.QASE_SELF_HEAL_THRESHOLD ? Number(process.env.QASE_SELF_HEAL_THRESHOLD) : undefined
 	};
 }
 
@@ -100,7 +107,13 @@ const DEFAULTS = {
 	autoCreateSchedule: true,
 	autoDevReport: true,
 	exploreViewports: true,
-	defaultScheduleCron: '0 9 * * *'
+	defaultScheduleCron: '0 9 * * *',
+	browserstackEnabled: false,
+	browserstackUser: '',
+	browserstackKey: '',
+	browserstackBrowsers: 'chrome',
+	selfHealEnabled: true,
+	selfHealThreshold: 0.8
 };
 
 /** The effective settings the agent runs with. Includes the key — server only. */
@@ -162,10 +175,17 @@ export function getPublicConfig() {
 		hasApiKey: Boolean(config.apiKey),
 		apiKeyHint: config.apiKey ? `••••${config.apiKey.slice(-4)}` : '',
 		apiKeyFromEnv: Boolean(fromEnv().apiKey) && !readStored().apiKey,
+		selfHealEnabled: config.selfHealEnabled !== false,
+		selfHealThreshold: config.selfHealThreshold ?? 0.8,
 		providers: PROVIDERS,
 		hasApiToken: Boolean(config.apiToken),
 		apiTokenHint: config.apiToken ? `••••${config.apiToken.slice(-4)}` : '',
 		apiTokenFromEnv: Boolean(fromEnv().apiToken) && !readStored().apiToken,
+		browserstackEnabled: config.browserstackEnabled === true,
+		browserstackBrowsers: config.browserstackBrowsers || 'chrome',
+		hasBrowserstackKey: Boolean(config.browserstackKey),
+		browserstackUser: config.browserstackUser || '',
+		browserstackKeyFromEnv: Boolean(fromEnv().browserstackKey) && !readStored().browserstackKey,
 		ready: isReady(config),
 		problem: describeProblem(config)
 	};
@@ -190,7 +210,7 @@ function describeProblem(config) {
 
 export function saveConfig(patch) {
 	const next = { ...readStored() };
-	for (const key of ['provider', 'apiKey', 'baseUrl', 'model', 'reasoning', 'discoveryModel', 'executionModel', 'apiToken']) {
+	for (const key of ['provider', 'apiKey', 'baseUrl', 'model', 'reasoning', 'discoveryModel', 'executionModel', 'apiToken', 'browserstackUser', 'browserstackKey']) {
 		if (typeof patch[key] === 'string') {
 			const trimmed = patch[key].trim();
 			if (trimmed) {
@@ -213,7 +233,16 @@ export function saveConfig(patch) {
 	if (patch.retriesCount !== undefined) {
 		next.retriesCount = Math.max(0, Math.min(5, Number(patch.retriesCount) || 0));
 	}
-	for (const boolKey of ['autoSaveWorkflow', 'autoGenerateTests', 'autoSmokeRun', 'autoCreateSchedule', 'autoDevReport', 'exploreViewports']) {
+	if (patch.browserstackBrowsers !== undefined) {
+		next.browserstackBrowsers = String(patch.browserstackBrowsers).trim();
+	}
+	if (patch.selfHealThreshold !== undefined) {
+		const t = Number(patch.selfHealThreshold);
+		if (Number.isFinite(t) && t >= 0 && t <= 1) {
+			next.selfHealThreshold = t;
+		}
+	}
+	for (const boolKey of ['autoSaveWorkflow', 'autoGenerateTests', 'autoSmokeRun', 'autoCreateSchedule', 'autoDevReport', 'exploreViewports', 'browserstackEnabled', 'selfHealEnabled']) {
 		if (patch[boolKey] !== undefined) {
 			next[boolKey] = Boolean(patch[boolKey]);
 		}
@@ -226,8 +255,7 @@ export function saveConfig(patch) {
 	}
 
 	stored = next;
-	fs.mkdirSync(CONFIG_DIR, { recursive: true });
-	fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, undefined, '\t'), { mode: 0o600 });
+	atomicWrite(CONFIG_FILE, JSON.stringify(next, undefined, '\t'), { mode: 0o600 });
 	return getPublicConfig();
 }
 

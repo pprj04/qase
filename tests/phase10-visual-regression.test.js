@@ -17,11 +17,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS_DIR = join(__dirname, '..', '.qase', 'artifacts');
 
 const BASE = `http://localhost:${process.env.PORT || 5173}`;
+const AUTH_HEADERS = { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
 
 async function post(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: AUTH_HEADERS,
 		body: JSON.stringify(body)
 	});
 	return { status: response.status, data: await response.json() };
@@ -30,6 +31,11 @@ async function post(path, body) {
 async function get(path) {
 	const response = await fetch(`${BASE}${path}`);
 	return { status: response.status, data: await response.json() };
+}
+
+async function del(path) {
+	const response = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } });
+	return { status: response.status, data: await response.json().catch(() => ({})) };
 }
 
 // -- Helpers --------------------------------------------------------------
@@ -137,7 +143,7 @@ describe('Phase 10A — Baseline Management', () => {
 
 		// Clean up.
 		deleteBaselines(tc.id);
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE' });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
 	});
 });
 
@@ -177,7 +183,7 @@ describe('Phase 10B — Diffing Engine', () => {
 		assert.equal(status, 400);
 		assert.ok(data.error.includes('No screenshots'), 'error message mentions screenshots');
 
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE' });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
 	});
 
 	it('DELETE /api/test-cases/:id/baselines clears baselines', async () => {
@@ -201,10 +207,10 @@ describe('Phase 10B — Diffing Engine', () => {
 		assert.equal(getBaselines(tc.id).length, 0, 'baselines cleared from module');
 
 		// Also verify the API route returns 200.
-		const resp = await fetch(`${BASE}/api/test-cases/${tc.id}/baselines`, { method: 'DELETE' });
+		const resp = await fetch(`${BASE}/api/test-cases/${tc.id}/baselines`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
 		assert.equal(resp.status, 200);
 
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE' });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
 	});
 });
 
@@ -224,6 +230,6 @@ describe('Phase 10 — visual_match assertion type', () => {
 		assert.ok(data.id, 'test case created');
 		assert.ok(data.assertions.some(a => a.type === 'visual_match'), 'has visual_match assertion');
 
-		await fetch(`${BASE}/api/test-cases/${data.id}`, { method: 'DELETE' });
+		await fetch(`${BASE}/api/test-cases/${data.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
 	});
 });

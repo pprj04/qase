@@ -24,10 +24,13 @@
     </a>
     <a class="topnav-link" data-nav="runs" href="#/runs">Runs</a>
     <a class="topnav-link" data-nav="tests" href="#/tests">Tests</a>
+    <a class="topnav-link" data-nav="workflows" href="#/workflows">Workflows</a>
+    <a class="topnav-link" data-nav="schedules" href="#/schedules">Schedules</a>
     <a class="topnav-link" data-nav="bugs" href="#/bugs">
       Bugs <span class="count" id="nav-count-bugs"></span>
     </a>
   </div>
+  <div class="topnav-spacer"></div>
   <div class="topnav-right">
     <div class="topnav-project">
       <select id="project-select" class="project-select" title="Active project"></select>
@@ -72,12 +75,12 @@
 
       <div class="transcript" id="transcript">
         <div class="empty-state" id="chat-empty">
-          <h2>Autonomous website QA</h2>
-          <p>Paste the URL of the site you want tested. Qase opens it in a real
-             browser, writes a test plan, works through it, and files what breaks.</p>
-          <p class="empty-note">If the site needs a login, the agent stops and asks.
-             Credentials you provide stay on this machine and are swapped in at the
-             keyboard — the model never sees them.</p>
+          <h2>Autonomous QA Agent</h2>
+          <p>Enter a URL below and Qase will explore the site, write a test plan,
+             test every form and flow, and report what breaks — automatically.</p>
+          <p class="empty-note">Need login? The agent asks for credentials and keeps them on this machine.<br>
+             Try: <code style="font:12px var(--mono);color:var(--accent-2);cursor:pointer"
+             onclick="document.getElementById('composer-input').value='https://studio.drytis.ai';document.getElementById('composer-input').focus()">studio.drytis.ai</code></p>
         </div>
       </div>
 
@@ -244,6 +247,49 @@
   </div>
 </div>
 
+<!-- ── Page: Workflows ─────────────────────────────────────────── -->
+<div class="page" id="page-workflows" hidden>
+  <div class="workflows-page">
+    <!-- Sticky header -->
+    <header class="workflows-header">
+      <div class="workflows-header-left">
+        <h2>🔄 Workflows</h2>
+        <div class="workflows-stats" id="workflows-stats"></div>
+      </div>
+      <div class="workflows-header-right">
+        <input type="text" id="workflows-search" class="workflows-search-input" placeholder="Search workflows…" autocomplete="off">
+      </div>
+    </header>
+
+    <!-- Body: scrollable list -->
+    <div class="workflows-body">
+      <div class="workflows-list" id="workflows-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Page: Schedules ─────────────────────────────────────────── -->
+<div class="page" id="page-schedules" hidden>
+  <div class="schedules-page">
+    <!-- Sticky header -->
+    <header class="schedules-header">
+      <div class="schedules-header-left">
+        <h2>📅 Schedules</h2>
+        <div class="schedules-stats" id="schedules-stats"></div>
+      </div>
+      <div class="schedules-header-right">
+        <button class="btn btn-primary btn-sm" id="btn-new-schedule">+ New Schedule</button>
+      </div>
+    </header>
+
+    <!-- Body -->
+    <div class="schedules-body">
+      <div class="schedules-trend" id="schedules-trend"></div>
+      <div class="schedules-list" id="schedules-list"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Page: Bugs (placeholder — full build in Phase 15E) ─────── -->
 <div class="page" id="page-bugs" hidden>
   <div class="bugs-page">
@@ -341,7 +387,7 @@
       </div>
       <label class="field">
         <span>URL</span>
-        <input type="text" id="bug-edit-url" placeholder="https://..."></input>
+        <input type="text" id="bug-edit-url" placeholder="https://...">
       </label>
       <label class="field">
         <span>Steps to reproduce (one per line)</span>
@@ -488,6 +534,45 @@
           <span>Default schedule cron</span>
           <input id="cfg-default-cron" type="text" value="0 9 * * *" placeholder="0 9 * * *">
           <small>Cron expression for auto-created schedules (default: daily 9am).</small>
+        </label>
+      </div>
+
+      <hr class="cfg-divider">
+      <div class="cfg-section-title">💚 Self-Healing Tests</div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <input type="checkbox" id="cfg-self-heal-enabled" checked>
+          <span>Enable self-healing for broken selectors</span>
+        </label>
+        <label class="field">
+          <span>Confidence threshold (0.0–1.0)</span>
+          <input id="cfg-self-heal-threshold" type="number" min="0" max="1" step="0.05" value="0.8">
+        </label>
+      </div>
+
+      <hr class="cfg-divider">
+      <div class="cfg-section-title">🌐 BrowserStack (Cross-Browser Testing)</div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <input type="checkbox" id="cfg-browserstack-enabled">
+          <span>Enable BrowserStack cloud</span>
+        </label>
+        <label class="field">
+          <span>Browsers</span>
+          <input id="cfg-browserstack-browsers" type="text" placeholder="chrome,firefox,safari" value="chrome">
+        </label>
+      </div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <span>BrowserStack username</span>
+          <input id="cfg-browserstack-user" autocomplete="off" spellcheck="false" placeholder="your-username">
+        </label>
+        <label class="field">
+          <span>BrowserStack access key</span>
+          <div class="cfg-token-row">
+            <input id="cfg-browserstack-key" type="password" autocomplete="off" spellcheck="false" placeholder="your-access-key">
+            <button class="btn btn-ghost btn-sm" type="button" id="cfg-browserstack-key-clear" title="Clear key">Clear</button>
+          </div>
         </label>
       </div>
 

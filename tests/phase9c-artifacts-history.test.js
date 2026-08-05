@@ -20,11 +20,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS_DIR = join(__dirname, '..', '.qase', 'artifacts');
 
 const BASE = `http://localhost:${process.env.PORT || 5173}`;
+const AUTH = { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
 
 async function post(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: AUTH,
 		body: JSON.stringify(body)
 	});
 	return { status: response.status, data: await response.json() };
@@ -168,7 +169,7 @@ describe('Phase 9C — Per-Test-Case History API', () => {
 		assert.ok(Array.isArray(data), 'returns an array');
 
 		// Clean up — use the testCases API
-		const delResp = await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE' });
+		const delResp = await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE', headers: { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } });
 		// Delete may return 200 with JSON or 204, either is fine
 		assert.ok(delResp.status < 400, 'delete succeeded');
 	});

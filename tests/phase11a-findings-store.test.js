@@ -4,9 +4,10 @@ import assert from 'node:assert/strict';
 const BASE = 'http://localhost:5173';
 
 async function api(method, path, body) {
+	const headers = body ? { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } : { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
 	const res = await fetch(`${BASE}${path}`, {
 		method,
-		headers: body ? { 'Content-Type': 'application/json' } : {},
+		headers,
 		body: body ? JSON.stringify(body) : undefined
 	});
 	const text = await res.text();

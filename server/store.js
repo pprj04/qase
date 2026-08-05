@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { atomicWrite } from './atomicWrite.js';
 
 /**
  * In-memory session store with a JSON mirror on disk.
@@ -29,7 +30,7 @@ function persistSoon() {
 	saveTimer = setTimeout(() => {
 		try {
 			fs.mkdirSync(STATE_DIR, { recursive: true });
-			fs.writeFileSync(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
+			atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
 		} catch {
 			// A dashboard that cannot write its history is still a usable dashboard.
 		}
@@ -175,8 +176,7 @@ export function setStatus(session, status, detail) {
 /** Immediately persist all in-memory sessions to disk. */
 export function saveSessions() {
 	try {
-		fs.mkdirSync(STATE_DIR, { recursive: true });
-		fs.writeFileSync(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
+		atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
 	} catch {
 		// best-effort
 	}

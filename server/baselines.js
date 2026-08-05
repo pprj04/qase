@@ -13,9 +13,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const STORE_FILE = join(__dirname, '..', '.qase', 'baselines.json');
@@ -40,8 +41,7 @@ function persistSoon() {
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
 		try {
-			mkdirSync(dirname(STORE_FILE), { recursive: true });
-			writeFileSync(STORE_FILE, JSON.stringify(baselines, null, '\t'));
+			atomicWrite(STORE_FILE, JSON.stringify(baselines, null, '\t'));
 		} catch (error) {
 			console.error('Failed to persist baselines:', error.message);
 		}
@@ -129,6 +129,21 @@ export function setBaseline(testCaseId, label, sourcePath, meta = {}) {
  */
 export function getBaselines(testCaseId) {
 	return baselines.filter(b => b.testCaseId === testCaseId);
+}
+
+/**
+ * Returns a Set of test case IDs that have at least one baseline.
+ * Used by the test-cases list endpoint to batch-annotate hasBaselines
+ * without requiring N+1 per-card API calls from the frontend.
+ *
+ * @returns {Set<string>}
+ */
+export function getTestCaseIdsWithBaselines() {
+	const ids = new Set();
+	for (const b of baselines) {
+		ids.add(b.testCaseId);
+	}
+	return ids;
 }
 
 /**

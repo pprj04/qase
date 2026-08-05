@@ -13,10 +13,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { emit } from './store.js';
 import { fileURLToPath } from 'node:url';
+import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS_FILE = join(__dirname, '..', '.qase', 'workflows.json');
@@ -188,8 +189,7 @@ function persistWorkflowsSoon() {
 
 function flushWorkflows() {
 	try {
-		mkdirSync(dirname(WORKFLOWS_FILE), { recursive: true });
-		writeFileSync(WORKFLOWS_FILE, JSON.stringify(workflows, null, '\t'));
+		atomicWrite(WORKFLOWS_FILE, JSON.stringify(workflows, null, '\t'));
 	} catch (error) {
 		console.error('Failed to persist workflows:', error.message);
 	}

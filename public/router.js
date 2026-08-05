@@ -16,7 +16,7 @@
  * No deep-linking into sub-views yet (e.g. #/bugs/:id). That comes later.
  */
 
-export const PAGES = ['runs', 'tests', 'bugs'];
+export const PAGES = ['runs', 'tests', 'workflows', 'schedules', 'bugs'];
 
 let current = null;
 let initialized = false;

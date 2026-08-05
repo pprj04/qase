@@ -9,10 +9,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { removeTestCaseFromAllFindings } from './findings.js';
+import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_CASES_FILE = join(__dirname, '..', '.qase', 'test-cases.json');
@@ -50,8 +51,7 @@ function persistSoon() {
 
 function flush() {
 	try {
-		mkdirSync(dirname(TEST_CASES_FILE), { recursive: true });
-		writeFileSync(TEST_CASES_FILE, JSON.stringify(testCases, null, '\t'));
+		atomicWrite(TEST_CASES_FILE, JSON.stringify(testCases, null, '\t'));
 	} catch (error) {
 		console.log('Failed to persist test cases:', error.message);
 	}

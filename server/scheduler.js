@@ -9,10 +9,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CronExpressionParser } from 'cron-parser';
+import { atomicWrite } from './atomicWrite.js';
 import { getTestCase } from './testCases.js';
 import { runTestSuite } from './replay.js';
 import { getConfig } from './config.js';
@@ -48,8 +49,7 @@ function persistSoon() {
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
 		try {
-			mkdirSync(dirname(SCHEDULES_FILE), { recursive: true });
-			writeFileSync(SCHEDULES_FILE, JSON.stringify(schedules, null, '\t'));
+			atomicWrite(SCHEDULES_FILE, JSON.stringify(schedules, null, '\t'));
 		} catch (error) {
 			console.error('Failed to persist schedules:', error.message);
 		}
@@ -61,8 +61,7 @@ load();
 /** Immediately persist the in-memory schedules array to disk. */
 export function saveSchedulesRaw() {
 	try {
-		mkdirSync(dirname(SCHEDULES_FILE), { recursive: true });
-		writeFileSync(SCHEDULES_FILE, JSON.stringify(schedules, null, '\t'));
+		atomicWrite(SCHEDULES_FILE, JSON.stringify(schedules, null, '\t'));
 	} catch (error) {
 		console.error('Failed to persist schedules:', error.message);
 	}

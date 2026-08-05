@@ -10,9 +10,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECTS_FILE = join(__dirname, '..', '.qase', 'projects.json');
@@ -42,8 +43,7 @@ function persistSoon() {
 
 function flush() {
 	try {
-		mkdirSync(dirname(PROJECTS_FILE), { recursive: true });
-		writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, '\t'));
+		atomicWrite(PROJECTS_FILE, JSON.stringify(projects, null, '\t'));
 	} catch (error) {
 		console.error('Failed to persist projects:', error.message);
 	}

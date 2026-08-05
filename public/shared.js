@@ -111,7 +111,19 @@ const el = {
 	pipelinePanel: $('pipeline-panel'),
 	pipelineStages: $('pipeline-stages'),
 	pipelineSummary: $('pipeline-summary'),
-	pipelineRerun: $('pipeline-rerun')
+	pipelineRerun: $('pipeline-rerun'),
+	workflowsList: $('workflows-list'),
+	workflowsSearch: $('workflows-search'),
+	workflowsStats: $('workflows-stats'),
+	schedulesList: $('schedules-list'),
+	schedulesStats: $('schedules-stats'),
+	schedulesTrend: $('schedules-trend'),
+	btnNewSchedule: $('btn-new-schedule'),
+	cfgBrowserstackEnabled: $('cfg-browserstack-enabled'),
+	cfgBrowserstackBrowsers: $('cfg-browserstack-browsers'),
+	cfgBrowserstackUser: $('cfg-browserstack-user'),
+	cfgBrowserstackKey: $('cfg-browserstack-key'),
+	cfgBrowserstackKeyClear: $('cfg-browserstack-key-clear')
 };
 
 const state = {
@@ -137,7 +149,8 @@ const state = {
 	testsViewportFilter: '',
 	editingTc: null,
 	editorSteps: [],
-	editorAssertions: []
+	editorAssertions: [],
+	workflowState: { workflows: [], search: '', expanded: new Set() }
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */

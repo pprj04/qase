@@ -6,9 +6,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNS_FILE = join(__dirname, '..', '.qase', 'replay-runs.json');
@@ -33,8 +34,7 @@ function persistSoon() {
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
 		try {
-			mkdirSync(dirname(RUNS_FILE), { recursive: true });
-			writeFileSync(RUNS_FILE, JSON.stringify(runs, null, '\t'));
+			atomicWrite(RUNS_FILE, JSON.stringify(runs, null, '\t'));
 		} catch (error) {
 			console.error('Failed to persist replay runs:', error.message);
 		}

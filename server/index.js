@@ -57,12 +57,13 @@ import {
 import { buildJUnitXml } from './junit.js';
 import {
 	getBaselines, getBaseline, approveBaseline, deleteBaselines,
-	autoCaptureBaselines
+	autoCaptureBaselines, getTestCaseIdsWithBaselines
 } from './baselines.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+app.use(setAuthCookie);
 app.use(express.static(path.join(here, '..', 'public')));
 
 // Serve persisted run artifacts (screenshots, traces) from .qase/artifacts/
@@ -119,6 +120,10 @@ function safeEqual(a, b) {
  * endpoints from unauthenticated access. When not set, all routes are open
  * (backwards-compatible for single-user local usage).
  *
+ * Authentication methods:
+ *   1. Bearer token via Authorization header (for external API / CI-CD)
+ *   2. qase_token cookie (set automatically for same-origin browser UI)
+ *
  * Usage: apply to specific routes via `app.post('/path', requireApiToken, handler)`.
  */
 function requireApiToken(request, response, next) {
@@ -126,12 +131,38 @@ function requireApiToken(request, response, next) {
 	if (!token) {
 		return next(); // No token configured — open access.
 	}
+
+	// Method 1: Bearer header (external API / CI-CD).
 	const auth = request.headers.authorization ?? '';
 	const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-	if (safeEqual(bearer, token)) {
+	if (bearer && safeEqual(bearer, token)) {
 		return next();
 	}
+
+	// Method 2: Cookie (same-origin browser UI).
+	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
+	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
+		return next();
+	}
+
 	response.status(401).json({ error: 'Invalid or missing API token. Set Authorization: Bearer <token> header.' });
+}
+
+/**
+ * Sets the auth cookie on same-origin requests so the browser UI
+ * works transparently.  The cookie is httpOnly so JavaScript can't
+ * read it (XSS-resistant) and same-origin only.
+ */
+function setAuthCookie(request, response, next) {
+	const token = getConfig().apiToken;
+	if (token) {
+		// Set cookie if not already present or matching.
+		const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
+		if (!cookieMatch || !safeEqual(cookieMatch[1], token)) {
+			response.setHeader('Set-Cookie', `qase_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
+		}
+	}
+	next();
 }
 
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
@@ -202,7 +233,7 @@ app.put('/api/config', requireApiToken, (request, response) => {
 });
 
 /** Probes the configured endpoint so a wrong URL or key surfaces before a run. */
-app.post('/api/config/test', async (request, response) => {
+app.post('/api/config/test', requireApiToken, async (request, response) => {
 	response.json(await testConnection(request.body ?? {}));
 });
 
@@ -210,7 +241,7 @@ app.get('/api/sessions', (request, response) => {
 	response.json(listSessions({ projectId: request.query.projectId }));
 });
 
-app.post('/api/sessions', (request, response) => {
+app.post('/api/sessions', requireApiToken, (request, response) => {
 	const projectId = request.body?.projectId ?? getDefaultProjectId();
 	response.status(201).json(createSession('New test run', projectId));
 });
@@ -257,13 +288,13 @@ app.get('/api/sessions/:id', (request, response) => {
 	response.json(payload);
 });
 
-app.delete('/api/sessions/:id', (request, response) => {
+app.delete('/api/sessions/:id', requireApiToken, (request, response) => {
 	clearSecrets(request.params.id);
 	response.json({ deleted: deleteSession(request.params.id) });
 });
 
 /** The chat entry point: a URL starts a run, anything else steers the current one. */
-app.post('/api/sessions/:id/message', async (request, response) => {
+app.post('/api/sessions/:id/message', requireApiToken, async (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -304,7 +335,7 @@ app.post('/api/sessions/:id/message', async (request, response) => {
 });
 
 /** Answers a blocking ask_question with a plain option or free-text reply. */
-app.post('/api/sessions/:id/answer', (request, response) => {
+app.post('/api/sessions/:id/answer', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -327,7 +358,7 @@ app.post('/api/sessions/:id/answer', (request, response) => {
  * Answers a credential question without the values ever reaching the model.
  * They go into the session vault; the agent gets placeholder names back.
  */
-app.post('/api/sessions/:id/credentials', (request, response) => {
+app.post('/api/sessions/:id/credentials', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -370,7 +401,7 @@ app.post('/api/sessions/:id/credentials', (request, response) => {
 	response.json({ ok: true, secretNames: names });
 });
 
-app.post('/api/sessions/:id/stop', (request, response) => {
+app.post('/api/sessions/:id/stop', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -404,7 +435,7 @@ app.get('/api/sessions/:id/report.md', (request, response) => {
 
 /* ── Pipeline routes (Phase 12) ──────────────────────────────────── */
 
-app.post('/api/sessions/:id/run-pipeline', (request, response) => {
+app.post('/api/sessions/:id/run-pipeline', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -427,7 +458,7 @@ app.get('/api/sessions/:id/pipeline-status', (request, response) => {
 /**
  * Trigger per-finding and app-level intelligence analysis for a session.
  */
-app.post('/api/sessions/:id/analyze-dev', async (request, response) => {
+app.post('/api/sessions/:id/analyze-dev', requireApiToken, async (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 
@@ -509,7 +540,7 @@ app.get('/api/sessions/:id/workflow', (request, response) => {
 	});
 });
 
-app.post('/api/sessions/:id/workflow', (request, response) => {
+app.post('/api/sessions/:id/workflow', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -535,7 +566,7 @@ app.get('/api/workflows/:id', (request, response) => {
 	response.json(wf);
 });
 
-app.put('/api/workflows/:id', (request, response) => {
+app.put('/api/workflows/:id', requireApiToken, (request, response) => {
 	const wf = updateWorkflow(request.params.id, request.body ?? {});
 	if (!wf) {
 		return response.status(404).json({ error: 'Workflow not found' });
@@ -543,14 +574,14 @@ app.put('/api/workflows/:id', (request, response) => {
 	response.json(wf);
 });
 
-app.delete('/api/workflows/:id', (request, response) => {
+app.delete('/api/workflows/:id', requireApiToken, (request, response) => {
 	const deleted = deleteWorkflow(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
 
 /* ── Test case routes ───────────────────────────────────────────── */
 
-app.post('/api/workflows/:id/generate-tests', async (request, response) => {
+app.post('/api/workflows/:id/generate-tests', requireApiToken, async (request, response) => {
 	const workflow = getWorkflow(request.params.id);
 	if (!workflow) {
 		return response.status(404).json({ error: 'Workflow not found' });
@@ -572,13 +603,19 @@ app.post('/api/workflows/:id/generate-tests', async (request, response) => {
 });
 
 app.get('/api/test-cases', (request, response) => {
-	response.json(listTestCases({
+	const cases = listTestCases({
 		projectId: request.query.projectId,
 		targetUrl: request.query.targetUrl,
 		workflowId: request.query.workflowId,
 		suiteId: request.query.suiteId,
 		tag: request.query.tag
-	}));
+	});
+	// Batch-annotate hasBaselines to eliminate N+1 per-card API calls.
+	const idsWithBaselines = getTestCaseIdsWithBaselines();
+	for (const tc of cases) {
+		tc.hasBaselines = idsWithBaselines.has(tc.id);
+	}
+	response.json(cases);
 });
 
 app.get('/api/test-cases/export', (request, response) => {
@@ -606,7 +643,7 @@ app.get('/api/test-cases/export', (request, response) => {
 
 /* ── Manual test case create + clone + tags ─────────────────────── */
 
-app.post('/api/test-cases', (request, response) => {
+app.post('/api/test-cases', requireApiToken, (request, response) => {
 	const data = request.body ?? {};
 	const tc = createTestCase({
 		projectId: data.projectId ?? getDefaultProjectId(),
@@ -624,7 +661,7 @@ app.post('/api/test-cases', (request, response) => {
 	response.status(201).json(tc);
 });
 
-app.post('/api/test-cases/:id/clone', (request, response) => {
+app.post('/api/test-cases/:id/clone', requireApiToken, (request, response) => {
 	const clone = cloneTestCase(request.params.id);
 	if (!clone) {
 		return response.status(404).json({ error: 'Test case not found' });
@@ -644,7 +681,7 @@ app.get('/api/test-cases/:id', (request, response) => {
 	response.json(tc);
 });
 
-app.put('/api/test-cases/:id', (request, response) => {
+app.put('/api/test-cases/:id', requireApiToken, (request, response) => {
 	const tc = updateTestCase(request.params.id, request.body ?? {});
 	if (!tc) {
 		return response.status(404).json({ error: 'Test case not found' });
@@ -652,7 +689,7 @@ app.put('/api/test-cases/:id', (request, response) => {
 	response.json(tc);
 });
 
-app.delete('/api/test-cases/:id', (request, response) => {
+app.delete('/api/test-cases/:id', requireApiToken, (request, response) => {
 	const deleted = deleteTestCase(request.params.id);
 	if (deleted) {
 		deleteBaselines(request.params.id);
@@ -666,7 +703,7 @@ app.get('/api/suites', (request, response) => {
 	response.json(listSuites({ projectId: request.query.projectId }));
 });
 
-app.post('/api/suites', (request, response) => {
+app.post('/api/suites', requireApiToken, (request, response) => {
 	try {
 		const suite = createSuite({
 			projectId: request.body?.projectId ?? getDefaultProjectId(),
@@ -679,7 +716,7 @@ app.post('/api/suites', (request, response) => {
 	}
 });
 
-app.put('/api/suites/:id', (request, response) => {
+app.put('/api/suites/:id', requireApiToken, (request, response) => {
 	try {
 		const suite = updateSuite(request.params.id, request.body ?? {});
 		if (!suite) {
@@ -691,7 +728,7 @@ app.put('/api/suites/:id', (request, response) => {
 	}
 });
 
-app.delete('/api/suites/:id', (request, response) => {
+app.delete('/api/suites/:id', requireApiToken, (request, response) => {
 	const deleted = deleteSuite(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
@@ -704,8 +741,12 @@ app.post('/api/test-cases/:id/run', requireApiToken, async (request, response) =
 		return response.status(404).json({ error: 'Test case not found' });
 	}
 	try {
-		const { credentials } = request.body ?? {};
-		const result = await runTestCase(tc, { credentials });
+		const { credentials, browser } = request.body ?? {};
+		const result = await runTestCase(tc, { credentials, browser });
+		// Clean internal healing artifacts before storing/returning.
+		delete result._domSnapshot;
+		delete result._failedStepIndex;
+		delete result._failedStep;
 		const stored = addRun(result);
 		response.json({ result, history: stored });
 	} catch (error) {
@@ -714,7 +755,7 @@ app.post('/api/test-cases/:id/run', requireApiToken, async (request, response) =
 });
 
 app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
-	const { testCaseIds, credentials } = request.body ?? {};
+	const { testCaseIds, credentials, browsers } = request.body ?? {};
 	const config = getConfig();
 	const concurrency = Number(request.body?.concurrency) || config.concurrentRuns;
 	const retries = Number.isFinite(Number(request.body?.retries)) ? Number(request.body.retries) : config.retriesCount;
@@ -728,7 +769,7 @@ app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
 		if (cases.length === 0) {
 			return response.status(404).json({ error: 'No test cases found for the given IDs' });
 		}
-		const summary = await runTestSuite(cases, { credentials, concurrency, retries });
+		const summary = await runTestSuite(cases, { credentials, concurrency, retries, browsers });
 		// Persist each individual result.
 		for (const result of summary.results) {
 			addRun(result);
@@ -793,7 +834,7 @@ app.post('/api/test-cases/:id/approve-baseline', requireApiToken, async (request
 	}
 });
 
-app.delete('/api/test-cases/:id/baselines', (request, response) => {
+app.delete('/api/test-cases/:id/baselines', requireApiToken, (request, response) => {
 	deleteBaselines(request.params.id);
 	response.json({ deleted: true });
 });
@@ -804,7 +845,7 @@ app.get('/api/schedules', (request, response) => {
 	response.json(listSchedules({ projectId: request.query.projectId }));
 });
 
-app.post('/api/schedules', (request, response) => {
+app.post('/api/schedules', requireApiToken, (request, response) => {
 	try {
 		const body = { ...request.body };
 		if (!body.projectId) body.projectId = getDefaultProjectId();
@@ -815,7 +856,7 @@ app.post('/api/schedules', (request, response) => {
 	}
 });
 
-app.put('/api/schedules/:id', (request, response) => {
+app.put('/api/schedules/:id', requireApiToken, (request, response) => {
 	try {
 		const sched = updateSchedule(request.params.id, request.body ?? {});
 		if (!sched) {
@@ -827,7 +868,7 @@ app.put('/api/schedules/:id', (request, response) => {
 	}
 });
 
-app.delete('/api/schedules/:id', (request, response) => {
+app.delete('/api/schedules/:id', requireApiToken, (request, response) => {
 	const deleted = deleteSchedule(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
@@ -884,7 +925,7 @@ app.get('/api/regression/runs/:id', (request, response) => {
 	response.json(run);
 });
 
-app.post('/api/validate-cron', (request, response) => {
+app.post('/api/validate-cron', requireApiToken, (request, response) => {
 	const { cronExpr } = request.body ?? {};
 	response.json({ valid: validateCron(cronExpr) });
 });
@@ -994,7 +1035,7 @@ app.get('/api/findings/export', (request, response) => {
 		.json(data);
 });
 
-app.post('/api/findings', (request, response) => {
+app.post('/api/findings', requireApiToken, (request, response) => {
 	const data = request.body ?? {};
 	const finding = addFinding({
 		...data,
@@ -1017,7 +1058,7 @@ app.get('/api/findings/:id', (request, response) => {
 	response.json({ ...finding, linkedTests });
 });
 
-app.put('/api/findings/:id', (request, response) => {
+app.put('/api/findings/:id', requireApiToken, (request, response) => {
 	const finding = updateFinding(request.params.id, request.body ?? {});
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -1025,7 +1066,7 @@ app.put('/api/findings/:id', (request, response) => {
 	response.json(finding);
 });
 
-app.delete('/api/findings/:id', (request, response) => {
+app.delete('/api/findings/:id', requireApiToken, (request, response) => {
 	const deleted = deleteFinding(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
@@ -1039,7 +1080,7 @@ app.patch('/api/findings/:id/status', (request, response) => {
 	response.json(finding);
 });
 
-app.post('/api/findings/:id/comments', (request, response) => {
+app.post('/api/findings/:id/comments', requireApiToken, (request, response) => {
 	const { author, text } = request.body ?? {};
 	const comment = addComment(request.params.id, author, text);
 	if (!comment) {
@@ -1048,7 +1089,7 @@ app.post('/api/findings/:id/comments', (request, response) => {
 	response.status(201).json(comment);
 });
 
-app.post('/api/findings/:id/link/:testCaseId', (request, response) => {
+app.post('/api/findings/:id/link/:testCaseId', requireApiToken, (request, response) => {
 	const finding = linkTestCase(request.params.id, request.params.testCaseId);
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -1063,7 +1104,7 @@ app.post('/api/findings/:id/link/:testCaseId', (request, response) => {
 	response.json(finding);
 });
 
-app.delete('/api/findings/:id/link/:testCaseId', (request, response) => {
+app.delete('/api/findings/:id/link/:testCaseId', requireApiToken, (request, response) => {
 	const finding = unlinkTestCase(request.params.id, request.params.testCaseId);
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -1124,12 +1165,12 @@ app.get('/api/projects', (_request, response) => {
 	response.json(listProjects());
 });
 
-app.post('/api/projects', (request, response) => {
+app.post('/api/projects', requireApiToken, (request, response) => {
 	const project = createProject(request.body ?? {});
 	response.status(201).json(project);
 });
 
-app.put('/api/projects/:id', (request, response) => {
+app.put('/api/projects/:id', requireApiToken, (request, response) => {
 	const project = updateProject(request.params.id, request.body ?? {});
 	if (!project) {
 		return response.status(404).json({ error: 'Project not found' });
@@ -1137,7 +1178,7 @@ app.put('/api/projects/:id', (request, response) => {
 	response.json(project);
 });
 
-app.delete('/api/projects/:id', (request, response) => {
+app.delete('/api/projects/:id', requireApiToken, (request, response) => {
 	const deleted = deleteProject(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });

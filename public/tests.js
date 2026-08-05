@@ -297,14 +297,8 @@ function renderTestCaseCard(tc) {
 
 	header.append(sevDot, name, stepCount, runBtn, approveBtn, editBtn, cloneBtn, delBtn);
 
-	// Check if baselines exist and show the approve button after runs
-	card._checkBaselines = async () => {
-		try {
-			const baselines = await api(`/test-cases/${tc.id}/baselines`);
-			approveBtn.style.display = baselines.length > 0 ? '' : 'none';
-		} catch { /* ignore */ }
-	};
-	card._checkBaselines();
+	// Use server-provided hasBaselines flag instead of N+1 API calls.
+	approveBtn.style.display = tc.hasBaselines ? '' : 'none';
 
 	// Tags + viewport + move-to-suite
 	const metaRow = document.createElement('div');
@@ -680,6 +674,11 @@ async function runSingleTest(tc, card, runBtn) {
 		});
 
 		renderRunResult(resultContainer, data.result);
+		// Show the approve-baseline button if the run produced screenshots.
+		if (data.result.screenshots?.length > 0) {
+			const approveBtn = card.querySelector('.tc-approve-baseline');
+			if (approveBtn) approveBtn.style.display = '';
+		}
 		toast(
 			data.result.result === 'pass' ? `✓ ${tc.name} passed` : `✗ ${tc.name} ${data.result.result}`,
 			data.result.result === 'pass' ? 'good' : 'bad'
@@ -722,8 +721,8 @@ async function runAllTests() {
 			method: 'POST',
 			body: JSON.stringify({
 				testCaseIds: ids,
-				concurrency: Number(cfg.concurrentRuns?.value) || 3,
-				retries: Number(cfg.retriesCount?.value) || 0
+				concurrency: 3,
+				retries: 0
 			})
 		});
 
@@ -759,8 +758,16 @@ function renderRunResult(container, result) {
 	const icon = result.result === 'pass' ? '✓' : result.result === 'fail' ? '✗' : '⚠';
 	const label = result.result === 'pass' ? 'PASSED' : result.result === 'fail' ? 'FAILED' : 'ERROR';
 	let bannerHtml = `<span class="tc-result-icon">${icon}</span> ${label} · ${Math.round(result.durationMs / 1000)}s`;
+	if (result.browser && result.browser !== 'chromium') {
+		const browserIcons = { chrome: '🌐', firefox: '🦊', safari: '🧭', edge: '🔵' };
+		const safeBrowser = escapeHtml(result.browser);
+		bannerHtml += ` <span class="tc-browser-badge" title="Browser: ${safeBrowser}">${browserIcons[result.browser] || '🌐'} ${safeBrowser}</span>`;
+	}
 	if (result.flaky) {
 		bannerHtml += ` <span class="tc-flaky-badge" title="Passed on attempt ${result.attempt || 2} of ${result.attempt || 2}">⚡ FLAKY</span>`;
+	}
+	if (result.healed) {
+		bannerHtml += ` <span class="tc-healed-badge" title="Selector was auto-healed and persisted">💚 HEALED</span>`;
 	}
 	if (result.attempt && result.attempt > 1) {
 		bannerHtml += ` <span class="tc-attempt-badge">attempt ${result.attempt}</span>`;
@@ -795,6 +802,26 @@ function renderRunResult(container, result) {
 		errEl.className = 'tc-result-error';
 		errEl.textContent = result.error;
 		container.append(errEl);
+	}
+
+	// Healing details
+	if (result.healRecords?.length > 0) {
+		const healLabel = document.createElement('div');
+		healLabel.className = 'tc-section-label';
+		healLabel.textContent = 'Self-Healing';
+		container.append(healLabel);
+
+		for (const rec of result.healRecords) {
+			const row = document.createElement('div');
+			row.className = 'tc-heal-record';
+			const pct = Math.round(rec.confidence * 100);
+			row.innerHTML = `<span class="tc-heal-action">${escapeHtml(rec.action)}</span>`
+				+ `<span class="tc-heal-old">${escapeHtml(rec.oldSelector)}</span>`
+				+ `<span class="tc-heal-arrow">→</span>`
+				+ `<span class="tc-heal-new">${escapeHtml(rec.newSelector)}</span>`
+				+ `<span class="tc-heal-conf" title="${escapeHtml(rec.reason || '')}">${pct}% confidence</span>`;
+			container.append(row);
+		}
 	}
 
 	// Step results

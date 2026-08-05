@@ -14,11 +14,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 const BASE = `http://localhost:${process.env.PORT || 5173}`;
+const AUTH = { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
 
 async function post(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: AUTH,
 		body: JSON.stringify(body)
 	});
 	return { status: response.status, data: await response.json() };
@@ -27,7 +28,7 @@ async function post(path, body) {
 async function put(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
 		method: 'PUT',
-		headers: { 'Content-Type': 'application/json' },
+		headers: AUTH,
 		body: JSON.stringify(body)
 	});
 	return { status: response.status, data: await response.json() };
