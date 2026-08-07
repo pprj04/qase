@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qase — autonomous QA agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script>
@@ -36,7 +39,6 @@
       <select id="project-select" class="project-select" title="Active project"></select>
       <button id="new-project" class="btn btn-ghost btn-sm" title="New project">+</button>
     </div>
-    <button class="brand-sub" id="model-badge" title="Model settings">…</button>
     <button class="theme-toggle" id="theme-toggle" title="Toggle theme">🌙</button>
     <button class="btn btn-ghost btn-sm" id="open-settings" title="Settings">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -75,30 +77,23 @@
 
       <div class="transcript" id="transcript">
         <div class="empty-state" id="chat-empty">
-          <h2>Autonomous QA Agent</h2>
-          <p>Enter a URL below and Qase will explore the site, write a test plan,
-             test every form and flow, and report what breaks — automatically.</p>
-          <p class="empty-note">Need login? The agent asks for credentials and keeps them on this machine.<br>
-             Try: <code style="font:12px var(--mono);color:var(--accent-2);cursor:pointer"
-             onclick="document.getElementById('composer-input').value='https://studio.drytis.ai';document.getElementById('composer-input').focus()">studio.drytis.ai</code></p>
-        </div>
-      </div>
-
-      <!-- Live mission phase tracker (visible while agent is working) -->
-      <div class="mission-phases" id="mission-phases" hidden>
-        <div class="mission-phase is-active" data-phase="explore">
-          <span class="mission-phase-dot"></span>
-          <span class="mission-phase-label">Explore</span>
-        </div>
-        <div class="mission-phase-line"></div>
-        <div class="mission-phase" data-phase="test">
-          <span class="mission-phase-dot"></span>
-          <span class="mission-phase-label">Test</span>
-        </div>
-        <div class="mission-phase-line"></div>
-        <div class="mission-phase" data-phase="report">
-          <span class="mission-phase-dot"></span>
-          <span class="mission-phase-label">Report</span>
+          <div class="ai-cursor">
+            <span class="ai-cursor-bracket">[</span>
+            <span class="ai-cursor-text">QASE</span>
+            <span class="ai-cursor-bracket">]</span>
+            <span class="ai-cursor-blink">_</span>
+          </div>
+          <h2>Autonomous Software Quality Engineer</h2>
+          <p>Validate any web application. Understand its purpose.<br>
+             Discover bugs, missing features and UX issues.<br>
+             Generate improvements automatically.</p>
+          <div class="prompt-chips">
+            <button class="prompt-chip" data-prompt="https://example.com">Validate Website</button>
+            <button class="prompt-chip" data-prompt="Test authentication">Test Authentication</button>
+            <button class="prompt-chip" data-prompt="Review checkout flow">Review Checkout</button>
+            <button class="prompt-chip" data-prompt="Find UX issues">Find UX Issues</button>
+            <button class="prompt-chip" data-prompt="Validate mobile experience">Check Mobile UX</button>
+          </div>
         </div>
       </div>
 
@@ -113,29 +108,6 @@
         <div class="thinking-body" id="thinking-body"></div>
       </div>
 
-      <!-- Pipeline progress (Phase 12) -->
-      <div class="pipeline-panel" id="pipeline-panel" hidden>
-        <div class="pipeline-head">
-          <span class="pipeline-title">⚡ Autonomy Pipeline</span>
-          <button class="btn btn-ghost btn-sm pipeline-rerun" id="pipeline-rerun">↻ Re-run</button>
-        </div>
-        <div class="pipeline-stages" id="pipeline-stages"></div>
-        <div class="pipeline-summary" id="pipeline-summary"></div>
-      </div>
-
-      <!-- Dev Intelligence (Phase 13) -->
-      <div class="dev-intel-panel" id="dev-intel-panel" hidden>
-        <div class="dev-intel-head">
-          <span class="dev-intel-title">🧠 Developer Intelligence</span>
-          <div class="dev-intel-actions">
-            <button class="btn btn-ghost btn-sm" id="dev-intel-refresh" title="Re-analyze">↻</button>
-            <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">⬇ Report</button>
-            <button class="btn btn-ghost btn-sm" id="dev-intel-copy-prompt" title="Copy AI improvement prompt">📋 AI Prompt</button>
-          </div>
-        </div>
-        <div class="dev-intel-body" id="dev-intel-body"></div>
-      </div>
-
       <div class="question-slot" id="question-slot"></div>
 
       <form class="composer" id="composer">
@@ -144,8 +116,12 @@
       </form>
     </main>
 
+    <!-- Mobile viewer toggle (shows on narrow screens only) -->
+    <button class="viewer-toggle" id="viewer-toggle" hidden>📊 View</button>
+
     <!-- ── Right: live browser + activity ─────────────────────────── -->
     <aside class="panel viewer">
+      <button class="viewer-close" id="viewer-close" hidden>✕</button>
       <header class="panel-head">
         <div class="urlbar">
           <span class="dot" id="browser-dot"></span>
@@ -184,17 +160,56 @@
       </div>
 
       <nav class="tabs" id="tabs">
-        <button class="tab is-active" data-tab="activity">Activity</button>
-        <button class="tab" data-tab="plan">Plan <span class="count" id="count-plan"></span></button>
-        <button class="tab" data-tab="report">Report</button>
+        <button class="tab is-active" data-tab="activity" id="tab-thinking">REASONING_LOG</button>
+        <button class="tab" data-tab="analysis" id="tab-analysis">APPLICATION_ANALYSIS</button>
+        <button class="tab" data-tab="plan" id="tab-evidence">EVIDENCE <span class="count" id="count-plan"></span></button>
+        <button class="tab" data-tab="report" id="tab-report">REPORT</button>
       </nav>
 
       <div class="tab-body">
-        <section class="tab-pane is-active" data-pane="activity"><div class="feed" id="activity-feed"></div></section>
-        <section class="tab-pane" data-pane="plan"><div class="feed" id="plan-list"></div></section>
+        <section class="tab-pane is-active" data-pane="activity">
+          <div class="mission-stage-strip" id="mission-stage-strip"></div>
+          <div class="thinking-stream" id="activity-feed"></div>
+        </section>
+        <section class="tab-pane" data-pane="analysis">
+          <div class="app-analysis-content" id="dev-intel-body"></div>
+          <div class="dev-intel-actions" id="dev-intel-actions-bar">
+            <button class="btn btn-ghost btn-sm" id="dev-intel-copy-prompt" title="Copy AI improvement prompt">Improvement Prompt</button>
+            <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">Report</button>
+          </div>
+        </section>
+        <section class="tab-pane" data-pane="plan">
+          <div class="evidence-grid" id="plan-list"></div>
+        </section>
         <section class="tab-pane" data-pane="report">
+          <div class="mission-summary" id="mission-summary-bar" hidden>
+            <div class="ms-item">
+              <span class="ms-label">TYPE</span>
+              <span class="ms-value" id="ms-app-type">—</span>
+            </div>
+            <div class="ms-item">
+              <span class="ms-label">QUALITY</span>
+              <span class="ms-value ms-score" id="ms-quality">—</span>
+            </div>
+            <div class="ms-item">
+              <span class="ms-label">RELEASE</span>
+              <span class="ms-value" id="ms-release">—</span>
+            </div>
+            <div class="ms-item">
+              <span class="ms-label">CONFIDENCE</span>
+              <span class="ms-value" id="ms-confidence">—</span>
+            </div>
+            <div class="ms-item">
+              <span class="ms-label">ANOMALIES</span>
+              <span class="ms-value" id="ms-critical">—</span>
+            </div>
+            <div class="ms-item">
+              <span class="ms-label">GAPS</span>
+              <span class="ms-value" id="ms-gaps">—</span>
+            </div>
+          </div>
           <div class="metrics-overview" id="metrics-overview"></div>
-          <div class="feed" id="report-view"></div>
+          <div class="findings-grouped" id="report-view"></div>
         </section>
       </div>
     </aside>

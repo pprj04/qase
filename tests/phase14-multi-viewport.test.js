@@ -15,6 +15,7 @@
  */
 
 import assert from 'node:assert';
+import 'dotenv/config';
 
 const BASE = 'http://localhost:5173';
 
@@ -173,7 +174,7 @@ console.log('\n── Phase 14: Multi-Viewport / Responsive Testing ──\n');
 	};
 	const res = await fetch(`${BASE}/api/test-cases`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' },
+		headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.QASE_API_TOKEN}` },
 		body: JSON.stringify(tcData)
 	});
 	if (!res.ok) {
@@ -185,7 +186,7 @@ console.log('\n── Phase 14: Multi-Viewport / Responsive Testing ──\n');
 		ok('created test case has viewports=[tablet]', JSON.stringify(tc.viewports) === JSON.stringify(['tablet']), `got: ${JSON.stringify(tc.viewports)}`);
 
 		// Clean up
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE', headers: { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	}
 }
 

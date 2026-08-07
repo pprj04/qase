@@ -238,7 +238,7 @@ export async function executeSchedule(schedule) {
 	notifyTestFailure(schedule.id, summary);
 
 	schedule.lastRun = {
-		ts: summary.ts,
+		ts: Date.now(),
 		result: summary.failed + summary.errored === 0 ? 'pass' : 'fail',
 		summary: { total: summary.total, passed: summary.passed, failed: summary.failed, errored: summary.errored, flaky: summary.flaky ?? 0 }
 	};

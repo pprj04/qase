@@ -1,10 +1,12 @@
 import { describe, it, before, after } from 'node:test';
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 
 const BASE = 'http://localhost:5173';
 
 async function api(method, path, body) {
-	const headers = body ? { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } : { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
+	const TOKEN = process.env.QASE_API_TOKEN;
+	const headers = body ? { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` } : { Authorization: `Bearer ${TOKEN}` };
 	const res = await fetch(`${BASE}/api${path}`, {
 		method,
 		headers,

@@ -91,6 +91,8 @@ async function selectSession(id) {
 	}
 	if (!session.capturedSteps) session.capturedSteps = [];
 	if (!session.findings) session.findings = [];
+	if (!session.activities) session.activities = [];
+	if (!session.todos) session.todos = [];
 
 	renderHeader();
 	renderTranscript();
@@ -655,11 +657,40 @@ function renderFindings() {
 		el.findingsList.innerHTML = '<div class="feed-empty">No findings filed yet</div>';
 		return;
 	}
-	const sorted = [...findings].sort(
-		(a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
-	);
-	for (const finding of sorted) {
-		el.findingsList.append(renderFinding(finding));
+
+	// Group findings by category
+	const groups = {};
+	for (const f of findings) {
+		const cat = f.category || f.severity || 'other';
+		if (!groups[cat]) groups[cat] = [];
+		groups[cat].push(f);
+	}
+
+	// Order categories by priority
+	const CATEGORY_ORDER = [
+		'critical', 'security', 'feature_gap', 'feature gap', 'ux', 'accessibility',
+		'performance', 'high', 'medium', 'low', 'info', 'other'
+	];
+	const sortedCats = Object.keys(groups).sort((a, b) => {
+		const ai = CATEGORY_ORDER.indexOf(a.toLowerCase());
+		const bi = CATEGORY_ORDER.indexOf(b.toLowerCase());
+		return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+	});
+
+	for (const cat of sortedCats) {
+		const group = groups[cat];
+		const header = document.createElement('div');
+		header.className = 'finding-group-header';
+		header.textContent = `${cat.toUpperCase()} (${group.length})`;
+		el.findingsList.append(header);
+
+		// Sort within group by severity
+		const sorted = [...group].sort(
+			(a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
+		);
+		for (const finding of sorted) {
+			el.findingsList.append(renderFinding(finding));
+		}
 	}
 }
 
@@ -1282,7 +1313,7 @@ function renderScheduleCard(sched) {
 	if (sched.targetUrl) {
 		parts.push(hostOf(sched.targetUrl));
 	}
-	if (sched.lastRun) {
+	if (sched.lastRun && sched.lastRun.ts) {
 		const r = sched.lastRun;
 		parts.push(`last: ${r.result} (${relativeTime(r.ts)})`);
 	}
@@ -1358,6 +1389,7 @@ function list(items) {
 
 function connect(id) {
 	state.stream?.close();
+	clearTimeout(state._reconnectTimer);
 	const stream = new EventSource(`/api/sessions/${id}/events`);
 	state.stream = stream;
 
@@ -1367,7 +1399,13 @@ function connect(id) {
 	};
 	stream.onerror = () => {
 		el.connDot.className = 'dot';
-		el.connLabel.textContent = 'reconnecting…';
+		// Debounce the "reconnecting…" label — EventSource auto-reconnects
+		// and brief drops are normal. Only show the label if the connection
+		// doesn't recover within 2 seconds.
+		clearTimeout(state._reconnectTimer);
+		state._reconnectTimer = setTimeout(() => {
+			el.connLabel.textContent = 'reconnecting…';
+		}, 2000);
 	};
 	stream.onmessage = event => {
 		const data = JSON.parse(event.data);
@@ -1409,8 +1447,9 @@ function handleEvent(event) {
 		case 'message_done':
 			break;
 
-		case 'activity': {
-			const index = session.activities.findIndex(item => item.id === event.activity.id);
+	case 'activity': {
+		if (!Array.isArray(session.activities)) session.activities = [];
+		const index = session.activities.findIndex(item => item.id === event.activity.id);
 			if (index === -1) {
 				session.activities.push(event.activity);
 			} else {
@@ -1432,6 +1471,7 @@ function handleEvent(event) {
 			break;
 
 		case 'finding':
+			if (!Array.isArray(session.findings)) session.findings = [];
 			session.findings.push(event.finding);
 			renderFindings();
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
@@ -1447,6 +1487,7 @@ function handleEvent(event) {
 
 		case 'pipeline_start':
 			pipelineState.stages = {};
+			pipelineState.startTime = Date.now();
 			for (const stage of (event.stages ?? [])) {
 				pipelineState.stages[stage.key] = { status: 'pending', info: stage };
 			}
@@ -1461,6 +1502,7 @@ function handleEvent(event) {
 				result: event.result
 			};
 			renderPipeline();
+			injectPipelineMessage(event.stage, event.status, event.result);
 			break;
 		}
 
@@ -1468,6 +1510,10 @@ function handleEvent(event) {
 			pipelineState.summary = event.summary;
 			pipelineState.stages = event.stages;
 			renderPipeline();
+			updateMissionSummary(event.summary);
+
+			// Inject release assessment block into conversation
+			injectReleaseAssessment(event.summary);
 			break;
 		}
 
@@ -1565,15 +1611,9 @@ const BASE_URL_OPTIONAL = new Set(['openai', 'openrouter', 'nvidia', 'grok']);
 
 function paintConfig(config) {
 	state.config = config;
-	el.modelBadge.textContent = config.ready ? config.model : (config.problem ?? 'not configured');
-	el.modelBadge.style.color = config.ready ? '' : 'var(--danger)';
-	const tiers = [
-		config.discoveryModel ? `discovery: ${config.discoveryModel}` : '',
-		config.executionModel ? `execution: ${config.executionModel}` : ''
-	].filter(Boolean).join(' · ');
-	el.modelBadge.title = config.ready
-		? `${config.provider}${config.baseUrl ? ` · ${config.baseUrl}` : ''}${tiers ? ` · ${tiers}` : ''}`
-		: 'Open settings to finish configuring';
+	if (el.modelBadge) {
+		el.modelBadge.textContent = config.ready ? '' : (config.problem ?? '');
+	}
 }
 
 function fillSettings(config) {
@@ -1707,7 +1747,7 @@ async function openSettings() {
 }
 
 $('open-settings').onclick = openSettings;
-el.modelBadge.onclick = openSettings;
+if (el.modelBadge) el.modelBadge.onclick = openSettings;
 
 cfg.testBtn.onclick = async () => {
 	cfg.test.className = 'test-result busy';
@@ -1960,6 +2000,188 @@ function renderSeveritySummary(bySeverity) {
 	return frag;
 }
 
+/* ── Conversation-Driven AI: pipeline milestones inject agent messages ── */
+
+const STAGE_MESSAGES = {
+	workflow_save: {
+		running: () => `Understanding application...`,
+		done: (result) => {
+			const steps = result?.stepCount ?? result?.count ?? 0;
+			return `**Application understood.** ${steps} interaction${steps === 1 ? '' : 's'} captured.\n\nPlanning validation approach...`;
+		}
+	},
+	dev_intelligence: {
+		running: () => `Analyzing findings and root causes...`,
+		done: (result) => {
+			const findings = result?.findingsAnalyzed ?? 0;
+			return `**Analysis complete.** ${findings} finding${findings === 1 ? '' : 's'} analyzed for root cause and fix recommendations.`;
+		}
+	},
+	feature_gap: {
+		running: () => `Detecting application purpose and feature gaps...`,
+		done: (result) => {
+			const purpose = result?.gapAnalysis?.purpose?.name ?? result?.purpose?.name ?? 'this application';
+			const appType = result?.gapAnalysis?.inventory?.appType ?? '';
+			const gaps = result?.featureGaps ?? result?.gapAnalysis?.gaps ?? [];
+			const conf = result?.gapAnalysis?.purpose?.confidence ?? result?.purpose?.confidence ?? 0;
+			const confPct = Math.round(conf * 100);
+			const detected = result?.gapAnalysis?.inventory?.capabilities ?? {};
+			const foundFeatures = Object.entries(detected).filter(([_, v]) => v).map(([k]) => k);
+			let msg = `**Application identified as ${purpose}**${appType ? ` (${appType})` : ''}.\n\nDetected with ${confPct}% confidence.`;
+			if (foundFeatures.length > 0) {
+				msg += `\n\n**Detected features:** ${foundFeatures.join(', ')}`;
+			}
+			if (gaps.length > 0) {
+				const features = gaps.slice(0, 5).map(g => g.name || g.feature || g.description || 'Unknown').join(', ');
+				msg += `\n\n**Missing features:** ${features}${gaps.length > 5 ? ` (+${gaps.length - 5} more)` : ''}`;
+			}
+			return msg;
+		}
+	},
+	test_generation: {
+		running: () => `Generating test scenarios...`,
+		done: (result) => {
+			const count = result?.count ?? 0;
+			return `**Test cases generated.** ${count} scenario${count === 1 ? '' : 's'} covering critical paths and edge cases.`;
+		}
+	},
+	smoke_run: {
+		running: () => `Running validation tests...`,
+		done: (result) => {
+			const passed = result?.passed ?? 0;
+			const failed = result?.failed ?? 0;
+			const total = result?.total ?? (passed + failed);
+			return `**Validation complete.** ${passed}/${total} passed${failed > 0 ? `, ${failed} failed` : ''}.`;
+		}
+	},
+	mission_finalize: {
+		running: () => `Assessing release readiness...`,
+		done: (result) => {
+			const score = result?.qualityScore;
+			const ready = result?.releaseReady;
+			let msg = '**Release assessment complete.**';
+			if (score != null) msg += ` Quality score: **${Math.round(score)}/100**.`;
+			if (ready) msg += '\n\n✓ Application is **release-ready**.';
+			else msg += '\n\n✕ Application is **not release-ready** — review findings below.';
+			return msg;
+		}
+	},
+	knowledge_write: {
+		running: () => null,
+		done: () => `**Knowledge updated.** Patterns from this mission saved for future runs.`
+	}
+};
+
+function injectPipelineMessage(stage, status, result) {
+	const config = STAGE_MESSAGES[stage];
+	if (!config) return;
+	const text = config[status]?.(result);
+	if (!text) return;
+
+	const message = {
+		id: `pipeline-${stage}-${status}-${Date.now()}`,
+		role: 'agent',
+		text,
+		kind: status === 'running' ? 'pipeline-running' : 'pipeline-status'
+	};
+
+	// Add to session messages
+	if (state.session?.messages) {
+		state.session.messages.push(message);
+	}
+
+	// Render into transcript
+	el.chatEmpty.hidden = true;
+	const node = renderMessage(message);
+	el.transcript.append(node);
+	scrollTranscript();
+}
+
+/**
+ * Injects a structured release assessment block at the end of a mission.
+ */
+function injectReleaseAssessment(summary) {
+	if (!summary) return;
+
+	const score = summary.qualityScore;
+	const ready = summary.releaseReady;
+	const critical = summary.criticalIssues ?? 0;
+	const gaps = summary.featureGapsCount ?? 0;
+	const appType = summary.appType ?? 'Unknown';
+	const confidence = summary.confidence != null ? Math.round(summary.confidence * 100) : null;
+
+	const lines = ['---', '', '**RELEASE ASSESSMENT**', ''];
+	lines.push(`Application: \`${appType}\``);
+	if (score != null) lines.push(`Quality Score: \`${Math.round(score)}/100\``);
+	if (confidence != null) lines.push(`Confidence: \`${confidence}%\``);
+	lines.push(`Critical Issues: \`${critical}\``);
+	lines.push(`Feature Gaps: \`${gaps}\``);
+	lines.push('');
+	if (ready) {
+		lines.push('**Status: [ READY ]**');
+		lines.push('Application meets quality threshold for release.');
+	} else {
+		lines.push('**Status: [ NOT READY ]**');
+		lines.push('Address critical issues and feature gaps before release.');
+		if (critical > 0) {
+			lines.push(`\n**Recommended action:** Fix ${critical} critical issue${critical === 1 ? '' : 's'}, then revalidate.`);
+		} else if (gaps > 0) {
+			lines.push(`\n**Recommended action:** Implement ${gaps} missing feature${gaps === 1 ? '' : 's'}, then revalidate.`);
+		}
+	}
+	lines.push('', '---');
+
+	const message = {
+		id: `release-assessment-${Date.now()}`,
+		role: 'agent',
+		text: lines.join('\n'),
+		kind: 'release-assessment'
+	};
+
+	if (state.session?.messages) {
+		state.session.messages.push(message);
+	}
+
+	el.chatEmpty.hidden = true;
+	const node = renderMessage(message);
+	el.transcript.append(node);
+	scrollTranscript();
+}
+
+/* ── Mission Summary Bar ─────────────────────────────────────────── */
+
+function updateMissionSummary(summary) {
+	if (!summary) return;
+
+	const bar = document.getElementById('mission-summary-bar');
+	if (!bar) return;
+
+	const appType = summary.appType || summary.purpose || 'Unknown';
+	const qualityScore = summary.qualityScore != null ? Math.round(summary.qualityScore) : '—';
+	const releaseReady = summary.releaseReady ?? false;
+	const confidence = summary.confidence != null ? Math.round(summary.confidence * 100) + '%' : '—';
+	const criticalCount = summary.criticalIssues != null
+		? summary.criticalIssues
+		: (summary.findings ? summary.findings.filter(f => f.severity === 'critical').length : 0);
+	const gapCount = summary.featureGapsCount != null
+		? summary.featureGapsCount
+		: (summary.gaps ? summary.gaps.length : 0);
+
+	const setText = (id, val) => {
+		const node = document.getElementById(id);
+		if (node) node.textContent = val;
+	};
+
+	setText('ms-app-type', appType);
+	setText('ms-quality', String(qualityScore));
+	setText('ms-release', releaseReady ? '[ READY ]' : '[ BLOCKED ]');
+	setText('ms-confidence', String(confidence));
+	setText('ms-critical', String(criticalCount));
+	setText('ms-gaps', String(gapCount));
+
+	bar.hidden = false;
+}
+
 /* ── Export handlers ──────────────────────────────────────────────── */
 
 async function handleExport(type) {
@@ -2033,6 +2255,20 @@ document.addEventListener('click', event => {
 /* ── Boot ────────────────────────────────────────────────────────── */
 
 (async function boot() {
+	// ── Prompt chips (empty state suggested prompts) ──────────────────
+	// Attach early — before any async calls — so chips work immediately.
+	document.querySelectorAll('.prompt-chip').forEach(chip => {
+		chip.addEventListener('click', () => {
+			const prompt = chip.dataset.prompt || chip.textContent.trim();
+			const input = document.getElementById('composer-input');
+			if (input) {
+				input.value = prompt;
+				input.focus();
+				input.dispatchEvent(new Event('input', { bubbles: true }));
+			}
+		});
+	});
+
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
@@ -2081,4 +2317,23 @@ document.addEventListener('click', event => {
 		await startRun();
 	}
 	el.composerInput.focus();
+
+	// ── Mobile viewer toggle ─────────────────────────────────────────
+	const viewerToggle = document.getElementById('viewer-toggle');
+	const viewerClose = document.getElementById('viewer-close');
+	const viewerPanel = document.querySelector('.panel.viewer');
+
+	if (viewerToggle && viewerPanel) {
+		viewerToggle.hidden = false;
+		viewerToggle.addEventListener('click', () => {
+			viewerPanel.classList.add('mobile-open');
+			viewerClose.hidden = false;
+		});
+	}
+	if (viewerClose && viewerPanel) {
+		viewerClose.addEventListener('click', () => {
+			viewerPanel.classList.remove('mobile-open');
+			viewerClose.hidden = true;
+		});
+	}
 })();

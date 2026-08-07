@@ -188,7 +188,7 @@ function renderScheduleCard(sched) {
 	if (sched.targetUrl) {
 		parts.push(hostOf(sched.targetUrl));
 	}
-	if (sched.lastRun) {
+	if (sched.lastRun && sched.lastRun.ts) {
 		const r = sched.lastRun;
 		const icon = r.result === 'pass' ? '✅' : r.result === 'fail' ? '❌' : '⚠️';
 		parts.push(`last: ${icon} ${relativeTime(r.ts)}`);

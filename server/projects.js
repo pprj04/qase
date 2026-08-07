@@ -123,6 +123,7 @@ export async function assignOrphanedEntities() {
 	const regressionStore = await import('./regressionStore.js');
 	const suites = await import('./suites.js');
 	const findings = await import('./findings.js');
+	const missions = await import('./missions.js');
 
 	let orphans = 0;
 	orphans += store.backfillProjectId(defaultId);
@@ -132,6 +133,7 @@ export async function assignOrphanedEntities() {
 	orphans += regressionStore.backfillProjectId(defaultId);
 	orphans += suites.backfillProjectId(defaultId);
 	orphans += findings.backfillProjectId(defaultId);
+	orphans += missions.backfillProjectId();
 
 	if (orphans > 0) {
 		console.log(`[projects] Assigned ${orphans} orphaned entities to Default project`);
@@ -151,6 +153,7 @@ async function reassignEntities(fromProjectId, toProjectId) {
 	const regressionStore = await import('./regressionStore.js');
 	const suites = await import('./suites.js');
 	const findings = await import('./findings.js');
+	const missions = await import('./missions.js');
 
 	store.reassignProjectId(fromProjectId, toProjectId);
 	workflows.reassignProjectId(fromProjectId, toProjectId);
@@ -159,6 +162,7 @@ async function reassignEntities(fromProjectId, toProjectId) {
 	regressionStore.reassignProjectId(fromProjectId, toProjectId);
 	suites.reassignProjectId(fromProjectId, toProjectId);
 	findings.reassignProjectId(fromProjectId, toProjectId);
+	missions.reassignProjectId(fromProjectId, toProjectId);
 }
 
 /* ── Bootstrap ──────────────────────────────────────────────────── */

@@ -105,12 +105,16 @@ console.log('\n── Phase 13: Developer Intelligence ──\n');
 	const pipeline = await import('../server/pipeline.js');
 	ok('Pipeline exports runAutonomyPipeline', typeof pipeline.runAutonomyPipeline === 'function');
 
-	// Check STAGE_INFO includes dev_intelligence by reading the file
-	const fs = await import('node:fs');
-	const src = fs.readFileSync(new URL('../server/pipeline.js', import.meta.url), 'utf8');
-	ok('Pipeline has dev_intelligence stage', src.includes('dev_intelligence'));
-	ok('Pipeline imports analyzeSessionFindings', src.includes('analyzeSessionFindings'));
-	ok('Pipeline has Stage 5 block', src.includes('Stage 5: Dev Intelligence'));
+	// Check that the dev_intelligence capability is registered in the orchestrator
+	const { defaultRegistry } = await import('../server/capabilities.js');
+	ok('Registry has dev_intelligence capability', defaultRegistry.has('dev_intelligence'));
+
+	const devCap = defaultRegistry.get('dev_intelligence');
+	ok('dev_intelligence has execute function', typeof devCap.execute === 'function');
+	ok('dev_intelligence has enabled function', typeof devCap.enabled === 'function');
+
+	// Check STAGE_INFO includes dev_intelligence
+	ok('Pipeline has dev_intelligence stage info', pipeline.STAGE_INFO && pipeline.STAGE_INFO.dev_intelligence);
 }
 
 // ── Test 6: Config autoDevReport flag ────────────────────────────

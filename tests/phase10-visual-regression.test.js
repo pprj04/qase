@@ -6,6 +6,7 @@
  */
 
 import { describe, it } from 'node:test';
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS_DIR = join(__dirname, '..', '.qase', 'artifacts');
 
 const BASE = `http://localhost:${process.env.PORT || 5173}`;
-const AUTH_HEADERS = { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
+const AUTH_HEADERS = { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.QASE_API_TOKEN}` };
 
 async function post(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
@@ -34,7 +35,7 @@ async function get(path) {
 }
 
 async function del(path) {
-	const response = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } });
+	const response = await fetch(`${BASE}${path}`, { method: 'DELETE', headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	return { status: response.status, data: await response.json().catch(() => ({})) };
 }
 
@@ -143,7 +144,7 @@ describe('Phase 10A — Baseline Management', () => {
 
 		// Clean up.
 		deleteBaselines(tc.id);
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	});
 });
 
@@ -183,7 +184,7 @@ describe('Phase 10B — Diffing Engine', () => {
 		assert.equal(status, 400);
 		assert.ok(data.error.includes('No screenshots'), 'error message mentions screenshots');
 
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	});
 
 	it('DELETE /api/test-cases/:id/baselines clears baselines', async () => {
@@ -207,10 +208,10 @@ describe('Phase 10B — Diffing Engine', () => {
 		assert.equal(getBaselines(tc.id).length, 0, 'baselines cleared from module');
 
 		// Also verify the API route returns 200.
-		const resp = await fetch(`${BASE}/api/test-cases/${tc.id}/baselines`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
+		const resp = await fetch(`${BASE}/api/test-cases/${tc.id}/baselines`, { method: "DELETE", headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 		assert.equal(resp.status, 200);
 
-		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
+		await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	});
 });
 
@@ -230,6 +231,6 @@ describe('Phase 10 — visual_match assertion type', () => {
 		assert.ok(data.id, 'test case created');
 		assert.ok(data.assertions.some(a => a.type === 'visual_match'), 'has visual_match assertion');
 
-		await fetch(`${BASE}/api/test-cases/${data.id}`, { method: "DELETE", headers: { Authorization: "Bearer qase-5f8a3b2e1d9c4a7f" } });
+		await fetch(`${BASE}/api/test-cases/${data.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	});
 });

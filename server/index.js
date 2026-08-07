@@ -1,13 +1,13 @@
 import 'dotenv/config';
 import * as path from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { closeBrowser, ensureRuntime, runTurn } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { mountDemoSite } from './demoSite.js';
 import { buildReportMarkdown } from './report.js';
-import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
+import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
 	listSessions, liveFor, loadSessions, setStatus
@@ -48,8 +48,15 @@ import {
 import { runAutonomyPipeline } from './pipeline.js';
 import {
 	analyzeFinding, analyzeSessionFindings,
-	buildAppImprovementReport, buildFixPrompt, buildAppImprovementPromptText
+	buildAppImprovementReport, buildFixPrompt, buildAppImprovementPromptText,
+	scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt,
+	compareIterations
 } from './devIntelligence.js';
+import {
+	createMission, getMission, listMissions, updateMission, deleteMission,
+	finalizeMission, loadMissionsFromDisk, missionBus, recordIteration,
+	getComparisonIterations
+} from './missions.js';
 import { buildDevReportMarkdown } from './devReport.js';
 import {
 	createSuite, listSuites, getSuite, updateSuite, deleteSuite
@@ -281,7 +288,16 @@ app.get('/api/sessions/:id', (request, response) => {
 		Object.assign(payload, {
 			messages: session.messages,
 			capturedSteps: session.capturedSteps,
-			findings: session.findings
+			findings: session.findings,
+			activities: session.activities,
+			todos: session.todos
+		});
+	} else {
+		// Even for heavy sessions, include activities + todos (they're small) so
+		// the reasoning log and evidence tabs work without a second round-trip.
+		Object.assign(payload, {
+			activities: session.activities,
+			todos: session.todos
 		});
 	}
 
@@ -478,6 +494,15 @@ app.get('/api/sessions/:id/dev-intelligence', (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	response.json(session.devIntelligence ?? null);
+});
+
+/** Feature gap analysis for the Application Understanding card. */
+app.get('/api/sessions/:id/feature-gaps', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const summary = session.pipeline?.summary;
+	if (!summary?.featureGaps) return response.json(null);
+	response.json(summary.featureGaps);
 });
 
 /** Per-finding intelligence: structured fix suggestion. */
@@ -1183,6 +1208,598 @@ app.delete('/api/projects/:id', requireApiToken, (request, response) => {
 	response.status(deleted ? 204 : 404).end();
 });
 
+/* ── Mission management routes (dashboard) ──────────────────────── */
+
+app.get('/api/missions', (request, response) => {
+	response.json(listMissions({
+		projectId: request.query.projectId,
+		status: request.query.status,
+		type: request.query.type,
+		source: request.query.source
+	}));
+});
+
+app.post('/api/missions', requireApiToken, (request, response) => {
+	const mission = createMission(request.body ?? {});
+	response.status(201).json(mission);
+});
+
+app.get('/api/missions/:id', (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	response.json(mission);
+});
+
+app.put('/api/missions/:id', requireApiToken, (request, response) => {
+	const mission = updateMission(request.params.id, request.body ?? {});
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	response.json(mission);
+});
+
+app.delete('/api/missions/:id', requireApiToken, (request, response) => {
+	const deleted = deleteMission(request.params.id);
+	response.status(deleted ? 204 : 404).end();
+});
+
+/**
+ * Links a mission to an existing session and copies session findings
+ * into the mission, then runs quality scoring.
+ */
+app.post('/api/missions/:id/link-session', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	const session = getSession(request.body?.sessionId);
+	if (!session) {
+		return response.status(404).json({ error: 'Session not found' });
+	}
+
+	updateMission(mission.id, {
+		sessionId: session.id,
+		status: 'running',
+		findings: session.findings ?? [],
+		targetUrl: session.targetUrl ?? mission.targetUrl
+	});
+
+	response.json(getMission(mission.id));
+});
+
+/* ── Public API v1 (external integration) ──────────────────────── */
+
+/**
+ * The public API is the integration contract for external consumers
+ * (Drytis dev team, AI Studio, CI/CD pipelines).
+ *
+ * All routes under /api/v1/ require Bearer token auth.
+ * Pattern: submit mission → poll status → get report (or webhook).
+ */
+
+app.post('/api/v1/missions', requireApiToken, async (request, response) => {
+	const body = request.body ?? {};
+
+	// Validate required fields
+	if (!body.targetUrl) {
+		return response.status(400).json({ error: 'targetUrl is required' });
+	}
+
+	// Build mission context — testCredentials go to in-memory vault, not persisted JSON
+	let contextForMission = {
+		buildPrompt: body.buildPrompt || undefined,
+		requirements: body.requirements || undefined,
+		businessGoals: body.businessGoals || undefined
+	};
+
+	if (body.testCredentials && typeof body.testCredentials === 'object') {
+		const credEntries = {};
+		if (body.testCredentials.username) credEntries.QA_USERNAME = body.testCredentials.username;
+		if (body.testCredentials.password) credEntries.QA_PASSWORD = body.testCredentials.password;
+		if (Object.keys(credEntries).length > 0) {
+			storeSecrets(`mission-temp`, credEntries);
+			contextForMission.testCredentials = { vaultKey: 'mission-temp', placeholders: Object.keys(credEntries).map(k => `{{${k}}}`) };
+		}
+	}
+
+	// Create the mission
+	const mission = createMission({
+		projectId: body.projectId,
+		type: body.type,
+		name: body.name,
+		targetUrl: body.targetUrl,
+		objectives: body.objectives,
+		capabilities: body.capabilities,
+		source: body.source || 'api',
+		generationId: body.generationId,
+		constraints: body.constraints,
+		successCriteria: body.successCriteria,
+		context: contextForMission
+	});
+
+	// Optionally auto-start: create a session and kick off the agent
+	if (body.autoStart !== false) {
+		try {
+			const session = createSession(mission.name || 'API Mission', mission.projectId);
+			session.targetUrl = mission.targetUrl;
+
+			// Migrate temp vault credentials to session scope
+			if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
+				const tempVault = vaultFor('mission-temp');
+				if (tempVault.size > 0) {
+					storeSecrets(session.id, Object.fromEntries(tempVault));
+					clearSecrets('mission-temp');
+					session.secretNames = [...tempVault.keys()];
+				}
+			}
+
+			// Link mission to session
+			updateMission(mission.id, {
+				sessionId: session.id,
+				status: 'running'
+			});
+
+			// Build the agent task from mission type + objectives
+			const taskPrompt = buildMissionPrompt(mission);
+
+			// Start the agent (async — returns immediately)
+			await ensureRuntime(session);
+			startTurn(session, { task: taskPrompt });
+
+			response.status(202).json({
+				missionId: mission.id,
+				sessionId: session.id,
+				status: 'running',
+				message: 'Mission started. Poll GET /api/v1/missions/:id for results.',
+				reportUrl: `/api/v1/missions/${mission.id}/report`
+			});
+		} catch (error) {
+			updateMission(mission.id, { status: 'failed' });
+			response.status(500).json({
+				missionId: mission.id,
+				error: 'Failed to start agent',
+				detail: error instanceof Error ? error.message : String(error)
+			});
+		}
+	} else {
+		response.status(201).json({
+			missionId: mission.id,
+			status: 'created',
+			message: 'Mission created but not started. POST /api/v1/missions/:id/start to begin.'
+		});
+	}
+});
+
+/**
+ * Starts a previously-created mission.
+ */
+app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	if (mission.status === 'running') {
+		return response.status(409).json({ error: 'Mission is already running' });
+	}
+
+	try {
+		const session = createSession(mission.name || 'API Mission', mission.projectId);
+		session.targetUrl = mission.targetUrl;
+
+		// Migrate temp vault credentials to session scope (for missions created with autoStart: false)
+		if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
+			const tempVault = vaultFor('mission-temp');
+			if (tempVault.size > 0) {
+				storeSecrets(session.id, Object.fromEntries(tempVault));
+				clearSecrets('mission-temp');
+				session.secretNames = [...tempVault.keys()];
+			}
+		}
+
+		updateMission(mission.id, { sessionId: session.id, status: 'running' });
+
+		const taskPrompt = buildMissionPrompt(mission);
+		await ensureRuntime(session);
+		startTurn(session, { task: taskPrompt });
+
+		response.status(202).json({
+			missionId: mission.id,
+			sessionId: session.id,
+			status: 'running'
+		});
+	} catch (error) {
+		updateMission(mission.id, { status: 'failed' });
+		response.status(500).json({
+			error: 'Failed to start agent',
+			detail: error instanceof Error ? error.message : String(error)
+		});
+	}
+});
+
+/**
+ * Gets mission status + results. External consumers poll this.
+ */
+app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	// If mission has a linked session, sync session state
+	if (mission.sessionId) {
+		const session = getSession(mission.sessionId);
+		if (session) {
+			const isRunning = Boolean(liveFor(session.id)?.running);
+			const sessionStatus = session.status;
+			const isComplete = ['done', 'error', 'interrupted'].includes(sessionStatus) && !isRunning;
+
+			if (isRunning && mission.status !== 'completed') {
+				// Update mission with live session findings
+				updateMission(mission.id, { findings: session.findings ?? [] });
+			} else if (isComplete && mission.status === 'running') {
+				// Session finished — finalize the mission
+				finalizeMissionFromSession(mission, session);
+			}
+		}
+	}
+
+	response.json({
+		id: mission.id,
+		status: mission.status,
+		type: mission.type,
+		targetUrl: mission.targetUrl,
+		qualityScore: mission.qualityScore,
+		verdict: mission.verdict,
+		releaseReady: mission.releaseReady,
+		improvementPrompt: mission.improvementPrompt ? true : false,
+		findingsCount: (mission.findings ?? []).length,
+		findings: mission.findings ?? [],
+		sessionId: mission.sessionId,
+		createdAt: mission.createdAt,
+		completedAt: mission.completedAt
+	});
+});
+
+/**
+ * Aborts a running mission.
+ */
+app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	if (mission.status !== 'running') {
+		return response.status(409).json({ error: 'Mission is not running' });
+	}
+
+	if (mission.sessionId) {
+		const record = liveFor(mission.sessionId);
+		record?.controller?.abort();
+	}
+
+	updateMission(mission.id, { status: 'aborted', completedAt: Date.now() });
+	response.json({ missionId: mission.id, status: 'aborted' });
+});
+
+/**
+ * Triggers the next validation iteration. Creates a new session,
+ * runs the agent, and records results as a new iteration on mission
+ * completion. The comparison between iterations powers the loop:
+ * validate → improve → validate again → compare → approve.
+ */
+app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	if (mission.status === 'running') {
+		return response.status(409).json({ error: 'Mission is already running. Stop it first.' });
+	}
+	if (!mission.targetUrl) {
+		return response.status(400).json({ error: 'Mission has no targetUrl' });
+	}
+
+	try {
+		const session = createSession(`${mission.name} — Iteration ${mission.currentIteration + 1}`, mission.projectId);
+		session.targetUrl = mission.targetUrl;
+
+		// Set status to running
+		updateMission(mission.id, { sessionId: session.id, status: 'running' });
+
+		// Build prompt — includes awareness of previous iterations
+		const taskPrompt = buildMissionPrompt(mission);
+
+		await ensureRuntime(session);
+		startTurn(session, { task: taskPrompt });
+
+		response.status(202).json({
+			missionId: mission.id,
+			sessionId: session.id,
+			iteration: mission.currentIteration + 1,
+			status: 'running',
+			message: `Iteration ${mission.currentIteration + 1} started. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/comparison for delta.`
+		});
+	} catch (error) {
+		updateMission(mission.id, { status: 'failed' });
+		response.status(500).json({
+			error: 'Failed to start iteration',
+			detail: error instanceof Error ? error.message : String(error)
+		});
+	}
+});
+
+/**
+ * Returns the comparison between the last two iterations.
+ * Shows what was fixed, what remains, and what's new.
+ *
+ * This is the output that tells a product owner:
+ *   "Is the app improving? Is it ready for release?"
+ */
+app.get('/api/v1/missions/:id/comparison', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	if (mission.iterations.length === 0) {
+		return response.status(400).json({ error: 'No iterations have been run yet' });
+	}
+
+	if (mission.iterations.length === 1) {
+		// Only one iteration — baseline, nothing to compare
+		const onlyIter = mission.iterations[0];
+		const quality = calculateMissionQuality(onlyIter.findings);
+		return response.json({
+			iteration: 1,
+			type: 'baseline',
+			message: 'First iteration — no previous run to compare against.',
+			currentScore: onlyIter.qualityScore,
+			verdict: onlyIter.verdict,
+			releaseReady: onlyIter.releaseReady,
+			risk: quality.risk,
+			confidence: quality.confidence,
+			recommendations: quality.recommendations,
+			criticalIssues: quality.criticalIssues,
+			findingsCount: onlyIter.findings.length
+		});
+	}
+
+	const pair = getComparisonIterations(mission.id);
+	const comparison = compareIterations(pair.previous.findings, pair.current.findings);
+
+	// Enrich with product-facing quality from current iteration
+	const currQuality = calculateMissionQuality(pair.current.findings);
+
+	response.json({
+		iteration: pair.current.number,
+		type: 'comparison',
+		comparison,
+		productQuality: {
+			releaseReady: pair.current.releaseReady ?? currQuality.releaseReady,
+			confidence: currQuality.confidence,
+			risk: currQuality.risk,
+			recommendations: currQuality.recommendations,
+			criticalIssues: currQuality.criticalIssues
+		}
+	});
+});
+
+/**
+ * Full mission report — structured for AI Studio / developer consumption.
+ *
+ * This is the AI Studio integration contract endpoint:
+ *   verdict, qualityScore, findings with fixPrompt, improvementPrompt, regressionReady
+ */
+app.get('/api/v1/missions/:id/report', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const findings = mission.findings ?? [];
+	const quality = calculateMissionQuality(findings);
+	const report = buildImprovementPrompt(mission, findings, quality);
+
+	const format = request.query.format || 'json';
+
+	if (format === 'markdown' || format === 'md') {
+		const md = buildMissionReportMarkdown(mission, report);
+		response.type('text/markdown').send(md);
+	} else {
+		response.json({
+			missionId: mission.id,
+			missionType: mission.type,
+			targetUrl: mission.targetUrl,
+			source: mission.source,
+			generationId: mission.generationId,
+			...report,
+			createdAt: mission.createdAt,
+			completedAt: mission.completedAt
+		});
+	}
+});
+
+/**
+ * Webhook registration — register a callback URL to receive mission
+ * results when complete. Simple in-memory store (sufficient for now).
+ */
+const webhooks = new Map(); // missionId -> [{ url, events }]
+
+app.post('/api/v1/webhooks', requireApiToken, (request, response) => {
+	const { missionId, url, events } = request.body ?? {};
+	if (!url) {
+		return response.status(400).json({ error: 'url is required' });
+	}
+	if (!missionId) {
+		return response.status(400).json({ error: 'missionId is required' });
+	}
+
+	const entry = { url, events: events || ['mission.completed'], id: randomUUID() };
+	if (!webhooks.has(missionId)) webhooks.set(missionId, []);
+	webhooks.get(missionId).push(entry);
+
+	response.status(201).json({ webhookId: entry.id, missionId, url, events: entry.events });
+});
+
+/* ── Mission helpers ───────────────────────────────────────────── */
+
+/**
+ * Builds the agent prompt from mission type and objectives.
+ * The mission type determines the testing strategy.
+ */
+function buildMissionPrompt(mission) {
+	const typeDescriptions = {
+		full_audit: 'Perform a comprehensive quality audit of this application. Test all major user flows, forms, navigation, and interactive elements.',
+		security: 'Focus on security validation. Check for authentication boundaries, data exposure, session handling, and common vulnerabilities (OWASP).',
+		ux: 'Focus on UX validation. Test responsive behavior, interaction patterns, accessibility, and overall user experience.',
+		regression: 'Perform regression testing. Verify existing functionality still works correctly after recent changes.',
+		feature_gap: 'Analyze feature completeness. Compare against expected functionality and identify missing features.',
+		accessibility: 'Focus on accessibility validation. Check WCAG compliance, keyboard navigation, screen reader compatibility, and visual contrast.'
+	};
+
+	const lines = [
+		typeDescriptions[mission.type] || typeDescriptions.full_audit,
+		'',
+		`Target: ${mission.targetUrl}`
+	];
+
+	if (mission.objectives?.length) {
+		lines.push('', 'Specific objectives:');
+		for (const obj of mission.objectives) {
+			lines.push(`- ${obj}`);
+		}
+	}
+
+	if (mission.constraints && Object.keys(mission.constraints).length > 0) {
+		lines.push('', 'Constraints:');
+		for (const [key, value] of Object.entries(mission.constraints)) {
+			lines.push(`- ${key}: ${value}`);
+		}
+	}
+
+	return lines.join('\n');
+}
+
+/**
+ * Finalizes a mission from a completed session — records the iteration,
+ * scores quality, generates improvement prompt, fires webhooks.
+ *
+ * This is called both for the first run AND subsequent iterations.
+ * Each run is recorded as a new iteration for the validation loop.
+ */
+function finalizeMissionFromSession(mission, session) {
+	const findings = session.findings ?? [];
+
+	// Score each finding inline
+	for (const f of findings) {
+		const scored = scoreFindingQuality(f, findings);
+		if (f.confidence == null) f.confidence = scored.confidence;
+		if (f.isDuplicate == null) f.isDuplicate = scored.isDuplicate;
+		if (f.duplicateOf == null && scored.duplicateOf) f.duplicateOf = scored.duplicateOf;
+		if (f.reproducibility == null) f.reproducibility = scored.reproducibility;
+	}
+
+	const quality = calculateMissionQuality(findings);
+	const report = buildImprovementPrompt(mission, findings, quality);
+
+	// Record this run as a new iteration (enables the validation loop)
+	recordIteration(mission.id, {
+		sessionId: session.id,
+		findings,
+		qualityScore: quality.score,
+		verdict: quality.verdict,
+		releaseReady: quality.releaseReady,
+		improvementPrompt: report.improvementPrompt
+	});
+
+	// Also update mission top-level fields
+	finalizeMission(mission.id, {
+		status: 'completed',
+		qualityScore: quality.score,
+		verdict: quality.verdict,
+		improvementPrompt: report.improvementPrompt,
+		releaseReady: quality.releaseReady,
+		findings,
+		summary: session.report?.summary || null
+	});
+
+	// Fire webhooks
+	fireMissionWebhooks(mission.id, report);
+
+	return getMission(mission.id);
+}
+
+/**
+ * Fires registered webhooks for a completed mission.
+ * Blocks internal/loopback IPs to prevent SSRF.
+ */
+function fireMissionWebhooks(missionId, report) {
+	const hooks = webhooks.get(missionId);
+	if (!hooks?.length) return;
+
+	for (const hook of hooks) {
+		// Basic SSRF protection: block internal addresses
+		let parsedUrl;
+		try {
+			parsedUrl = new URL(hook.url);
+		} catch {
+			continue;
+		}
+		const blockedPatterns = ['127.0.0.1', 'localhost', '169.254', '10.', '172.16.', '172.17.', '172.18.',
+			'172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.',
+			'172.28.', '172.29.', '172.30.', '172.31.', '192.168.', '0.0.0.0', '::1', 'metadata'];
+		if (blockedPatterns.some(pattern => parsedUrl.hostname.includes(pattern))) {
+			continue;
+		}
+
+		fetch(hook.url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ missionId, ...report })
+		}).catch(() => { /* non-fatal */ });
+	}
+}
+
+/**
+ * Builds a markdown mission report for the report endpoint.
+ */
+function buildMissionReportMarkdown(mission, report) {
+	const lines = [
+		`# Mission Report: ${mission.name || mission.id}`,
+		'',
+		`**Type:** ${mission.type}  `,
+		`**Target:** ${mission.targetUrl || 'N/A'}  `,
+		`**Verdict:** ${report.verdict}  `,
+		`**Quality Score:** ${report.qualityScore}/100  `,
+		`**Release Ready:** ${report.regressionReady ? 'Yes' : 'No'}`,
+		'',
+		'---',
+		'',
+		'## Findings',
+		''
+	];
+
+	for (const f of report.findings) {
+		lines.push(`### [${f.severity.toUpperCase()}] ${f.title}`);
+		if (f.observed) lines.push(`- **Observed:** ${f.observed}`);
+		if (f.expected) lines.push(`- **Expected:** ${f.expected}`);
+		if (f.impact) lines.push(`- **Impact:** ${f.impact}`);
+		if (f.evidence) lines.push(`- **Evidence:** ${f.evidence}`);
+		if (f.recommendation) lines.push(`- **Recommendation:** ${f.recommendation}`);
+		if (f.confidence != null) lines.push(`- **Confidence:** ${(f.confidence * 100).toFixed(0)}%`);
+		if (f.reproducibility) lines.push(`- **Reproducibility:** ${f.reproducibility}`);
+		lines.push('');
+	}
+
+	if (report.improvementPrompt) {
+		lines.push('---', '', '## Improvement Prompt', '', '```', report.improvementPrompt, '```');
+	}
+
+	return lines.join('\n');
+}
+
 // Chromium is a child process; without this it outlives the server that
 // started it and the user is left closing browsers by hand.
 let shuttingDown = false;
@@ -1214,6 +1831,17 @@ try {
 } catch (err) {
 	console.error('[findings] Migration error:', err.message);
 }
+
+// Load missions from disk + backfill project IDs
+loadMissionsFromDisk();
+
+// Listen for mission_finalized events from the capability orchestrator
+// and fire webhooks (webhook registry lives here in index.js)
+missionBus.on('finalized', ({ missionId, report }) => {
+	if (missionId) {
+		fireMissionWebhooks(missionId, report);
+	}
+});
 
 const port = Number(process.env.PORT ?? 5173);
 app.listen(port, () => {

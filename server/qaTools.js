@@ -16,38 +16,52 @@ import { getConfig, VIEWPORT_PRESETS } from './config.js';
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 
 export function createQaTools(session) {
-	const reportFinding = {
-		name: 'report_finding',
-		description: 'Files one confirmed defect found while testing the site. Call once per distinct defect, as soon as you have confirmed it. Never include credentials or other secrets in any field.',
-		category: 'qa',
-		parametersSchema: {
-			type: 'object',
-			properties: {
-				title: { type: 'string', description: 'One line naming the defect, written from the user\'s point of view.' },
-				severity: { type: 'string', enum: SEVERITIES, description: 'User impact: critical blocks the core flow, high breaks an important flow, medium is a real but survivable defect, low is polish, info is an observation.' },
-				category: { type: 'string', description: 'Area of the defect, e.g. authentication, forms, navigation, console, network, accessibility, layout, performance, content.' },
-				url: { type: 'string', description: 'The page URL where the defect appears.' },
-				steps: { type: 'array', items: { type: 'string' }, description: 'The exact steps to reproduce, in order.' },
-				expected: { type: 'string', description: 'What should have happened.' },
-				actual: { type: 'string', description: 'What actually happened.' },
-				evidence: { type: 'string', description: 'Supporting detail: a console error, a status code, the text of an error message.' }
+const reportFinding = {
+			name: 'report_finding',
+			description: 'Files one confirmed defect found while testing the site. Call once per distinct defect, as soon as you have confirmed it. Never include credentials or other secrets in any field.',
+			category: 'qa',
+			parametersSchema: {
+				type: 'object',
+				properties: {
+					title: { type: 'string', description: 'One line naming the defect, written from the user\'s point of view.' },
+					severity: { type: 'string', enum: SEVERITIES, description: 'User impact: critical blocks the core flow, high breaks an important flow, medium is a real but survivable defect, low is polish, info is an observation.' },
+					category: { type: 'string', description: 'Area of the defect, e.g. authentication, forms, navigation, console, network, accessibility, layout, performance, content.' },
+					url: { type: 'string', description: 'The page URL where the defect appears.' },
+					steps: { type: 'array', items: { type: 'string' }, description: 'The exact steps to reproduce, in order.' },
+					expected: { type: 'string', description: 'What should have happened.' },
+					actual: { type: 'string', description: 'What actually happened.' },
+					evidence: { type: 'string', description: 'Supporting detail: a console error, a status code, the text of an error message.' },
+
+					// ── Evidence Engine fields ──
+					observed: { type: 'string', description: 'The specific behavior you observed. What did the page do? Be precise: element IDs, text shown, response codes.' },
+					impact: { type: 'string', description: 'The real-world consequence for a user. Who is affected and how? e.g. "Users cannot log in, blocking all access to the app."' },
+					recommendation: { type: 'string', description: 'Your concrete suggestion for how a developer should fix this. Reference the likely cause if known.' },
+					reproducibility: { type: 'string', enum: ['confirmed', 'unconfirmed', 'intermittent'], description: 'Whether you could reliably reproduce the issue. confirmed = reproduced consistently, intermittent = happens sometimes, unconfirmed = saw it once.' }
+				},
+				required: ['title', 'severity', 'expected', 'actual']
 			},
-			required: ['title', 'severity', 'expected', 'actual']
-		},
-		async run(input) {
-			const severity = SEVERITIES.includes(input.severity) ? input.severity : 'medium';
-			const finding = redact(session.id, {
-				id: randomUUID(),
-				ts: Date.now(),
-				title: String(input.title ?? '').trim(),
-				severity,
-				category: String(input.category ?? 'general').trim(),
-				url: input.url ?? session.targetUrl,
-				steps: Array.isArray(input.steps) ? input.steps.map(String) : [],
-				expected: String(input.expected ?? '').trim(),
-				actual: String(input.actual ?? '').trim(),
-				evidence: input.evidence ? String(input.evidence) : undefined
-			});
+			async run(input) {
+				const severity = SEVERITIES.includes(input.severity) ? input.severity : 'medium';
+				const finding = redact(session.id, {
+					id: randomUUID(),
+					ts: Date.now(),
+					title: String(input.title ?? '').trim(),
+					severity,
+					category: String(input.category ?? 'general').trim(),
+					url: input.url ?? session.targetUrl,
+					steps: Array.isArray(input.steps) ? input.steps.map(String) : [],
+					expected: String(input.expected ?? '').trim(),
+					actual: String(input.actual ?? '').trim(),
+					evidence: input.evidence ? String(input.evidence) : undefined,
+
+					// Evidence Engine fields
+					observed: input.observed ? String(input.observed).trim() : undefined,
+					impact: input.impact ? String(input.impact).trim() : undefined,
+					recommendation: input.recommendation ? String(input.recommendation).trim() : undefined,
+					reproducibility: ['confirmed', 'unconfirmed', 'intermittent'].includes(input.reproducibility)
+						? input.reproducibility
+						: undefined
+				});
 
 			if (!finding.title) {
 				return { success: false, error: 'report_finding requires a title.' };

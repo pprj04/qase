@@ -170,7 +170,23 @@ export function addFinding(data) {
 			to: 'open',
 			by: data.createdBy ?? 'agent'
 		}],
-		tags: Array.isArray(data.tags) ? data.tags : []
+		tags: Array.isArray(data.tags) ? data.tags : [],
+
+		// ── Evidence Engine fields (additive — backward compatible) ──
+		// These enrich findings with structured evidence + quality metadata.
+		// Old findings without these fields are unaffected.
+		observed: data.observed ? String(data.observed).trim() : undefined,
+		impact: data.impact ? String(data.impact).trim() : undefined,
+		recommendation: data.recommendation ? String(data.recommendation).trim() : undefined,
+		fixPrompt: data.fixPrompt ? String(data.fixPrompt).trim() : undefined,
+		confidence: typeof data.confidence === 'number'
+			? Math.max(0, Math.min(1, data.confidence))
+			: undefined,
+		isDuplicate: typeof data.isDuplicate === 'boolean' ? data.isDuplicate : undefined,
+		duplicateOf: data.duplicateOf ? String(data.duplicateOf) : undefined,
+		reproducibility: ['confirmed', 'unconfirmed', 'intermittent'].includes(data.reproducibility)
+			? data.reproducibility
+			: undefined
 	};
 	findings.push(finding);
 	persistSoon();
@@ -220,6 +236,18 @@ export function updateFinding(id, patch) {
 	if (Array.isArray(patch.tags)) f.tags = patch.tags;
 	if (Array.isArray(patch.steps)) f.steps = patch.steps.map(String);
 	if (patch.devIntelligence !== undefined) f.devIntelligence = patch.devIntelligence;
+
+	// ── Evidence Engine fields ──
+	if (typeof patch.observed === 'string') f.observed = patch.observed.trim();
+	if (typeof patch.impact === 'string') f.impact = patch.impact.trim();
+	if (typeof patch.recommendation === 'string') f.recommendation = patch.recommendation.trim();
+	if (typeof patch.fixPrompt === 'string') f.fixPrompt = patch.fixPrompt.trim();
+	if (typeof patch.confidence === 'number') f.confidence = Math.max(0, Math.min(1, patch.confidence));
+	if (typeof patch.isDuplicate === 'boolean') f.isDuplicate = patch.isDuplicate;
+	if (typeof patch.duplicateOf === 'string') f.duplicateOf = patch.duplicateOf || undefined;
+	if (typeof patch.reproducibility === 'string' && ['confirmed', 'unconfirmed', 'intermittent'].includes(patch.reproducibility)) {
+		f.reproducibility = patch.reproducibility;
+	}
 
 	persistSoon();
 	return f;
@@ -341,7 +369,13 @@ export function syncSessionFinding(session, finding) {
 			steps: finding.steps,
 			expected: finding.expected,
 			actual: finding.actual,
-			evidence: finding.evidence
+			evidence: finding.evidence,
+			// Evidence Engine fields (sync if present on the session finding)
+			...(finding.observed != null && { observed: finding.observed }),
+			...(finding.impact != null && { impact: finding.impact }),
+			...(finding.recommendation != null && { recommendation: finding.recommendation }),
+			...(finding.confidence != null && { confidence: finding.confidence }),
+			...(finding.reproducibility != null && { reproducibility: finding.reproducibility })
 		});
 		persistSoon();
 		return existing;
@@ -360,6 +394,12 @@ export function syncSessionFinding(session, finding) {
 		expected: finding.expected,
 		actual: finding.actual,
 		evidence: finding.evidence,
+		// Evidence Engine fields
+		...(finding.observed != null && { observed: finding.observed }),
+		...(finding.impact != null && { impact: finding.impact }),
+		...(finding.recommendation != null && { recommendation: finding.recommendation }),
+		...(finding.confidence != null && { confidence: finding.confidence }),
+		...(finding.reproducibility != null && { reproducibility: finding.reproducibility }),
 		createdBy: 'agent'
 	});
 }

@@ -10,7 +10,7 @@ import { getModelTier, getPublicConfig } from './config.js';
 import { addActivity, addMessage, emit, liveFor, listSessions, setStatus, updateActivity } from './store.js';
 import { redact, secretNames } from './secrets.js';
 import { createQaTools } from './qaTools.js';
-import { captureStep } from './workflows.js';
+import { captureStep, finalizeStepOutcome } from './workflows.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
 import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration } from '@cleanslate/sdk';
@@ -289,7 +289,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			session.targetUrl ??= input.url;
 		}
 		// Capture browser actions as structured workflow steps.
-		captureStep(session, { toolName, input: safeInput });
+		captureStep(session, { toolName, input: safeInput, toolCallId });
 		return activity;
 	};
 
@@ -357,6 +357,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 						error: ok ? undefined : (result?.error ?? result?.message),
 						summary: summariseResult(part.toolName, result)
 					});
+					// B1: Finalize the captured step's outcome from the tool result
+					finalizeStepOutcome(session, part.toolCallId, part.toolName, result);
 					openActivities.delete(part.toolCallId);
 
 					if (part.toolName === 'update_todo' && ok) {

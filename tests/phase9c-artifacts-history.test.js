@@ -11,6 +11,7 @@
  */
 
 import { describe, it } from 'node:test';
+import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ARTIFACTS_DIR = join(__dirname, '..', '.qase', 'artifacts');
 
 const BASE = `http://localhost:${process.env.PORT || 5173}`;
-const AUTH = { 'Content-Type': 'application/json', Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' };
+const AUTH = { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.QASE_API_TOKEN}` };
 
 async function post(path, body) {
 	const response = await fetch(`${BASE}${path}`, {
@@ -169,7 +170,7 @@ describe('Phase 9C — Per-Test-Case History API', () => {
 		assert.ok(Array.isArray(data), 'returns an array');
 
 		// Clean up — use the testCases API
-		const delResp = await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE', headers: { Authorization: 'Bearer qase-5f8a3b2e1d9c4a7f' } });
+		const delResp = await fetch(`${BASE}/api/test-cases/${tc.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 		// Delete may return 200 with JSON or 204, either is fine
 		assert.ok(delResp.status < 400, 'delete succeeded');
 	});

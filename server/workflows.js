@@ -27,9 +27,9 @@ const WORKFLOWS_FILE = join(__dirname, '..', '.qase', 'workflows.json');
 /** Browser tools that produce a workflow step. */
 const BROWSER_ACTIONS = new Set([
 	'browser_open', 'browser_click', 'browser_fill', 'browser_check',
-	'browser_select', 'browser_type', 'browser_key', 'browser_scroll',
-	'browser_hover', 'browser_screenshot', 'browser_diagnostics',
-	'browser_snapshot'
+	'browser_select', 'browser_select_option', 'browser_type', 'browser_key',
+	'browser_press_key', 'browser_scroll', 'browser_hover', 'browser_screenshot',
+	'browser_diagnostics', 'browser_snapshot'
 ]);
 
 /** Maps SDK tool names to clean action verbs. */
@@ -39,8 +39,10 @@ const STEP_ACTIONS = {
 	browser_fill: 'fill',
 	browser_check: 'check',
 	browser_select: 'select',
+	browser_select_option: 'select',
 	browser_type: 'type',
 	browser_key: 'key',
+	browser_press_key: 'key',
 	browser_scroll: 'scroll',
 	browser_hover: 'hover',
 	browser_screenshot: 'screenshot',
@@ -127,8 +129,11 @@ function extractTarget(input) {
  *
  * The input has already been redacted by secrets.js before we receive it,
  * so credential placeholders are preserved but real secrets are masked.
+ *
+ * B1: Now also stores toolCallId so the result can be correlated later
+ * via finalizeStepOutcome(), and initializes an outcome object.
  */
-export function captureStep(session, { toolName, input }) {
+export function captureStep(session, { toolName, input, toolCallId }) {
 	if (!BROWSER_ACTIONS.has(toolName)) {
 		return undefined;
 	}
@@ -144,12 +149,14 @@ export function captureStep(session, { toolName, input }) {
 	const step = {
 		id: randomUUID(),
 		ts: Date.now(),
+		toolCallId: toolCallId ?? undefined,   // B1: correlate with tool_result
 		action,
 		target,
 		label: label || undefined,
 		displayLabel: verbLabel,
 		value: value || undefined,
-		url: session.targetUrl
+		url: session.targetUrl,
+		outcome: { status: 'pending' }          // B1: finalized by finalizeStepOutcome
 	};
 
 	session.capturedSteps ??= [];
@@ -159,6 +166,82 @@ export function captureStep(session, { toolName, input }) {
 	emit(session, 'workflow_step', { step });
 
 	return step;
+}
+
+/**
+ * B1: Finalizes a captured step's outcome from the tool result.
+ *
+ * Called from agent.js when a tool_result arrives. Finds the step by
+ * toolCallId and enriches its outcome object with what actually happened
+ * after the action: success/failure, URL changes, page title, element
+ * counts, console/network errors.
+ *
+ * This is the factual basis that the intelligence layer (B2) will consume
+ * to reason about whether features actually work — not just whether their
+ * pages exist.
+ *
+ * @param {object} session
+ * @param {string} toolCallId — correlates to the step stored by captureStep
+ * @param {string} toolName
+ * @param {object} result — raw tool result (already redacted)
+ */
+export function finalizeStepOutcome(session, toolCallId, toolName, result) {
+	if (!toolCallId || !session.capturedSteps) return;
+
+	const step = session.capturedSteps.find(s => s.toolCallId === toolCallId);
+	if (!step) return; // Not a browser action, or step already finalized
+
+	const ok = result?.success !== false;
+
+	const outcome = {
+		status: ok ? 'success' : 'failed',
+		urlAfter: null,
+		titleAfter: null,
+		error: null,
+		elementsFound: null,
+		consoleErrors: null,
+		networkErrors: null,
+		dialogAppeared: false,
+		ts: Date.now()
+	};
+
+	// Extract URL and title (most tools return these)
+	if (result?.url) {
+		outcome.urlAfter = result.url !== step.url ? result.url : null;
+	}
+	if (result?.title) {
+		outcome.titleAfter = result.title;
+	}
+
+	// Extract failure info
+	if (!ok) {
+		outcome.error = result?.error ?? result?.message ?? 'Action failed';
+	}
+
+	// Enrich from snapshot results
+	if (toolName === 'browser_snapshot' || result?.elements !== undefined) {
+		outcome.elementsFound = Array.isArray(result?.elements) ? result.elements.length : (result?.elementCount ?? null);
+	}
+
+	// Enrich from diagnostics results
+	if (toolName === 'browser_diagnostics' || result?.console !== undefined) {
+		const consoleErrors = Array.isArray(result?.console)
+			? result.console.filter(e => e.level === 'error').length
+			: null;
+		const networkErrors = Array.isArray(result?.network)
+			? result.network.filter(e => e.statusCode >= 400 || e.error).length
+			: null;
+		outcome.consoleErrors = consoleErrors;
+		outcome.networkErrors = networkErrors;
+	}
+
+	// Detect dialogs (alert/confirm/prompt) — the SDK sometimes surfaces these
+	if (result?.dialog || result?.dialogText || result?.alert) {
+		outcome.dialogAppeared = true;
+	}
+
+	step.outcome = outcome;
+	emit(session, 'step_outcome', { stepId: step.id, toolCallId, outcome });
 }
 
 /* ── Saved workflow persistence ─────────────────────────────────── */
