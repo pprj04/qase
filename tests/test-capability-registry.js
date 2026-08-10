@@ -238,10 +238,10 @@ describe('C1: Orchestrator — execution', () => {
 
 describe('C1: Default Registry — pipeline stages', () => {
 
-	it('registers all 8 pipeline stages', () => {
+	it('registers all 10 pipeline stages', () => {
 		const reg = createDefaultRegistry();
 		const caps = reg.list();
-		assert.equal(caps.length, 8);
+		assert.equal(caps.length, 10);
 
 		const ids = caps.map(c => c.id).sort();
 		assert.ok(ids.includes('workflow_save'));
@@ -249,14 +249,17 @@ describe('C1: Default Registry — pipeline stages', () => {
 		assert.ok(ids.includes('smoke_run'));
 		assert.ok(ids.includes('schedule_create'));
 		assert.ok(ids.includes('dev_intelligence'));
+		assert.ok(ids.includes('application_understanding'));
 		assert.ok(ids.includes('feature_gap'));
 		assert.ok(ids.includes('mission_finalize'));
+		assert.ok(ids.includes('decision_engine'));
 		assert.ok(ids.includes('knowledge_write'));
 	});
 
-	it('dependency chain: knowledge_write depends on mission_finalize depends on feature_gap', () => {
+	it('dependency chain: knowledge_write depends on decision_engine depends on mission_finalize depends on feature_gap', () => {
 		const reg = createDefaultRegistry();
-		assert.deepEqual(reg.get('knowledge_write').dependsOn, ['mission_finalize']);
+		assert.deepEqual(reg.get('knowledge_write').dependsOn, ['decision_engine']);
+		assert.deepEqual(reg.get('decision_engine').dependsOn, ['mission_finalize']);
 		assert.deepEqual(reg.get('mission_finalize').dependsOn, ['feature_gap']);
 	});
 
@@ -275,9 +278,9 @@ describe('C1: Default Registry — pipeline stages', () => {
 		assert.deepEqual(reg.get('dev_intelligence').dependsOn, []);
 	});
 
-	it('feature_gap has no dependencies (can run independently)', () => {
+	it('feature_gap depends on application_understanding', () => {
 		const reg = createDefaultRegistry();
-		assert.deepEqual(reg.get('feature_gap').dependsOn, []);
+		assert.deepEqual(reg.get('feature_gap').dependsOn, ['application_understanding']);
 	});
 
 	it('plans correct execution order', () => {
@@ -295,8 +298,10 @@ describe('C1: Default Registry — pipeline stages', () => {
 		assert.ok(planIds.indexOf('test_generation') < planIds.indexOf('schedule_create'));
 		// feature_gap before mission_finalize
 		assert.ok(planIds.indexOf('feature_gap') < planIds.indexOf('mission_finalize'));
-		// mission_finalize before knowledge_write
-		assert.ok(planIds.indexOf('mission_finalize') < planIds.indexOf('knowledge_write'));
+		// mission_finalize before decision_engine
+		assert.ok(planIds.indexOf('mission_finalize') < planIds.indexOf('decision_engine'));
+		// decision_engine before knowledge_write
+		assert.ok(planIds.indexOf('decision_engine') < planIds.indexOf('knowledge_write'));
 	});
 
 	it('each capability has metadata (confidence, cost, category)', () => {

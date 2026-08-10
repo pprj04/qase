@@ -30,6 +30,17 @@ export const MISSION_STATUS = [
 	'created', 'running', 'completed', 'failed', 'aborted'
 ];
 
+/**
+ * Phase 1 reliability: terminal states that cannot be transitioned out of.
+ * A mission in a terminal state rejects start/iterate operations.
+ */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted']);
+
+/** True if the mission status is terminal (no further transitions allowed). */
+export function isTerminalStatus(status) {
+	return TERMINAL_STATUSES.has(status);
+}
+
 /* ── Storage ───────────────────────────────────────────────────── */
 
 const store = new Map();
@@ -166,7 +177,9 @@ export function updateMission(id, patch = {}) {
 		'successCriteria', 'constraints', 'status', 'sessionId',
 		'qualityScore', 'verdict', 'improvementPrompt', 'releaseReady',
 		'findings', 'summary', 'completedAt',
-		'iterations', 'currentIteration', 'context'
+		'iterations', 'currentIteration', 'context',
+		// Phase 5: Continuous Validation Loop fields
+		'stopReason', 'iterationMetadata'
 	];
 
 	for (const key of allowed) {
@@ -194,10 +207,20 @@ export function attachFinding(missionId, finding) {
 
 /**
  * Finalize a mission — set quality score, verdict, improvement prompt.
+ *
+ * Phase 1 reliability: idempotency guard. If the mission is already in a
+ * terminal state (completed/failed/aborted), the call is a no-op and
+ * returns the existing mission. This prevents double-finalization from
+ * the race between pipeline completion and lazy finalization on GET.
  */
 export function finalizeMission(id, results = {}) {
 	const mission = store.get(id);
 	if (!mission) return null;
+
+	// Idempotency: already finalized — return as-is
+	if (TERMINAL_STATUSES.has(mission.status)) {
+		return mission;
+	}
 
 	mission.status = results.status || 'completed';
 	mission.qualityScore = results.qualityScore ?? null;

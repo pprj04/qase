@@ -10,6 +10,7 @@
  */
 
 import { getModelTier, VIEWPORT_PRESETS } from './config.js';
+import { classifyError, isRetryableType, ERROR_TYPES } from './errorTypes.js';
 
 /* ── Prompt construction ────────────────────────────────────────── */
 
@@ -93,8 +94,29 @@ Generate test cases from this workflow. Remember: respond with ONLY a JSON array
 /* ── LLM call ───────────────────────────────────────────────────── */
 
 /**
+ * Classifies an LLM error to determine whether it is retryable.
+ *
+ * Phase 1: delegates to the centralized classifyError() in errorTypes.js
+ * so that error classification is consistent across the entire codebase.
+ * Kept for backward compatibility — existing callers (selfHeal.js,
+ * devIntelligence.js) import this function.
+ */
+export function isRetryableLLMError(error) {
+	if (!error) return false;
+	const type = classifyError(error);
+	return isRetryableType(type);
+}
+
+const LLM_MAX_RETRIES = 2;
+const LLM_RETRY_DELAY_MS = 3000;
+
+/**
  * Makes a direct OpenAI-compatible chat completion request using the
  * project's configured model credentials. Returns the raw text response.
+ *
+ * Retries transient failures (timeout, 429, 5xx, empty response, network)
+ * up to LLM_MAX_RETRIES times with LLM_RETRY_DELAY_MS delay between attempts.
+ * Non-retryable failures (auth, bad request) are thrown immediately.
  */
 export async function callLLM(systemPrompt, userPrompt) {
 	const config = getModelTier('execution');
@@ -119,29 +141,48 @@ export async function callLLM(systemPrompt, userPrompt) {
 		max_tokens: 4096
 	};
 
-	const response = await fetch(url, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${config.apiKey}`
-		},
-		body: JSON.stringify(body),
-		signal: AbortSignal.timeout(120_000)
-	});
+	let lastError;
+	for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
+		if (attempt > 0) {
+			await new Promise(resolve => setTimeout(resolve, LLM_RETRY_DELAY_MS));
+			console.error(`[llm] Retry attempt ${attempt}/${LLM_MAX_RETRIES} after: ${lastError.message}`);
+		}
 
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => '');
-		throw new Error(`LLM request failed (${response.status}): ${errorText.slice(0, 300)}`);
+		try {
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${config.apiKey}`
+				},
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(120_000)
+			});
+
+			if (!response.ok) {
+				const errorText = await response.text().catch(() => '');
+				const err = new Error(`LLM request failed (${response.status}): ${errorText.slice(0, 300)}`);
+				err.status = response.status;
+				throw err;
+			}
+
+			const data = await response.json();
+			const content = data?.choices?.[0]?.message?.content;
+
+			if (!content) {
+				throw new Error('LLM returned an empty response.');
+			}
+
+			return content;
+		} catch (error) {
+			lastError = error;
+			if (!isRetryableLLMError(error) || attempt >= LLM_MAX_RETRIES) {
+				throw error;
+			}
+		}
 	}
 
-	const data = await response.json();
-	const content = data?.choices?.[0]?.message?.content;
-
-	if (!content) {
-		throw new Error('LLM returned an empty response.');
-	}
-
-	return content;
+	throw lastError;
 }
 
 /* ── Response parsing ───────────────────────────────────────────── */

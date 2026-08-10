@@ -1,0 +1,339 @@
+
+S S Niharikaa Aitam
+20:28
+Pushkar is my voice audible and clear.
+
+PP
+Pushkaraj Potdar
+20:28
+Yes. It is clear.
+
+SA
+S S Niharikaa Aitam
+20:28
+Okay. Thank you.
+
+PP
+Pushkaraj Potdar
+20:30
+Okay.
+
+SA
+S S Niharikaa Aitam
+20:30
+Next new assign. Getting some noise.
+
+PP
+Pushkaraj Potdar
+20:30
+Hola, Tomás.
+
+SA
+S S Niharikaa Aitam
+20:31
+Hi, Thomas. Hi, team. Yesterday, we tested one twenty Android devices and through different browser combinations using browser stack. Across, different Android versions on Chrome, Edge, Firefox, Opera, and Safari. During this testing, we reported 33 new bugs, which are related to Dry DCI studio and the meeting links. Mainly cover mainly covering login, microphone, and camera functionality. Like, there are two issues which you mentioned, Thomas, like, the microphone issue that has been resolved and the password, change issue is present, and we re recreated the issue and shared it with the development team. And we also shared the end to end, QA workflow with the team for review and for future automation planning. In addition, we created an end to end integration and shared with the team. We continued working on the dry .com feature page based on your feedback and received an initial review. So we also continued on the end to end endpoint integration plan for AI studio and while working on the integration we investigated a technical blocker, which is a the current implementation and identified the root cause for it.
+
+PP
+Pushkaraj Potdar
+20:34
+There are some like, four blockers, actually. Just a second. Yeah. Right. Just a sec. I will share with you. It was actually item itemic.
+
+SA
+S S Niharikaa Aitam
+20:34
+So the current blockers, we are facing.
+
+PP
+Pushkaraj Potdar
+20:34
+And the mission centric UI, then the there was a actually, I'm at yeah. I'm audible. Okay. There was a local, like, public API and endpoints. Like, it show the status in progress and also one, like, mission workflow. And then there was also feature gap detection. A there was a blocker too. And the mission centric UI, we are working on on the UI. To fix the UI, we we face some issue, like, so we have changing it. No. No. No. It's nothing to do with that thing. Yes. Yeah. Actually, we need to like, in see the back end progress we can integrate it with the back end also. So we are working on the u UI too. We will work on that today.
+
+TE
+Thomas Eide
+20:36
+What back end access do you need?
+
+PP
+Pushkaraj Potdar
+20:36
+What means the end and back end need to be synchronized. It's synchronized. Synchronized. So we need to keep in mind, like, the front end should be not effect on back end. So if we connect with the front end, so we can we will we should get the output from it.
+
+TE
+Thomas Eide
+20:36
+Yeah. This is your product case. Right?
+
+PP
+Pushkaraj Potdar
+20:36
+Yes.
+
+TE
+Thomas Eide
+20:36
+Alright. Did you do any research on the architecture?
+
+PP
+Pushkaraj Potdar
+20:36
+Yeah. We did, and we have done the research on that, correction.
+
+TE
+Thomas Eide
+20:37
+And and how are you gonna build or structure this?
+
+PP
+Pushkaraj Potdar
+20:37
+Which.
+
+TE
+Thomas Eide
+20:37
+And what's your architecture.
+
+PP
+Pushkaraj Potdar
+20:37
+Okay. Okay. Yeah. Right.
+
+TE
+Thomas Eide
+20:37
+You're gonna change this. What what what's your architecture plan?
+
+PP
+Pushkaraj Potdar
+20:37
+So first will be the mission creation. So the mission create in the mission creation, we can user can input the.
+
+TE
+Thomas Eide
+20:37
+I'm talking about architecture, not workflows.
+
+PP
+Pushkaraj Potdar
+20:37
+Okay. Okay.
+
+MM
+Mishal Muneer
+20:37
+Architecture for integrating to writer's thumbs.
+
+TE
+Thomas Eide
+20:37
+Well, you don't integrate to Drytus. They integrate to you.
+
+MM
+Mishal Muneer
+20:37
+So right now, the architecture is like we have like, we failed first what first of our first attempt was, like, implementing multiple agents, but that miserably. So how I built this is, like, have built a single agent and a single orchestration pipeline And, like, I have given tools to one single agent, browser automation, tools and, like, the click click tool and like, all the tools necessary for testing. And, it's working as a single agent.
+
+TE
+Thomas Eide
+20:38
+I see.
+
+MM
+Mishal Muneer
+20:38
+A single pipeline. She does the present architecture.
+
+TE
+Thomas Eide
+20:38
+Well, you know that doesn't scale.
+
+PP
+Pushkaraj Potdar
+20:38
+Alright. We also like, we have created a mission controller. It will control the missions and the other mission countries. And also the browser abstraction there. Where it will check the different browsers. Then we have the decision layer where it will planning the it will give the planning prompt disco discovery prompt, test condition prompt, then work validation prompt, and feature gap prompt, and lose root cause prompt. It will create the report prompt at the end. And we have the analysis pipeline, so it will the whole application from application map to bug report. Then we have the key we will we have the key web workflow. So from the bug found to the reopened blog bug and close ticket. We also added the continuous learning in it like mission finish, then it will store the application graph workflows and all. Then it will go to the next mission. Reuse the existing knowledge based on that. And it will create the smarter smarter planning and using the less scrolling and with and do the better testing in it, and it will it will support the faster execution. And for.
+
+TE
+Thomas Eide
+20:40
+So let let me let me start. So this is the challenge that you have. So you you've never been taught about model view controllers. Right? And so you like, this was something that was skipped over. You just never learned it. And so you you really never learned how we build front ends and back ends and how they interact and interface. The the way we learned it in nineteen eighty nineteen ninety is the way you do it today. And that that's a problem. Because we don't build systems that way anymore. Right? Just don't no systems can scale this way. We have an abundance of of servers. We have an abundance of of hardware at our disposal. That we can spin up in real time. The latency of an API that resides on the same server is as fast as the latency of a function call. But you never learned that. You're used to latency across the world, where you're calling an API endpoint that's in The US, well, that's around the entire world. There's going to be if you trade route that, it's probably gonna take you two thousand milliseconds. But that isn't what you learned. So now the struggle is basic fundamental architecture has been lost. I argue, and I've argued before, this was done on purpose. This was done to make you dumb on purpose. By your professors, by the universities, on purpose. But you aren't at a university, and you have the ability to learn the correct way. You need to get your heads back in the books. You need to understand proper architecture. You can use AI. Take advantage of this. Because if you can't get fundamental architecture down, and, Misha, we had a call yesterday, you have no idea.
+
+MM
+Mishal Muneer
+20:42
+Yes.
+
+TE
+Thomas Eide
+20:42
+It is a long shot. For you. But you can learn, but you're not gonna learn from somebody showing you or telling you. And you're damn well not gonna learn in that country from somebody showing you and telling you. Because you had the best. These professors didn't show you and tell you. Why is anybody else going to do it? And the ones that do know it, they never share it with you because they're trying to get the highest paying job. We have freaks in our country. We have people who dress up like animals in our country. There's nothing to be pissed up. If you wanna dress up like an animal, I don't care. But when my son and your son, the one that's dressed up like an animal, go for a job interview, And all things equal, which one's gonna get the job? The one dressed up like an animal or the one that's just a normal everyday guy? Well, in your country,.
+
+MM
+Mishal Muneer
+20:43
+No.
+
+TE
+Thomas Eide
+20:43
+You don't share information because everybody is stepping on everybody. It's your entire culture. How do I get ahead? You're with an American company. You need to learn this. Without learning it, you don't get to step into the next. Loops, harnessing, orchestration, architecture agents that like, an agent that manages the orchestration. And then how are you passing the context back and forth between the different agents and how are you using compression on that context. And all the while, I would be surprised if there's a log file any place inside of any application you've built. But that is something that fundamentally doesn't come or build by you or your team. So it doesn't surprise me. Go do some homework quickly.
+
+MM
+Mishal Muneer
+20:44
+Yes. We look.
+
+TE
+Thomas Eide
+20:44
+Get back up to speed. You don't have a choice. You're a long way off between before anybody integrates. The dev team's excited to see what you have. But you're a long way off. Because I can tell you, you start working with guys like this, they're not gonna work with you.
+
+MM
+Mishal Muneer
+20:44
+Yes.
+
+TE
+Thomas Eide
+20:44
+Any one of you got on a soccer field with me we were playing a high level competitive game I'm not playing the sport with you. I will I I'll just leave the team. I'll quit. I'll leave the field. I'm on a field to win. But if you can't kick a ball straight, our team doesn't have a chance of winning. If you can't understand the fundamentals of architecture, our team doesn't have a chance of winning. I've pushed you. You've done amazing. Now you have to go the next step. Alright? Start by looking at MVC.
+
+MM
+Mishal Muneer
+20:45
+Yes.
+
+TE
+Thomas Eide
+20:45
+Models use controllers. Start by how do you spin up workers How do you spin up a 100,000 workers? You get a call. You have a high we'll call it latency. You have a high latency object. It's gonna take three minutes for this function to run. How do you and you get a 100,000 calls, the same time. How do you spin up a 100,000 instances at the same time?
+
+MM
+Mishal Muneer
+20:46
+Okay.
+
+TE
+Thomas Eide
+20:46
+These are questions you ask Gemini. ChatGPT or any of these others. You can learn this and discover this yourself. If you're looking for me, or anybody outside your team to tell you how to do it, it isn't happening. If you go to your friends, they don't know how to do it either.
+
+MM
+Mishal Muneer
+20:46
+Yes.
+
+TE
+Thomas Eide
+20:46
+If you go to the very best engineers in in India, they already live in America. They live there.
+
+MM
+Mishal Muneer
+20:46
+Yes.
+
+TE
+Thomas Eide
+20:46
+And you wonder how they got out. This is the change you have to make. Alright? Are we testing mobile yet?
+
+MM
+Mishal Muneer
+20:46
+Yes. Yes.
+
+TE
+Thomas Eide
+20:46
+Through this through through case?
+
+MM
+Mishal Muneer
+20:46
+Like, case, it it will shrink down to mob mobiles size, and it'll do the testing.
+
+TE
+Thomas Eide
+20:47
+I understand. You have to think about mobile browser Right?
+
+PP
+Pushkaraj Potdar
+20:47
+Ya vi, Miels.
+
+TE
+Thomas Eide
+20:47
+First and foremost, like, how are we going through the different browsers? How are we going through different like, on different platforms to different browsers on different platforms? Like, have we thought about do we test this on DuckDuckGo and some of these other alternative mobile or other other browser rendering apps. And then as you do this and you start to open your mind, you're like, gonna have to build an engine to test iOS and Android apps.
+
+MM
+Mishal Muneer
+20:52
+Oh, yes. But I think it helps for, like, search engine optimization. Try to.
+
+TE
+Thomas Eide
+20:52
+It's AI engine optimization now. Nobody's using search anymore. Google's dying.
+
+MM
+Mishal Muneer
+20:53
+So we'll reorder that we'll go through all the features. We'll reorder accordingly. And if some are unnecessary, we'll remove it.
+
+TE
+Thomas Eide
+20:53
+I've seen some need more explanation. If we're missing features, he has talked about the features we're missing. They are technical, like proxy and some of these. They need to be added. They just need to be added in the right place.
+
+MM
+Mishal Muneer
+20:53
+Okay.
+
+TE
+Thomas Eide
+20:53
+If you need to add workstation is a feature. Right, which is great for a technical person. They're like, hey. Do you mean you have a cloud based workstation?
+
+MM
+Mishal Muneer
+20:53
+Yes.
+
+TE
+Thomas Eide
+20:53
+That has to be. But there is not a difference between studio and workstation now. In when you get your studio subscription, you have access to every single feature. That we offer. No features are held back.
+
+MM
+Mishal Muneer
+20:54
+Okay.
+
+TE
+Thomas Eide
+20:54
+Any other questions?
+
+MM
+Mishal Muneer
+20:54
+And, Bill, no. That's it. We'll give you the prompt by tonight.
+
+TE
+Thomas Eide
+20:54
+Tomorrow's fine. Alright. Thanks, guys. Bye.
+
+MM
+Mishal Muneer
+20:54
+Thank you.
+
+SA
+S S Niharikaa Aitam
+20:54
+Thank you bye.

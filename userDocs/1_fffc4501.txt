@@ -1,0 +1,858 @@
+Mishal Muneer
+20:27
+Hello, hey पुष्कर. Hello?
+
+AU
+Abhishek U
+20:29
+Hello? Yeah. Hi, everyone. Okay. Let's wait. Neharika is not available in Abhishek Alright. Yeah. Hi, Thomas.
+
+MM
+Mishal Muneer
+20:30
+¿Qué más?
+
+AU
+Abhishek U
+20:30
+And Right. So let's wait for winning for next thirty seconds, and then we can start with updates.
+
+MC
+Manoj Kumar Ch
+20:30
+Yeah. Sure.
+
+TE
+Thomas Eide
+20:33
+While he's looking at that, can can are you able to hear me? Alright. There's a couple of bugs that I wanna report. One is it appears it's working day. I typically can't unmute, but maybe they fixed that. Another bug is when I change my password, which I don't know if that is something we can do yet. And if it's not, it needs to be added. But when I change my password, it should log me out of every place. Right? So let let's make sure that's happening. And then and like, we should probably go in and and and actually go get the typical behaviors of an application like this and and just use AI to research? What are the other typical behaviors that we should be looking at right here, right now. Right? And so that we can test and and find out other other things to test. It's just a suggestion. Alright. In your application your application what's your application called? Case. Perfect. Everything in your application should be in a coding font. It should look like like old syntax. So the entire design of case should look like coding format. Anyone and everyone using case now or in the future, it it should feel like like a a coding tool. Right?
+
+MM
+Mishal Muneer
+20:35
+Like, as CLI tool.
+
+TE
+Thomas Eide
+20:35
+Yep. Yep.
+
+MM
+Mishal Muneer
+20:35
+Okay.
+
+TE
+Thomas Eide
+20:35
+So change that style, look, design, feel so that you feel like an expert in coding. And and these are just suggestions. This is the real reason I'm here is we have new models that are gonna show up. The new new way that our product works As this gets launched, there are four models You're gonna have to go to new.drydockcom to read about them. New.drydoos.com to read about them so you can understand the four different models and methods. This is something that I built. You can ask questions after reviewing it. Here are the four models. Studio is just our workspace. It'll be connected to an LLM, and you'll be able to do anything and everything with a cloud based IDE. Right? This is a cloud based IDE attached So replacing localhost with Drytis. For $25 a month, you're gonna get this cloud based IDE. Attached to an LLM. And there's gonna be millions and millions of tokens. So you're not gonna run out of tokens. This is a do it yourself model. Right? This is Studio. There's not a whole lot of agents. This is just do it yourself. Just use the model and do it yourself. At any point, you can change the models. There'll be a drop down, four models. DRIDIS 5.1, Edge 2.2, and Albert 2.1. These models are consistent of a couple of things. But most importantly, is Drytis is an AI engineer. This is very similar to the what we have right now. Security vulnerability testing. Your application itself is going to get meshed in to this. It's why we built Case. And so you'll be able to take your application and run it within DRIDIS 5.1. Alright? So that is a primary use case of Drytis. This is an AI engineer. Alright? So now you can see your application getting merged in to DRIDIS 5.1. We automate. So all of the toolkits that you've built have to have endpoints so that the dev team can integrate your application into the workflows. Right? So as you build and create edge cases, test cases. Your application will now be doing a very deep high level QA, and it will run-in loops. And so think about the endpoints that you build being looped, and it gets sent back, and it gets sent back, and it gets sent back. Right? And that is DRIDIS 5.1. And so this is a bit of it the the harnessing that we're doing and the loop engineering we're doing is really just to try to get a pretty fully product. This is a good AI engineer. There is no such thing as a great AI engineer. Doesn't exist. In fact, I don't believe it will ever exist. That that that is not a thing. And there are thousands of reasons why none of which matter, What does matter is a great AI engineer will never exist. Alright?
+
+MM
+Mishal Muneer
+20:39
+Yes.
+
+TE
+Thomas Eide
+20:39
+What will exist? Is great human engineers. The edge model will hand off this application to a human. A great human. The Albert model will hand this off to the best engineers in the world. But the edge is gonna hand this off. This is a handoff with a very specific list of tasks. What you have to be doing right this second as you understand that handoff, is you have to, as a team, come together and you have to come up with a way to test the dryness model to test the edge model, and eventually to test the Albert model. We're not concerned with the Albert model model right now, but this is the test scenarios. The edge specifically and for the dritis. So what you're gonna be doing is you have to think about how are we going to build test cases to test this in order to improve this product internally? In the dritis model, you're producing test cases with specific outcomes, or you're trying to get the model to make mistakes. So you're creating test cases in which you're asking the model or you're forcing the model to create mistakes so that you can catch the mistakes. They can they can make advancements. They can improve the the model. It's DRIDIS five point one, we are building our own our our own Frontier model as we speak. It's been approved. They are they are building as we speak right now. So we will have our own model as we deploy. So how do you test dritis to make it fail? Right? How do we give it cases in which it fails, and how can we give it improvements? But more importantly, how do we build test scenarios for the edge model? This is gonna be handed off to an actual engineer. And so we have to go through as a team and determine how are we going to test this How are we going to look at the credits right, the tokens consumed, input and output, and how are we going to validate that project And I don't expect you to have the answer right this second. You have to meet as a team.
+
+MM
+Mishal Muneer
+20:41
+Yes.
+
+TE
+Thomas Eide
+20:41
+But let me give you a very obvious answer. You take two identical projects the exact same input, the exact same context, and you run it through edge,.
+
+MM
+Mishal Muneer
+20:42
+All the models.
+
+TE
+Thomas Eide
+20:42
+Well, you run it through all the models, but you run it through edge. And you run it through three times three different projects from three different accounts, and you get three different engineers. That should be something that you should expect. If you don't get three different engineers, it it's okay. If you get three different engineers what's the output?
+
+MM
+Mishal Muneer
+20:42
+Ok.
+
+TE
+Thomas Eide
+20:42
+And then what what are we okay with getting? How wildly different is the output How wildly different is the cost? Through three different engineers? So when does the time get out of parameter? When does the output out of parameter? When is the well, time is cost. But not only cost. Right? Because the the cost is not relative to time. Because they they're they're irrelevant. So how do you determine when any of these and then what are the other things that can be out of band? Now just remember that the engineer can communicate with the client. And should communicate with the client. So I want you to determine out of band behaviors. So that when you're running this test, you can see out of band behaviors.
+
+MM
+Mishal Muneer
+20:43
+Ok.
+
+TE
+Thomas Eide
+20:43
+We have to test our own product. Now this week, for the first time, we're hoping to eat our own dog food. Meaning our dev team will internally start to be using this product. Hopefully, before the end of this week. Which means that every co every every new iteration of their own internal code is going to go through the edge model. Get tested by an engineer, and and those responses will come back. Ideally, you should be building that into case. Now you really don't understand the architecture of an enterprise grade product. Nobody on this team does. I don't expect you to. It's quite alright. I'm not gonna teach you this. You wouldn't get it anyway.
+
+MM
+Mishal Muneer
+20:44
+Bueno, Tomás,.
+
+TE
+Thomas Eide
+20:44
+But one thing you can start to look at is think about microservices. So think about breaking the application into individual, small consumable components. So the component that would call is its own server. It has its own endpoint. Everything is isolated under that playwright. And it calls that. And now think about that container. That you could spin up 50 of them if you needed at at the same time. Right? So so that that is the way that you should be thinking about your architecture. That is a simple way to start to think about the architecture. Why do we do this? Because if you start to build this way, you'll also be able to eat our dog food. You'll also be able to develop using the edge model. If you build this way, you'll be able to make an improvement in your product using the edge model that code, that snippet, that that particular function and what's required will run through AI. It will build It's it will it will create the tasks for the engineer. The engineer will go do the testing. We'll finish fixing what they can fix. And you'll be able to consume our dog food. You'll be able to use our product yourselves as a team. Using our product yourselves as a team is the number one way to test it. Right? The number the way way I'm asking you is how do we automate this testing? How do we create test cases? So that we can start to validate things that are out of band? But if you start to build this way, you'll be able to use our product. If you can use our product, to do testing, and you can build our product down to microservices obviously, multiple projects, multiple endpoints, like multiple dependencies. Then and only then will you be able to use our product where you have engineers testing that by time you receive your own code back, you're getting the best model output. You are no longer a QA engineer.
+
+MM
+Mishal Muneer
+20:46
+Ok.
+
+TE
+Thomas Eide
+20:47
+When you make this shift, you will move from being a QA engineers to being product dev engineers. You're no longer a QA engineer. This is your choice to make that transition, not mine, not anybody else's. It's your choice. When you build, when you understand, when you go do the research, on how to build this, or you're using the edge model to build and those engineers are doing the QA, you're no longer QA engineers.
+
+MM
+Mishal Muneer
+20:47
+Yes.
+
+TE
+Thomas Eide
+20:47
+That's your choice. That's your transition. They are. They're doing all the review. They're making the suggestions. They're making all the edge case unit tests, suggestions, everything. And that feedback is exactly what we're looking for. We want that. We want them to do that. We want them to learn that behavior. Not different than what you do right now. But now you can build on case so that Case can be deployed to clients. Case can be used by clients. A set of endpoints that can be accessed by the dev team a set of services that are no longer within one server one repo, I will not allow one repo to be sent to any engineer out of our team. No one would. But once you learn to architect, in an enterprise, level, Once you start to build that environment, you can eat your own dog food. And that's the best way for us to be able to test this product. We're at 1,300 engineers. As if if we build this, if you start to use this product and we advance this product, And by using this product, you can increase the quality not the features. We don't need a lot more features, do we?
+
+MM
+Mishal Muneer
+20:49
+No, no.
+
+TE
+Thomas Eide
+20:49
+We need very few features. We sell two things. We have a environment. We have a cloud based ID or cloud based CLI. Right? Which is different.
+
+PP
+Pushkaraj Potdar
+20:49
+Yes.
+
+TE
+Thomas Eide
+20:49
+But that's not really our primary product. A lot of people have that. We're not special. I mean, we are, but we're we're not. And there are features to that, but who cares? The the features are less relevant. Than the edge model. Which is adding the human engineer in the loop. And getting consistent results from that human engineer.
+
+MM
+Mishal Muneer
+20:49
+Yes.
+
+TE
+Thomas Eide
+20:49
+And being able to test human engineers for projects. Right?
+
+PP
+Pushkaraj Potdar
+20:50
+Yes.
+
+TE
+Thomas Eide
+20:50
+And you need to think, how are we gonna test that model? With the human engineer? Because an out of band is a project that should take two hours to complete takes three days. That's out of band. Right? And then what do we do to prevent that? Once it's out of band, we can make suggestions back to the dev team. Hey. This is out of band.
+
+MM
+Mishal Muneer
+20:50
+Okay.
+
+TE
+Thomas Eide
+20:50
+If dritis runs case, and it takes sixteen hours for case to run,.
+
+MM
+Mishal Muneer
+20:50
+It takes sixteen hours for the.
+
+TE
+Thomas Eide
+20:50
+On a project, that might be out of band. Right? Either is an error error or it's it's looped too many times. Whatever the case may be. Drytus 5.1. Should be able to create Call of Duty. There was an application written two weekends ago. 150 word prompt and he was able 55,000 lines of code later was able to replicate Call of Duty. The entire application. That that is a possibility with drydock is 5.1.
+
+MM
+Mishal Muneer
+20:51
+Ok.
+
+TE
+Thomas Eide
+20:51
+Now everybody can see that code It's on a public GitHub, but I promise you if you went and you got that code, you cannot play Call of Duty with it. You're gonna find lots and lots of different bugs. Right? We all know this. But with edge, you should be able to run that Call of Duty model. Alright? And that's what we have to like, when you think about testing, you can use public projects, and you can actually build from a from a single prompt. And you should be able to to establish what like, they finished an application You run Case to test the application. Us what they missed. Tell us what they got wrong. What happened? Right? So that we can start really to be able to grade the project and determine if if it's out of band. What did they miss And then later, we'll be able to determine how did they miss it and how do we keep them from it in the future. Alright?
+
+PP
+Pushkaraj Potdar
+20:52
+Yes. Sure.
+
+TE
+Thomas Eide
+20:52
+It's a tough project.
+
+MM
+Mishal Muneer
+20:52
+Yes, yes. Uh-huh.
+
+TE
+Thomas Eide
+20:52
+You understand the go forward. How do you break your product into the different services or endpoints so that you can to use our edge product as you build number one, Number two, how do you build a platform to test our edge product? Because these are human engineers. And this is gonna be automated testing that's gonna run twenty four hours a day, seven days a week. You're not gonna kick off a test. You're gonna be building a and it's going to run testing. And and is it the same engineer? Is it a different engineer? What's the results? What's out of band? What was missed? What are the improvements we can make? So that we can improve the edge product? Ultimately, improving the edge product is also improving the DryDIS product. Because five point run runs before the engineer gets a hold of it. And if you think about the testing, you could grab the code prior Like, you you can get you could get a snapshot of the code prior to the engineer. So you can get before and after the engineer work as well as you build this. Alright?
+
+MM
+Mishal Muneer
+20:54
+Ok.
+
+TE
+Thomas Eide
+20:54
+This is what we need. You're gonna continue to test the platform, the features, those things that are on the workspace. Right? But if you think about studio at $25 a month, we actually it it's not that we don't care. We do care about that. We that isn't our pro we don't make any money. At $25 money month, we're losing we're losing money. On that platform. We care when they use our models. And so we have to we have to shift our thinking to automated testing for the studio environment, and how do we build the testing for our three models.
+
+PP
+Pushkaraj Potdar
+20:54
+Right.
+
+MM
+Mishal Muneer
+20:54
+Okay.
+
+TE
+Thomas Eide
+20:55
+And how do we start to use our our how do we start to use Edge ourselves so that we can transition from being an external QA team to beam a product team for Dritis. When we finish making that transition, you're not gonna be with me. You're gonna move over to the dev team.
+
+MM
+Mishal Muneer
+20:55
+Ok.
+
+TE
+Thomas Eide
+20:55
+There'll be no more calls with me. Because you'll be integrated fully into the dev team.
+
+MM
+Mishal Muneer
+20:55
+Okay.
+
+TE
+Thomas Eide
+20:55
+But if you went over to the dev team right now, you structurally are not ready. You cannot do it. You're not there.
+
+MM
+Mishal Muneer
+20:55
+Yes.
+
+TE
+Thomas Eide
+20:55
+You've produced great work. But, again, you have to make this an enterprise grade product. It has to be ready so that you can show here's how you can integrate these components. And this is what we can do. In Flow in Workflow. So when Abi asked for, hey. Let me see this workflow. And you didn't get it to him without him asking a second time. You can't be on a dev team like that. I can tell you our dev team is never asked twice. Nobody on that team asked twice. It's not how we operate.
+
+MM
+Mishal Muneer
+20:56
+Okay.
+
+TE
+Thomas Eide
+20:56
+If you want a chance at the big leagues, if you want a chance at something really, really big, that's gonna be used by a lot of people in the world, you're gonna have to make a transition yourselves. No one's gonna show you how to do it. No coach is gonna make you a great player. The amount of time you practice, the amount of time you spend in the gym, that's what's gonna make a great player. You decide whether you're gonna be great or not. Do you have any questions for me?
+
+MM
+Mishal Muneer
+20:57
+Ok. So So, Thomas, we are gonna be a model provider.
+
+TE
+Thomas Eide
+20:57
+We already are. We always have been. What we were before is a least cost routing provider. Right? We just did the least cost routing.
+
+MM
+Mishal Muneer
+20:57
+Ok.
+
+TE
+Thomas Eide
+20:57
+Right? That's all we were. We released cost routing to another model. We are right now training own model and then we will we are building our own transformer to be on top of our own model.
+
+MM
+Mishal Muneer
+20:57
+Ok.
+
+TE
+Thomas Eide
+20:58
+Think about the amount of code. Think think about the amount well, when you think about machine learning, think about what what the number one requirement for machine learning. Does anybody know what the number one requirement is for machine learning?
+
+MM
+Mishal Muneer
+20:58
+Data.
+
+TE
+Thomas Eide
+20:58
+Be more specific. What data? What data? I don't understand what he said. Nope.
+
+SA
+S S Niharikaa Aitam
+20:58
+It's real data, like, when the things happen,.
+
+TE
+Thomas Eide
+20:58
+Maybe if he means something different. The answer is SME data, subject matter expert data.
+
+MM
+Mishal Muneer
+20:58
+Yes.
+
+TE
+Thomas Eide
+20:58
+What the models are trained on is the Internet. It's trained on social media. Right? That is the language. So that's what large language models are trained on. They're trained on on on the way humans talk. That is there's absolutely no subject matter expertise in there. In fact, you could argue there's less than subject matter expertise there. Because there's just not enough subject there's not enough stack overflow conversations for the model to actually be really good at coding. It can be good at language because there is a lot of you and I talking on the Internet. There's not a lot of you and I coding on the Internet. Right? Most of it's obfuscated. Even websites are obfuscated. So it it it isn't learning. And so for it to learn to code, it needs SME data. It needs engineers, real engineers, great engineers doing something specifically The thing it does as an SME in machine learning is it tells it what it did right, and it what it did wrong. And that is the entire platform that we're building. That is what l Edge and Albert are. Is those are real engineers vetted are telling it what it's done right and what it's done wrong.
+
+MM
+Mishal Muneer
+20:59
+Okay.
+
+TE
+Thomas Eide
+20:59
+And that's specifically what the task list does is tell what you did right and what you did wrong. When you go in and you give a prompt to fix something, you're not telling it what it did wrong. You're only telling it what you want next.
+
+MM
+Mishal Muneer
+21:00
+Yes.
+
+TE
+Thomas Eide
+21:00
+Our model is here's what you did wrong. Here's why I think you got it wrong. This is what it should have been, and this is the prompt to fix it. That is four things. Right now, the only thing an engineer gives is here's what you do to fix it. Here's what what you should do. Here's what's wrong. Here's what it should be. Here's why I think you got it wrong. And this is the prompt to fix it. And that's what our goal is in Edge and Albert. When the engineer gives all four of those responses, that's the output token, of the engineer. You're now truly training the model with SMEs. That's why we have our own model.
+
+MM
+Mishal Muneer
+21:01
+Okay. Okay. Okay. So, like, the more the engineer uses it, the better the model becomes.
+
+TE
+Thomas Eide
+21:01
+Exactly. Right now, anybody is using Claude. And Claude has to decide. And if you looked at Claude, here's what Claude used to get SME data. Cloud had a if you they they open well, they didn't open source. They're they're code got exposed. And one of the tools that they used was let me know when it cussed. When an engineer cussed at the model, treat that as a bad result. That was the only SME value that they had.
+
+MM
+Mishal Muneer
+21:01
+Okay.
+
+TE
+Thomas Eide
+21:01
+Was when you when when when when the engineer or the person coding got pissed and gave you a pissed response, that was the feedback loop that Claude has.
+
+MM
+Mishal Muneer
+21:01
+Okay.
+
+TE
+Thomas Eide
+21:01
+That's the only feedback loop they have, guys. The other the only other feedback loop they have is they're ingesting code. Meaning you add your repo They're ingesting code. When you add the repo of a project you're fixing, they get to ingest the entire codebase. Something that isn't exposed right now without compiling or without, like, access to my Laravel. Right? Even PHP, I can't see all the functions. I can see where the the the page calls a function. I can't see what the function actually does. What's even more valuable is never ever can I see any of my comments? And so Claude is using engineers giving their code as a value to create their model. That is one value. The other is when they cuss, that's the only other feedback loop they get. We have several feedback loops. This is what you did wrong, This is what it should have been. This is why I think you got it wrong. And this is the prompt to fix it. From a real engineer.
+
+MM
+Mishal Muneer
+21:03
+Yes.
+
+TE
+Thomas Eide
+21:03
+You add those four data points instead of what the fuck have you just sent me?
+
+MM
+Mishal Muneer
+21:03
+Yes.
+
+TE
+Thomas Eide
+21:03
+That is a good data point. That's feedback. It means you just sent me AI Slop, but I don't know what you sent what part of this was Slop. We're gonna say exactly what part of Slop how, and why.
+
+MM
+Mishal Muneer
+21:03
+The model understands. It gets better.
+
+TE
+Thomas Eide
+21:03
+So now the model is getting the data so that it can get better faster.
+
+MM
+Mishal Muneer
+21:03
+Yes.
+
+TE
+Thomas Eide
+21:03
+And the real secret is who wants that feedback the most in the world? Who wants that feedback more than anybody else in the world right now?
+
+MM
+Mishal Muneer
+21:04
+The clients.
+
+TE
+Thomas Eide
+21:04
+Well, the client wants the best product. Anthropic wants that data. More than anybody in the world.
+
+MM
+Mishal Muneer
+21:04
+Okay.
+
+TE
+Thomas Eide
+21:04
+Because it would help them to train their model faster, wouldn't it? And whoever has the best model, fastest wins. And they know that, and so do you and so do I. They want this data more than anybody. I would say that OpenAI is it it wants it.
+
+PP
+Pushkaraj Potdar
+21:04
+Yeah.
+
+TE
+Thomas Eide
+21:04
+IBM wants it. Amazon wants it.
+
+MM
+Mishal Muneer
+21:04
+That's it.
+
+TE
+Thomas Eide
+21:04
+Meta wants it. Microsoft wants it. They all want it. This is the feedback data that they want. Do this well, and don't be surprised if you're working for Anthrop. But do this well. Don't be surprised who you're working for in a year. We have no control over that. Shareholders control all that. All we control is we know this is the best behavior, and this is why we're doing it.
+
+MM
+Mishal Muneer
+21:05
+Yes.
+
+TE
+Thomas Eide
+21:05
+And this is what it's gonna take to build the best coding model. Because all we're doing is taking the latest frontier model and improving it. But you can't improve it unless you say, this is what you got wrong. This is what it should have done. This is why I think you got it wrong, and this is the prompt to get it right.
+
+MM
+Mishal Muneer
+21:05
+Yes. Feedback loops.
+
+TE
+Thomas Eide
+21:05
+Feedback loop. The only feedback loop that goes to the model is this is the prompt to fix it. Well, they're already getting that feedback loop. But they don't really understand. The model understand that feedback. But, boy, if you told it the first three things, it would know what it got wrong, and that'd be really, really good training data, wouldn't it?
+
+MM
+Mishal Muneer
+21:06
+Yes.
+
+TE
+Thomas Eide
+21:06
+In fact, that'd be the best training data for a human engineer, wouldn't it?
+
+MM
+Mishal Muneer
+21:06
+Yes.
+
+TE
+Thomas Eide
+21:06
+Yeah.
+
+MM
+Mishal Muneer
+21:06
+Yes.
+
+TE
+Thomas Eide
+21:06
+That's the edge model.
+
+MM
+Mishal Muneer
+21:06
+Okay.
+
+TE
+Thomas Eide
+21:06
+That's exactly what we're doing. The engineers practice seem to be an engineer. Here's what you did wrong.
+
+MM
+Mishal Muneer
+21:06
+And the model gets better.
+
+TE
+Thomas Eide
+21:06
+Here's what you should have done. Here's why I think you got it wrong. And this is the prompt to fix it. And the model gets better. We were hoping to achieve this through the green button. But psychologically, none of us wanted to touch the green button, and neither did you. Neither did I.
+
+MM
+Mishal Muneer
+21:06
+Yes.
+
+TE
+Thomas Eide
+21:06
+The green button's gonna be gone.
+
+MM
+Mishal Muneer
+21:06
+Yes.
+
+TE
+Thomas Eide
+21:06
+It's gonna be built in. The handoff is seamless. Almost invisible. You have to be able to test this handoff so that we can improve the engineering experience. People are paying input and output tokens, for human engineers. And if you think about input and output right now, the models are 90% input, 10% output. Think about this conversation. 90% of what you received is input. Today.
+
+MM
+Mishal Muneer
+21:07
+Yes. Yes.
+
+TE
+Thomas Eide
+21:07
+What's the 10% output?
+
+MM
+Mishal Muneer
+21:07
+The work we do.
+
+TE
+Thomas Eide
+21:07
+The task list. Actually.
+
+MM
+Mishal Muneer
+21:07
+Okay.
+
+TE
+Thomas Eide
+21:07
+Just the task list. You're you're right. It is the work you do. But it's the task list. What do we have to do following this meeting? Is 10%. It should take you one of the time it took me to speak. Because this is your understanding to the best of your human ability to create the list of things that you have to do based off of what I just said. So you got as clear understanding as I could give, which wasn't great, I never blame you guys for my inability to describe things in detail. But what you got back what you produce out is this is what we have to do, team. We need to come together. Very different. But input and output of human intelligence is no different input and output of artificial intelligence. It's the same thing. 90% in, 10% out.
+
+MM
+Mishal Muneer
+21:08
+Okay.
+
+TE
+Thomas Eide
+21:08
+You have to come together as a team. Without coming together as a team, you will not understand the comments that I make when I say, look. You don't know how to build you don't know how to architect for enterprise. When I make that comment, if you come to bet together individually, you're like, he doesn't know what he's talking about. I've built enterprise products. He doesn't know what he's saying. When you get together as a team, one of you is going to say, hold on. He doesn't mean we're stupid. He doesn't mean like, we can't do it. What he's telling us is we need to go in and we need to use AI, and we need to research the structure that these big companies are using for different features. He keeps mentioning microservices What is he talking about? Amazon runs on probably 15,000,000 servers, just its single application. To order a book from Amazon probably hits a thousand servers. All in the same building, You know what the latency is for local area networks. There's higher latency in a in a CPU than there is in local area network.
+
+MM
+Mishal Muneer
+21:10
+Yes.
+
+TE
+Thomas Eide
+21:10
+And then when you start to get together as a team, you're like, hey. How do we architect this so that we can deploy our services commercially? Within the product? How can Drytis consume our agent?
+
+MM
+Mishal Muneer
+21:10
+Yes.
+
+TE
+Thomas Eide
+21:11
+Today, you're using your own dog food. Did you use your did you use Case to do the 187 test cases that you talked about? That you ran?
+
+PP
+Pushkaraj Potdar
+21:11
+Yeah. This is Vicky.
+
+TE
+Thomas Eide
+21:11
+Okay. And you got you got outputs. And did you go back and manually check those things to say, hey. I think our product's working.
+
+PP
+Pushkaraj Potdar
+21:11
+Yeah. We did. I actually I just did We got the.
+
+TE
+Thomas Eide
+21:11
+So you're eating your own dog food right now. Right?
+
+PP
+Pushkaraj Potdar
+21:11
+Yeah. Right.
+
+MM
+Mishal Muneer
+21:11
+Yes.
+
+TE
+Thomas Eide
+21:11
+How's that feel?
+
+MM
+Mishal Muneer
+21:11
+Good.
+
+TE
+Thomas Eide
+21:11
+Okay. You know what's gonna feel great? When you build, it gets handed off to an engineer, and the product you get back is better than what you thought you were gonna get back. Because the engineer goes in and gives you three suggestions that you didn't think of. And on top of the three suggestions, the engineer gives you gives you the prompts for those three suggestions that you can just accept like, the thread on perplexity So if I accept these three prompts, one two three, it's gonna go add all three of these options.
+
+MM
+Mishal Muneer
+21:12
+Okay.
+
+TE
+Thomas Eide
+21:12
+Things you didn't think of. All in real time.
+
+PP
+Pushkaraj Potdar
+21:12
+Yes.
+
+TE
+Thomas Eide
+21:12
+You're eating your own dog food. You realize that our deaf team is not yet eating their own dog food?
+
+MM
+Mishal Muneer
+21:12
+Yes.
+
+TE
+Thomas Eide
+21:12
+You should be proud of that.
+
+MM
+Mishal Muneer
+21:12
+Yes.
+
+TE
+Thomas Eide
+21:12
+Think about how you would test the QA product with a live engineer. How you would run that? End to end to get the result and be able to measure the output and then determine if the output is out of band or not. All automated. So you literally could run it come back tomorrow, and be able to see a report that says, yeah, This worked great. Best of luck. But I want you to go to new.drydisk.com. I want you to read about it. There's a specific article under the about section. Excuse me. It's under the pricing section. There's an article at the bottom of the pricing section.
+
+MM
+Mishal Muneer
+21:13
+Oh, yes. Right is this?
+
+TE
+Thomas Eide
+21:13
+Nope. It's not. It has to be on the no. It has to be on the bottom of the about No. It's under this. It's at the bottom of the solutions page maybe. Oh, it's at the bottom of the solutions. No. No. I I wrote a blog. It has to be on the about section. There it is.
+
+MM
+Mishal Muneer
+21:14
+Everything right is dust a glance.
+
+TE
+Thomas Eide
+21:14
+That might be the about page. No.
+
+MM
+Mishal Muneer
+21:14
+No. No. It's it's in solutions.
+
+TE
+Thomas Eide
+21:14
+No. No. No. I don't know. I what are you looking at? It's everything Tritus does at a glance.
+
+MM
+Mishal Muneer
+21:14
+Oh, yes.
+
+TE
+Thomas Eide
+21:14
+No. That's all its features. Hey. You know what I would love any one of you to do is to go through that feature list and give me a set of instructions. Just give me one prompt to fix that. To improve that.
+
+MM
+Mishal Muneer
+21:14
+Okay.
+
+TE
+Thomas Eide
+21:14
+So when you think about unlimited projects, does it need a hover over? To explain that? And I don't know. Maybe it does. Maybe it doesn't. I don't think it does. Right? But one to one and team meetings, you're like, don't even know what the hell that means. Right? Like, either and the prompt could be get rid of this. But I basically want you to go through that Any one of you do this would be a huge favor. And just tell me, hey. Like, it says connect your repo. Like, with the hover over, if you think that could be improved, I I would love that.
+
+MM
+Mishal Muneer
+21:15
+Okay.
+
+TE
+Thomas Eide
+21:15
+I I would love. If you're like, hey. This should be under founders, owners, and managers instead of the tech team. Just whatever recommendations you have on that feature list. What's sort of supposed to be cool about the feature list is unlike everybody else, all the features are available.
+
+MM
+Mishal Muneer
+21:15
+Yes.
+
+TE
+Thomas Eide
+21:16
+And when you go to the model level differences, when you think about your tool, exists under Drytis 5.1 and Edge and Albert, There may be many other things within your tool that need to be added. Under the model level difference. But a single prompt that you share with me, hey. Update the solutions page Everything Drydus does at a glance, these changes. Be very specific in that prompt because I am not even gonna look at it. I'm gonna trust you at a level where I just send the prompt in and I update this. So the marketing team knows what we do because the marketing team doesn't understand any of that shit.
+
+MM
+Mishal Muneer
+21:16
+Yes. I want to change the layout.
+
+TE
+Thomas Eide
+21:16
+I don't think so.
+
+MM
+Mishal Muneer
+21:16
+Like, or change from.
+
+TE
+Thomas Eide
+21:16
+They'll handle the layout. I just care if it's in the wrong section.
+
+MM
+Mishal Muneer
+21:16
+Okay. Okay. Yes.
+
+TE
+Thomas Eide
+21:16
+Because the layout is supposed to show the layout.
+
+MM
+Mishal Muneer
+21:16
+We have to go through the content. Right?
+
+TE
+Thomas Eide
+21:16
+The the layout is supposed to show you that studio gives you everything. For $25, you get everything. That's the real important. Studio is to show you everything that you get.
+
+MM
+Mishal Muneer
+21:17
+Ok.
+
+TE
+Thomas Eide
+21:17
+But if you go to the about section, there's an article. I wrote this article. It's very, very important. The article is called when passion turns in turns us into a team. Then you'll understand me. Alright. I gotta go, guys. Best of luck on this next two projects.
+
+PP
+Pushkaraj Potdar
+21:17
+Thank you.
+
+TE
+Thomas Eide
+21:17
+How do you make your product consumable enterprise consumable, So where you can actually start to use our product, the Edge product, And then how are we going to test Edge? How are we gonna test DRIDIS? Specifically, how are we gonna test our model and how are we gonna test our model with the engineer?
+
+MM
+Mishal Muneer
+21:18
+Yes.
+
+TE
+Thomas Eide
+21:18
+Alright. Good luck. Ciao.
+
+MM
+Mishal Muneer
+21:18
+Bye.
+
+SA
+S S Niharikaa Aitam
+21:18
+Thank you.

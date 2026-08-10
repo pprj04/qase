@@ -1,0 +1,433 @@
+Abhishek U
+01:31
+Hello? Hi. Is there something wrong with the meeting Means in the transcript section, we supposed to have AI notes as well initially. So we're not getting transcripts Okay. It's showing the transcript, but it does not have that note section right now. So we should be looking for August third Let me see. Notes. Okay. Yes. It does have notes section. So did you guys check all the meeting transcript? Yes or not? Alright. And what about all the issues which Thomas raised today? I'm asking about the issues which Thomas raised today. Thomas raised few of the concerns. Right? Few bugs. And let me go through it. And do we have that workflow ready? Means how we supposed to do testing and whatever the bugs we are getting, what we supposed to do with the bugs, Means I'm I'm not getting what you said. Means, we are trying to add this feature that it will also go ahead and check the UI Alright? And after that, he also mentioned few things, like, we need to do two changes into the product. First change was, to get the endpoint first. Regard so that it can be integrated Right? So what about that? What we can do on this? Alright. Okay. Let me go through the details, what else he said. One was regarding if I remember correctly, he said there should be a retro styling means it feels like people are coding, yeah, coding, coding kind of a text. Okay. Tell me one thing. How we supposed to figure out the features if there are any issue with the features? So we can do this. Where is Michelle right now? Did you guys discuss among yourself after the, Thomas call? Right. And did you guys also had word with the any other team today after our meeting? Michelle. Did you talk to Thomas separately or did he try to contact you regarding anything?
+
+MM
+Mishal Muneer
+01:42
+No, no, no.
+
+AU
+Abhishek U
+01:42
+Alright. And and, Michelle, did you get what exactly Thomas.
+
+MM
+Mishal Muneer
+01:42
+Oh, yes. He wanted us to build endpoints so that they like, he can integrate case into their system. That's what he meant.
+
+AU
+Abhishek U
+01:42
+Yes. And and there was one more requirement.
+
+MM
+Mishal Muneer
+01:42
+He told us to change like, make a prompt to change. I think Pushkar is working on that.
+
+AU
+Abhishek U
+01:43
+Alright. So, Michelle, see, currently, we also want that workflow as well. And and the sprint plan which you guys shared in the group.
+
+MM
+Mishal Muneer
+01:43
+Yes.
+
+AU
+Abhishek U
+01:43
+I hope everybody have that sprint plan. Alright? So if we go ahead and open these print plan for the week, three to seven August, Can you explain me how means you just mentioned the the Manoj and Niharika. So what about others and what what's to be or how exactly it's made Yeah. It's it's fine. Shared it but whenever we are building a team plan, so it includes all the team members. What exactly who is doing what. Alright. And he also gave couple of bugs as well. Michelle, do you remember?
+
+MM
+Mishal Muneer
+01:45
+Yes. Yes.
+
+AU
+Abhishek U
+01:45
+So do we have any idea what kind of bugs he was talking about?
+
+MM
+Mishal Muneer
+01:45
+You talked about the password and microphone, I think. Yeah. Mic issue, I think. Resolved. And the forgot password No. Like, he he told that like, once he changed the password, it's not getting locked out of everything. So.
+
+AU
+Abhishek U
+01:45
+Yeah. So did you guys check all those which he talked about? Means all these bugs.
+
+MM
+Mishal Muneer
+01:45
+No password. Should check. Actually, I'm right now working on integrating endpoints. Our case.
+
+AU
+Abhishek U
+01:45
+Yeah. Whatever it is, my only concern is tomorrow, whenever we will connect, Alright? We should have answer to all these If we will again connect tomorrow, then we should not disappoint once again that these many bugs were already given to you guys. And, normally, what he used to say, like, just like a black hole wherein you dumb things If I tell you anything, you will never come back with the status. What exactly it's going on with the bugs. Right?
+
+MM
+Mishal Muneer
+01:46
+Yes.
+
+AU
+Abhishek U
+01:46
+He used to say such things. Right?
+
+MM
+Mishal Muneer
+01:46
+Yes.
+
+AU
+Abhishek U
+01:46
+That whatever bugs he gives us, we never came back with any solution or never check what exactly happened. So please make sure, these bugs, whatever he said, about in today's meeting, we should recreate it or whatever your standard protocol is as per the quality parameters. Whatever you do, please do that.
+
+MM
+Mishal Muneer
+01:46
+Okay.
+
+AU
+Abhishek U
+01:47
+Regarding endpoints, if it is not done today, at least you should have plan how to do it and when it will be done. Regarding those font changes and other changes, please document everything means at least you should have a pointer that many things are required. These are the to do list for now. And, we need this much time to get these things done.
+
+MM
+Mishal Muneer
+01:47
+Yes.
+
+AU
+Abhishek U
+01:47
+And what he is by the next week means that the same tool will be working with the key with the dev team. Right? This is what he said.
+
+MM
+Mishal Muneer
+01:47
+Yeah. I think it's he's trying to integrate it into try this I don't know about how they're gonna use it, but he told us to make endpoints so that he can call or use our platform.
+
+AU
+Abhishek U
+01:47
+Yeah. But he was expecting it's supposed to be done by next week. Right?
+
+MM
+Mishal Muneer
+01:48
+He told by the end of the week, he told he'll release the new model Yeah. I think by next week, we'll be, I guess.
+
+AU
+Abhishek U
+01:48
+Yes. So please plan thing accordingly. So that we should be on schedule And the very last thing, as I said, please share that workflow. Even you can give me a very basic, rough workflow as well. It does not require any fancy dashboard kind of a thing. The fancy PDF. Just a basic steps on a notepad, and you can just share it on what as you are comfortable with. Means after the case will run these.
+
+MM
+Mishal Muneer
+01:48
+Workflow like, how we are gonna use case. Right?
+
+AU
+Abhishek U
+01:48
+Right. And because case also have some steps. Right? Because let's say the as a first time user, I I did an audit with the case. It found four bugs.
+
+MM
+Mishal Muneer
+01:49
+Okay.
+
+AU
+Abhishek U
+01:49
+About the next time? What it will do next time?
+
+MM
+Mishal Muneer
+01:49
+Okay. Okay.
+
+AU
+Abhishek U
+01:49
+And what about those four bugs?
+
+MM
+Mishal Muneer
+01:49
+Okay.
+
+AU
+Abhishek U
+01:49
+How we supposed to report them or what we are going to do with that?
+
+MM
+Mishal Muneer
+01:49
+Okay.
+
+AU
+Abhishek U
+01:49
+Means we must be having some plan.
+
+MM
+Mishal Muneer
+01:49
+Find that. Yes. Yes.
+
+AU
+Abhishek U
+01:49
+Either we'll going to report them manually or it will be reported automatically next time whenever the second audit will run, are we going emphasize on these four bugs or we are going to means keep on testing it, rigorously for next twenty four hours means there should be a plan, means as per QA.
+
+MM
+Mishal Muneer
+01:49
+Yes.
+
+AU
+Abhishek U
+01:49
+That workflow I'm asking. So discuss among yourself and send even a rough copy will work means just the instruction or, the flow means. This is the first step, second step, third step, fourth and this house the cycle will repeat.
+
+MM
+Mishal Muneer
+01:50
+Okay. Fine.
+
+AU
+Abhishek U
+01:50
+Alright. And what else we.
+
+MM
+Mishal Muneer
+01:50
+Workflow, can we give it by tomorrow? We'll have a meeting today, and we'll decide how we'll.
+
+AU
+Abhishek U
+01:50
+So do one thing. Either share it before meeting with Thomas.
+
+MM
+Mishal Muneer
+01:50
+Okay. And today I'll I'll do I'll try to recreate the bugs Thomas gave me, and I'm working on the endpoints.
+
+AU
+Abhishek U
+01:50
+To divide the task, why why to do it by your own everything? Divide the task to everyone. And make sure everyone is working on a time by tomorrow when we'll get connect.
+
+MM
+Mishal Muneer
+01:50
+Oh, yes.
+
+AU
+Abhishek U
+01:50
+The problem is that the transcript is too long. I understand. So how many of you already read the transcript? Complete? Oh, great. So whatever he talked about, I hope we all are working on it, and we have already the task which he was asking for.
+
+MM
+Mishal Muneer
+01:51
+Yes.
+
+AU
+Abhishek U
+01:51
+Okay. Great. So you guys going to meet again? Means today or not? Yes. Please discuss all the things, divide the task, ensure that before we get into the meeting tomorrow, we should have all the answers.
+
+MM
+Mishal Muneer
+01:51
+Okay.
+
+AU
+Abhishek U
+01:51
+Alright? Okay. And and, Michelle, that tool is not yet pushed to production. Right?
+
+MM
+Mishal Muneer
+01:52
+Not yet. Push.
+
+AU
+Abhishek U
+01:52
+Okay. Let me check why it's not done yet. So should I ask a team to, they'll check again whether the IP was configured properly or not with.
+
+MM
+Mishal Muneer
+01:52
+Did you get the domain case q a c?
+
+AU
+Abhishek U
+01:52
+Yes. Yes. Alright. So I I was trying to get hold on you regarding the same so that if there is anything else we can do right now so we can get this done? Okay. So I'll double check it to what going on with the production. And if if it's not done Friday, I'll ask them to do it now. So please keep a means eye on it whether it is getting pushed on production or not. Alright?
+
+MM
+Mishal Muneer
+01:53
+Okay. Okay.
+
+AU
+Abhishek U
+01:53
+Okay. Thanks. Bye.
+
+MM
+Mishal Muneer
+01:53
+Bye. Hello, buenas noches. I think we we have to design a workflow, like, how we are going to test and we'll use case and all. Oh, yes.
+
+PP
+Pushkaraj Potdar
+01:54
+Actually,.
+
+MM
+Mishal Muneer
+01:54
+Features and don't.
+
+PP
+Pushkaraj Potdar
+01:54
+Monash, not that part, actually. The type is it was Thomas wanted, like, it should find the gaps between gaps inside the application rendered by the AS studio so it can add features Like, there are if there is any missing features, and, there is a a feature part in the main marketing website. Right?
+
+MM
+Mishal Muneer
+01:54
+Yes.
+
+PP
+Pushkaraj Potdar
+01:54
+So he also wanted yeah. He also wanted to improve that part. Marketing website.
+
+MM
+Mishal Muneer
+01:54
+I think you wanted to check the call content. Right? Like, if all the features.
+
+PP
+Pushkaraj Potdar
+01:54
+Content is okay. Just a second.
+
+SA
+S S Niharikaa Aitam
+01:55
+He is asking he's expecting you.
+
+MM
+Mishal Muneer
+01:55
+No. Alignment, I think.
+
+SA
+S S Niharikaa Aitam
+01:55
+Si,.
+
+MM
+Mishal Muneer
+01:55
+Alignment is set brand team will take care of it. Right? Talk loudly, Arika. Okay. We can use to test this. Right? Hello? I think he wants to, like, remove all the like, AI, like, for this one. Right? Add collaborators built in database with support conversation history mobile workspace access, Like, remove the unnecessary and all. From this list. And there's, like, sir, PHP, my admin access and all, think it is unnecessary. Yeah. Coming soon and all. Leave it, I guess. Soon. Leave it. Engineer conversation history, that and all, like, all all the platforms they provide. Right? Video and voice call engineer. I think that is necessary. Advanced coding agent execution. But there are, like, some features Okay. Yes. Yes. And and But he told he want Oh, yes, sir. That I'm working on. But I he told he told he told he wants, like, this. Right? Like, a prompt prompter fix it directly.
+
+PP
+Pushkaraj Potdar
+02:00
+He wanted to fix, yeah, he wanted to fix the feature Paesh. So one of us can go through the feature page and to fix to fix it, create a and give it to them. Yeah.
+
+MM
+Mishal Muneer
+02:00
+Yes. Yes. Jordan?
+
+PP
+Pushkaraj Potdar
+02:00
+We don't make this yeah. We don't need to fix it, but there is and there is just UI changes, I think, we want it.
+
+MM
+Mishal Muneer
+02:00
+No. No. Not UI changes. He just wanted to remove all the unnecessary. Features. But I asked that about I asked it the meeting. Right? We want to change the layout. And he told.
+
+PP
+Pushkaraj Potdar
+02:01
+Can you confirm it again, Michelle, from Thomas?
+
+MM
+Mishal Muneer
+02:01
+Fine. I'll text him.
+
+PP
+Pushkaraj Potdar
+02:02
+Yeah. We discussed with the meeting, and we got some confusion with in the feature feature thing you wanted to fix. Can you yeah. Can you explain to not explain. Okay.
+
+MM
+Mishal Muneer
+02:02
+Will ask him for what he exactly wants.
+
+PP
+Pushkaraj Potdar
+02:02
+Yeah. We were going going through the feature page and we wanted to know what exactly you want. So.
+
+MM
+Mishal Muneer
+02:03
+That is after the release it. Right? I think He told by the end of the week, he told. Let's see. But we should also plan how I have I have text texted him. See what he says. And, Puskar, what are you working on?
+
+PP
+Pushkaraj Potdar
+02:04
+I'm working on the flow, and there are some fixes I'm currently looking at. And there are some bugs, like Thomas mentioned, So just a second. Okay. So first one was mobile permission bug. Thomas completely come complete complaint that every meeting on mobile ask him again for the microphone camera Okay? And that one was the issue. Then second issue was planning agent. Yeah. Planning agent issue. Thomas agreed this were real product issue? Planning agent is exposing the model. It's revealing the LNM model. And.
+
+MM
+Mishal Muneer
+02:05
+No. I think that they've fixed it. Right?
+
+PP
+Pushkaraj Potdar
+02:05
+Know need to test again. Planning agent reveal which LM model is used, then planning agent expose its chain of thought.
+
+MM
+Mishal Muneer
+02:06
+I have changed my password. Reset password. Okay. That that is a bug. Right? Project management is like, once we open a project. Okay. Okay. Book space. Okay. That also report. He told, like, once we change the password, it's not getting logged out of all other devices. Right? Yes. Yes. Yes. Yes. That book is there. I'll report it. Pushkar, if you're focused on, just add me to your project, bro.
+
+PP
+Pushkaraj Potdar
+02:14
+Yeah.
+
+MM
+Mishal Muneer
+02:14
+Okay, guys.

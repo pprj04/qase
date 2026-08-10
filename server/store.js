@@ -216,3 +216,62 @@ export function backfillProjectId(defaultId) {
 	return count;
 }
 
+/* ── Phase 1: Stuck Session Watchdog ────────────────────────────── */
+
+/**
+ * Detects sessions stuck in 'running' status whose live record shows no
+ * active controller. This can happen when:
+ *   - The runTurn promise was rejected outside the catch block
+ *   - The process was under memory pressure and dropped an event
+ *   - An unhandled promise rejection left record.running stale
+ *
+ * The watchdog runs periodically and marks such sessions as 'interrupted'
+ * so they don't block the UI or hold mission status forever.
+ */
+
+const WATCHDOG_INTERVAL_MS = 60_000; // check every 60s
+const MAX_RUNNING_DURATION_MS = 30 * 60 * 1000; // 30 min same as agent timeout
+
+let watchdogTimer = null;
+
+function runWatchdog() {
+	const now = Date.now();
+	for (const session of sessions.values()) {
+		if (session.status !== 'running') continue;
+
+		const record = live.get(session.id);
+		// Case 1: record.running is false but session.status is still 'running'
+		if (record && record.running === false) {
+			console.warn(`[watchdog] Session ${session.id} stuck in 'running' but not actually running — marking interrupted`);
+			session.status = 'interrupted';
+			session.pendingQuestion = undefined;
+			emit(session, 'status', { status: 'interrupted', detail: 'Detected stuck by watchdog' });
+			continue;
+		}
+
+		// Case 2: session has been running too long with no update
+		if (now - session.updatedAt > MAX_RUNNING_DURATION_MS) {
+			console.warn(`[watchdog] Session ${session.id} exceeded max running duration (${Math.round((now - session.updatedAt) / 1000)}s) — marking interrupted`);
+			record?.controller?.abort();
+			session.status = 'interrupted';
+			session.pendingQuestion = undefined;
+			emit(session, 'status', { status: 'interrupted', detail: 'Exceeded max running duration' });
+		}
+	}
+}
+
+/**
+ * Starts the periodic watchdog. Called once on server boot.
+ */
+export function startWatchdog() {
+	if (watchdogTimer) return;
+	watchdogTimer = setInterval(runWatchdog, WATCHDOG_INTERVAL_MS);
+	watchdogTimer.unref?.();
+}
+
+/** Stops the watchdog (for testing). */
+export function stopWatchdog() {
+	clearInterval(watchdogTimer);
+	watchdogTimer = null;
+}
+

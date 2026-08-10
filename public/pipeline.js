@@ -15,18 +15,23 @@ const pipelineState = {
 	startTime: null
 };
 
+// Phase 2: Application Understanding model data
+let cachedAppModel = null;
+
 /**
  * Maps backend pipeline stages to human-readable activities.
  * These are activities the user cares about, not internal stage names.
  */
 const ACTIVITY_MAP = {
-	workflow_save:    { verb: 'Understanding application', doneVerb: 'Application understood' },
+	application_understanding: { verb: 'Understanding application', doneVerb: 'Application model built' },
+	workflow_save:    { verb: 'Saving workflow', doneVerb: 'Workflow saved' },
 	test_generation:  { verb: 'Generating test scenarios', doneVerb: 'Test scenarios generated' },
 	smoke_run:        { verb: 'Running validation', doneVerb: 'Validation complete' },
 	schedule_create:  { verb: 'Preparing schedule', doneVerb: 'Schedule ready' },
 	dev_intelligence: { verb: 'Analyzing root causes', doneVerb: 'Root cause analysis done' },
 	feature_gap:      { verb: 'Detecting feature gaps', doneVerb: 'Feature gap analysis done' },
 	mission_finalize: { verb: 'Assessing release readiness', doneVerb: 'Release assessment done' },
+	decision_engine:  { verb: 'Evaluating decision', doneVerb: 'Decision evaluated' },
 	knowledge_write:  { verb: 'Updating knowledge base', doneVerb: 'Knowledge updated' }
 };
 
@@ -313,7 +318,274 @@ function renderAppUnderstandingFromGaps() {
 		return;
 	}
 	const narrativeHtml = buildNarrativeHtml();
-	devIntelElements.body.innerHTML = narrativeHtml || '<div class="dev-intel-empty">Waiting for analysis…</div>';
+	const auModelHtml = buildAppModelHtml();
+	devIntelElements.body.innerHTML = auModelHtml + narrativeHtml || '<div class="dev-intel-empty">Waiting for analysis…</div>';
+}
+
+/**
+ * Phase 2: Renders the structured Application Understanding model.
+ * Displays purpose, confidence, roles, features (expected/observed/verified),
+ * workflows, unknowns, and conflicts — all with evidence references.
+ */
+function buildAppModelHtml() {
+	if (!cachedAppModel) return '';
+
+	const m = cachedAppModel;
+	const u = m.understanding || {};
+	const c = m.confidence || {};
+	const f = u.features || {};
+	const html = [];
+
+	html.push('<div class="au-model-section">');
+	html.push('<div class="au-model-header">🧭 Application Understanding</div>');
+
+	// Status badge
+	const statusColors = { understood: '#4ade80', partially_understood: '#fbbf24', uncertain: '#f87171', discovered: '#94a3b8' };
+	const statusColor = statusColors[m.status] || '#94a3b8';
+	html.push(`<div class="au-model-status" style="color:${statusColor}">Status: ${escapeHtml(m.status || 'unknown')}</div>`);
+
+	// Purpose with confidence
+	if (u.purpose?.id) {
+		html.push('<div class="au-model-row">');
+		html.push(`<span class="au-model-label">Purpose:</span>`);
+		html.push(`<span class="au-model-value">${escapeHtml(u.purpose.name || u.purpose.id)}</span>`);
+		const pc = c.purpose || {};
+		if (pc.value != null) {
+			html.push(`<span class="au-model-conf">${Math.round(pc.value * 100)}%</span>`);
+		}
+		html.push('</div>');
+		// Confidence basis
+		if (c.purpose?.basis?.length > 0) {
+			html.push(`<div class="au-model-basis">${escapeHtml(c.purpose.basis.join('; '))}</div>`);
+		}
+		// Source
+		if (u.purpose.source) {
+			html.push(`<div class="au-model-source">Source: ${escapeHtml(u.purpose.source)}</div>`);
+		}
+	}
+
+	// Heuristic baseline preserved
+	if (u.purpose?.heuristicBaseline) {
+		const hb = u.purpose.heuristicBaseline;
+		html.push(`<div class="au-model-heuristic">Heuristic baseline: ${escapeHtml(hb.name || hb.id)} (${Math.round((hb.confidence || 0) * 100)}%)</div>`);
+	}
+
+	// Roles
+	if (u.roles?.length > 0) {
+		html.push('<div class="au-model-row">');
+		html.push('<span class="au-model-label">Roles:</span>');
+		const rolesHtml = u.roles.map(r => `<span class="au-role-tag ${r.source}">${escapeHtml(r.name)} <small>(${r.source})</small></span>`);
+		html.push(`<span class="au-model-roles">${rolesHtml.join(' ')}</span>`);
+		html.push('</div>');
+	}
+
+	// Features summary
+	const expCount = f.expected?.length || 0;
+	const obsCount = f.observed?.length || 0;
+	const verCount = f.verified?.length || 0;
+	const broCount = f.broken?.length || 0;
+	const unvCount = f.unverified?.length || 0;
+	if (expCount > 0 || obsCount > 0) {
+		html.push('<div class="au-model-features">');
+		html.push(`<div class="au-model-row"><span class="au-model-label">Features:</span></div>`);
+		html.push('<div class="au-feature-grid">');
+		html.push(`<span class="au-fcat expected">Expected ${expCount}</span>`);
+		html.push(`<span class="au-fcat observed">Observed ${obsCount}</span>`);
+		html.push(`<span class="au-fcat verified">Verified ${verCount}</span>`);
+		if (broCount > 0) html.push(`<span class="au-fcat broken">Broken ${broCount}</span>`);
+		if (unvCount > 0) html.push(`<span class="au-fcat unverified">Unverified ${unvCount}</span>`);
+		html.push('</div>');
+
+		// Verified features detail
+		if (f.verified?.length > 0) {
+			html.push('<details class="au-expandable"><summary>Verified features</summary><div class="au-features">');
+			for (const feat of f.verified) {
+				html.push(`<span class="au-feature verified">✓ ${escapeHtml(feat.name)}</span>`);
+			}
+			html.push('</div></details>');
+		}
+		// Expected features detail
+		if (f.expected?.length > 0) {
+			html.push('<details class="au-expandable"><summary>Expected features</summary><div class="au-features">');
+			for (const feat of f.expected) {
+				const sourceTag = feat.source === 'context' ? '📌' : feat.source === 'heuristic' ? '🔍' : '';
+				html.push(`<span class="au-feature expected">${sourceTag} ${escapeHtml(feat.name)}</span>`);
+			}
+			html.push('</div></details>');
+		}
+		// Unverified features detail
+		if (f.unverified?.length > 0) {
+			html.push('<details class="au-expandable"><summary>Unverified expected</summary><div class="au-features">');
+			for (const feat of f.unverified) {
+				html.push(`<span class="au-feature unverified">? ${escapeHtml(feat.name)}</span>`);
+			}
+			html.push('</div></details>');
+		}
+		html.push('</div>');
+	}
+
+	// Workflows
+	if (u.workflows?.length > 0) {
+		html.push('<details class="au-expandable" open>');
+		html.push('<summary>Workflows</summary>');
+		for (const wf of u.workflows) {
+			const observed = wf.expectedSteps?.filter(s => s.status === 'observed' || s.status === 'verified').length || 0;
+			const total = wf.expectedSteps?.length || 0;
+			html.push(`<div class="au-model-wf">${escapeHtml(wf.name)} (${observed}/${total} steps, ${Math.round((wf.confidence || 0) * 100)}%)</div>`);
+			if (wf.expectedSteps) {
+				html.push('<div class="au-wf-steps">');
+				for (const step of wf.expectedSteps) {
+					const icons = { verified: '✓', observed: '○', not_found: '✗', not_tested: '?' };
+					const icon = icons[step.status] || '?';
+					html.push(`<span class="au-wf-step ${step.status}">${icon} ${escapeHtml(step.name)}</span>`);
+				}
+				html.push('</div>');
+			}
+		}
+		html.push('</details>');
+	}
+
+	// Unknowns
+	if (m.unknowns?.length > 0) {
+		html.push('<details class="au-expandable" open>');
+		html.push(`<summary>Unknowns (${m.unknowns.length})</summary>`);
+		for (const u of m.unknowns) {
+			const icon = u.blocking ? '⛔' : 'ℹ️';
+			html.push(`<div class="au-model-unknown">${icon} ${escapeHtml(u.description)}</div>`);
+			if (u.reason) html.push(`<div class="au-model-unknown-reason">${escapeHtml(u.reason)}</div>`);
+		}
+		html.push('</details>');
+	}
+
+	// Conflicts
+	if (m.conflicts?.length > 0) {
+		html.push('<details class="au-expandable" open>');
+		html.push(`<summary>⚠️ Conflicts (${m.conflicts.length})</summary>`);
+		for (const cf of m.conflicts) {
+			html.push(`<div class="au-model-conflict">${escapeHtml(cf.description)}</div>`);
+			html.push(`<div class="au-model-conflict-detail">Expected: ${escapeHtml(cf.expectedValue)} | Observed: ${escapeHtml(cf.observedValue)}</div>`);
+		}
+		html.push('</details>');
+	}
+
+	// Evidence count
+	if (m.evidence?.length > 0) {
+		html.push(`<div class="au-model-evidence">${m.evidence.length} evidence items collected</div>`);
+	}
+
+	// Overall confidence
+	if (c.overall?.value != null) {
+		html.push(`<div class="au-model-overall">Overall confidence: ${Math.round(c.overall.value * 100)}%`);
+		if (c.overall.basis?.length > 0) {
+			html.push(` <small>(${escapeHtml(c.overall.basis.join('; '))})</small>`);
+		}
+		html.push('</div>');
+	}
+
+	html.push('</div>');
+	return html.join('');
+}
+
+async function loadAppUnderstanding(sessionId) {
+	try {
+		const data = await api(`/sessions/${sessionId}/app-understanding`);
+		cachedAppModel = data;
+	} catch {
+		cachedAppModel = null;
+	}
+}
+
+/* ── Knowledge Layer (Phase 3) ────────────────────────────────── */
+
+let cachedKnowledge = null;
+
+async function loadKnowledge(sessionId) {
+	try {
+		const data = await api(`/sessions/${sessionId}/knowledge`);
+		cachedKnowledge = data;
+	} catch {
+		cachedKnowledge = null;
+	}
+}
+
+function renderKnowledgeSection() {
+	const container = document.getElementById('knowledge-section');
+	if (!container) return;
+
+	if (!cachedKnowledge || (!cachedKnowledge.hints?.length && !cachedKnowledge.validation?.length)) {
+		container.innerHTML = `
+			<div class="knowledge-empty">
+				<span class="knowledge-icon">📚</span>
+				<p>No historical knowledge signals for this mission.</p>
+				<p class="knowledge-sub">As more missions complete, patterns will accumulate and guide future exploration.</p>
+			</div>`;
+		return;
+	}
+
+	const parts = [];
+
+	// Relevant Knowledge / Historical Signals
+	if (cachedKnowledge.hints?.length > 0) {
+		parts.push('<div class="knowledge-hints">');
+		parts.push('<h4>Historical Knowledge Signals</h4>');
+		parts.push('<p class="knowledge-disclaimer">Historical guidance from previous missions — validate independently.</p>');
+		for (const hint of cachedKnowledge.hints) {
+			const confPct = Math.round((hint.confidence || 0) * 100);
+			const relPct = Math.round((hint.relevance || 0) * 100);
+			const statusBadge = hint.occurrences >= 3
+				? '<span class="k-badge k-supported">SUPPORTED</span>'
+				: '<span class="k-badge k-weak">WEAK</span>';
+			parts.push(`
+				<div class="knowledge-card">
+					<div class="k-header">
+						<span class="k-pattern">${escapeHtml(hint.pattern)}</span>
+						${statusBadge}
+					</div>
+					<div class="k-meta">
+						<span>Confidence: ${confPct}%</span>
+						<span>Relevance: ${relPct}%</span>
+						<span>Observed: ${hint.occurrences || 1} mission(s)</span>
+					</div>
+					<div class="k-reason">Matched: ${escapeHtml(hint.reason || 'keyword match')}</div>
+					${hint.recommendation ? `<div class="k-rec">Suggestion: ${escapeHtml(hint.recommendation)}</div>` : ''}
+				</div>`);
+		}
+		parts.push('</div>');
+	}
+
+	// Validation Results
+	if (cachedKnowledge.validation?.length > 0) {
+		parts.push('<div class="knowledge-validation">');
+		parts.push('<h4>Current Mission Validation</h4>');
+		const valIcons = { confirmed: '✅', supported: '🟡', contradicted: '❌', not_tested: '⬜', irrelevant: '⏭️' };
+		for (const v of cachedKnowledge.validation) {
+			const icon = valIcons[v.result] || '❓';
+			parts.push(`
+				<div class="k-val-row">
+					<span class="k-val-icon">${icon}</span>
+					<span class="k-val-result">${v.result.toUpperCase()}</span>
+					<span class="k-val-pattern">${escapeHtml(v.pattern)}</span>
+				</div>`);
+		}
+		parts.push('</div>');
+	}
+
+	// Conflicts
+	if (cachedKnowledge.conflicts?.length > 0) {
+		parts.push('<div class="knowledge-conflicts">');
+		parts.push('<h4>⚠️ Knowledge Conflicts</h4>');
+		for (const c of cachedKnowledge.conflicts) {
+			parts.push(`
+				<div class="k-conflict">
+					<div><strong>Historical:</strong> ${escapeHtml(c.historicalClaim)}</div>
+					<div><strong>Current evidence:</strong> ${escapeHtml(c.currentEvidence)}</div>
+					<div class="k-resolution">Resolution: ${escapeHtml(c.resolution)}</div>
+				</div>`);
+		}
+		parts.push('</div>');
+	}
+
+	container.innerHTML = parts.join('');
 }
 
 async function loadDevIntelFromSession(sessionId) {
@@ -325,7 +597,316 @@ async function loadDevIntelFromSession(sessionId) {
 		devIntelState.data = null;
 	}
 	await loadGapAnalysis(sessionId);
+	await loadAppUnderstanding(sessionId);
+	await loadKnowledge(sessionId);
+	await loadDecision(sessionId);
+	await loadLoopStatus();
+	await loadEvidence();
 	renderDevIntel();
+	renderKnowledgeSection();
+	renderDecisionSection();
+	renderLoopSection();
+	renderEvidenceSection();
+}
+
+/* ── Decision Engine (Phase 4) ─────────────────────────────────── */
+
+let cachedDecision = null;
+
+async function loadDecision(sessionId) {
+	try {
+		const data = await api(`/sessions/${sessionId}/decision`);
+		cachedDecision = data;
+	} catch {
+		cachedDecision = null;
+	}
+}
+
+function renderDecisionSection() {
+	const container = document.getElementById('decision-section');
+	if (!container) return;
+
+	if (!cachedDecision || !cachedDecision.decision) {
+		container.innerHTML = `
+			<div class="decision-empty">
+				<span class="decision-icon">🎯</span>
+				<p>No decision recorded for this mission yet.</p>
+				<p class="decision-sub">The Decision Engine evaluates after quality assessment completes.</p>
+			</div>`;
+		return;
+	}
+
+	const d = cachedDecision.decision;
+	const parts = [];
+
+	// Decision badge
+	const badgeClass = {
+		CONTINUE: 'decision-badge-continue',
+		REVALIDATE: 'decision-badge-revalidate',
+		ESCALATE: 'decision-badge-escalate',
+		STOP_PASS: 'decision-badge-pass',
+		STOP_FAIL: 'decision-badge-fail',
+		STOP_BUDGET: 'decision-badge-budget',
+		STOP_BLOCKED: 'decision-badge-blocked'
+	}[d.decision] || 'decision-badge-unknown';
+
+	parts.push('<div class="decision-panel">');
+
+	// Header with decision type + confidence
+	parts.push(`
+		<div class="decision-header">
+			<span class="decision-badge ${badgeClass}">${escapeHtml(d.decision)}</span>
+			<span class="decision-confidence">Confidence: ${(d.confidence * 100).toFixed(0)}%</span>
+		</div>`);
+
+	// Reason — the "Why?"
+	parts.push(`
+		<div class="decision-reason">
+			<strong>Why?</strong>
+			<p>${escapeHtml(d.reason)}</p>
+		</div>`);
+
+	// Key factors
+	if (d.factors && Object.keys(d.factors).length > 0) {
+		parts.push('<div class="decision-factors"><h4>Key Factors</h4><dl>');
+		for (const [key, value] of Object.entries(d.factors)) {
+			if (key === 'confidenceBasis' || key === 'inputSignature') continue;
+			const display = typeof value === 'number' && value <= 1 && value >= 0
+				? `${(value * 100).toFixed(0)}%`
+				: escapeHtml(String(value));
+			parts.push(`<dt>${escapeHtml(key)}</dt><dd>${display}</dd>`);
+		}
+		parts.push('</dl></div>');
+	}
+
+	// Confidence basis (auditability)
+	if (d.factors?.confidenceBasis) {
+		const basis = Array.isArray(d.factors.confidenceBasis) ? d.factors.confidenceBasis : [d.factors.confidenceBasis];
+		parts.push('<div class="decision-confidence-basis"><h4>Confidence Basis</h4><ul>');
+		for (const b of basis) {
+			parts.push(`<li>${escapeHtml(String(b))}</li>`);
+		}
+		parts.push('</ul></div>');
+	}
+
+	// Recommended action
+	if (d.recommendedAction) {
+		parts.push(`
+			<div class="decision-action">
+				<strong>Recommended Action:</strong>
+				<p>${escapeHtml(d.recommendedAction)}</p>
+			</div>`);
+	}
+
+	// Safety override notice
+	if (d.factors?.safetyOverride) {
+		parts.push(`
+			<div class="decision-safety-override">
+				⚠️ <strong>Safety override:</strong> ${escapeHtml(d.factors.safetyOverride)} — original decision was ${escapeHtml(d.factors.originalDecision || 'unknown')}
+			</div>`);
+	}
+
+	// Evidence references
+	if (d.evidenceRefs?.length > 0) {
+		parts.push(`<div class="decision-evidence-refs"><strong>Evidence:</strong> ${d.evidenceRefs.length} finding(s) referenced</div>`);
+	}
+
+	// Knowledge references
+	if (d.knowledgeRefs?.length > 0) {
+		parts.push(`<div class="decision-knowledge-refs"><strong>Knowledge:</strong> ${d.knowledgeRefs.length} historical pattern(s) considered</div>`);
+	}
+
+	// Policy version
+	parts.push(`<div class="decision-policy-version">Policy v${escapeHtml(d.policyVersion || '?')} · ${escapeHtml(d.timestamp || '')}</div>`);
+
+	parts.push('</div>'); // .decision-panel
+
+	// Decision history
+	if (cachedDecision.historyCount > 1) {
+		parts.push('<div class="decision-history-section">');
+		parts.push(`<h4>Decision History (${cachedDecision.historyCount})</h4>`);
+		for (const h of (cachedDecision.history ?? []).slice(-10)) {
+			const hBadgeClass = {
+				CONTINUE: 'decision-badge-continue',
+				REVALIDATE: 'decision-badge-revalidate',
+				ESCALATE: 'decision-badge-escalate',
+				STOP_PASS: 'decision-badge-pass',
+				STOP_FAIL: 'decision-badge-fail',
+				STOP_BUDGET: 'decision-badge-budget',
+				STOP_BLOCKED: 'decision-badge-blocked'
+			}[h.decision] || 'decision-badge-unknown';
+			parts.push(`
+				<div class="decision-history-item">
+					<span class="decision-badge decision-badge-sm ${hBadgeClass}">${escapeHtml(h.decision)}</span>
+					<span class="decision-history-time">${escapeHtml(h.timestamp || '')}</span>
+					<span class="decision-history-conf">${(h.confidence * 100).toFixed(0)}%</span>
+				</div>`);
+		}
+		parts.push('</div>');
+	}
+
+	container.innerHTML = parts.join('');
+}
+
+/* ── Continuous Validation Loop (Phase 5) ───────────────────────── */
+
+let cachedLoopStatus = null;
+
+async function loadLoopStatus(missionId) {
+	try {
+		// The loop status needs a mission ID — get it from the session's linked mission
+		// We need to find the mission for the current session
+		let mId = missionId;
+		if (!mId) {
+			// Try to find the mission linked to this session
+			const missions = await api('/missions');
+			const linked = missions.find(m => m.sessionId === state.sessionId);
+			if (!linked) return;
+			mId = linked.id;
+		}
+
+		const data = await api(`/v1/missions/${mId}/loop-status`);
+		cachedLoopStatus = { ...data, missionId: mId };
+	} catch {
+		cachedLoopStatus = null;
+	}
+}
+
+function renderLoopSection() {
+	const container = document.getElementById('loop-section');
+	if (!container) return;
+
+	if (!cachedLoopStatus || cachedLoopStatus.totalIterations === 0) {
+		container.innerHTML = `
+			<div class="loop-empty">
+				<span class="loop-icon">🔄</span>
+				<p>No validation iterations yet.</p>
+				<p class="loop-sub">After a mission completes, revalidate to start a continuous validation loop.</p>
+			</div>`;
+		return;
+	}
+
+	const ls = cachedLoopStatus;
+	const parts = [];
+
+	parts.push('<div class="loop-panel">');
+
+	// Header
+	parts.push(`
+		<div class="loop-header">
+			<h4>Validation Loop — Iteration ${ls.currentIteration}</h4>
+			<span class="loop-max">Max: ${ls.maxIterations}</span>
+		</div>`);
+
+	// Convergence badge
+	if (ls.convergence) {
+		const convState = ls.convergence.state;
+		const convClass = {
+			improving: 'loop-badge-improving',
+			declining: 'loop-badge-declining',
+			regression: 'loop-badge-regression',
+			no_improvement: 'loop-badge-no-improvement',
+			stable: 'loop-badge-stable',
+			insufficient_data: 'loop-badge-unknown'
+		}[convState] || 'loop-badge-unknown';
+		parts.push(`
+			<div class="loop-convergence">
+				<span class="loop-badge ${convClass}">${escapeHtml(convState.replace(/_/g, ' ').toUpperCase())}</span>
+				<span class="loop-detail">${escapeHtml(ls.convergence.detail || '')}</span>
+			</div>`);
+	}
+
+	// Score comparison
+	if (ls.comparison) {
+		const c = ls.comparison;
+		const deltaStr = c.scoreDelta > 0 ? `+${c.scoreDelta}` : `${c.scoreDelta}`;
+		const deltaClass = c.scoreDelta > 0 ? 'loop-delta-up' : c.scoreDelta < 0 ? 'loop-delta-down' : 'loop-delta-flat';
+		parts.push(`
+			<div class="loop-comparison">
+				<div class="loop-comp-item">
+					<span class="loop-comp-label">Score Delta</span>
+					<span class="loop-comp-value ${deltaClass}">${deltaStr}</span>
+				</div>
+				<div class="loop-comp-item">
+					<span class="loop-comp-label">Fixed</span>
+					<span class="loop-comp-value loop-fixed">${c.fixedCount}</span>
+				</div>
+				<div class="loop-comp-item">
+					<span class="loop-comp-label">Remaining</span>
+					<span class="loop-comp-value">${c.remainingCount}</span>
+				</div>
+				<div class="loop-comp-item">
+					<span class="loop-comp-label">New / Regressions</span>
+					<span class="loop-comp-value ${c.newRegressionCount > 0 ? 'loop-regression' : ''}">${c.newRegressionCount}</span>
+				</div>
+			</div>`);
+	}
+
+	// Latest decision
+	if (ls.latestDecision) {
+		parts.push(`
+			<div class="loop-decision">
+				<strong>Latest Decision:</strong> ${escapeHtml(ls.latestDecision.decision || 'N/A')}
+				<span class="loop-decision-conf">${ls.latestDecision.confidence != null ? `${(ls.latestDecision.confidence * 100).toFixed(0)}% confidence` : ''}</span>
+			</div>`);
+	}
+
+	// Stop reason
+	if (ls.stopReason) {
+		parts.push(`
+			<div class="loop-stop-reason">
+				⏹ <strong>Stop:</strong> ${escapeHtml(ls.stopReason.replace(/_/g, ' '))}
+			</div>`);
+	}
+
+	// Revalidate button
+	if (ls.canRevalidate && !ls.stopReason && cachedLoopStatus.missionId) {
+		parts.push(`
+			<button class="btn btn-sm loop-revalidate-btn" id="loop-revalidate-btn">
+				🔄 Start Revalidation (Iteration ${ls.currentIteration + 1})
+			</button>`);
+	}
+
+	// Iteration history
+	if (ls.iterations && ls.iterations.length > 0) {
+		parts.push('<div class="loop-iterations">');
+		parts.push('<h4>Iteration History</h4>');
+		for (const iter of ls.iterations) {
+			const scoreColor = iter.qualityScore >= 85 ? 'loop-score-pass' : iter.qualityScore >= 60 ? 'loop-score-warn' : 'loop-score-fail';
+			parts.push(`
+				<div class="loop-iter-item">
+					<span class="loop-iter-num">#${iter.number}</span>
+					<span class="loop-iter-score ${scoreColor}">${iter.qualityScore ?? '—'}</span>
+					<span class="loop-iter-verdict">${escapeHtml(iter.verdict || '—')}</span>
+					<span class="loop-iter-findings">${iter.findingCount} findings</span>
+				</div>`);
+		}
+		parts.push('</div>');
+	}
+
+	parts.push('</div>'); // .loop-panel
+
+	container.innerHTML = parts.join('');
+
+	// Wire up revalidate button
+	const revalidateBtn = document.getElementById('loop-revalidate-btn');
+	if (revalidateBtn) {
+		revalidateBtn.addEventListener('click', async () => {
+			if (!cachedLoopStatus?.missionId) return;
+			revalidateBtn.disabled = true;
+			revalidateBtn.textContent = 'Starting...';
+			try {
+				const token = localStorage.getItem('qase_api_token') || '';
+				await api(`/v1/missions/${cachedLoopStatus.missionId}/revalidate`, { method: 'POST' });
+				toast('Revalidation iteration started');
+				setTimeout(() => loadLoopStatus(cachedLoopStatus.missionId).then(renderLoopSection), 3000);
+			} catch (error) {
+				toast(error.message || 'Failed to start revalidation', 'bad');
+				revalidateBtn.disabled = false;
+				revalidateBtn.textContent = '🔄 Start Revalidation';
+			}
+		});
+	}
 }
 
 devIntelElements.refresh?.addEventListener('click', async () => {
@@ -386,4 +967,97 @@ document.addEventListener('click', async (e) => {
 	}
 });
 
-export { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState };
+let cachedEvidence = null;
+
+async function loadEvidence(missionId) {
+	try {
+		let mId = missionId;
+		if (!mId) {
+			const missions = await api('/missions');
+			const linked = missions.find(m => m.sessionId === state.sessionId);
+			if (!linked) return;
+			mId = linked.id;
+		}
+		const [statsRes, coverageRes] = await Promise.all([
+			api(`/v1/evidence/stats`),
+			api(`/v1/missions/${mId}/evidence-coverage`).catch(() => null)
+		]);
+		cachedEvidence = { stats: statsRes, coverage: coverageRes, missionId: mId };
+	} catch {
+		cachedEvidence = null;
+	}
+}
+
+function renderEvidenceSection() {
+	const container = document.getElementById('evidence-section');
+	if (!container) return;
+
+	if (!cachedEvidence) {
+		container.innerHTML = '';
+		return;
+	}
+
+	const { stats, coverage } = cachedEvidence;
+
+	if (!stats || (stats.totalEvidence === 0 && !coverage)) {
+		container.innerHTML = '';
+		return;
+	}
+
+	let html = '<div class="evidence-panel">';
+	html += '<h3 class="section-title">Evidence Graph</h3>';
+
+	// Stats row
+	if (stats.totalEvidence > 0) {
+		html += '<div class="evidence-stats-row">';
+		html += `<div class="evidence-stat"><span class="evidence-stat-value">${stats.totalEvidence}</span><span class="evidence-stat-label">Evidence</span></div>`;
+		html += `<div class="evidence-stat"><span class="evidence-stat-value">${stats.totalObservations || 0}</span><span class="evidence-stat-label">Observations</span></div>`;
+		html += `<div class="evidence-stat"><span class="evidence-stat-value">${stats.totalEdges || 0}</span><span class="evidence-stat-label">Links</span></div>`;
+		html += '</div>';
+	}
+
+	// Coverage bar
+	if (coverage && coverage.total > 0) {
+		const pct = Math.round(coverage.coverage);
+		const barColor = pct >= 80 ? '#22c55e' : pct >= 50 ? '#f59e0b' : '#ef4444';
+		html += '<div class="evidence-coverage">';
+		html += '<div class="evidence-coverage-header">';
+		html += `<span>Evidence Coverage</span><span style="font-weight:600;color:${barColor}">${pct}%</span>`;
+		html += '</div>';
+		html += `<div class="evidence-coverage-bar"><div class="evidence-coverage-fill" style="width:${pct}%;background:${barColor}"></div></div>`;
+		html += '<div class="evidence-coverage-detail">';
+		html += `<span>✓ ${coverage.verified || 0} verified</span>`;
+		html += `<span>◐ ${coverage.partiallyVerified || 0} partial</span>`;
+		html += `<span>○ ${coverage.unverified || 0} unverified</span>`;
+		html += `<span>of ${coverage.total} total</span>`;
+		html += '</div>';
+		html += '</div>';
+	}
+
+	// Evidence by type
+	if (stats.evidenceByType && Object.keys(stats.evidenceByType).length > 0) {
+		html += '<div class="evidence-types">';
+		html += '<div class="evidence-types-title">By Type</div>';
+		html += '<div class="evidence-type-grid">';
+		for (const [type, count] of Object.entries(stats.evidenceByType)) {
+			html += `<div class="evidence-type-chip"><span class="evidence-type-icon">${getEvidenceIcon(type)}</span> ${type} <span class="evidence-type-count">${count}</span></div>`;
+		}
+		html += '</div>';
+		html += '</div>';
+	}
+
+	html += '</div>';
+	container.innerHTML = html;
+}
+
+function getEvidenceIcon(type) {
+	const icons = {
+		screenshot: '📷', network: '🌐', console: '🖥', dom: '📄',
+		api_response: '🔌', log: '📋', trace: '🔍', assertion: '✓',
+		observation: '👁', step_outcome: '👣', finding_detail: '🔍',
+		video: '🎥'
+	};
+	return icons[type] || '📎';
+}
+
+export { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState, renderKnowledgeSection, loadKnowledge, renderDecisionSection, loadDecision, renderLoopSection, loadLoopStatus, renderEvidenceSection, loadEvidence };

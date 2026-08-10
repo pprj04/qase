@@ -2069,6 +2069,17 @@ const STAGE_MESSAGES = {
 	knowledge_write: {
 		running: () => null,
 		done: () => `**Knowledge updated.** Patterns from this mission saved for future runs.`
+	},
+	decision_engine: {
+		running: () => null,
+		done: (result) => {
+			const dec = result?.decision;
+			if (!dec) return '**Decision evaluated.**';
+			let msg = `**Decision: ${dec.decision}**`;
+			if (dec.confidence != null) msg += ` (confidence: ${(dec.confidence * 100).toFixed(0)}%)`;
+			if (dec.reason) msg += `\n\n${dec.reason.slice(0, 150)}`;
+			return msg;
+		}
 	}
 };
 

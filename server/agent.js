@@ -23,6 +23,13 @@ const BROWSER_IDLE_MS = 0;
 /** How many times to retry on a model timeout. */
 const MODEL_TIMEOUT_RETRIES = 2;
 const MODEL_TIMEOUT_RETRY_DELAY_MS = 2000;
+/**
+ * Maximum wall-clock time a single session turn is allowed to run.
+ * After this the turn is aborted and the session marked as 'error'.
+ * The agent normally finishes in under 5 minutes; this is a safety net
+ * for runaway loops that would otherwise hang forever.
+ */
+const SESSION_TURN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 /** The tools the agent is allowed to use. */
 const ALLOWED_TOOLS = new Set([
@@ -85,14 +92,18 @@ function liveBrowserUrl(record) {
  */
 export async function closeBrowser(sessionId) {
 	const record = liveFor(sessionId);
+	if (!record?.bridge) return;
 	clearTimeout(record.idleTimer);
 	record.idleTimer = undefined;
-	if (!record.bridge?.hasPage()) {
-		return;
+	// Phase 1: Always call suspend() to ensure service.dispose() runs,
+	// which calls browser.close() to kill Chromium processes.
+	// Previously, if hasPage() was false (page already closed), we'd skip
+	// suspend entirely, leaving Chromium running as a zombie.
+	try {
+		await record.bridge.suspend();
+	} catch (err) {
+		console.error(`[agent] closeBrowser(${sessionId}) suspend failed: ${err.message}`);
 	}
-	// suspend() captures cookies, local storage and the current URL first, so a
-	// signed-in session is restored when the browser comes back.
-	await record.bridge.suspend();
 }
 
 /** Closes every other session's browser, so only one is ever running. */
@@ -295,6 +306,21 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 
 	record.onToolStart = beginActivity;
 
+	// Mission-level turn timeout guard. If the turn exceeds the limit,
+	// abort the controller and mark the session as errored. This prevents
+	// runaway agent loops from holding browser resources indefinitely.
+	let turnTimeoutTimer = setTimeout(() => {
+		if (!controller.signal.aborted) {
+			controller.abort();
+			addMessage(session, {
+				role: 'system',
+				text: `The session timed out after ${SESSION_TURN_TIMEOUT_MS / 60000} minutes.`,
+				kind: 'error'
+			});
+		}
+	}, SESSION_TURN_TIMEOUT_MS);
+	turnTimeoutTimer.unref?.();
+
 	try {
 		const stream = resumeAnswer === undefined
 			? runtime.run(task, controller.signal)
@@ -392,6 +418,11 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			setStatus(session, 'awaiting_input');
 		} else if (session.report) {
 			setStatus(session, 'done');
+			// Phase 1: Dispose browser resources when the session is done.
+			// The conversation and report survive on disk; the Chromium
+			// process should not linger consuming memory.
+			void closeBrowser(session.id);
+			record.dispose?.();
 		} else {
 			setStatus(session, 'idle');
 		}
@@ -411,6 +442,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			setStatus(session, 'error', message);
 		}
 	} finally {
+		clearTimeout(turnTimeoutTimer);
 		closeThinking();
 		record.running = false;
 		record.controller = undefined;

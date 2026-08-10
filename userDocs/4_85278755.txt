@@ -1,0 +1,68 @@
+S S Niharikaa Aitam
+20:29
+Okay, okay.
+
+MM
+Mishal Muneer
+20:30
+Hello. Am I audible?
+
+MC
+Manoj Kumar Ch
+20:30
+Ya. Ya. Отлично.
+
+MM
+Mishal Muneer
+20:31
+Thomas is not gonna join. Okay. So yesterday, we have tested 50 devices and logged 19 new bugs on the Xiaomi mobile across Chrome, Firefox, and Edge. Separately, we tested 36 mobile devices reported 90 new bugs related to Writers AI studio login, meeting link, login camera, and mic and mute issues. Okay. Okay. So yesterday, we have tested 50 devices and log logged new bugs on Xiaomi mobiles across Chrome, Firefox, Edge separately. And we separately 36 mobile devices and report 19 new bugs related to Drytus AI studio login meeting link, camera, and mic and mute issues. And we have covered various Android on BrowserStack, Safari Edge, Firefox, can, Chrome, and Opera. And other updates are we have sent the Thomas requested to rearrange the content on the solution page. For better SEO plus AI search and we are working on case automation architecture changes so it can scale up to a million users proper API endpoints for AI calls. And for today, we will continue testing remaining Android versions Windows Windows device for Writer Studio. Login, meeting login, camera, mic, and mute. And we'll keep on working on case architecture we'll further research plan and try to implement it. You. That's all from us. Hi. Yes. We have checked, and we have sent a prompt to rearrange all the content in new.ritis.com. In a in a structured way so that SEO and AEO is possible. It's a it's a a vast project. So I might need a week or two.
+
+AU
+Abhishek U
+20:34
+Vicker two.
+
+MM
+Mishal Muneer
+20:34
+To implement this yes. To implement this test and make sure it's, like, scaling properly. So what I'm targeting is up to a million users, they can use without much latency issues. And people can use it, with less friction.
+
+AU
+Abhishek U
+20:34
+Alright. So we'll discuss this in brief in our internal call and just to understand, I mean, how much time we need to get this done. Just explain me what all things we are planning in at the point of view and what all things we need so that we can plan it accordingly. Thomas, you want to add something?
+
+TE
+Thomas Eide
+20:35
+No. No. Just listening. Thanks,.
+
+MM
+Mishal Muneer
+20:35
+Okay.
+
+MC
+Manoj Kumar Ch
+20:35
+Ok.
+
+MM
+Mishal Muneer
+20:35
+Okay. Okay.
+
+TE
+Thomas Eide
+20:35
+Thanks, guys.
+
+MC
+Manoj Kumar Ch
+20:35
+Thank you, Thomas. Thank you.
+
+MM
+Mishal Muneer
+20:35
+Thank you.

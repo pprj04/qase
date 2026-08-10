@@ -31,10 +31,16 @@ import { listMissions, finalizeMission, recordIteration } from './missions.js';
 import { missionBus } from './missions.js';
 import { analyzeFeatureGaps, enhanceGapsWithLLM, gapsToFindings } from './featureGap.js';
 import { syncSessionFinding } from './findings.js';
+import { withRetry, wrapError, classifyError, isRetryableType, ERROR_TYPES } from './errorTypes.js';
+import { buildAppUnderstanding } from './appUnderstanding.js';
+import { summarizeAppModel } from './appModel.js';
+import { queryKnowledge, detectAppMetadata, validateKnowledge, detectKnowledgeConflicts, writeKnowledge, getPatternById } from './knowledge.js';
+import { makeDecisionSafe, DECISION_TYPES, TERMINAL_DECISIONS, trackBudget, computeBudgetRemaining } from './decisionEngine.js';
 
 /* ── Pipeline Stage Info (shared with pipeline.js) ──────────────── */
 
 const STAGE_INFO = {
+	app_understanding: { icon: '🧭', label: 'Understanding' },
 	workflow_save:    { icon: '📋', label: 'Workflow' },
 	test_generation:  { icon: '🧪', label: 'Tests' },
 	smoke_run:        { icon: '💨', label: 'Smoke' },
@@ -42,7 +48,8 @@ const STAGE_INFO = {
 	dev_intelligence: { icon: '🧠', label: 'Dev Report' },
 	feature_gap:      { icon: '🔍', label: 'Feature Gaps' },
 	mission_finalize: { icon: '🎯', label: 'Mission' },
-	knowledge_write:  { icon: '📚', label: 'Knowledge' }
+	knowledge_write:  { icon: '📚', label: 'Knowledge' },
+	knowledge_query:  { icon: '🔎', label: 'Knowledge Query' }
 };
 
 function emitProgress(session, stage, status, detail, result) {
@@ -75,6 +82,15 @@ class CapabilityRegistry {
 		return this.capabilities.has(id);
 	}
 }
+
+/* ── Reliability constants ──────────────────────────────────────── */
+
+/** Per-capability timeout in ms. Capabilities that exceed this are failed. */
+const CAPABILITY_TIMEOUT_MS = 180_000; // 3 minutes per capability
+/** Max retry attempts for retryable capability failures. */
+const CAPABILITY_MAX_RETRIES = 1;
+/** Delay between capability retries. */
+const CAPABILITY_RETRY_DELAY_MS = 3000;
 
 /* ── Orchestrator ───────────────────────────────────────────────── */
 
@@ -124,6 +140,11 @@ class Orchestrator {
 	 * Executes capabilities in dependency order.
 	 * Collects evidence from each capability's output.
 	 * Skips downstream capabilities when a dependency is skipped or fails.
+	 *
+	 * Phase 1 reliability: each capability is wrapped in a timeout and
+	 * bounded retry. Transient failures (LLM timeout, network blip) get
+	 * one retry; non-retryable failures skip the capability and mark
+	 * downstream deps as failed.
 	 */
 	async execute(session, config) {
 		const allCaps = this.registry.list();
@@ -170,7 +191,16 @@ class Orchestrator {
 			}
 
 			try {
-				const result = await cap.execute(session, evidence, config);
+				// Wrap each capability in a bounded timeout + retry.
+				const result = await withRetry(
+					(attempt) => cap.execute(session, evidence, config),
+					{
+						maxRetries: CAPABILITY_MAX_RETRIES,
+						delayMs: CAPABILITY_RETRY_DELAY_MS,
+						timeoutMs: CAPABILITY_TIMEOUT_MS,
+						label: `capability:${cap.id}`
+					}
+				);
 				results[cap.id] = { status: 'done', result };
 
 				// Collect produced evidence
@@ -180,7 +210,8 @@ class Orchestrator {
 					}
 				}
 			} catch (error) {
-				results[cap.id] = { status: 'failed', error: error.message };
+				const wrapped = wrapError(error, { capability: cap.id });
+				results[cap.id] = { status: 'failed', error: wrapped.message, errorType: wrapped.errorType };
 				failedDeps.add(cap.id);
 			}
 		}
@@ -334,12 +365,60 @@ function createDefaultRegistry() {
 		}
 	});
 
-	// Capability 6: Feature Gap Analysis
+	// Capability 6: Application Understanding (Phase 2)
+	// Builds a structured Application Model from all evidence sources.
+	// Runs BEFORE feature_gap so downstream capabilities can consume the model.
+	registry.register({
+		id: 'application_understanding',
+		name: 'Application Understanding',
+		category: 'analysis',
+		dependsOn: [],
+		requiredEvidence: [],
+		producesEvidence: ['appModel'],
+		enabled: () => true,
+		confidence: 0.7,
+		cost: 'medium',
+		async execute(session, evidence, config) {
+			const linkedMission = listMissions({}).find(m => m.sessionId === session.id);
+			const missionContext = linkedMission?.context || null;
+
+			emitProgress(session, 'application_understanding', 'running', 'Building application model…');
+
+			const appModel = await buildAppUnderstanding(session, missionContext, {
+				useLLM: Boolean(config.model && config.baseUrl)
+			});
+
+			// Store on session for downstream capabilities and API access
+			session.appModel = appModel;
+
+			const summary = summarizeAppModel(appModel);
+			const purposeName = summary.purpose?.name || 'Unknown';
+			const confidence = summary.confidence?.purpose ?? 0;
+
+			emitProgress(session, 'application_understanding', 'done',
+				`Application understood: ${purposeName} (${Math.round(confidence * 100)}% confidence)`,
+				{
+					purpose: summary.purpose,
+					confidence: summary.confidence,
+					features: summary.features,
+					workflows: summary.workflows,
+					unknowns: summary.unknowns,
+					conflicts: summary.conflicts,
+					status: summary.status,
+					evidenceCount: summary.evidenceCount,
+					roles: summary.roles,
+				});
+
+			return { appModel, appModelSummary: summary };
+		}
+	});
+
+	// Capability 7: Feature Gap Analysis
 	registry.register({
 		id: 'feature_gap',
 		name: 'Feature Gap Analysis',
 		category: 'analysis',
-		dependsOn: [],
+		dependsOn: ['application_understanding'],
 		requiredEvidence: [],
 		producesEvidence: ['featureGaps'],
 		enabled: (config) => config.autoFeatureGap !== false,
@@ -350,8 +429,10 @@ function createDefaultRegistry() {
 			const linkedMission = listMissions({}).find(m => m.sessionId === session.id);
 			const missionContext = linkedMission?.context || null;
 
+			// Consume Application Model if available (from application_understanding)
+			const appModel = session.appModel || evidence.appModel || null;
+
 			// Knowledge query — surface known patterns before analysis
-			const { queryKnowledge, detectAppMetadata } = await import('./knowledge.js');
 			const appMeta = detectAppMetadata(session);
 			const knowledgeResult = queryKnowledge(appMeta);
 
@@ -457,44 +538,99 @@ function createDefaultRegistry() {
 		}
 	});
 
-	// Capability 8: Knowledge Write
+	// Capability 8: Decision Engine (Phase 4)
+	registry.register({
+		id: 'decision_engine',
+		name: 'Decision Engine',
+		category: 'decision',
+		dependsOn: ['mission_finalize'],
+		requiredEvidence: [],
+		producesEvidence: ['decision'],
+		enabled: () => true,
+		confidence: 0.95,
+		cost: 'low',
+		async execute(session, evidence, config) {
+			// Find the linked mission
+			const linkedMissions = listMissions({}).filter(m => m.sessionId === session.id);
+			const mission = linkedMissions[0] ?? null;
+
+			// Build the decision from all available evidence
+			const decision = makeDecisionSafe(session, evidence, mission);
+
+			// Emit progress
+			const isTerminal = TERMINAL_DECISIONS.has(decision.decision);
+			emitProgress(session, 'decision_engine', 'done',
+				`Decision: ${decision.decision} — ${decision.reason.slice(0, 120)}`,
+				{
+					decision: decision.decision,
+					confidence: decision.confidence,
+					reason: decision.reason,
+					terminal: isTerminal,
+					factors: decision.factors,
+					recommendedAction: decision.recommendedAction
+				});
+
+			return { decision };
+		}
+	});
+
+	// Capability 9: Knowledge Write (Phase 3 Enhanced)
 	registry.register({
 		id: 'knowledge_write',
 		name: 'Write Knowledge Patterns',
 		category: 'extraction',
-		dependsOn: ['mission_finalize'],
+		dependsOn: ['decision_engine'],
 		requiredEvidence: [],
 		producesEvidence: ['knowledgePatterns'],
 		enabled: () => true,
 		confidence: 0.85,
 		cost: 'low',
 		async execute(session, evidence, config) {
-			const { writeKnowledge } = await import('./knowledge.js');
 			const findings = session.findings ?? [];
 			const missionResult = evidence.missionResult;
 			const linkedMissions = missionResult?.linkedMissions ?? [];
 			const missionForKnowledge = linkedMissions[0];
 
+			// Phase 3: Validate patterns that were surfaced before this mission
+			const patternsUsed = session.knowledgePatternsUsed || [];
+			let validationResults = [];
+			let conflicts = [];
+			if (patternsUsed.length > 0) {
+				// Re-fetch the pattern objects by ID using the ESM import
+				const relevantPatterns = patternsUsed.map(id => getPatternById(id)).filter(Boolean);
+
+				if (relevantPatterns.length > 0) {
+					validationResults = validateKnowledge(relevantPatterns, session, missionForKnowledge?.id || session.id);
+					conflicts = detectKnowledgeConflicts(relevantPatterns, session.appModel || evidence.appModel, findings);
+					if (validationResults.length > 0 || conflicts.length > 0) {
+						console.log(`[knowledge] Validated ${validationResults.length} patterns, found ${conflicts.length} conflicts for session ${session.id}`);
+					}
+				}
+			}
+
+			// Write new knowledge from findings
 			if (findings.length === 0 || !missionForKnowledge) {
 				emitProgress(session, 'knowledge_write', 'skipped', 'No findings or mission');
-				return { knowledgePatterns: [] };
+				return { knowledgePatterns: [], validationResults, conflicts };
 			}
 
 			const written = writeKnowledge(findings, session, missionForKnowledge.id);
 			if (written.length === 0) {
 				emitProgress(session, 'knowledge_write', 'skipped', 'No notable findings');
-				return { knowledgePatterns: [] };
+				return { knowledgePatterns: [], validationResults, conflicts };
 			}
 
 			emitProgress(session, 'knowledge_write', 'done',
-				`Learned ${written.length} pattern${written.length === 1 ? '' : 's'} (${written.filter(w => w.action === 'created').length} new)`,
+				`Learned ${written.length} pattern${written.length === 1 ? '' : 's'} (${written.filter(w => w.action === 'created').length} new), validated ${validationResults.length}, ${conflicts.length} conflict${conflicts.length === 1 ? '' : 's'}`,
 				{
 					patternsWritten: written.length,
 					newPatterns: written.filter(w => w.action === 'created').length,
-					accumulated: written.filter(w => w.action === 'accumulated').length
+					accumulated: written.filter(w => w.action === 'accumulated').length,
+					validatedPatterns: validationResults.length,
+					conflictsDetected: conflicts.length
 				});
 
-			return { knowledgePatterns: written };
+			return { knowledgePatterns: written, validationResults, conflicts };
 		}
 	});
 
@@ -510,54 +646,124 @@ const defaultOrchestrator = new Orchestrator(defaultRegistry);
  * Runs the full autonomy pipeline via the Orchestrator.
  * This replaces the original runAutonomyPipeline function in pipeline.js
  * but produces identical behavior and result shapes.
+ *
+ * Phase 1 reliability: idempotency guard prevents concurrent or duplicate
+ * pipeline executions for the same session. A session whose pipeline
+ * already ran successfully returns the cached result.
  */
 export async function runAutonomyPipeline(session, options = {}) {
-	const config = getConfig();
-	const { results, evidence } = await defaultOrchestrator.execute(session, config);
+	// Idempotency guard — prevent duplicate/concurrent pipeline runs
+	if (session._pipelineRunning) {
+		if (options.force) {
+			// Forced re-run (e.g. from run-pipeline endpoint): wait for the
+			// current one to finish, then re-read the result if it succeeded.
+			// This is a safety valve, not a normal path.
+			console.warn(`[pipeline] Session ${session.id} pipeline already running, force=true — waiting for completion`);
+			// Wait up to 5 minutes for the existing run
+			for (let i = 0; i < 60; i++) {
+				if (!session._pipelineRunning) break;
+				await new Promise(r => setTimeout(r, 5000));
+			}
+		} else {
+			// Already ran or running — return cached result if available
+			if (session.pipeline?.completedAt) {
+				return { summary: session.pipeline.summary, stages: session.pipeline.stages };
+			}
+			// Running but not yet complete — wait for it
+			console.warn(`[pipeline] Session ${session.id} pipeline already running, waiting…`);
+			for (let i = 0; i < 60; i++) {
+				if (!session._pipelineRunning) break;
+				await new Promise(r => setTimeout(r, 5000));
+			}
+			if (session.pipeline?.completedAt) {
+				return { summary: session.pipeline.summary, stages: session.pipeline.stages };
+			}
+		}
+	}
 
-	// Extract structured data for UI mission summary bar
-	const featureGapResult = results.feature_gap?.result ?? null;
-	const devIntelResult = results.dev_intelligence?.result ?? null;
-	const missionFinalizeResult = results.mission_finalize?.result ?? null;
-	const qualityScore = missionFinalizeResult?.qualityScore ?? null;
-	const releaseReady = missionFinalizeResult?.releaseReady ?? false;
-	const gaps = featureGapResult?.featureGaps ?? featureGapResult?.gapAnalysis?.gaps ?? [];
-	const purpose = featureGapResult?.gapAnalysis?.purpose ?? featureGapResult?.purpose ?? null;
-	const appType = featureGapResult?.gapAnalysis?.inventory?.appType
-		?? purpose?.name
-		?? devIntelResult?.summary?.appType
-		?? 'Unknown';
-	const findings = session.findings ?? [];
-	const criticalCount = findings.filter(f => f.severity === 'critical').length;
+	// If already completed and not forced, return cached
+	if (session.pipeline?.completedAt && !options.force) {
+		return { summary: session.pipeline.summary, stages: session.pipeline.stages };
+	}
 
-	// Build the summary object for backward compat with pipeline.js consumers
-	const summary = {
-		workflowId: results.workflow_save?.result?.workflowId ?? null,
-		testCaseCount: results.test_generation?.result?.count ?? 0,
-		smokeResults: results.smoke_run?.result ?? null,
-		scheduleId: results.schedule_create?.result?.scheduleId ?? null,
-		devIntelligence: devIntelResult,
-		featureGaps: featureGapResult,
-		knowledgeWrite: results.knowledge_write?.result ?? null,
-		// Enriched fields for the AI-first Mission Summary Bar
-		qualityScore,
-		releaseReady,
-		appType,
-		purpose: purpose ? (purpose.name ?? purpose) : null,
-		confidence: purpose?.confidence ?? 0,
-		criticalIssues: criticalCount,
-		featureGapsCount: Array.isArray(gaps) ? gaps.length : 0,
-		findings
-	};
+	session._pipelineRunning = true;
+	const startedAt = Date.now();
 
-	session.pipeline = {
-		stages: results,
-		completedAt: Date.now(),
-		summary
-	};
-	emit(session, 'pipeline_complete', { summary, stages: results });
+	try {
+		const config = getConfig();
+		const { results, evidence } = await defaultOrchestrator.execute(session, config);
 
-	return { summary, stages: results };
+		// Extract structured data for UI mission summary bar
+		const appUnderstandingResult = results.application_understanding?.result ?? null;
+		const featureGapResult = results.feature_gap?.result ?? null;
+		const devIntelResult = results.dev_intelligence?.result ?? null;
+		const missionFinalizeResult = results.mission_finalize?.result ?? null;
+		const decisionEngineResult = results.decision_engine?.result ?? null;
+		const qualityScore = missionFinalizeResult?.qualityScore ?? missionFinalizeResult?.missionResult?.quality?.score ?? null;
+		const releaseReady = missionFinalizeResult?.missionResult?.quality?.releaseReady ?? false;
+		const gaps = featureGapResult?.featureGaps ?? featureGapResult?.gapAnalysis?.gaps ?? [];
+		// Purpose now comes from the Application Model when available
+		const appModelSummary = appUnderstandingResult?.appModelSummary ?? null;
+		const purpose = appModelSummary?.purpose ?? featureGapResult?.gapAnalysis?.purpose ?? featureGapResult?.purpose ?? null;
+		const appType = appModelSummary?.applicationType
+			?? featureGapResult?.gapAnalysis?.inventory?.appType
+			?? purpose?.name
+			?? devIntelResult?.summary?.appType
+			?? 'Unknown';
+		const findings = session.findings ?? [];
+		const criticalCount = findings.filter(f => f.severity === 'critical').length;
+
+		// Build the summary object for backward compat with pipeline.js consumers
+		const summary = {
+			workflowId: results.workflow_save?.result?.workflowId ?? null,
+			testCaseCount: results.test_generation?.result?.count ?? 0,
+			smokeResults: results.smoke_run?.result ?? null,
+			scheduleId: results.schedule_create?.result?.scheduleId ?? null,
+			devIntelligence: devIntelResult,
+			featureGaps: featureGapResult,
+			knowledgeWrite: results.knowledge_write?.result ?? null,
+				// Phase 2: Application Understanding data
+				appUnderstanding: appModelSummary,
+				// Phase 3: Knowledge data
+				knowledgeValidation: results.knowledge_write?.result?.validationResults ?? [],
+				knowledgeConflicts: results.knowledge_write?.result?.conflicts ?? [],
+				knowledgeHintsInjected: session.knowledgeHints?.length ?? 0,
+			// Phase 4: Decision Engine data
+			decision: decisionEngineResult?.decision ?? null,
+			// Enriched fields for the AI-first Mission Summary Bar
+			qualityScore,
+			releaseReady,
+			appType,
+			purpose: purpose ? (purpose.name ?? purpose) : null,
+			confidence: purpose?.confidence ?? appModelSummary?.confidence?.purpose ?? 0,
+			criticalIssues: criticalCount,
+			featureGapsCount: Array.isArray(gaps) ? gaps.length : 0,
+			findings
+		};
+
+		session.pipeline = {
+			stages: results,
+			completedAt: Date.now(),
+			summary
+		};
+		emit(session, 'pipeline_complete', { summary, stages: results });
+
+		return { summary, stages: results };
+	} catch (error) {
+		// The pipeline itself threw (orchestrator-level, not per-capability).
+		// Record the failure on the session so consumers know.
+		const wrapped = wrapError(error, { phase: 'pipeline' });
+		session.pipeline = {
+			stages: {},
+			completedAt: Date.now(),
+			error: wrapped.message,
+			errorType: wrapped.errorType
+		};
+		emit(session, 'pipeline_error', { error: wrapped.message, errorType: wrapped.errorType });
+		throw wrapped;
+	} finally {
+		session._pipelineRunning = false;
+	}
 }
 
 // Export for testing and external use

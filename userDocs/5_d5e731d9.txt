@@ -1,0 +1,199 @@
+Abhishek U
+Yeah. Hi, everyone.
+Okay. Michelle is not here.
+And did you guys check the yesterday's transcript?
+
+Mishal Muneer
+Oh, yes.
+Yes.
+So I've
+made a new architecture plan
+So I'm in the process of, like, implementing it.
+So I'll be working on that today.
+Pushkar is working on the UI
+
+Pushkaraj
+Onsuma timonet.
+
+Mishal Muneer
+part
+Uh-huh. Yeah. We have shared them a prompt.
+He told us to reorder the items
+in the features table in new..com.
+So we have shared him a prompt. Let's see what he says.
+Oh, yes.
+
+Pushkaraj
+If anyone search in the AI AI chatbot, so AI should recommend us before anyone else.
+That part, we are also working on it. Yeah.
+
+Mishal Muneer
+Yeah. Like, that
+I think that came when we were talking about this feature thing.
+So, like,
+right now, all the features are listed in that.
+So what he wants us to do was
+to reorder it
+to make sure all the features are included and all the unnecessary
+ones are
+removed.
+We have shared them the prompt
+We have shared for reordering
+all the features that are present in the table right now.
+Yes.
+It might it might take one one week, I guess.
+I need to
+That
+push curve which
+
+Pushkaraj
+Hello?
+So the production one, actually,
+have sent the the link and API API API API
+So
+the production is done or not, we wanted to ask you.
+Yeah. Last time yeah. I checked the so it will it was showing
+it was showing nothing.
+Last night.
+Yeah.
+Okay. Okay.
+Yes, Ray.
+
+Mishal Muneer
+Okay.
+
+Pushkaraj
+Yes. We
+yes. We can.
+Okay.
+Okay. Fine.
+
+Mishal Muneer
+Yes.
+
+Pushkaraj
+Еще.
+
+Mishal Muneer
+Okay.
+Okay.
+Bye.
+Oh, yes. Yes. I've shared in.
+That it's showing
+fire to bad gate error.
+Hello?
+There are two booster.
+Screenshot.
+
+Pushkaraj
+Yeah. I on my side, it's working fine, but it's, like, showing the
+previous version.
+
+Mishal Muneer
+It's showing, like, a container is starting
+And once
+
+Pushkaraj
+Yeah. Do it again. Like,
+repeat again.
+
+Mishal Muneer
+But I'll refresh.
+Okay. Okay. It started right now.
+Model name is Kimi.
+Kimi k three.
+Guys, I think we have to start using our tool
+to test.
+There is no browser stack.
+Yeah.
+Pues claro.
+It told to change the UI. Right?
+
+Pushkaraj
+Yes, Michelle.
+
+Mishal Muneer
+He told to change the UI. Right?
+
+Pushkaraj
+Yeah.
+Yeah. There are some change changes. I I think it didn't get pushed on the main website.
+So I will post it today.
+I will do some changes.
+
+Mishal Muneer
+Mitch.
+
+Pushkaraj
+To
+try to test some try to test some applications using that.
+
+Mishal Muneer
+Ok, ok.
+
+Pushkaraj
+Yeah.
+
+Mishal Muneer
+Buenas noches.
+I've shared a screenshot
+Can you report this issue?
+Meeting issue?
+Hello?
+There are two poster.
+
+Pushkaraj
+I'm having some, microphone issue headphone issue with you.
+Yeah. Right.
+Actually, my headphone is not getting connected through the laptop.
+There is something issue might be.
+And the another issue on the, mobile
+like that. It continuously asking, like, speech recognition and
+synthesize from Google cannot
+something like that.
+When I connect this meeting through the Google Chrome,
+Yeah.
+
+Mishal Muneer
+Guys, any update on the payout
+this last month?
+I think this time we should get by seventh only.
+Before seventh.
+Ninth.
+And they were telling about implementing their some system and all that.
+Let's see.
+That time, I think, last month.
+When I was talking to Aditi, he told me from next month
+he will get on time.
+07:30.
+Let's see.
+Yes. There is no
+this
+authentication
+in case
+Uh-huh. Someone is using case.
+So, like, when others are using, we can see, bro.
+I'll screenshot this issue and
+ask
+I think, some
+packets are not installed as Chromium.
+Play. Right? Enroll.
+Okay.
+This is new.
+Yes.
+It needs to look like CLI, like
+
+S S Niharikaa Aitam
+Yes. Yes.
+No. It's not about the dashboard, but
+the font look, it should be like a coding thing.
+Like, when we write a code, it looks somewhat different. Like,
+in Python language or Java something.
+So that phone, he is expecting that.
+
+Mishal Muneer
+Okay. I will meet
+Okay.
+
+Pushkaraj Potdar
+Okay.

@@ -1,3 +1,5 @@
+import { computeEvidenceCoverage } from './evidenceGraph.js';
+
 /**
  * Developer Intelligence (Phase 13)
  *
@@ -339,6 +341,14 @@ export function calculateMissionQuality(findings = []) {
 		});
 	}
 
+	// Evidence coverage: what percentage of findings are backed by evidence
+	let evidenceCoverage = null;
+	try {
+		evidenceCoverage = computeEvidenceCoverage(findings);
+	} catch {
+		// Evidence graph may not be loaded in all contexts
+	}
+
 	return {
 		score,
 		verdict,
@@ -347,7 +357,8 @@ export function calculateMissionQuality(findings = []) {
 		risk,
 		criticalIssues,
 		recommendations,
-		breakdown
+		breakdown,
+		evidenceCoverage
 	};
 }
 

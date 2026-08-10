@@ -75,9 +75,9 @@ describe('Phase 12 — Autonomy Pipeline', () => {
 		it('should trigger pipeline via POST /sessions/:id/run-pipeline', async () => {
 			// Use a session that has captured steps (a done session from QA).
 			const sessions = await api('GET', '/sessions').then(r => r.data);
-			const doneSession = sessions.find(s => s.status === 'done');
+			const doneSession = sessions.find(s => s.status === 'done' && s.capturedSteps > 0);
 			if (!doneSession) {
-				console.log('  (skipped — no done session available)');
+				console.log('  (skipped — no done session with captured steps available)');
 				return;
 			}
 
@@ -85,12 +85,20 @@ describe('Phase 12 — Autonomy Pipeline', () => {
 			assert.equal(status, 200);
 			assert.equal(data.ok, true);
 
-			// Wait for the pipeline to complete.
-			await new Promise(r => setTimeout(r, 5000));
+			// Poll pipeline-status until completedAt is present (up to 30s).
+			// Phase 1 added retry delays and per-capability timeouts that can
+			// make the pipeline take longer than a fixed sleep.
+			let pipelineResult = null;
+			for (let i = 0; i < 60; i++) {
+				await new Promise(r => setTimeout(r, 500));
+				const res = await api('GET', `/sessions/${doneSession.id}/pipeline-status`);
+				if (res.data && res.data.completedAt) {
+					pipelineResult = res.data;
+					break;
+				}
+			}
 
-			// Check pipeline status — should have completed.
-			const { data: pipelineResult } = await api('GET', `/sessions/${doneSession.id}/pipeline-status`);
-			assert.ok(pipelineResult !== null, 'Pipeline should have started');
+			assert.ok(pipelineResult !== null, 'Pipeline should have completed within 30s');
 			assert.ok(pipelineResult.stages, 'Pipeline stages should exist');
 			// Workflow save should always succeed if session has captured steps.
 			assert.ok(['done', 'skipped', 'failed'].includes(pipelineResult.stages.workflow_save.status));

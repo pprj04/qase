@@ -10,7 +10,7 @@ import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
-	listSessions, liveFor, loadSessions, setStatus
+	listSessions, liveFor, loadSessions, setStatus, startWatchdog
 } from './store.js';
 import {
 	saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, updateWorkflow
@@ -55,7 +55,7 @@ import {
 import {
 	createMission, getMission, listMissions, updateMission, deleteMission,
 	finalizeMission, loadMissionsFromDisk, missionBus, recordIteration,
-	getComparisonIterations
+	getComparisonIterations, isTerminalStatus
 } from './missions.js';
 import { buildDevReportMarkdown } from './devReport.js';
 import {
@@ -66,6 +66,26 @@ import {
 	getBaselines, getBaseline, approveBaseline, deleteBaselines,
 	autoCaptureBaselines, getTestCaseIdsWithBaselines
 } from './baselines.js';
+import { summarizeAppModel } from './appModel.js';
+import { queryKnowledge, detectAppMetadata, generateExplorationHints, validateKnowledge, detectKnowledgeConflicts } from './knowledge.js';
+import { getAllPatterns, getPatternProvenance, getPatternsForMission, deletePattern, getKnowledgeStats, applyDecay, clearAllPatterns } from './knowledge.js';
+import { summarizeKnowledgeItem } from './knowledgeModel.js';
+import {
+	DEFAULT_MAX_ITERATIONS, STOP_REASONS, ITERATION_STATUS,
+	analyzeConvergence, hasReachedIterationLimit, getStopReason,
+	resolveAction, buildRevalidationPrompt, prepareKnowledgeForIteration,
+	getLoopStatus, getComparisonSummary, getLatestIteration, updateIterationMetadata,
+	createIterationMetadata
+} from './validationLoop.js';
+import {
+	createEvidence, getEvidence, getMissionEvidence, getSessionEvidence,
+	getFindingEvidence, getEvidenceChainForApi, createObservation, getSessionObservations,
+	linkEvidenceToFinding, collectSessionEvidence, computeEvidenceCoverage,
+	computeEvidenceConfidence, determineEvidenceStatus, validateGraphIntegrity,
+	detectOrphans, getGraphStats, compareIterationEvidence, getHistoricalEvidence,
+	getEvidenceCount, getObservationCount, getEdgeCount,
+	EVIDENCE_TYPES, EVIDENCE_STATUS
+} from './evidenceGraph.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -97,6 +117,7 @@ mountDemoSite(app);
 
 loadSessions();
 startScheduler();
+startWatchdog();
 
 /* ── Health endpoint (no auth) ──────────────────────────────────── */
 
@@ -422,7 +443,10 @@ app.post('/api/sessions/:id/stop', requireApiToken, (request, response) => {
 	if (!session) {
 		return;
 	}
-	liveFor(session.id).controller?.abort();
+	const record = liveFor(session.id);
+	record?.controller?.abort();
+	// Phase 1: close browser resources on stop to prevent orphaned Chromium.
+	void closeBrowser(session.id);
 	response.json({ ok: true });
 });
 
@@ -496,6 +520,33 @@ app.get('/api/sessions/:id/dev-intelligence', (request, response) => {
 	response.json(session.devIntelligence ?? null);
 });
 
+/** Application Understanding model for a session (Phase 2). */
+app.get('/api/sessions/:id/app-understanding', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const appModel = session.appModel || null;
+	if (!appModel) return response.json(null);
+	response.json(appModel);
+});
+
+/** Application Understanding summary for a session (Phase 2). */
+app.get('/api/sessions/:id/app-understanding-summary', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const summary = session.pipeline?.summary?.appUnderstanding ?? null;
+	if (!summary) {
+		// Try to generate from stored model
+		if (session.appModel) {
+			try {
+				response.json(summarizeAppModel(session.appModel));
+				return;
+			} catch { /* fall through */ }
+		}
+		return response.json(null);
+	}
+	response.json(summary);
+});
+
 /** Feature gap analysis for the Application Understanding card. */
 app.get('/api/sessions/:id/feature-gaps', (request, response) => {
 	const session = requireSession(request, response);
@@ -550,6 +601,125 @@ app.get('/api/sessions/:id/dev-report', (request, response) => {
 	}
 	const md = buildDevReportMarkdown(session, session.devIntelligence);
 	response.type('text/markdown').send(md);
+});
+
+/* ── Knowledge routes (Phase 3) ─────────────────────────────────── */
+
+/** Get all knowledge patterns with stats. */
+app.get('/api/knowledge', (request, response) => {
+	const stats = getKnowledgeStats();
+	const allPatterns = getAllPatterns().map(p => summarizeKnowledgeItem(p));
+	response.json({ patterns: allPatterns, stats });
+});
+
+/** Get a specific knowledge pattern with full provenance. */
+app.get('/api/knowledge/:id', (request, response) => {
+	const provenance = getPatternProvenance(request.params.id);
+	if (!provenance) return response.status(404).json({ error: 'Knowledge pattern not found' });
+	response.json(provenance);
+});
+
+/** Get knowledge patterns associated with a mission. */
+app.get('/api/missions/:id/knowledge', (request, response) => {
+	const patterns = getPatternsForMission(request.params.id);
+	response.json({ patterns });
+});
+
+/** Get knowledge relevant to a session (hints that were injected). */
+app.get('/api/sessions/:id/knowledge', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const hints = session.knowledgeHints || [];
+	const patternsUsed = session.knowledgePatternsUsed || [];
+	const validation = session.pipeline?.summary?.knowledgeValidation || [];
+	const conflicts = session.pipeline?.summary?.knowledgeConflicts || [];
+	response.json({ hints, patternsUsed, validation, conflicts });
+});
+
+/** Get knowledge statistics. */
+app.get('/api/knowledge-stats', (request, response) => {
+	response.json(getKnowledgeStats());
+});
+
+/** Delete a knowledge pattern. */
+app.delete('/api/knowledge/:id', requireApiToken, (request, response) => {
+	const deleted = deletePattern(request.params.id);
+	if (!deleted) return response.status(404).json({ error: 'Pattern not found' });
+	response.json({ deleted: true });
+});
+
+/** Apply confidence decay to all patterns. */
+app.post('/api/knowledge/decay', requireApiToken, (request, response) => {
+	applyDecay();
+	response.json({ applied: true });
+});
+
+/* ── Decision Engine routes (Phase 4) ───────────────────────────── */
+
+/**
+ * Get the current/latest decision for a session.
+ * Read-only — returns the most recent decision from history.
+ */
+app.get('/api/sessions/:id/decision', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const history = session.decisionHistory ?? [];
+	const latest = history.length > 0 ? history[history.length - 1] : null;
+	const pipelineDecision = session.pipeline?.summary?.decision ?? null;
+	response.json({
+		decision: latest ?? pipelineDecision,
+		history,
+		historyCount: history.length
+	});
+});
+
+/**
+ * Get all decisions for a session (full history).
+ */
+app.get('/api/sessions/:id/decisions', (request, response) => {
+	const session = requireSession(request, response);
+	if (!session) return;
+	const history = session.decisionHistory ?? [];
+	response.json({
+		decisions: history,
+		count: history.length
+	});
+});
+
+/**
+ * Get decisions for a mission — looks up the linked session(s).
+ */
+app.get('/api/missions/:id/decisions', (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) return response.status(404).json({ error: 'Mission not found' });
+
+	const decisions = [];
+	// Check current session
+	if (mission.sessionId) {
+		const session = getSession(mission.sessionId);
+		if (session?.decisionHistory) {
+			decisions.push(...session.decisionHistory);
+		}
+	}
+	// Check iteration sessions
+	for (const iter of (mission.iterations ?? [])) {
+		if (iter.sessionId && iter.sessionId !== mission.sessionId) {
+			const session = getSession(iter.sessionId);
+			if (session?.decisionHistory) {
+				decisions.push(...session.decisionHistory);
+			}
+		}
+	}
+	// Also check pipeline summary
+	const pipelineDecision = mission.sessionId
+		? getSession(mission.sessionId)?.pipeline?.summary?.decision ?? null
+		: null;
+
+	response.json({
+		decisions,
+		count: decisions.length,
+		latest: decisions.length > 0 ? decisions[decisions.length - 1] : pipelineDecision
+	});
 });
 
 /* ── Workflow routes ────────────────────────────────────────────── */
@@ -1338,11 +1508,31 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			// Link mission to session
 			updateMission(mission.id, {
 				sessionId: session.id,
-				status: 'running'
-			});
+					status: 'running'
+				});
 
-			// Build the agent task from mission type + objectives
-			const taskPrompt = buildMissionPrompt(mission);
+			// Phase 3: Query knowledge BEFORE exploration and inject as hints
+			let knowledgeHints = '';
+			let relevantPatterns = [];
+			try {
+				const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
+				console.log(`[knowledge] detectAppMetadata for ${mission.targetUrl}:`, JSON.stringify(appMeta));
+				const knowledgeResult = queryKnowledge(appMeta);
+				console.log(`[knowledge] queryKnowledge returned ${knowledgeResult.patterns?.length || 0} patterns, ${knowledgeResult.hints?.length || 0} hints, summary: ${knowledgeResult.summary}`);
+				relevantPatterns = knowledgeResult.patterns || [];
+				knowledgeHints = generateExplorationHints(relevantPatterns);
+				// Store for post-mission validation
+				session.knowledgeHints = knowledgeResult.hints || [];
+				session.knowledgePatternsUsed = relevantPatterns.map(p => p.id);
+				if (knowledgeHints) {
+					console.log(`[knowledge] Injected ${relevantPatterns.length} historical pattern(s) as exploration hints for session ${session.id}`);
+				}
+			} catch (err) {
+				console.warn('[knowledge] Pre-exploration query failed:', err.message);
+			}
+
+			// Build the agent task from mission type + objectives + knowledge hints
+			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 
 			// Start the agent (async — returns immediately)
 			await ensureRuntime(session);
@@ -1380,6 +1570,10 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
 	}
+	// Phase 1: prevent restarting a terminal mission
+	if (isTerminalStatus(mission.status)) {
+		return response.status(409).json({ error: `Mission is already ${mission.status}. Create a new mission or iterate.` });
+	}
 	if (mission.status === 'running') {
 		return response.status(409).json({ error: 'Mission is already running' });
 	}
@@ -1400,7 +1594,25 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 
 		updateMission(mission.id, { sessionId: session.id, status: 'running' });
 
-		const taskPrompt = buildMissionPrompt(mission);
+		// Phase 3: Query knowledge BEFORE exploration and inject as hints
+		let knowledgeHints = '';
+		let relevantPatterns = [];
+		try {
+			const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
+			const knowledgeResult = queryKnowledge(appMeta);
+			relevantPatterns = knowledgeResult.patterns || [];
+			knowledgeHints = generateExplorationHints(relevantPatterns);
+			// Store for post-mission validation
+			session.knowledgeHints = knowledgeResult.hints || [];
+			session.knowledgePatternsUsed = relevantPatterns.map(p => p.id);
+			if (knowledgeHints) {
+				console.log(`[knowledge] Injected ${relevantPatterns.length} historical pattern(s) as exploration hints for session ${session.id}`);
+			}
+		} catch (err) {
+			console.warn('[knowledge] Pre-exploration query failed:', err.message);
+		}
+
+		const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 		await ensureRuntime(session);
 		startTurn(session, { task: taskPrompt });
 
@@ -1445,6 +1657,19 @@ app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
 		}
 	}
 
+	// Build pipeline stage summary if available — exposes capability failures
+	// so consumers don't need a separate query to see if stages failed.
+	let pipelineStages = null;
+	if (mission.sessionId) {
+		const pipelineSession = getSession(mission.sessionId);
+		if (pipelineSession?.pipeline?.stages) {
+			pipelineStages = {};
+			for (const [key, val] of Object.entries(pipelineSession.pipeline.stages)) {
+				pipelineStages[key] = val.status;
+			}
+		}
+	}
+
 	response.json({
 		id: mission.id,
 		status: mission.status,
@@ -1457,6 +1682,13 @@ app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
 		findingsCount: (mission.findings ?? []).length,
 		findings: mission.findings ?? [],
 		sessionId: mission.sessionId,
+		pipelineStages,
+		// Phase 5: Continuous Validation Loop fields
+		currentIteration: mission.currentIteration ?? 0,
+		iterations: mission.iterations ?? [],
+		iterationMetadata: mission.iterationMetadata ?? [],
+		stopReason: mission.stopReason ?? null,
+		constraints: mission.constraints ?? {},
 		createdAt: mission.createdAt,
 		completedAt: mission.completedAt
 	});
@@ -1477,10 +1709,12 @@ app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
 	if (mission.sessionId) {
 		const record = liveFor(mission.sessionId);
 		record?.controller?.abort();
+		// Phase 1: close browser resources to prevent orphaned Chromium.
+		void closeBrowser(mission.sessionId);
 	}
 
-	updateMission(mission.id, { status: 'aborted', completedAt: Date.now() });
-	response.json({ missionId: mission.id, status: 'aborted' });
+	updateMission(mission.id, { status: 'aborted', completedAt: Date.now(), stopReason: 'manual_stop' });
+	response.json({ missionId: mission.id, status: 'aborted', stopReason: 'manual_stop' });
 });
 
 /**
@@ -1528,6 +1762,158 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 			detail: error instanceof Error ? error.message : String(error)
 		});
 	}
+});
+
+/**
+ * Phase 5: Trigger a controlled revalidation iteration.
+ *
+ * This is the Continuous Validation Loop's manual trigger. Unlike the
+ * existing /iterate endpoint, this:
+ *   1. Checks iteration limits (maxIterations, no-improvement)
+ *   2. Injects knowledge hints (Phase 3) for each iteration
+ *   3. Builds a revalidation prompt that includes awareness of previous findings
+ *   4. Prevents duplicate concurrent iterations
+ *   5. Records iteration metadata (decision, comparison, convergence)
+ *
+ * The endpoint is idempotent: repeated identical requests while an
+ * iteration is already running return the existing session.
+ */
+app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	// Guard: mission is already running — return existing session (idempotency)
+	if (mission.status === 'running') {
+		return response.status(409).json({
+			error: 'Mission is already running. Wait for the current iteration to complete.',
+			missionId: mission.id,
+			sessionId: mission.sessionId,
+			iteration: mission.currentIteration
+		});
+	}
+
+	if (!mission.targetUrl) {
+		return response.status(400).json({ error: 'Mission has no targetUrl' });
+	}
+
+	// Guard: iteration limit reached
+	if (hasReachedIterationLimit(mission)) {
+		const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+		return response.status(409).json({
+			error: `Maximum iterations (${limit}) reached. Mission validation loop is complete.`,
+			stopReason: STOP_REASONS.MAX_ITERATIONS,
+			missionId: mission.id,
+			iterations: mission.currentIteration
+		});
+	}
+
+	// Guard: no-improvement detected
+	const convergence = analyzeConvergence(mission);
+	const stopReason = getStopReason(mission);
+	if (stopReason === STOP_REASONS.NO_IMPROVEMENT) {
+		return response.status(409).json({
+			error: `No meaningful improvement detected for ${convergence.iterationsWithoutImprovement} iteration(s). Validation loop should stop.`,
+			stopReason: STOP_REASONS.NO_IMPROVEMENT,
+			convergence,
+			missionId: mission.id
+		});
+	}
+
+	try {
+		// Create session for the new iteration
+		const iterationNumber = (mission.currentIteration || 0) + 1;
+		const session = createSession(
+			`${mission.name} — Revalidation ${iterationNumber}`,
+			mission.projectId
+		);
+		session.targetUrl = mission.targetUrl;
+
+		// Update mission to running
+		updateMission(mission.id, { sessionId: session.id, status: 'running' });
+
+		// Phase 3: Query knowledge BEFORE exploration
+		const knowledgeData = prepareKnowledgeForIteration(mission);
+		session.knowledgeHints = knowledgeData.patterns;
+		session.knowledgePatternsUsed = knowledgeData.patternIds;
+
+		// Get previous iteration data for revalidation prompt
+		const previousIterations = mission.iterations ?? [];
+		const lastIteration = previousIterations.length > 0
+			? previousIterations[previousIterations.length - 1]
+			: null;
+
+		// Build revalidation prompt with awareness of previous findings
+		const taskPrompt = lastIteration
+			? buildRevalidationPrompt(mission, lastIteration, knowledgeData.hints)
+			: buildMissionPrompt(mission) + knowledgeData.hints;
+
+		// Store iteration metadata
+		const iterMeta = createIterationMetadata(mission, session);
+		iterMeta.status = ITERATION_STATUS.RUNNING;
+		const meta = mission.iterationMetadata ? [...mission.iterationMetadata] : [];
+		meta.push(iterMeta);
+		updateMission(mission.id, { iterationMetadata: meta });
+
+		// Start the agent
+		await ensureRuntime(session);
+		startTurn(session, { task: taskPrompt });
+
+		console.log(`[validation-loop] Started revalidation iteration ${iterationNumber} for mission ${mission.id} (session ${session.id})`);
+
+		response.status(202).json({
+			missionId: mission.id,
+			sessionId: session.id,
+			iteration: iterationNumber,
+			status: 'running',
+			message: `Revalidation iteration ${iterationNumber} started. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/loop-status for validation loop status.`,
+			knowledgePatternsInjected: knowledgeData.patternIds.length,
+			previousFindingsCount: lastIteration?.findings?.length ?? 0
+		});
+	} catch (error) {
+		updateMission(mission.id, { status: 'failed' });
+		response.status(500).json({
+			error: 'Failed to start revalidation iteration',
+			detail: error instanceof Error ? error.message : String(error)
+		});
+	}
+});
+
+/**
+ * Phase 5: Get the validation loop status for a mission.
+ *
+ * Returns the complete iteration history, convergence analysis,
+ * comparison, latest decision, and stop reason.
+ */
+app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const loopStatus = getLoopStatus(mission);
+	response.json(loopStatus);
+});
+
+/**
+ * Phase 5: Get comparison summary with convergence analysis.
+ *
+ * Extends the existing /comparison endpoint with convergence detection,
+ * trend analysis, and iteration context.
+ */
+app.get('/api/v1/missions/:id/validation-comparison', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const summary = getComparisonSummary(mission);
+	if (!summary) {
+		return response.status(400).json({ error: 'No iterations have been run yet' });
+	}
+
+	response.json(summary);
 });
 
 /**
@@ -1621,6 +2007,185 @@ app.get('/api/v1/missions/:id/report', requireApiToken, (request, response) => {
 	}
 });
 
+/* ── Phase 6: Evidence Graph API ─────────────────────────────────── */
+
+/**
+ * Phase 6: Get all evidence for a mission.
+ * Supports pagination via ?limit= and ?offset=.
+ */
+app.get('/api/v1/missions/:id/evidence', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
+	const offset = parseInt(request.query.offset) || 0;
+	const evidence = getMissionEvidence(mission.id, { limit, offset });
+	const total = getMissionEvidence(mission.id, { limit: 999999 }).length;
+
+	response.json({ missionId: mission.id, evidence, total, limit, offset });
+});
+
+/**
+ * Phase 6: Get evidence for a specific finding.
+ * Returns the provenance chain (finding → observation → evidence → session → iteration → decision).
+ */
+app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const findingId = request.params.findingId;
+	const allFindings = mission.findings ?? [];
+	const quality = calculateMissionQuality(allFindings);
+	const decision = mission.iterationMetadata?.[mission.iterationMetadata.length - 1]?.decision ?? null;
+	const latestSession = mission.sessionId;
+	const latestIteration = mission.iterations?.[mission.iterations.length - 1];
+
+	const chain = getEvidenceChainForApi(findingId, {
+		mission,
+		findings: allFindings,
+		quality,
+		decision,
+		sessionId: latestSession,
+		iteration: latestIteration
+	});
+
+	response.json(chain);
+});
+
+/**
+ * Phase 6: Get evidence coverage for a mission.
+ * Returns the percentage of findings backed by evidence.
+ */
+app.get('/api/v1/missions/:id/evidence-coverage', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const findings = mission.findings ?? [];
+	const coverage = computeEvidenceCoverage(findings);
+
+	response.json({ missionId: mission.id, ...coverage });
+});
+
+/**
+ * Phase 6: Get graph integrity report for a mission.
+ */
+app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+
+	const result = validateGraphIntegrity({
+		findings: mission.findings ?? [],
+		missions: undefined, // no direct map access from here
+		sessions: undefined
+	});
+
+	response.json({ missionId: mission.id, ...result });
+});
+
+/**
+ * Phase 6: Get evidence graph stats.
+ */
+app.get('/api/v1/evidence/stats', requireApiToken, (request, response) => {
+	response.json(getGraphStats());
+});
+
+/**
+ * Phase 6: Get a specific evidence item by ID.
+ */
+app.get('/api/v1/evidence/:id', requireApiToken, (request, response) => {
+	const evidence = getEvidence(request.params.id);
+	if (!evidence) {
+		return response.status(404).json({ error: 'Evidence not found' });
+	}
+	response.json(evidence);
+});
+
+/**
+ * Phase 6: Get all observations for a session.
+ */
+app.get('/api/v1/sessions/:id/observations', requireApiToken, (request, response) => {
+	const session = getSession(request.params.id);
+	if (!session) {
+		return response.status(404).json({ error: 'Session not found' });
+	}
+
+	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
+	const offset = parseInt(request.query.offset) || 0;
+	const observations = getSessionObservations(session.id, { limit, offset });
+
+	response.json({ sessionId: session.id, observations, total: observations.length });
+});
+
+/**
+ * Phase 6: Get evidence for a specific session.
+ */
+app.get('/api/v1/sessions/:id/evidence', requireApiToken, (request, response) => {
+	const session = getSession(request.params.id);
+	if (!session) {
+		return response.status(404).json({ error: 'Session not found' });
+	}
+
+	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
+	const offset = parseInt(request.query.offset) || 0;
+	const evidence = getSessionEvidence(session.id, { limit, offset });
+
+	response.json({ sessionId: session.id, evidence, total: evidence.length });
+});
+
+/**
+ * Phase 6: Get evidence for a specific iteration of a mission.
+ */
+app.get('/api/v1/missions/:id/evidence/iterations/:iteration', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	const iteration = parseInt(request.params.iteration);
+	if (!iteration || iteration < 1) {
+		return response.status(400).json({ error: 'Invalid iteration number' });
+	}
+	const evidence = getHistoricalEvidence(mission.id, iteration);
+	response.json({ missionId: mission.id, iteration, evidence, total: evidence.length });
+});
+
+/**
+ * Phase 6: Compare evidence across two iterations.
+ */
+app.get('/api/v1/missions/:id/evidence/compare/:iter1/:iter2', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	const iter1 = parseInt(request.params.iter1);
+	const iter2 = parseInt(request.params.iter2);
+	if (!iter1 || !iter2 || iter1 < 1 || iter2 < 1) {
+		return response.status(400).json({ error: 'Invalid iteration numbers' });
+	}
+	const comparison = compareIterationEvidence(mission.id, iter1, iter2);
+	response.json({ missionId: mission.id, iteration1: iter1, iteration2: iter2, comparison });
+});
+
+/**
+ * Phase 6: Validate evidence graph integrity (POST — triggers a fresh validation pass).
+ */
+app.post('/api/v1/evidence/validate', requireApiToken, (request, response) => {
+	const { missions, sessions, findings } = request.body ?? {};
+	const context = {};
+	if (missions) context.missions = new Map(Object.entries(missions));
+	if (sessions) context.sessions = new Map(Object.entries(sessions));
+	if (findings) context.findings = findings;
+	const result = validateGraphIntegrity(context);
+	response.json(result);
+});
+
 /**
  * Webhook registration — register a callback URL to receive mission
  * results when complete. Simple in-memory store (sufficient for now).
@@ -1688,8 +2253,20 @@ function buildMissionPrompt(mission) {
  *
  * This is called both for the first run AND subsequent iterations.
  * Each run is recorded as a new iteration for the validation loop.
+ *
+ * Phase 1 reliability: idempotency guard prevents double-finalization.
+ * The race between pipeline completion and lazy finalization on GET
+ * /api/v1/missions/:id means this function can be called twice. The
+ * mission's finalizeMission() and recordIteration() both have their own
+ * guards, but we add one here too so the expensive quality scoring and
+ * webhook firing only happen once.
  */
 function finalizeMissionFromSession(mission, session) {
+	// Idempotency: if the mission is already terminal, skip
+	if (isTerminalStatus(mission.status)) {
+		return getMission(mission.id);
+	}
+
 	const findings = session.findings ?? [];
 
 	// Score each finding inline
@@ -1722,8 +2299,44 @@ function finalizeMissionFromSession(mission, session) {
 		improvementPrompt: report.improvementPrompt,
 		releaseReady: quality.releaseReady,
 		findings,
-		summary: session.report?.summary || null
+		summary: session.report?.summary || session.pipeline?.summary || null
 	});
+
+	// Phase 5: Update iteration metadata with decision + quality + completion
+	const latestMeta = getLatestIteration(getMission(mission.id));
+	if (latestMeta) {
+		const decision = session.pipeline?.summary?.decision
+			?? session.decisionHistory?.[session.decisionHistory.length - 1]
+			?? null;
+		updateIterationMetadata(getMission(mission.id), latestMeta.number, {
+			status: ITERATION_STATUS.COMPLETED,
+			completedAt: Date.now(),
+			qualityScore: quality.score,
+			verdict: quality.verdict,
+			decision: decision,
+			duration: latestMeta.startedAt ? Date.now() - latestMeta.startedAt : null
+		});
+	}
+
+	// Phase 5: Record stop reason if the validation loop should terminate
+	const updatedMission = getMission(mission.id);
+	const stopReason = getStopReason(updatedMission);
+	if (stopReason) {
+		updateMission(mission.id, { stopReason });
+		console.log(`[validation-loop] Mission ${mission.id} stop reason: ${stopReason}`);
+	}
+
+	// Phase 6: Collect evidence from session into the evidence graph
+	try {
+		const iterNum = getMission(mission.id)?.currentIteration ?? 1;
+		const iterId = `iter_${iterNum}`;
+		const evidenceResult = collectSessionEvidence(session, getMission(mission.id), iterId);
+		if (evidenceResult.evidenceCreated > 0) {
+			console.log(`[evidence-graph] Collected ${evidenceResult.evidenceCreated} evidence items, ${evidenceResult.observationsCreated} observations, ${evidenceResult.linksCreated} links for mission ${mission.id} iteration ${iterNum}`);
+		}
+	} catch (egErr) {
+		console.error(`[evidence-graph] Failed to collect evidence for mission ${mission.id}:`, egErr.message);
+	}
 
 	// Fire webhooks
 	fireMissionWebhooks(mission.id, report);

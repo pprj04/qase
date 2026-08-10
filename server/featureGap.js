@@ -224,7 +224,7 @@ export function extractAppInventory(session) {
 	const report = session.report ?? {};
 	const todos = session.todos ?? [];
 
-	// Distinct pages visited (derive from step URLs)
+	// Distinct pages visited (derive from step URLs AND navigation outcomes)
 	const urlSet = new Set();
 	for (const step of steps) {
 		if (step.url) {
@@ -233,6 +233,13 @@ export function extractAppInventory(session) {
 				// Normalize: strip query params, trailing slashes
 				urlSet.add(u.pathname.replace(/\/$/, '') || '/');
 			} catch { /* skip invalid URLs */ }
+		}
+		// Also include pages navigated TO (urlAfter)
+		if (step.outcome?.urlAfter) {
+			try {
+				const u = new URL(step.outcome.urlAfter, session.targetUrl);
+				urlSet.add(u.pathname.replace(/\/$/, '') || '/');
+			} catch { /* skip */ }
 		}
 	}
 	const pages = [...urlSet].sort();
@@ -346,7 +353,7 @@ export function extractAppInventory(session) {
  *   - expectedFeatures: purpose-specific feature set (beyond generic ones)
  *   - excludeFeatures: features that should NOT be expected for this purpose
  */
-const PURPOSE_CATALOG = [
+export const PURPOSE_CATALOG = [
 	{
 		id: 'crm',
 		name: 'CRM / Customer Relationship Management',
@@ -1415,6 +1422,9 @@ const WORKFLOW_TEMPLATES = {
 		{ id: 'template', name: 'Use templates', signals: ['template', 'gallery', 'pre-built'], dependsOn: ['create_doc'], severity: 'low' },
 	],
 };
+
+// Exported for Phase 2 Application Understanding to consume
+export { WORKFLOW_TEMPLATES };
 
 /**
  * Detects which workflow steps are present in the exploration data.
