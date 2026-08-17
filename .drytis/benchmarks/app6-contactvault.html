@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ContactVault</title>
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+    h1 { color: #333; }
+    .contact-list { background: white; border-radius: 8px; padding: 16px; margin-top: 16px; }
+    .contact-item { padding: 8px 0; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+    .contact-item:last-child { border: none; }
+    .contact-name { font-weight: 500; }
+    .contact-email { color: #666; font-size: 0.9em; }
+    .contact-phone { color: #999; font-size: 0.85em; }
+    .btn { background: #0066cc; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+    .btn:hover { background: #0052a3; }
+    .btn-delete { background: #cc0033; padding: 4px 10px; font-size: 0.85em; }
+    .btn-cancel { background: #ccc; color: #333; }
+    .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); }
+    .modal-bg.show { display: flex; align-items: center; justify-content: center; }
+    .modal { background: white; padding: 24px; border-radius: 12px; width: 360px; }
+    .modal label { display: block; margin: 8px 0 4px; font-size: 0.9em; }
+    .modal input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    .stat { display: inline-block; background: white; padding: 8px 16px; border-radius: 8px; margin-right: 8px; }
+    .stat strong { font-size: 1.4em; color: #0066cc; }
+    .toast { position: fixed; bottom: 20px; right: 20px; background: #0066cc; color: white; padding: 10px 20px; border-radius: 6px; display: none; }
+    .error-msg { color: #cc0033; font-size: 0.85em; display: none; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <h1>ContactVault</h1>
+  <div>
+    <span class="stat"><strong id="count">3</strong> contacts</span>
+    <button class="btn" id="addBtn">Add Contact</button>
+  </div>
+  <div class="contact-list" id="list"></div>
+
+  <div class="modal-bg" id="modal">
+    <div class="modal">
+      <h2 id="modalTitle">Add Contact</h2>
+      <label for="nameInput">Name</label>
+      <input type="text" id="nameInput" placeholder="John Doe">
+      <label for="emailInput">Email</label>
+      <input type="email" id="emailInput" placeholder="john@example.com">
+      <label for="phoneInput">Phone</label>
+      <input type="tel" id="phoneInput" placeholder="+1 555-0100">
+      <div class="error-msg" id="formError">Name is required</div>
+      <div class="modal-actions">
+        <button class="btn btn-cancel" id="cancelBtn" type="button">Cancel</button>
+        <button class="btn" id="saveBtn" type="button">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // BUG: contacts stored in JS variable, not localStorage.
+    // Data resets to defaults on every page reload.
+    var contacts = [
+      {id:1, name:'Alice Johnson', email:'alice@example.com', phone:'555-0101'},
+      {id:2, name:'Bob Smith', email:'bob@example.com', phone:'555-0102'},
+      {id:3, name:'Carol White', email:'carol@example.com', phone:'555-0103'}
+    ];
+
+    function render() {
+      var list = document.getElementById('list');
+      list.innerHTML = '';
+      contacts.forEach(function(c) {
+        var div = document.createElement('div');
+        div.className = 'contact-item';
+        div.innerHTML = '<div><span class="contact-name">' + c.name + '</span><br>' +
+          '<span class="contact-email">' + c.email + '</span>' +
+          '<span class="contact-phone"> · ' + (c.phone || 'No phone') + '</span></div>' +
+          '<button class="btn btn-delete" onclick="del(' + c.id + ')">Delete</button>';
+        list.appendChild(div);
+      });
+      document.getElementById('count').textContent = contacts.length;
+    }
+
+    function del(id) {
+      contacts = contacts.filter(function(c) { return c.id !== id; });
+      render();
+      toast('Contact deleted');
+    }
+
+    function toast(msg) {
+      var t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.display = 'block';
+      setTimeout(function() { t.style.display = 'none'; }, 2000);
+    }
+
+    function showModal() {
+      document.getElementById('modal').classList.add('show');
+      document.getElementById('nameInput').value = '';
+      document.getElementById('emailInput').value = '';
+      document.getElementById('phoneInput').value = '';
+      document.getElementById('formError').style.display = 'none';
+      document.getElementById('modalTitle').textContent = 'Add Contact';
+    }
+
+    function closeModal() {
+      document.getElementById('modal').classList.remove('show');
+    }
+
+    function saveContact() {
+      var name = document.getElementById('nameInput').value.trim();
+      var email = document.getElementById('emailInput').value.trim();
+      var phone = document.getElementById('phoneInput').value.trim();
+      if (!name) {
+        document.getElementById('formError').style.display = 'block';
+        return;
+      }
+      contacts.push({id: Date.now(), name: name, email: email, phone: phone});
+      closeModal();
+      render();
+      toast('Contact saved!');
+    }
+
+    document.getElementById('addBtn').addEventListener('click', showModal);
+    document.getElementById('cancelBtn').addEventListener('click', closeModal);
+    document.getElementById('saveBtn').addEventListener('click', saveContact);
+
+    render();
+  </script>
+</body>
+</html>

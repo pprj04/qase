@@ -257,6 +257,11 @@ async function executeStep(page, step, credentials, baseUrl) {
 				await page.locator(target).first().hover({ timeout: STEP_TIMEOUT_MS });
 				break;
 			}
+			case 'reload': {
+				// Phase 18: original repro steps may explicitly reload the page.
+				await page.reload({ timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
+				break;
+			}
 			case 'screenshot':
 			case 'snapshot':
 				// No-op action — these are observational, not interactive.
@@ -265,7 +270,7 @@ async function executeStep(page, step, credentials, baseUrl) {
 				// No-op — assertions will check console/network.
 				break;
 			case 'wait':
-				await page.waitForTimeout(Number(value) || 1000);
+				await page.waitForTimeout(Number(value) || Number(step.ms) || 1000);
 				break;
 			default:
 				return fail(`Unknown action: ${step.action}`);

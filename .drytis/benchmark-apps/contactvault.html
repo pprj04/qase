@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ContactVault — Contact Manager</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f6fa; color: #2d3436; }
+    .header { background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.5rem; }
+    .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
+    .nav { display: flex; gap: 20px; margin-bottom: 20px; }
+    .nav a { color: #667eea; text-decoration: none; padding: 8px 16px; border-radius: 6px; }
+    .nav a:hover { background: rgba(102,126,234,0.1); }
+    .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #eee; }
+    th { color: #636e72; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; }
+    .badge.active { background: #00b894; color: white; }
+    .badge.inactive { background: #dfe6e9; color: #636e72; }
+    .btn { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; }
+    .btn:hover { background: #5568d3; }
+    .btn-sm { padding: 5px 12px; font-size: 0.85rem; margin-right: 5px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px; }
+    .stat-card { background: white; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+    .stat-card .num { font-size: 2rem; font-weight: 700; color: #667eea; }
+    .stat-card .label { color: #636e72; font-size: 0.85rem; margin-top: 5px; }
+    .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+    .search-bar input { flex: 1; padding: 10px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; }
+    .empty { text-align: center; padding: 40px; color: #636e72; }
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 100; }
+    .modal-overlay.show { display: flex; align-items: center; justify-content: center; }
+    .modal { background: white; padding: 30px; border-radius: 16px; width: 90%; max-width: 500px; }
+    .modal h2 { margin-bottom: 20px; }
+    .toast { position: fixed; bottom: 20px; right: 20px; background: #00b894; color: white; padding: 12px 24px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); display: none; z-index: 200; }
+    .footer { text-align: center; padding: 30px; color: #b2bec3; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📇 ContactVault</h1>
+    <span>Simple Contact Management</span>
+  </div>
+
+  <div class="container">
+    <div class="stats">
+      <div class="stat-card">
+        <div class="num" id="totalContacts">5</div>
+        <div class="label">Total Contacts</div>
+      </div>
+      <div class="stat-card">
+        <div class="num" id="activeContacts">3</div>
+        <div class="label">Active</div>
+      </div>
+      <div class="stat-card">
+        <div class="num" id="totalCompanies">4</div>
+        <div class="label">Companies</div>
+      </div>
+    </div>
+
+    <div class="nav">
+      <a href="#" onclick="showContacts(event)">Contacts</a>
+      <a href="#" onclick="showCompanies(event)">Companies</a>
+      <a href="#" onclick="showSettings(event)">Settings</a>
+    </div>
+
+    <div class="search-bar">
+      <input type="text" id="searchInput" placeholder="Search contacts by name or email..." oninput="filterContacts()">
+      <button class="btn" onclick="openModal()">Add Contact</button>
+    </div>
+
+    <div class="card" id="contactsCard">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>Phone</th>
+            <th>Company</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="contactsBody">
+        </tbody>
+      </table>
+      <div class="empty" id="emptyState" style="display:none">No contacts found</div>
+    </div>
+
+    <div class="footer">
+      ContactVault v1.0 — Built for simplicity
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h2 id="modalTitle">Add New Contact</h2>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="contactName" placeholder="John Doe">
+      </div>
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="contactEmail" placeholder="john@example.com">
+      </div>
+      <div class="form-group">
+        <label>Phone</label>
+        <input type="tel" id="contactPhone" placeholder="+1 555-0100">
+      </div>
+      <div class="form-group">
+        <label>Company</label>
+        <select id="contactCompany">
+          <option value="">Select company...</option>
+          <option>TechCorp</option>
+          <option>GreenLeaf Inc</option>
+          <option>BlueWave Systems</option>
+          <option>StartupX</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="contactStatus">
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px">
+        <button class="btn" style="background:#dfe6e9; color:#2d3436" onclick="closeModal()">Cancel</button>
+        <button class="btn" onclick="saveContact()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">Contact saved successfully!</div>
+
+  <script>
+    let contacts = [
+      { id: 1, name: 'Alice Chen', email: 'alice@techcorp.com', phone: '+1 555-0101', company: 'TechCorp', status: 'active' },
+      { id: 2, name: 'Bob Smith', email: 'bob@greenleaf.com', phone: '+1 555-0102', company: 'GreenLeaf Inc', status: 'active' },
+      { id: 3, name: 'Carol White', email: 'carol@bluewave.com', phone: '+1 555-0103', company: 'BlueWave Systems', status: 'inactive' },
+      { id: 4, name: 'Dave Brown', email: 'dave@startupx.com', phone: '+1 555-0104', company: 'StartupX', status: 'active' },
+      { id: 5, name: 'Eve Davis', email: 'eve@techcorp.com', phone: '+1 555-0105', company: 'TechCorp', status: 'inactive' },
+    ];
+    let editingId = null;
+
+    function renderContacts(list) {
+      const tbody = document.getElementById('contactsBody');
+      const empty = document.getElementById('emptyState');
+      tbody.innerHTML = '';
+      if (!list || list.length === 0) {
+        empty.style.display = 'block';
+        document.querySelector('table').style.display = 'none';
+        return;
+      }
+      empty.style.display = 'none';
+      document.querySelector('table').style.display = '';
+      list.forEach(c => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${c.name}</td>
+          <td>${c.email}</td>
+          <td>${c.phone}</td>
+          <td>${c.company}</td>
+          <td><span class="badge ${c.status}">${c.status}</span></td>
+          <td>
+            <button class="btn btn-sm" onclick="editContact(${c.id})">Edit</button>
+            <button class="btn btn-sm" style="background:#e74c3c" onclick="deleteContact(${c.id})">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function filterContacts() {
+      const q = document.getElementById('searchInput').value.toLowerCase();
+      const filtered = contacts.filter(c =>
+        c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q)
+      );
+      renderContacts(filtered);
+    }
+
+    function openModal(id) {
+      editingId = id || null;
+      document.getElementById('modalOverlay').classList.add('show');
+      if (id) {
+        const c = contacts.find(x => x.id === id);
+        document.getElementById('modalTitle').textContent = 'Edit Contact';
+        document.getElementById('contactName').value = c.name;
+        document.getElementById('contactEmail').value = c.email;
+        document.getElementById('contactPhone').value = c.phone;
+        document.getElementById('contactCompany').value = c.company;
+        document.getElementById('contactStatus').value = c.status;
+      } else {
+        document.getElementById('modalTitle').textContent = 'Add New Contact';
+        ['contactName','contactEmail','contactPhone'].forEach(id => document.getElementById(id).value = '');
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').classList.remove('show');
+    }
+
+    function saveContact() {
+      const name = document.getElementById('contactName').value.trim();
+      const email = document.getElementById('contactEmail').value.trim();
+      const phone = document.getElementById('contactPhone').value.trim();
+      const company = document.getElementById('contactCompany').value;
+      const status = document.getElementById('contactStatus').value;
+      if (!name) { alert('Name is required'); return; }
+      if (editingId) {
+        const c = contacts.find(x => x.id === editingId);
+        Object.assign(c, { name, email, phone, company, status });
+      } else {
+        contacts.push({ id: Date.now(), name, email, phone, company, status });
+      }
+      closeModal();
+      renderContacts(contacts);
+      updateStats();
+      showToast('Contact saved successfully!');
+    }
+
+    function editContact(id) { openModal(id); }
+
+    function deleteContact(id) {
+      if (confirm('Delete this contact?')) {
+        contacts = contacts.filter(c => c.id !== id);
+        renderContacts(contacts);
+        updateStats();
+        showToast('Contact deleted');
+      }
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(() => toast.style.display = 'none', 3000);
+    }
+
+    function updateStats() {
+      document.getElementById('totalContacts').textContent = contacts.length;
+      document.getElementById('activeContacts').textContent = contacts.filter(c => c.status === 'active').length;
+    }
+
+    function showContacts(e) { e.preventDefault(); document.getElementById('contactsCard').style.display = 'block'; }
+    function showCompanies(e) { e.preventDefault(); alert('Companies page coming soon!'); }
+    function showSettings(e) { e.preventDefault(); alert('Settings page coming soon!'); }
+
+    renderContacts(contacts);
+  </script>
+</body>
+</html>

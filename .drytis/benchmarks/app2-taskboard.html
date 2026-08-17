@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaskBoard — Project Management</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,sans-serif}
+body{background:#f0f2f5;color:#1a1a1a}
+.nav{background:#0066ff;color:#fff;padding:10px 24px;display:flex;gap:20px;align-items:center}
+.nav a{color:#fff;text-decoration:none;font-size:14px;opacity:0.9}
+.nav .logo{font-size:18px;font-weight:700;margin-right:auto}
+.container{max-width:1200px;margin:20px auto;padding:0 24px}
+.board{display:flex;gap:16px;overflow-x:auto;padding-bottom:16px}
+.column{flex:1;min-width:250px;background:#ebecf0;border-radius:8px;padding:12px}
+.column h3{font-size:14px;margin-bottom:12px;color:#44546f}
+.card{background:#fff;border-radius:6px;padding:12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,0.1);cursor:pointer}
+.card:hover{box-shadow:0 2px 6px rgba(0,0,0,0.15)}
+.card .title{font-size:14px;font-weight:500;margin-bottom:4px}
+.card .meta{font-size:12px;color:#6b7280}
+.card .label{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;margin-right:4px;margin-top:4px}
+.label.high{background:#fee2e2;color:#991b1b}
+.label.medium{background:#fef3c7;color:#92400e}
+.label.low{background:#dbeafe;color:#1e40af}
+.btn{padding:6px 14px;border:none;border-radius:6px;cursor:pointer;font-size:13px}
+.btn-primary{background:#0066ff;color:#fff}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.active{display:flex}
+.modal{background:#fff;border-radius:8px;padding:24px;width:480px;max-width:90%}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;margin-bottom:4px;font-size:13px;font-weight:600}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px}
+.stat-box{display:inline-block;background:#fff;padding:16px 24px;border-radius:8px;margin-right:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.stat-box .num{font-size:24px;font-weight:700;color:#0066ff}
+.stat-box .label{font-size:12px;color:#6b7280}
+</style>
+</head>
+<body>
+<div class="nav">
+<span class="logo">📋 TaskBoard</span>
+<a href="#board">Board</a>
+<a href="#tasks">My Tasks</a>
+<a href="#team">Team</a>
+<a href="#reports">Reports</a>
+<a href="#login">Sign In</a>
+</div>
+<div class="container">
+<div id="board-view">
+<h1 style="margin-bottom:16px">Project Board</h1>
+<div style="margin-bottom:16px">
+<button class="btn btn-primary" onclick="openTaskModal()">+ Add Task</button>
+</div>
+<div class="board" id="kanban">
+<div class="column" id="col-todo"><h3>📋 To Do (0)</h3></div>
+<div class="column" id="col-progress"><h3>🔄 In Progress (0)</h3></div>
+<div class="column" id="col-review"><h3>👁 Review (0)</h3></div>
+<div class="column" id="col-done"><h3>✅ Done (0)</h3></div>
+</div>
+</div>
+</div>
+
+<div class="modal-overlay" id="task-modal">
+<div class="modal">
+<h2 style="margin-bottom:16px">New Task</h2>
+<div class="form-group"><label>Title</label><input type="text" id="task-title"></div>
+<div class="form-group"><label>Description</label><textarea id="task-desc" rows="3"></textarea></div>
+<div class="form-group"><label>Priority</label><select id="task-priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+<div class="form-group"><label>Assignee</label><select id="task-assignee"><option>Alice</option><option>Bob</option><option>Charlie</option></select></div>
+<button class="btn btn-primary" onclick="saveTask()">Create</button>
+<button class="btn" style="margin-left:8px" onclick="closeTaskModal()">Cancel</button>
+</div>
+</div>
+
+<div id="toast" style="position:fixed;bottom:24px;right:24px;background:#333;color:#fff;padding:12px 20px;border-radius:6px;display:none;z-index:200"></div>
+
+<script>
+let tasks = [
+  {id:1, title:'Design landing page', desc:'Create wireframes', priority:'high', assignee:'Alice', status:'done'},
+  {id:2, title:'Build API endpoints', desc:'REST API for tasks', priority:'high', assignee:'Bob', status:'progress'},
+  {id:3, title:'Write documentation', desc:'API docs', priority:'low', assignee:'Charlie', status:'todo'},
+  {id:4, title:'Code review', desc:'Review PR #42', priority:'medium', assignee:'Alice', status:'review'},
+  {id:5, title:'Deploy to staging', desc:'', priority:'medium', assignee:'Bob', status:'todo'}
+];
+let nextId = 6;
+
+function renderBoard(){
+  const cols = {todo:[], progress:[], review:[], done:[]};
+  tasks.forEach(t => { if(cols[t.status]) cols[t.status].push(t); });
+  Object.keys(cols).forEach(status => {
+    const col = document.getElementById('col-' + status);
+    const existingCards = col.querySelectorAll('.card');
+    existingCards.forEach(c => c.remove());
+    cols[status].forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.onclick = () => advanceTask(t.id);
+      card.innerHTML = `<div class="title">${t.title}</div><div class="meta">${t.assignee}</div><span class="label ${t.priority}">${t.priority}</span>`;
+      col.appendChild(card);
+    });
+    const h3 = col.querySelector('h3');
+    const labels = {todo:'📋 To Do', progress:'🔄 In Progress', review:'👁 Review', done:'✅ Done'};
+    h3.textContent = `${labels[status]} (${cols[status].length})`;
+  });
+}
+
+function advanceTask(id){
+  const task = tasks.find(t => t.id === id);
+  if(!task) return;
+  const order = ['todo','progress','review','done'];
+  const idx = order.indexOf(task.status);
+  if(idx < order.length - 1){
+    task.status = order[idx+1];
+    renderBoard();
+    showToast('Task moved to ' + task.status);
+  }
+}
+
+function openTaskModal(){ document.getElementById('task-modal').classList.add('active'); }
+function closeTaskModal(){ document.getElementById('task-modal').classList.remove('active'); document.getElementById('task-title').value=''; }
+
+function saveTask(){
+  const title = document.getElementById('task-title').value.trim();
+  if(!title){ showToast('Title required'); return; }
+  tasks.push({
+    id:nextId++,
+    title,
+    desc:document.getElementById('task-desc').value,
+    priority:document.getElementById('task-priority').value,
+    assignee:document.getElementById('task-assignee').value,
+    status:'todo'
+  });
+  renderBoard();
+  closeTaskModal();
+  showToast('Task created');
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 2000);
+}
+
+renderBoard();
+
+// INTENTIONALLY BROKEN: Login link navigates to #login but no login form exists
+// INTENTIONALLY BROKEN: "Reports" nav link goes to #reports but no reports section exists
+// INTENTIONALLY BROKEN: "Team" nav link goes to #team but no team section exists
+// INTENTIONALLY MISSING: No search/filter functionality
+// INTENTIONALLY MISSING: No due dates on tasks
+// INTENTIONALLY MISSING: No comments/activity on tasks
+// INTENTIONALLY MISSING: No drag-and-drop (click to advance only)
+// INTENTIONALLY MISSING: No user authentication
+// INTENTIONALLY MISSING: No notifications
+// KNOWN WORKING: Task CRUD (add via modal, advance by clicking, delete not implemented)
+// KNOWN WORKING: Kanban board renders correctly with 4 columns
+</script>
+</body>
+</html>

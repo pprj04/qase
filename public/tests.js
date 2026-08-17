@@ -235,7 +235,7 @@ function renderTestCaseCard(tc) {
 			el.countTestcases.textContent = state.testCases.length || '';
 			toast(`Deleted "${tc.name}".`, 'good');
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		}
 	};
 
@@ -252,7 +252,7 @@ function renderTestCaseCard(tc) {
 			el.countTestcases.textContent = state.testCases.length || '';
 			toast(`Cloned "${tc.name}".`, 'good');
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		}
 	};
 
@@ -288,7 +288,7 @@ function renderTestCaseCard(tc) {
 			toast(`Baseline updated (${data.approved} screenshot${data.approved === 1 ? '' : 's'}).`, 'good');
 			approveBtn.style.display = 'none';
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		} finally {
 			approveBtn.disabled = false;
 			approveBtn.textContent = '✓ Baseline';
@@ -368,7 +368,7 @@ function renderTestCaseCard(tc) {
 				renderSuiteTree();
 				toast(`Moved to ${newSuiteId ? state.suites.find(s => s.id === newSuiteId)?.name : 'no suite'}.`, 'good');
 			} catch (error) {
-				toast(fail(error), 'bad');
+				fail(error);
 			}
 		};
 		metaRow.append(moveSelect);
@@ -684,7 +684,7 @@ async function runSingleTest(tc, card, runBtn) {
 			data.result.result === 'pass' ? 'good' : 'bad'
 		);
 	} catch (error) {
-		toast(fail(error), 'bad');
+		fail(error);
 		resultContainer.replaceChildren();
 		const errEl = document.createElement('div');
 		errEl.className = 'tc-result-error';
@@ -740,7 +740,7 @@ async function runAllTests() {
 		}
 		toast(msg, summary.failed + summary.errored === 0 ? 'good' : 'bad');
 	} catch (error) {
-		toast(fail(error), 'bad');
+		fail(error);
 	} finally {
 		indicator.remove();
 		if (runAllBtn) {
@@ -1057,7 +1057,7 @@ function renderSuiteNode(suite, depth) {
 			renderSuiteTree();
 			toast(`Deleted suite "${suite.name}".`, 'good');
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		}
 	};
 
@@ -1295,7 +1295,7 @@ el.btnNewSuite.onclick = async () => {
 		renderSuiteTree();
 		toast(`Suite "${name.trim()}" created.`, 'good');
 	} catch (error) {
-		toast(fail(error), 'bad');
+		fail(error);
 	}
 };
 
@@ -1361,7 +1361,7 @@ el.tcEditorSave.onclick = async () => {
 		renderTestCases();
 		el.countTestcases.textContent = state.testCases.length || '';
 	} catch (error) {
-		toast(fail(error), 'bad');
+		fail(error);
 	} finally {
 		el.tcEditorSave.disabled = false;
 		el.tcEditorSave.textContent = 'Save';

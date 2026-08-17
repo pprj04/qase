@@ -14,10 +14,14 @@ import { loadBugs, openBugDetail, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
+import { classifyViewport } from './deviceClassify.js';
 
 async function refreshRuns() {
 	const query = state.projectId ? `?projectId=${state.projectId}` : '';
-	const runs = await api(`/sessions${query}`).catch(() => []);
+	const runs = await api(`/sessions${query}`).catch(err => {
+		el.runList.innerHTML = '<div class="feed-empty">Unable to load runs. <a href="#" onclick="location.reload();return false;">Retry</a></div>';
+		return [];
+	});
 	if (runs.length === 0) {
 		el.runList.innerHTML = '<div class="feed-empty">No runs yet</div>';
 		return;
@@ -71,9 +75,16 @@ function renderRun(run) {
 async function selectSession(id) {
 	state.sessionId = id;
 	state.bubbles.clear();
+	// Viewport is per-session live state: reset it so a desktop session never
+	// inherits the previous device session's frame dimensions.
+	state.viewport = null;
 	localStorage.setItem('qase.session', id);
 
-	const session = await api(`/sessions/${id}`);
+	const session = await api(`/sessions/${id}`).catch(err => {
+		fail(err);
+		return null;
+	});
+	if (!session) return;
 	state.session = session;
 
 	// Lazy-load heavy arrays if stripped (large sessions).
@@ -93,7 +104,21 @@ async function selectSession(id) {
 	if (!session.findings) session.findings = [];
 	if (!session.activities) session.activities = [];
 	if (!session.todos) session.todos = [];
+	// Device context persists across refresh: prefer the resolved device,
+	// fall back to the request, else classify from the live frame viewport.
+	state.device = session.device ?? null;
+	if (!state.device && session.deviceRequest) {
+		const requested = typeof session.deviceRequest === 'string'
+			? session.deviceRequest
+			: session.deviceRequest?.device ?? session.deviceRequest?.deviceName;
+		state.device = requested ? { deviceName: requested, deviceType: /ipad|tablet|nexus 7/i.test(requested) ? 'tablet' : 'phone' } : null;
+	}
+	// Initial strip render happens after the frame is applied below — but for
+	// desktop sessions with no frame there is nothing to render, so hide any
+	// leftover strip from the previous session right away.
+	renderDeviceStrip();
 
+	// Render everything synchronously first — this is instant.
 	renderHeader();
 	renderTranscript();
 	resetThinking();
@@ -102,12 +127,28 @@ async function selectSession(id) {
 	renderTodos();
 	renderFindings();
 	renderReport();
-	await loadWorkflows();
-	await loadTestCases();
-	await loadRegression();
-	await loadMetrics();
-	await loadPipelineFromSession(id);
-	await loadDevIntelFromSession(id);
+	updateExecStats();
+
+	// Parallelize all secondary data loads — no more sequential blocking.
+	// SSE connection opens immediately so live events aren't missed.
+	connect(id);
+
+	await Promise.allSettled([
+		loadWorkflows(),
+		loadTestCases(),
+		loadRegression(),
+		loadMetrics(),
+		loadPipelineFromSession(id),
+		loadDevIntelFromSession(id),
+		loadSessionMission(id),
+		refreshRuns(),
+	]);
+
+	// Restore persisted summary bar (Phase 15: previously only shown on live SSE).
+	const persistedSummary = session.pipeline?.summary;
+	if (persistedSummary && persistedSummary.qualityScore != null) {
+		updateMissionSummary(persistedSummary);
+	}
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -117,10 +158,10 @@ async function selectSession(id) {
 		el.stageEmpty.hidden = false;
 		el.browserUrl.textContent = session.targetUrl ?? 'about:blank';
 		el.browserTitle.textContent = '';
+		// Device identity survives refresh even without a live frame.
+		renderDeviceStrip();
+		el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
 	}
-
-	connect(id);
-	await refreshRuns();
 }
 
 async function startRun() {
@@ -194,6 +235,73 @@ function updateMissionPhase(status, activityLabel) {
 		if (i < currentIdx) el.classList.add('is-done');
 		if (i === currentIdx) el.classList.add('is-active');
 	}
+}
+
+/* ── Execution stats bar (Step 4) ─────────────────────────────────── */
+
+/** Unique URLs visited by the agent. */
+function countPages(session) {
+	const steps = session?.capturedSteps ?? [];
+	const urls = new Set();
+	for (const step of steps) {
+		if (step.action === 'navigate' && step.url) {
+			urls.add(step.url.split('#')[0]);
+		} else if (step.url) {
+			urls.add(step.url.split('#')[0]);
+		}
+	}
+	return urls.size;
+}
+
+function updateExecStats() {
+	const bar = document.getElementById('exec-stats-bar');
+	if (!bar) return;
+
+	const session = state.session;
+	if (!session) { bar.hidden = true; return; }
+
+	const activities = session.activities ?? [];
+	const findings = session.findings ?? [];
+	const steps = session.capturedSteps ?? [];
+	const running = session.status === 'running';
+
+	const pages = countPages(session);
+	const actions = steps.length;
+	const findingsCount = findings.length;
+	const criticalCount = findings.filter(f => f.severity === 'critical').length;
+
+	// Elapsed time
+	let elapsedStr = '';
+	const start = session.startedAt ?? session.createdAt;
+	if (start) {
+		const end = session.status === 'running' ? Date.now() : (session.endedAt ?? session.updatedAt ?? Date.now());
+		const secs = Math.floor((end - start) / 1000);
+		const mins = Math.floor(secs / 60);
+		const s = secs % 60;
+		elapsedStr = `${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+	}
+
+	// Build the stats bar
+	const stats = [];
+	if (elapsedStr) stats.push(`<span class="es-item"><span class="es-icon">⏱</span> ${elapsedStr}</span>`);
+	stats.push(`<span class="es-item"><span class="es-icon">📄</span> ${pages} page${pages === 1 ? '' : 's'}</span>`);
+	stats.push(`<span class="es-item"><span class="es-icon">🖱</span> ${actions} action${actions === 1 ? '' : 's'}</span>`);
+	if (findingsCount > 0) {
+		const critBadge = criticalCount > 0
+			? ` · <span class="es-crit">${criticalCount} critical</span>`
+			: '';
+		stats.push(`<span class="es-item es-findings"><span class="es-icon">🔍</span> ${findingsCount} finding${findingsCount === 1 ? '' : 's'}${critBadge}</span>`);
+	}
+	if (running) {
+		stats.push('<span class="es-item es-live"><span class="es-pulse"></span> LIVE</span>');
+	} else if (session.status === 'done') {
+		stats.push('<span class="es-item es-done">✓ RUN COMPLETED</span>');
+	} else if (session.status === 'error' || session.status === 'interrupted') {
+		stats.push('<span class="es-item es-failed">✕ RUN FAILED</span>');
+	}
+
+	bar.innerHTML = stats.join('');
+	bar.hidden = false;
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
@@ -482,6 +590,9 @@ function applyFrame(frame) {
 		el.browserUrl.textContent = frame.url;
 	}
 	el.browserTitle.textContent = truncate(frame.title ?? '', 40);
+	// Device frame + strip follow the REAL viewport on every frame.
+	renderDeviceStrip();
+	applyDeviceFrameClass();
 }
 
 /**
@@ -524,6 +635,61 @@ function applyCursor(cursor) {
 			el.targetBox.classList.remove('is-visible');
 		}, 1500);
 	}
+}
+
+/* ── Device live view (mobile / tablet) ────────────────────────────── */
+
+/**
+ * Classifies the REAL execution viewport into phone / tablet / desktop.
+ * Only the actual frame dimensions decide — a CSS-resized desktop window is
+ * never misreported as a phone. Shared implementation lives in
+ * deviceClassify.js so tests can exercise it without a DOM.
+ */
+
+
+/** Applies / removes the device frame classes on the stage. */
+function applyDeviceFrameClass() {
+	const device = state.device;
+	const kind = device?.deviceType
+		|| classifyViewport(state.viewport ?? device?.viewport);
+	const landscape = (device?.viewport ?? state.viewport)?.width > (device?.viewport ?? state.viewport)?.height;
+	el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
+	if (kind === 'desktop' || !el.frame.src) return;
+	el.stageInner.classList.add(kind === 'phone' ? 'device-phone' : 'device-tablet');
+	if (landscape) el.stageInner.classList.add('device-landscape');
+}
+
+/**
+ * Renders the device info strip: device, OS, browser, viewport, mode.
+ * Shows only fields actually available; hidden entirely for desktop.
+ */
+function renderDeviceStrip() {
+	const strip = document.getElementById('device-strip');
+	const device = state.device;
+	if (!strip) return;
+	const viewport = device?.viewport ?? state.viewport;
+	const kind = device?.deviceType || classifyViewport(viewport);
+	if (kind === 'desktop') {
+		strip.hidden = true;
+		strip.replaceChildren();
+		return;
+	}
+	const parts = [];
+	if (device?.deviceName) {
+		parts.push(['Device', `<span class="device-name">${escapeHtml(device.deviceName)}</span>`]);
+	}
+	if (device?.os) parts.push(['OS', `<b>${escapeHtml(device.os)}</b>`]);
+	if (device?.browser) parts.push(['Browser', `<b>${escapeHtml(device.browser)}</b>`]);
+	if (viewport?.width && viewport?.height) {
+		parts.push(['Viewport', `<b>${viewport.width}×${viewport.height}</b>`]);
+	}
+	parts.push(['Mode', `<b>${kind === 'phone' ? 'Mobile' : 'Tablet'}</b>`]);
+	strip.innerHTML = parts
+		.map(([label, value]) => `<span class="device-field">${label}: ${value}</span>`)
+		.join('<span class="device-sep">·</span>')
+		+ `<span class="device-mode">${kind === 'phone' ? 'MOBILE' : 'TABLET'}</span>`;
+	strip.hidden = false;
+	applyDeviceFrameClass();
 }
 
 /* ── Activity, plan, findings, report ────────────────────────────── */
@@ -651,6 +817,7 @@ function renderFindings() {
 	const findings = state.session.findings ?? [];
 	el.countFindings.textContent = findings.length > 0 ? `${findings.length}` : '';
 	el.countFindings.classList.toggle('is-alert', findings.some(finding => finding.severity === 'critical'));
+	updateExecStats();
 
 	el.findingsList.replaceChildren();
 	if (findings.length === 0) {
@@ -709,6 +876,13 @@ function renderFinding(finding) {
 	sev.className = 'sev';
 	sev.textContent = finding.severity;
 	head.append(title, sev);
+	// Status badge (open/confirmed/resolved)
+	if (finding.status && finding.status !== 'open') {
+		const statusBadge = document.createElement('span');
+		statusBadge.className = 'sev finding-status';
+		statusBadge.textContent = finding.status;
+		head.append(statusBadge);
+	}
 	head.onclick = () => node.classList.toggle('is-open');
 
 	const body = document.createElement('div');
@@ -716,7 +890,12 @@ function renderFinding(finding) {
 
 	const meta = document.createElement('div');
 	meta.className = 'finding-meta';
-	meta.textContent = [finding.category, finding.url].filter(Boolean).join(' · ');
+	const metaParts = [];
+	if (finding.severity) metaParts.push(finding.severity.toUpperCase());
+	if (finding.category) metaParts.push(finding.category);
+	if (finding.url) metaParts.push(finding.url);
+	if (finding.ts) metaParts.push(new Date(finding.ts).toLocaleString());
+	meta.textContent = metaParts.join(' · ');
 	body.append(meta);
 
 	if (finding.steps?.length) {
@@ -730,7 +909,14 @@ function renderFinding(finding) {
 	}
 
 	const list = document.createElement('dl');
-	for (const [term, value] of [['Expected', finding.expected], ['Actual', finding.actual]]) {
+	for (const [term, value] of [
+		['Expected', finding.expected],
+		['Actual', finding.actual],
+		['Observed', finding.observed],
+		['Recommendation', finding.recommendation],
+		['Impact', finding.impact],
+	]) {
+		if (!value) continue;
 		const dt = document.createElement('dt');
 		dt.textContent = term;
 		const dd = document.createElement('dd');
@@ -739,14 +925,108 @@ function renderFinding(finding) {
 	}
 	body.append(list);
 
+	// Confidence + reproducibility badges
+	if (finding.confidence != null || finding.reproducibility) {
+		const badges = document.createElement('div');
+		badges.className = 'finding-badges';
+		if (finding.confidence != null) {
+			const conf = document.createElement('span');
+			conf.className = 'finding-badge';
+			conf.textContent = `Confidence: ${Math.round(finding.confidence * 100)}%`;
+			badges.append(conf);
+		}
+		if (finding.reproducibility) {
+			const repro = document.createElement('span');
+			repro.className = 'finding-badge';
+			repro.textContent = `Reproducibility: ${finding.reproducibility}`;
+			badges.append(repro);
+		}
+		body.append(badges);
+	}
+
 	if (finding.evidence) {
+		const ev = document.createElement('div');
+		ev.className = 'finding-evidence-text';
+		const label = document.createElement('div');
+		label.className = 'finding-evidence-label';
+		label.textContent = 'Evidence:';
 		const pre = document.createElement('pre');
 		pre.textContent = finding.evidence;
-		body.append(pre);
+		ev.append(label, pre);
+		body.append(ev);
 	}
+
+	// Typed evidence from the evidence graph — loaded on demand, only real data.
+	const evSection = document.createElement('div');
+	evSection.className = 'finding-graph-evidence';
+	evSection.hidden = true;
+	body.append(evSection);
 
 	const actions = document.createElement('div');
 	actions.className = 'finding-actions';
+
+	const viewEv = document.createElement('button');
+	viewEv.className = 'btn btn-ghost btn-sm';
+	viewEv.type = 'button';
+	viewEv.textContent = 'View Evidence';
+	let evLoaded = false;
+	viewEv.onclick = async () => {
+		if (!evSection.hidden) {
+			evSection.hidden = true;
+			viewEv.textContent = 'View Evidence';
+			return;
+		}
+		evSection.hidden = false;
+		viewEv.textContent = 'Hide Evidence';
+		if (evLoaded) return;
+		evSection.innerHTML = '<div class="ev-loading">Loading evidence…</div>';
+		try {
+			const items = await api(`/findings/${finding.id}/evidence`);
+			evLoaded = true;
+			renderGraphEvidence(evSection, items);
+		} catch (error) {
+			evSection.innerHTML = `<div class="ev-error">Unable to load evidence. <button type="button" class="btn btn-ghost btn-sm ev-retry">Retry</button></div>`;
+			evSection.querySelector('.ev-retry')?.addEventListener('click', () => {
+				evLoaded = false;
+				viewEv.click();
+				viewEv.click();
+			});
+		}
+	};
+	actions.append(viewEv);
+
+	// Revalidate — re-runs the owning mission as a new iteration via the
+	// existing validation loop. Only shown when a mission is linked.
+	if (state.missionId) {
+		const reval = document.createElement('button');
+		reval.className = 'btn btn-ghost btn-sm';
+		reval.type = 'button';
+		reval.textContent = 'Revalidate';
+		reval.onclick = async () => {
+			reval.disabled = true;
+			reval.textContent = 'Starting…';
+			try {
+				const res = await fetch(`/api/v1/missions/${state.missionId}/revalidate`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					credentials: 'same-origin'
+				});
+				if (!res.ok) {
+					const body = await res.json().catch(() => ({}));
+					throw new Error(body.error ?? `Revalidate failed (${res.status})`);
+				}
+				const data = await res.json();
+				toast(`Revalidation started — session ${String(data.sessionId).slice(0, 8)}`, 'good');
+			} catch (error) {
+				fail(error);
+			} finally {
+				reval.disabled = false;
+				reval.textContent = 'Revalidate';
+			}
+		};
+		actions.append(reval);
+	}
+
 	const copy = document.createElement('button');
 	copy.className = 'btn btn-ghost btn-sm';
 	copy.type = 'button';
@@ -777,6 +1057,68 @@ function findingAsTicket(finding) {
 	].filter(Boolean).join('\n');
 }
 
+/** Typed evidence chips for an evidence item — only types QASE actually produces. */
+const EVIDENCE_TYPE_META = {
+	browser_action: { icon: '🖱', label: 'Browser action' },
+	step_outcome: { icon: '✔', label: 'Step outcome' },
+	console: { icon: '⌨', label: 'Console' },
+	network: { icon: '🌐', label: 'Network' },
+	finding_detail: { icon: '🔎', label: 'Finding detail' },
+	screenshot: { icon: '📷', label: 'Screenshot' }
+};
+
+function renderGraphEvidence(container, items) {
+	container.replaceChildren();
+	if (!Array.isArray(items) || items.length === 0) {
+		const none = document.createElement('div');
+		none.className = 'ev-none';
+		none.textContent = 'No typed evidence linked to this finding in the evidence graph.';
+		container.append(none);
+		return;
+	}
+	const header = document.createElement('div');
+	header.className = 'finding-evidence-label';
+	header.textContent = `Collected evidence (${items.length}):`;
+	container.append(header);
+	for (const item of items) {
+		const meta = EVIDENCE_TYPE_META[item.type] ?? { icon: '•', label: item.type ?? 'evidence' };
+		const row = document.createElement('div');
+		row.className = 'ev-item';
+		const chip = document.createElement('span');
+		chip.className = 'ev-type-chip';
+		chip.textContent = `${meta.icon} ${meta.label}`;
+		row.append(chip);
+		const info = document.createElement('div');
+		info.className = 'ev-info';
+		if (item.observation) {
+			const obs = document.createElement('div');
+			obs.className = 'ev-obs';
+			obs.textContent = item.observation;
+			info.append(obs);
+		}
+		if (item.payload) {
+			const pay = document.createElement('pre');
+			pay.className = 'ev-payload';
+			pay.textContent = item.payload;
+			info.append(pay);
+		}
+		if (item.target) {
+			const tgt = document.createElement('div');
+			tgt.className = 'ev-target';
+			tgt.textContent = item.target;
+			info.append(tgt);
+		}
+		if (item.timestamp) {
+			const ts = document.createElement('div');
+			ts.className = 'ev-ts';
+			ts.textContent = new Date(item.timestamp).toLocaleString();
+			info.append(ts);
+		}
+		row.append(info);
+		container.append(row);
+	}
+}
+
 const VERDICTS = {
 	pass: { mark: '✓', label: 'Pass', tone: 'ok' },
 	pass_with_issues: { mark: '!', label: 'Pass with issues', tone: 'warn' },
@@ -787,6 +1129,7 @@ const VERDICTS = {
 function renderReport() {
 	const report = state.session.report;
 	el.reportView.replaceChildren();
+	loadUxQualityPanel();
 	if (!report) {
 		el.reportView.innerHTML = '<div class="feed-empty">The report is published when the run finishes</div>';
 		return;
@@ -937,7 +1280,7 @@ function renderWorkflows() {
 				renderSavedWorkflows();
 				toast(`Workflow "${wf.name}" saved.`, 'good');
 			} catch (error) {
-				toast(fail(error), 'bad');
+				fail(error);
 			} finally {
 				saveBtn.disabled = false;
 				saveBtn.textContent = 'Save as workflow';
@@ -967,6 +1310,13 @@ function renderWorkflowStep(step) {
 	const icon = document.createElement('span');
 	icon.className = 'wf-step-icon';
 	icon.textContent = STEP_ICONS[step.action] ?? '•';
+
+	// Outcome indicator (success/fail) from captured step data
+	if (step.outcome) {
+		const status = step.outcome.status;
+		if (status === 'success') node.classList.add('wf-step-ok');
+		else if (status === 'error' || status === 'fail') node.classList.add('wf-step-fail');
+	}
 
 	const body = document.createElement('div');
 	body.className = 'wf-step-body';
@@ -1045,7 +1395,7 @@ function renderSavedWorkflows() {
 				renderSavedWorkflows();
 				toast(`Deleted "${wf.name}".`, 'good');
 			} catch (error) {
-				toast(fail(error), 'bad');
+				fail(error);
 			}
 		};
 
@@ -1066,7 +1416,7 @@ function renderSavedWorkflows() {
 					toast(`Generated ${created.length} test case${created.length === 1 ? '' : 's'}.`, 'good');
 				}
 			} catch (error) {
-				toast(fail(error), 'bad');
+				fail(error);
 			} finally {
 				gen.disabled = false;
 				gen.textContent = 'Gen Tests';
@@ -1257,7 +1607,7 @@ function renderCreateScheduleForm() {
 			toast('Schedule created.', 'good');
 			nameInput.value = '';
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		} finally {
 			createBtn.disabled = false;
 			createBtn.textContent = 'Create';
@@ -1293,7 +1643,7 @@ function renderScheduleCard(sched) {
 			});
 			toast(`Schedule ${checkbox.checked ? 'enabled' : 'disabled'}.`, 'good');
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 			checkbox.checked = !checkbox.checked;
 		}
 	};
@@ -1347,7 +1697,7 @@ function renderScheduleCard(sched) {
 			state.regressionTrend = await api('/regression/trend?limit=15');
 			renderRegression();
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		} finally {
 			runBtn.disabled = false;
 			runBtn.textContent = 'Run Now';
@@ -1365,7 +1715,7 @@ function renderScheduleCard(sched) {
 			el.countRegression.textContent = state.schedules.length || '';
 			toast(`Deleted "${sched.name}".`, 'good');
 		} catch (error) {
-			toast(fail(error), 'bad');
+			fail(error);
 		}
 	};
 
@@ -1413,6 +1763,19 @@ function connect(id) {
 			handleEvent(data);
 		}
 	};
+	// Device context arrives once when the emulated device context is applied.
+	// Payload shape: { type: 'device', sessionId, device: {...} } — emit()
+	// spreads payloads at the top level, so event.data holds the whole event.
+	stream.addEventListener('device', event => {
+		try {
+			const data = JSON.parse(event.data);
+			state.device = data.device ?? null;
+		} catch {
+			return;
+		}
+		renderDeviceStrip();
+		applyDeviceFrameClass();
+	});
 }
 
 function handleEvent(event) {
@@ -1462,6 +1825,7 @@ function handleEvent(event) {
 					.filter(Boolean).join(' — ');
 				updateThinkingStrip();
 			}
+			updateExecStats();
 			break;
 		}
 
@@ -1523,9 +1887,20 @@ function handleEvent(event) {
 			break;
 		}
 
+		case 'ux_assessment_ready': {
+			// Phase 17: UX assessment finished post-finalize — refresh the
+			// REPORT tab panel if it's the mission we're viewing.
+		if (event.missionId && state.missionId === event.missionId) {
+			uxQualityState.missionId = event.missionId;
+			loadUxQualityPanel();
+		}
+			break;
+		}
+
 		case 'workflow_step':
 			state.capturedSteps.push(event.step);
 			renderWorkflows();
+			updateExecStats();
 			break;
 
 		case 'question':
@@ -1536,6 +1911,7 @@ function handleEvent(event) {
 		case 'status':
 			setStatus(event.status);
 			updateMissionPhase(event.status, event.activity);
+			updateExecStats();
 			if (event.status !== 'running') {
 				void refreshRuns();
 			}
@@ -1742,8 +2118,12 @@ cfg.browserstackKeyClear.onclick = () => {
 };
 
 async function openSettings() {
-	fillSettings(await api('/config'));
-	cfg.dialog.showModal();
+	try {
+		fillSettings(await api('/config'));
+		cfg.dialog.showModal();
+	} catch (err) {
+		fail(err);
+	}
 }
 
 $('open-settings').onclick = openSettings;
@@ -1793,12 +2173,56 @@ cfg.saveBtn.onclick = async () => {
 
 /* ── Wiring ──────────────────────────────────────────────────────── */
 
+// Intent panel toggle
+const intentPanel = document.getElementById('intent-panel');
+const intentToggleDown = document.getElementById('intent-toggle-down');
+const intentToggleUp = document.getElementById('intent-toggle-up');
+const intentBuildPrompt = document.getElementById('intent-build-prompt');
+const intentRequirements = document.getElementById('intent-requirements');
+
+if (intentToggleDown) intentToggleDown.onclick = () => { intentPanel.hidden = false; intentToggleDown.hidden = true; };
+if (intentToggleUp) intentToggleUp.onclick = () => { intentPanel.hidden = true; intentToggleDown.hidden = false; };
+
 el.composer.onsubmit = async event => {
 	event.preventDefault();
 	const text = el.composerInput.value.trim();
 	if (!text || !state.sessionId) {
 		return;
 	}
+
+	// Check if intent fields are provided — if so, create a mission via the API
+	const bp = intentBuildPrompt?.value.trim() || '';
+	const reqs = intentRequirements?.value.trim() || '';
+	const isUrl = /^https?:\/\//.test(text);
+
+	if (bp && isUrl) {
+		// Create a mission with Phase 8 intent
+		const reqList = reqs ? reqs.split(',').map(r => r.trim()).filter(Boolean) : undefined;
+		const device = document.getElementById('intent-device')?.value || '';
+		try {
+			const mission = await api('/v1/missions', {
+				method: 'POST',
+				body: JSON.stringify({
+					name: bp.slice(0, 50),
+					type: 'full_audit',
+					targetUrl: text,
+					buildPrompt: bp,
+					requirements: reqList,
+					...(device ? { constraints: { device } } : {}),
+				})
+			});
+			if (mission?.sessionId) {
+				await selectSession(mission.sessionId);
+			}
+			el.composerInput.value = '';
+			el.composerInput.style.height = 'auto';
+			el.questionSlot.replaceChildren();
+			return;
+		} catch (err) {
+			toast('Mission creation failed — falling back to standard run', 'bad');
+		}
+	}
+
 	if (!state.config?.ready) {
 		toast('Set up the model endpoint first.', 'bad');
 		void openSettings();
@@ -1886,11 +2310,11 @@ async function selectProject(id) {
 	await refreshRuns();
 	// If there's no session yet for this project, start a new run.
 	if (state.session?.projectId !== id) {
-		const runs = await api(`/sessions${id ? `?projectId=${id}` : ''}`).catch(() => []);
+		const runs = await api(`/sessions${id ? `?projectId=${id}` : ''}`).catch(err => { fail(err); return []; });
 		if (runs.length > 0) {
 			await selectSession(runs[0].id);
 		} else {
-			await startRun();
+			try { await startRun(); } catch (err) { fail(err); }
 		}
 	}
 }
@@ -1926,7 +2350,26 @@ async function loadMetrics() {
 		const metrics = await api(`/metrics/dashboard${query}`);
 		renderMetricsOverview(metrics);
 	} catch {
-		el.metricsOverview.replaceChildren();
+		// Non-critical: metrics are supplementary data.
+		// Leave existing metrics in place rather than blanking.
+	}
+}
+
+/** Loads the mission linked to the current session (if any) so the
+ *  FINDINGS tab can offer Revalidate and mission context. */
+async function loadSessionMission(sessionId) {
+	state.missionId = null;
+	state.missionInfo = null;
+	try {
+		const mission = await api(`/sessions/${sessionId}/mission`);
+		if (mission && mission.id) {
+			state.missionId = mission.id;
+			state.missionInfo = mission;
+			// Findings already rendered — re-render with mission context.
+			renderFindings();
+		}
+	} catch {
+		// Mission link is optional — sessions without missions are normal.
 	}
 }
 
@@ -2193,6 +2636,11 @@ function updateMissionSummary(summary) {
 	bar.hidden = false;
 }
 
+// Restore the summary bar when pipeline data is loaded after a refresh (Phase 15).
+window.addEventListener('pipeline:summary-restored', (e) => {
+	updateMissionSummary(e.detail);
+});
+
 /* ── Export handlers ──────────────────────────────────────────────── */
 
 async function handleExport(type) {
@@ -2299,12 +2747,15 @@ document.addEventListener('click', event => {
 
 	// Fire independent boot requests in parallel (config + projects).
 	const [config, projects] = await Promise.all([
-		api('/config').catch(() => undefined),
-		api('/projects').catch(() => [])
+		api('/config').catch(err => { console.error('[boot] config fetch failed:', err.message); return undefined; }),
+		api('/projects').catch(err => { console.error('[boot] projects fetch failed:', err.message); return []; })
 	]);
 
 	if (config) {
 		paintConfig(config);
+	} else {
+		// Config failure — tell the user, don't silently boot into broken state
+		toast('Unable to load configuration. Check that the server is running.', 'bad');
 	}
 
 	// Resolve project selection from parallel-fetched data.
@@ -2318,14 +2769,22 @@ document.addEventListener('click', event => {
 	renderProjectSelect();
 
 	// Sessions depend on projectId — fetch after project resolution.
-	const runs = await api(`/sessions${state.projectId ? `?projectId=${state.projectId}` : ''}`).catch(() => []);
+	const runs = await api(`/sessions${state.projectId ? `?projectId=${state.projectId}` : ''}`).catch(err => {
+		fail(err);
+		return [];
+	});
 	const remembered = localStorage.getItem('qase.session');
 	const target = runs.find(run => run.id === remembered) ?? runs[0];
 
 	if (target) {
 		await selectSession(target.id);
 	} else {
-		await startRun();
+		// No sessions exist — create a fresh one (but handle errors).
+		try {
+			await startRun();
+		} catch (err) {
+			fail(err);
+		}
 	}
 	el.composerInput.focus();
 
@@ -2348,3 +2807,241 @@ document.addEventListener('click', event => {
 		});
 	}
 })();
+
+/* ── Phase 17: Application Quality / UX Intelligence panel ──────── */
+
+const uxQualityState = { missionId: null, data: null, filter: 'all' };
+
+async function loadUxQualityPanel() {
+	// Resolve the mission for this session (mission id == session's mission)
+	const panel = document.getElementById('ux-quality-panel');
+	if (!panel) return;
+	let missionId = uxQualityState.missionId;
+	if (!missionId && state.session?.id) {
+		try {
+			const res = await fetch(`/api/missions/${state.session.id}/mission-for-session`);
+			if (res.ok) {
+				const j = await res.json();
+				// missionId null = session-only run with no mission — hide panel
+				if (j.missionId) {
+					missionId = j.missionId;
+					uxQualityState.missionId = missionId;
+				}
+			}
+		} catch { /* offline / transient — panel stays hidden */ }
+	}
+	if (!missionId) { panel.hidden = true; return; }
+	try {
+		const res = await fetch(`/api/missions/${missionId}/ux-quality`);
+		if (!res.ok) { panel.hidden = true; return; }
+		const data = await res.json();
+		uxQualityState.data = data;
+		panel.hidden = false;
+		renderUxQualityPanel();
+	} catch { panel.hidden = true; }
+}
+
+function renderUxQualityPanel() {
+	const data = uxQualityState.data;
+	if (!data) return;
+
+	// Head: overall score + meta
+	const overall = document.getElementById('uxq-overall');
+	const q = data.quality?.overall;
+	if (q?.score != null) {
+		overall.textContent = `${q.score}/100`;
+		overall.title = `confidence ${(q.confidence * 100).toFixed(0)}%`;
+	} else {
+		overall.textContent = '—';
+	}
+	document.getElementById('uxq-meta').textContent =
+		`confidence ${(q?.confidence * 100).toFixed(0)}% · evidence coverage ${(q?.evidenceCoverage * 100).toFixed(0)}% · ${q?.dimensionsScored ?? 0}/${(q?.dimensionsScored ?? 0) + (q?.dimensionsMissing?.length ?? 0)} dimensions`;
+
+	// Dimensions
+	const dimsBox = document.getElementById('uxq-dimensions');
+	dimsBox.replaceChildren();
+	for (const d of data.quality?.dimensions ?? []) {
+		const row = document.createElement('div');
+		row.className = 'uxq-dim';
+		const name = document.createElement('div');
+		name.className = 'uxq-dim-name';
+		const nm = document.createElement('span'); nm.textContent = d.dimension;
+		const sc = document.createElement('span'); sc.textContent = d.score != null ? `${d.score}` : '—';
+		name.append(nm, sc);
+		const bar = document.createElement('div'); bar.className = 'uxq-dim-bar';
+		const fill = document.createElement('div'); fill.className = 'uxq-dim-fill';
+		if (d.score != null) {
+			fill.style.width = `${Math.max(0, Math.min(100, d.score))}%`;
+			fill.dataset.band = d.score >= 80 ? 'ok' : d.score >= 60 ? 'warn' : 'bad';
+		}
+		bar.append(fill);
+		const meta = document.createElement('div');
+		meta.className = 'uxq-dim-meta';
+		meta.textContent = `confidence ${(d.confidence * 100).toFixed(0)}% · evidence ${(d.evidenceCoverage * 100).toFixed(0)}% · ${d.basis ?? ''}`;
+		row.append(name, bar, meta);
+		dimsBox.append(row);
+	}
+	if (!dimsBox.children.length) dimsBox.innerHTML = '<div class="uxq-empty">No quality dimensions could be scored.</div>';
+
+	renderUxIssues();
+	renderUxRecs();
+	renderUxUnverified();
+}
+
+function renderUxIssues() {
+	const box = document.getElementById('uxq-issues');
+	box.replaceChildren();
+	const issues = (uxQualityState.data?.ux?.issues ?? [])
+		.filter(i => uxQualityState.filter === 'all' || i.severity === uxQualityState.filter);
+	for (const i of issues) {
+		const row = document.createElement('div');
+		row.className = 'uxq-issue';
+		row.dataset.sev = i.severity;
+		row.addEventListener('click', () => openUxIssueDetail(i));
+		const main = document.createElement('div');
+		main.className = 'uxq-issue-main';
+		const title = document.createElement('div');
+		title.className = 'uxq-issue-title';
+		title.textContent = `[${i.severity.toUpperCase()}] ${i.title}`;
+		const sub = document.createElement('div');
+		sub.className = 'uxq-issue-sub';
+		sub.textContent = `${i.dimension}${i.viewports?.length ? ` · ${i.viewports.join('/')}` : ''}${i.occurrences > 1 ? ` · ×${i.occurrences}` : ''} · confidence ${(i.confidence * 100).toFixed(0)}%`;
+		main.append(title, sub);
+		const pill = document.createElement('span');
+		pill.className = 'uxq-pill';
+		pill.dataset.state = i.reviewState;
+		pill.textContent = i.reviewState === 'AUTO_VERIFIED' ? 'VERIFIED' : i.reviewState === 'REJECTED' ? 'REJECTED' : 'REVIEW';
+		row.append(main, pill);
+		box.append(row);
+	}
+	if (!box.children.length) box.innerHTML = '<div class="uxq-empty">No UX issues at this filter level.</div>';
+}
+
+function renderUxRecs() {
+	const box = document.getElementById('uxq-recs');
+	box.replaceChildren();
+	for (const r of uxQualityState.data?.recommendations ?? []) {
+		const row = document.createElement('div');
+		row.className = 'uxq-rec';
+		const title = document.createElement('div');
+		title.className = 'uxq-rec-title';
+		title.textContent = `[${r.priority}] ${r.issueTitle}`;
+		const body = document.createElement('div');
+		body.className = 'uxq-rec-body';
+		body.textContent = r.recommendation;
+		row.append(title, body);
+		box.append(row);
+	}
+	if (!box.children.length) box.innerHTML = '<div class="uxq-empty">No recommendations.</div>';
+}
+
+function renderUxUnverified() {
+	const box = document.getElementById('uxq-unverified');
+	box.replaceChildren();
+	const areas = uxQualityState.data?.ux?.unverifiedAreas ?? [];
+	const grouped = new Map();
+	for (const u of areas) {
+		const key = `${u.checkId ?? '?'} (${u.dimension ?? '?'})`;
+		grouped.set(key, (grouped.get(key) ?? 0) + 1);
+	}
+	for (const [k, n] of grouped) {
+		const item = document.createElement('div');
+		item.className = 'uxq-unverified-item';
+		item.textContent = `${k} — ${n} observation(s) could not be verified`;
+		box.append(item);
+	}
+	if (!box.children.length) box.innerHTML = '<div class="uxq-empty">Everything observed was verifiable.</div>';
+}
+
+function openUxIssueDetail(issue) {
+	const dlg = document.getElementById('ux-issue-detail');
+	if (!dlg) return;
+	document.getElementById('ux-issue-title').textContent = issue.title;
+	const body = document.getElementById('ux-issue-body');
+	body.replaceChildren();
+	const addRow = (label, value) => {
+		const d = document.createElement('div');
+		d.style.marginBottom = '10px';
+		const l = document.createElement('div');
+		l.style.cssText = 'font-size:11px;letter-spacing:.08em;color:var(--text-dim);margin-bottom:2px';
+		l.textContent = label.toUpperCase();
+		const v = document.createElement('div');
+		v.style.cssText = 'font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word';
+		v.textContent = value;
+		d.append(l, v);
+		body.append(d);
+	};
+	addRow('Severity / dimension', `${issue.severity} · ${issue.dimension}${issue.viewports?.length ? ` · ${issue.viewports.join('/')}` : ''}`);
+	addRow('Review state', `${issue.reviewState}${issue.reviewedBy ? ` (by ${issue.reviewedBy})` : ''}`);
+	addRow('Confidence', `${(issue.confidence * 100).toFixed(0)}%${issue.occurrences > 1 ? ` across ${issue.occurrences} observations` : ''}`);
+	if (issue.expected) addRow('Expected', issue.expected);
+	if (issue.actual) addRow('Actual', issue.actual);
+	if (issue.impact) addRow('Impact', issue.impact);
+	if (issue.urls?.length) addRow('Where', issue.urls.slice(0, 8).join('\n'));
+	if (issue.evidence?.length) {
+		const evBox = document.createElement('div');
+		for (const e of issue.evidence.slice(0, 10)) {
+			const d = document.createElement('div');
+			d.style.cssText = 'font-size:12px;color:var(--text-dim);border-left:2px solid var(--hair);padding-left:8px;margin:4px 0';
+			d.textContent = `${e.kind ?? 'evidence'}: ${e.detail ?? ''}`;
+			evBox.append(d);
+		}
+		addRow('Evidence', '');
+		body.append(evBox);
+	}
+	if (issue.reviewReason) addRow('Review note', issue.reviewReason);
+
+	// Review actions (human-only states; server enforces transitions)
+	const foot = document.getElementById('ux-issue-foot');
+	foot.replaceChildren();
+	const mkBtn = (label, state, style) => {
+		const b = document.createElement('button');
+		b.type = 'button';
+		b.className = `btn btn-sm ${style}`;
+		b.textContent = label;
+		b.addEventListener('click', () => reviewUxIssue(issue, state, b));
+		return b;
+	};
+	if (issue.reviewState !== 'REJECTED') {
+		foot.append(mkBtn('Reject', 'REJECTED', 'btn-danger'));
+	}
+	if (issue.reviewState === 'REVIEW_REQUIRED') {
+		foot.append(mkBtn('Approve', 'AUTO_VERIFIED', 'btn-primary'));
+	}
+	dlg.showModal();
+}
+
+async function reviewUxIssue(issue, reviewState, btn) {
+	const missionId = uxQualityState.missionId;
+	if (!missionId) return;
+	btn.disabled = true;
+	try {
+		const res = await fetch(`/api/missions/${missionId}/ux/issues/${encodeURIComponent(issue.id)}/review-ui`, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ reviewState, reason: 'reviewed in dashboard', by: 'dashboard' }),
+		});
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		const j = await res.json();
+		issue.reviewState = j.issue.reviewState;
+		issue.reviewedBy = j.issue.reviewedBy;
+		issue.reviewedAt = j.issue.reviewedAt;
+		renderUxIssues();
+		document.getElementById('ux-issue-detail')?.close();
+	} catch (err) {
+		btn.disabled = false;
+		btn.textContent = `Failed: ${err.message}`;
+	}
+}
+
+// Severity filter buttons
+document.addEventListener('click', (e) => {
+	const btn = e.target.closest('.uxq-filter');
+	if (!btn) return;
+	for (const b of document.querySelectorAll('.uxq-filter')) b.classList.toggle('is-active', b === btn);
+	uxQualityState.filter = btn.dataset.sev;
+	if (uxQualityState.data) renderUxIssues();
+});
+document.addEventListener('click', (e) => {
+	if (e.target.id === 'ux-issue-close') document.getElementById('ux-issue-detail')?.close();
+});

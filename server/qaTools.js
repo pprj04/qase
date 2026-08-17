@@ -5,6 +5,7 @@ import { notifyReport } from './webhooks.js';
 import { syncSessionFinding } from './findings.js';
 import { runAutonomyPipeline } from './pipeline.js';
 import { getConfig, VIEWPORT_PRESETS } from './config.js';
+import { reassessRiskWithFindings } from './riskModel.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -73,6 +74,26 @@ const reportFinding = {
 			try {
 				syncSessionFinding(session, finding);
 			} catch { /* non-fatal */ }
+
+			// Phase 14: Adaptive priority — update testContext when findings are reported.
+			// The agent sees updated priorities in the next turn's context.
+			if (session.testContext) {
+				try {
+					const newFindings = [{ title: finding.title, severity: finding.severity, category: finding.category }];
+					const reassessment = reassessRiskWithFindings(
+						session.testContext.riskAssessment,
+						newFindings,
+						session.findings
+					);
+					if (reassessment.updatedPriorities) {
+						session.testContext.adaptiveGuidance = reassessment.updatedPriorities;
+					}
+					if (reassessment.urgencyNote) {
+						session.testContext.urgencyNote = reassessment.urgencyNote;
+					}
+				} catch { /* non-fatal — adaptive priority is enhancement, not critical */ }
+			}
+
 			return {
 				success: true,
 				finding_id: finding.id,

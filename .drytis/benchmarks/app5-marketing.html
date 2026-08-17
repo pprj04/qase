@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SaaSLaunch — Marketing Site</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,sans-serif}
+body{color:#1a1a2e}
+.nav{background:#fff;padding:16px 40px;display:flex;align-items:center;gap:32px;box-shadow:0 1px 3px rgba(0,0,0,0.08);position:sticky;top:0;z-index:50}
+.nav .logo{font-size:22px;font-weight:800;color:#6366f1}
+.nav a{color:#4b5563;text-decoration:none;font-size:15px;font-weight:500;transition:color 0.2s}
+.nav a:hover{color:#6366f1}
+.nav .cta{margin-left:auto;display:flex;gap:12px;align-items:center}
+.nav .cta a.signin{color:#4b5563;font-size:14px}
+.btn-primary{background:#6366f1;color:#fff;padding:10px 24px;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:background 0.2s}
+.btn-primary:hover{background:#4f46e5}
+.hero{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:80px 40px;text-align:center}
+.hero h1{font-size:48px;margin-bottom:16px;font-weight:800}
+.hero p{font-size:20px;opacity:0.95;margin-bottom:32px}
+.hero .cta-group{display:flex;gap:16px;justify-content:center}
+.hero .btn-light{background:#fff;color:#6366f1;padding:12px 32px;border-radius:8px;font-weight:600;text-decoration:none;display:inline-block}
+.hero .btn-outline{border:2px solid #fff;color:#fff;padding:10px 30px;border-radius:8px;font-weight:600;text-decoration:none;display:inline-block}
+.features{padding:80px 40px;max-width:1200px;margin:0 auto}
+.features h2{text-align:center;font-size:36px;margin-bottom:48px}
+.features-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+.feature{text-align:center}
+.feature .icon{width:60px;height:60px;background:#eef2ff;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:28px}
+.feature h3{font-size:20px;margin-bottom:8px}
+.feature p{color:#6b7280;font-size:15px;line-height:1.6}
+.pricing{background:#f9fafb;padding:80px 40px}
+.pricing h2{text-align:center;font-size:36px;margin-bottom:48px}
+.pricing-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;max-width:1000px;margin:0 auto}
+.pricing-card{background:#fff;border-radius:12px;padding:32px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+.pricing-card.featured{border:2px solid #6366f1;transform:scale(1.05)}
+.pricing-card h3{font-size:20px;margin-bottom:8px}
+.pricing-card .price{font-size:36px;font-weight:800;margin:16px 0}
+.pricing-card .price span{font-size:16px;font-weight:400;color:#6b7280}
+.pricing-card ul{list-style:none;padding:0;margin:16px 0}
+.pricing-card ul li{padding:6px 0;color:#4b5563;font-size:15px}
+.pricing-card ul li::before{content:"✓ ";color:#10b981;font-weight:bold}
+.footer{background:#1f2937;color:#9ca3af;padding:40px;text-align:center;font-size:14px}
+.footer a{color:#9ca3af;margin:0 12px;text-decoration:none}
+.testimonials{padding:80px 40px;background:#fff}
+.testimonials h2{text-align:center;font-size:36px;margin-bottom:48px}
+.testimonial-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:24px;max-width:900px;margin:0 auto}
+.testimonial{background:#f9fafb;padding:24px;border-radius:8px}
+.testimonial p{font-style:italic;color:#4b5563;margin-bottom:12px}
+.testimonial .author{font-weight:600;color:#1a1a2e}
+</style>
+</head>
+<body>
+<div class="nav">
+<span class="logo">SaaSLaunch</span>
+<a href="#features">Features</a>
+<a href="#pricing">Pricing</a>
+<a href="#testimonials">Testimonials</a>
+<a href="#about">About</a>
+<div class="cta">
+<a href="#" class="signin" id="signin-link">Sign In</a>
+<button class="btn-primary" id="cta-btn">Get Started Free</button>
+</div>
+</div>
+
+<div class="hero">
+<h1>Ship Your SaaS in Days, Not Months</h1>
+<p>The all-in-one platform for building, launching, and scaling your SaaS product.</p>
+<div class="cta-group">
+<a href="#" class="btn-light" id="hero-start">Get Started Free</a>
+<a href="#features" class="btn-outline">See Features</a>
+</div>
+</div>
+
+<div class="features" id="features">
+<h2>Everything You Need</h2>
+<div class="features-grid">
+<div class="feature"><div class="icon">🚀</div><h3>Fast Deployment</h3><p>Deploy your application to production with a single click. Zero configuration required.</p></div>
+<div class="feature"><div class="icon">📊</div><h3>Analytics Built-in</h3><p>Track user behavior, revenue, and growth metrics without writing a single line of code.</p></div>
+<div class="feature"><div class="icon">🔒</div><h3>Enterprise Security</h3><p>SOC 2 compliant infrastructure with end-to-end encryption and SSO support.</p></div>
+<div class="feature"><div class="icon">💳</div><h3>Payments Ready</h3><p>Stripe integration out of the box. Accept payments and manage subscriptions instantly.</p></div>
+<div class="feature"><div class="icon">📧</div><h3>Email Automation</h3><p>Send transactional emails, drip campaigns, and newsletters with our built-in tools.</p></div>
+<div class="feature"><div class="icon">👥</div><h3>Team Collaboration</h3><p>Invite team members, assign roles, and collaborate in real-time.</p></div>
+</div>
+</div>
+
+<div class="pricing" id="pricing">
+<h2>Simple, Transparent Pricing</h2>
+<div class="pricing-cards">
+<div class="pricing-card">
+<h3>Starter</h3>
+<div class="price">$29<span>/mo</span></div>
+<ul><li>Up to 1,000 users</li><li>Basic analytics</li><li>Email support</li><li>1 project</li></ul>
+<button class="btn-primary">Choose Starter</button>
+</div>
+<div class="pricing-card featured">
+<h3>Pro</h3>
+<div class="price">$99<span>/mo</span></div>
+<ul><li>Up to 10,000 users</li><li>Advanced analytics</li><li>Priority support</li><li>10 projects</li><li>Custom domains</li><li>Team collaboration</li></ul>
+<button class="btn-primary">Choose Pro</button>
+</div>
+<div class="pricing-card">
+<h3>Enterprise</h3>
+<div class="price">$299<span>/mo</span></div>
+<ul><li>Unlimited users</li><li>Full analytics suite</li><li>Dedicated support</li><li>Unlimited projects</li><li>SSO & SAML</li><li>SLA guarantee</li></ul>
+<button class="btn-primary">Choose Enterprise</button>
+</div>
+</div>
+</div>
+
+<div class="testimonials" id="testimonials">
+<h2>What Our Customers Say</h2>
+<div class="testimonial-grid">
+<div class="testimonial"><p>"SaaSLaunch helped us go from idea to production in just 3 days. The platform is incredibly intuitive."</p><div class="author">— Sarah K., CTO at TechFlow</div></div>
+<div class="testimonial"><p>"The analytics dashboard alone is worth the price. We finally have visibility into our user behavior."</p><div class="author">— Mike R., Founder at AppHub</div></div>
+</div>
+</div>
+
+<div class="footer" id="about">
+<p>&copy; 2024 SaaSLaunch Inc. All rights reserved.</p>
+<p style="margin-top:8px"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a><a href="#">Contact</a><a href="#">Blog</a></p>
+</div>
+
+<script>
+// INTENTIONALLY BROKEN: "Get Started Free" button does nothing
+document.getElementById('cta-btn').addEventListener('click', function(e){
+  e.preventDefault();
+  // No registration flow
+});
+
+// INTENTIONALLY BROKEN: Hero "Get Started Free" does nothing
+document.getElementById('hero-start').addEventListener('click', function(e){
+  e.preventDefault();
+});
+
+// INTENTIONALLY BROKEN: "Sign In" link does nothing
+document.getElementById('signin-link').addEventListener('click', function(e){
+  e.preventDefault();
+});
+
+// INTENTIONALLY BROKEN: Pricing buttons do nothing
+document.querySelectorAll('.pricing-card .btn-primary').forEach(btn => {
+  btn.addEventListener('click', function(e){
+    e.preventDefault();
+    // No checkout or signup
+  });
+});
+
+// KNOWN WORKING: Navigation to #features, #pricing, #testimonials, #about via smooth scroll
+// KNOWN WORKING: All content sections render correctly
+// INTENTIONALLY MISSING: No login/registration system
+// INTENTIONALLY MISSING: No blog section (link exists but no page)
+// INTENTIONALLY MISSING: No contact form (link exists but no page)
+// INTENTIONALLY MISSING: No privacy policy page (link exists but no page)
+// INTENTIONALLY MISSING: No terms of service page
+// INTENTIONALLY MISSING: No user dashboard (marketing site only)
+</script>
+</body>
+</html>

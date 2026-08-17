@@ -30,3 +30,19 @@ npm-debug.log*
 # Project archive exports (not source)
 qase-project.tar.gz
 qase-project.zip
+
+# Drytis scratch scripts (contain literal test tokens — never publish)
+.drytis/*.js
+.drytis/*.mjs
+# Session scratch: logs, recovered runtime data, backups (never publish)
+.drytis/cred.json
+.drytis/*.txt
+.drytis/findings-recovered*.json
+.drytis/backup-*/
+.qase-old-corrupted/
+.qase-test-*/
+tests_old/
+public/downloads/
+/phase17-docs.zip
+/resp-body-root.txt
+/styles-inspect.txt

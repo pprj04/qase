@@ -264,28 +264,54 @@ export function scoreFindingQuality(finding, allFindings = []) {
  * @param {object[]} findings
  * @returns {{ score, verdict, releaseReady, confidence, risk, criticalIssues, recommendations, breakdown }}
  */
-export function calculateMissionQuality(findings = []) {
+export function calculateMissionQuality(findings = [], context = {}) {
 	if (!findings.length) {
 		return {
 			score: 100, verdict: 'pass', releaseReady: true,
 			confidence: 1.0, risk: 'low',
 			criticalIssues: [], recommendations: [],
-			breakdown: {}
+			breakdown: {}, scoringModel: 'v2'
 		};
 	}
 
-	let totalDeduction = 0;
 	const breakdown = { critical: 0, high: 0, medium: 0, low: 0, info: 0, duplicates: 0 };
 
+	for (const f of findings) {
+		const isDup = f.isDuplicate === true;
+		if (isDup) breakdown.duplicates++;
+		else breakdown[f.severity] = (breakdown[f.severity] ?? 0) + 1;
+	}
+
+	// Phase 9: Capped logarithmic scoring model
+	// Instead of linear deduction (which collapses to 0), we use:
+	//   deduction = MAX_DEDUCTION × (1 - e^(-λ × weightedIssues))
+	// This gives diminishing returns on each additional issue.
+	const MAX_DEDUCTION = 92;          // Max possible deduction (floor = 8, not 0)
+	const LAMBDA = 0.035;              // Decay rate — controls curve shape
+	const CRITICAL_FLOOR = 15;         // Any critical finding floors the score
+
+	// Weight each finding
+	let weightedIssues = 0;
 	for (const f of findings) {
 		const weight = SEVERITY_WEIGHTS[f.severity] ?? SEVERITY_WEIGHTS.medium;
 		const confidence = typeof f.confidence === 'number' ? f.confidence : 0.5;
 		const isDup = f.isDuplicate === true;
-		const deduction = isDup ? weight * 0.1 : weight * confidence;
-		totalDeduction += deduction;
+		weightedIssues += isDup ? weight * 0.05 * confidence : weight * confidence;
+	}
 
-		if (isDup) breakdown.duplicates++;
-		else breakdown[f.severity] = (breakdown[f.severity] ?? 0) + 1;
+	// Logarithmic deduction
+	let totalDeduction = MAX_DEDUCTION * (1 - Math.exp(-LAMBDA * weightedIssues));
+
+	// Apply critical floor
+	if (breakdown.critical > 0) {
+		totalDeduction = Math.max(totalDeduction, 100 - CRITICAL_FLOOR);
+	}
+
+	// Workflow success rate factor (Phase 9)
+	if (context.workflowSuccessFactor != null) {
+		// If workflows passed well, give a small boost (up to +5)
+		const wfBoost = Math.round(context.workflowSuccessFactor * 5);
+		totalDeduction = Math.max(0, totalDeduction - wfBoost);
 	}
 
 	const score = Math.max(0, Math.round(100 - totalDeduction));
@@ -358,7 +384,8 @@ export function calculateMissionQuality(findings = []) {
 		criticalIssues,
 		recommendations,
 		breakdown,
-		evidenceCoverage
+		evidenceCoverage,
+		scoringModel: 'v2'
 	};
 }
 

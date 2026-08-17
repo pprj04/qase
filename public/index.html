@@ -111,6 +111,24 @@
       <div class="question-slot" id="question-slot"></div>
 
       <form class="composer" id="composer">
+        <div id="intent-panel" class="intent-panel" hidden>
+          <label>Build prompt
+            <input type="text" id="intent-build-prompt" placeholder="Describe the application being tested (what it is, who uses it)">
+          </label>
+          <label>Requirements (comma-separated)
+            <input type="text" id="intent-requirements" placeholder="e.g. users can register, checkout works on mobile">
+          </label>
+          <label>Device
+            <select id="intent-device">
+              <option value="">Any</option>
+              <option value="desktop">Desktop</option>
+              <option value="mobile">Mobile</option>
+              <option value="tablet">Tablet</option>
+            </select>
+          </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-up">Hide</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-down" hidden>+ Mission intent</button>
         <textarea id="composer-input" rows="1" placeholder="https://example.com — or an instruction for the agent" autocomplete="off"></textarea>
         <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
       </form>
@@ -130,8 +148,19 @@
         <span class="subtle" id="browser-title"></span>
       </header>
 
-      <div class="stage" id="stage">
-        <div class="stage-inner" id="stage-inner" hidden>
+        <div class="stage" id="stage">
+          <div class="device-strip" id="device-strip" hidden></div>
+          <div class="mission-stage-strip" id="mission-stage-strip" hidden>
+            <div class="mission-phases" id="mission-phases" hidden>
+              <div data-phase="explore"><span class="ph-mark"></span><span class="ph-name">Explore</span></div>
+              <div data-phase="test"><span class="ph-mark"></span><span class="ph-name">Test</span></div>
+              <div data-phase="report"><span class="ph-mark"></span><span class="ph-name">Report</span></div>
+            </div>
+          </div>
+          <div class="exec-stats" id="exec-stats-bar" hidden>
+            <span id="exec-stats-steps"></span><span id="exec-stats-pages"></span><span id="exec-stats-findings"></span><span id="exec-stats-dur"></span>
+          </div>
+          <div class="stage-inner" id="stage-inner" hidden>
           <img id="frame" alt="Live view of the site under test">
           <div class="overlay" id="overlay">
             <div class="target-box" id="target-box"></div>
@@ -214,6 +243,51 @@
           </div>
           <div class="metrics-overview" id="metrics-overview"></div>
           <div class="findings-grouped" id="report-view"></div>
+
+          <!-- Phase 17: Application Quality / UX Intelligence panel -->
+          <section class="uxq-panel" id="ux-quality-panel" hidden>
+            <div class="uxq-head">
+              <div>
+                <h2>Application Quality</h2>
+                <div class="uxq-meta" id="uxq-meta"></div>
+              </div>
+              <div class="uxq-badge" id="uxq-overall">—</div>
+            </div>
+            <div class="uxq-section-head">
+              <span>Quality Dimensions</span>
+            </div>
+            <div class="uxq-dimensions" id="uxq-dimensions"></div>
+            <div class="uxq-section-head">
+              <span>UX Issues</span>
+              <div class="uxq-filters" id="uxq-filters">
+                <button type="button" class="uxq-filter is-active" data-filter="all">All</button>
+                <button type="button" class="uxq-filter" data-filter="critical">Critical</button>
+                <button type="button" class="uxq-filter" data-filter="major">Major</button>
+                <button type="button" class="uxq-filter" data-filter="minor">Minor</button>
+              </div>
+            </div>
+            <div class="uxq-issues" id="uxq-issues"></div>
+            <div class="uxq-section-head">
+              <span>Recommendations</span>
+            </div>
+            <div class="uxq-recs" id="uxq-recs"></div>
+            <div class="uxq-section-head">
+              <span>Unverified Observations</span>
+            </div>
+            <div class="uxq-unverified" id="uxq-unverified"></div>
+          </section>
+
+          <!-- Phase 17: UX issue drill-down dialog -->
+          <dialog class="modal modal-wide" id="ux-issue-detail">
+            <form method="dialog" class="modal-inner">
+              <header class="modal-head">
+                <h2 id="ux-issue-title">UX Issue</h2>
+                <button class="btn btn-ghost btn-sm" type="button" id="ux-issue-close">✕</button>
+              </header>
+              <div class="modal-body" id="ux-issue-body"></div>
+              <footer class="modal-foot" id="ux-issue-foot"></footer>
+            </form>
+          </dialog>
         </section>
       </div>
     </aside>
@@ -355,6 +429,14 @@
         </select>
         <select id="bug-filter-category" class="bugs-filter-select">
           <option value="">All categories</option>
+        </select>
+        <select id="bug-filter-fix-status" class="bugs-filter-select" title="Filter by fix validation status">
+          <option value="">All fix statuses</option>
+          <option value="VERIFIED_FIXED">✅ Verified Fixed</option>
+          <option value="STILL_BROKEN">❌ Still Broken</option>
+          <option value="PARTIALLY_FIXED">◐ Partially Fixed</option>
+          <option value="REGRESSED">⚠ Regressed</option>
+          <option value="UNABLE_TO_VERIFY">? Unable to Verify</option>
         </select>
       </div>
     </header>

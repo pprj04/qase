@@ -10,7 +10,7 @@ import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
-	listSessions, liveFor, loadSessions, setStatus, startWatchdog
+	listSessions, liveFor, loadSessions, setStatus, startWatchdog, pruneOldSessions
 } from './store.js';
 import {
 	saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, updateWorkflow
@@ -67,7 +67,7 @@ import {
 	autoCaptureBaselines, getTestCaseIdsWithBaselines
 } from './baselines.js';
 import { summarizeAppModel } from './appModel.js';
-import { queryKnowledge, detectAppMetadata, generateExplorationHints, validateKnowledge, detectKnowledgeConflicts } from './knowledge.js';
+import { queryKnowledge, detectAppMetadata, generateExplorationHints, validateKnowledge, detectKnowledgeConflicts, writeFixValidationKnowledge } from './knowledge.js';
 import { getAllPatterns, getPatternProvenance, getPatternsForMission, deletePattern, getKnowledgeStats, applyDecay, clearAllPatterns } from './knowledge.js';
 import { summarizeKnowledgeItem } from './knowledgeModel.js';
 import {
@@ -116,8 +116,52 @@ app.get('/api/artifacts/:runId/:filename', (request, response) => {
 mountDemoSite(app);
 
 loadSessions();
+loadAssessments(); // Phase 17 UX assessment store (survives restarts)
 startScheduler();
 startWatchdog();
+
+/* ── Phase 18: cross-module hooks (wired after stores are live) ───── */
+
+// Targeted-regression case selection (validationExecutorCore) reads the test
+// case store through this hook instead of importing a circular dependency.
+globalThis.__qaseListTestCases = () => listTestCases();
+
+// Validated fix outcomes are folded into the existing knowledge system.
+globalThis.__qasePhase18KnowledgeWriter = (run, originalFinding) => {
+	try {
+		writeFixValidationKnowledge(run, originalFinding);
+	} catch { /* knowledge capture is best-effort */ }
+};
+
+/* ── Phase 9.3: Resource Cleanup ──────────────────────────────────── */
+
+/**
+ * Phase 9.3: Periodic resource cleanup.
+ *
+ * 1. Closes browsers belonging to sessions that are no longer running
+ *    (leaked Chromium processes were the main memory-leak source).
+ * 2. Prunes the session list to the most recent 50 so sessions.json
+ *    stays bounded as missions accumulate.
+ */
+function runResourceCleanup() {
+	try {
+		for (const summary of listSessions()) {
+			const record = liveFor(summary.id);
+			if (summary.status && !['running', 'awaiting_input'].includes(summary.status) && record?.browser) {
+				void closeBrowser(summary.id).catch(() => { /* best effort */ });
+			}
+		}
+		const pruned = pruneOldSessions(50);
+		if (pruned > 0) {
+			console.log(`[resource-cleanup] Pruned ${pruned} old sessions (kept 50)`);
+		}
+	} catch (err) {
+		console.error('[resource-cleanup] failed:', err?.message || err);
+	}
+}
+
+setInterval(runResourceCleanup, 30 * 60 * 1000).unref?.();
+runResourceCleanup();
 
 /* ── Health endpoint (no auth) ──────────────────────────────────── */
 
@@ -1165,6 +1209,13 @@ app.get('/api/metrics/dashboard', (request, response) => {
 });
 
 /* ── Findings / Bugs Hub routes ──────────────────────────────────── */
+
+// Phase 16/17/18 additive surface — mounted BEFORE the legacy findings
+// routes so specific paths (e.g. /api/findings/grouped) win over the
+// generic /api/findings/:id parameter route below.
+import { phaseRouter } from './phaseRouter.js';
+import { getAssessmentForMission, loadAssessments } from './uxAssessment.js';
+app.use('/api', phaseRouter(requireApiToken));
 
 app.get('/api/findings', (request, response) => {
 	response.json(listFindings({
@@ -2338,6 +2389,28 @@ function finalizeMissionFromSession(mission, session) {
 		console.error(`[evidence-graph] Failed to collect evidence for mission ${mission.id}:`, egErr.message);
 	}
 
+	// Phase 17: fire-and-forget UX + application-quality assessment after
+	// finalize. Runs off the request path so mission completion latency is
+	// unaffected; persists its own record in the UX assessment store.
+	setImmediate(() => {
+		import('./uxAssessment.js')
+			.then(({ runUxAssessment }) => runUxAssessment(session, mission, {}))
+			.catch(err => console.error(`[ux-assessment] background run failed for ${mission.id}:`, err?.message || err));
+	});
+
+	// Phase 9.3: Close browser when the session is not done — sessions that
+	// complete normally have their browser closed by the pipeline, but
+	// error/interrupted/idle leftovers used to leak a Chromium process after
+	// mission finalization. Only actively-running sessions keep theirs.
+	try {
+		const sessionStatus = session.status;
+		if (sessionStatus !== 'done' && sessionStatus !== 'running' && sessionStatus !== 'awaiting_input') {
+			void closeBrowser(session.id);
+		}
+	} catch (cleanupErr) {
+		console.error(`[resource-cleanup] finalizer browser cleanup failed for ${session.id}:`, cleanupErr?.message || cleanupErr);
+	}
+
 	// Fire webhooks
 	fireMissionWebhooks(mission.id, report);
 
@@ -2410,6 +2483,40 @@ function buildMissionReportMarkdown(mission, report) {
 		lines.push('---', '', '## Improvement Prompt', '', '```', report.improvementPrompt, '```');
 	}
 
+	// Phase 17: append APPLICATION QUALITY section when a UX assessment exists.
+	try {
+		const a = getAssessmentForMission(mission.id);
+		if (a) {
+			const overall = a.quality?.overall ?? {};
+			const dims = a.quality?.dimensions ?? [];
+			lines.push(
+				'---', '',
+				'## APPLICATION QUALITY', '',
+				`**Overall:** ${(overall.score != null ? (overall.score * 100).toFixed(0) : 'N/A')}%  `,
+				`**Recorded:** ${a.recordedAt ? new Date(a.recordedAt).toISOString() : 'N/A'}  `,
+				`**Evidence Coverage:** ${overall.evidenceCoverage != null ? `${(overall.evidenceCoverage * 100).toFixed(0)}%` : 'N/A'}`,
+				'',
+			);
+			for (const d of dims) {
+				const bar = d.score != null ? `${(d.score * 100).toFixed(0)}%` : 'N/A';
+				lines.push(`- **${d.dimension}**: ${bar}`);
+			}
+			const issues = (a.ux?.issues ?? a.issues ?? []).filter(i => i.reviewState !== 'REJECTED');
+			if (issues.length) {
+				lines.push('', '### UX ISSUES', '');
+				for (const i of issues) {
+					lines.push(`#### ${i.title || i.checkId}`);
+					lines.push(`- **Severity:** ${i.severity}  `);
+					lines.push(`- **Confidence:** ${i.confidence != null ? `${(i.confidence * 100).toFixed(0)}%` : 'N/A'}  `);
+					lines.push(`- **Expected:** ${i.expected ?? 'N/A'}  `);
+					lines.push(`- **Actual:** ${i.actual ?? 'N/A'}  `);
+					const ev = (i.evidence ?? []).slice(0, 3);
+					if (ev.length) lines.push(`- **Evidence:** ${ev.map(e => e.detail || e.kind).join(' | ')}`);
+					lines.push('');
+				}
+			}
+		}
+	} catch { /* assessment optional — report still renders */ }
 	return lines.join('\n');
 }
 

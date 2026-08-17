@@ -116,15 +116,18 @@ async function loadPipelineFromSession(sessionId) {
 			pipelineState.stages = pipeline.stages;
 			pipelineState.summary = pipeline.summary;
 			renderPipeline();
+			// Restore the persisted mission summary bar on hydration (Phase 15).
+			if (pipeline.summary && pipeline.summary.qualityScore != null) {
+				window.dispatchEvent(new CustomEvent('pipeline:summary-restored', { detail: pipeline.summary }));
+			}
 		} else {
 			pipelineState.stages = null;
 			pipelineState.summary = null;
 			renderPipeline();
 		}
 	} catch {
-		pipelineState.stages = null;
-		pipelineState.summary = null;
-		renderPipeline();
+		// Pipeline data is supplementary — don't block the UI on failure.
+		// Leave any existing pipeline data in place.
 	}
 }
 
@@ -594,19 +597,150 @@ async function loadDevIntelFromSession(sessionId) {
 		const data = await api(`/sessions/${sessionId}/dev-intelligence`);
 		devIntelState.data = data;
 	} catch {
-		devIntelState.data = null;
+		// Non-critical: dev intelligence is supplementary.
+		// Don't null out existing data on failure.
 	}
-	await loadGapAnalysis(sessionId);
-	await loadAppUnderstanding(sessionId);
-	await loadKnowledge(sessionId);
-	await loadDecision(sessionId);
-	await loadLoopStatus();
-	await loadEvidence();
+	// Parallelize all sub-loads instead of 8 sequential awaits.
+	await Promise.allSettled([
+		loadGapAnalysis(sessionId),
+		loadAppUnderstanding(sessionId),
+		loadKnowledge(sessionId),
+		loadDecision(sessionId),
+		loadLoopStatus(),
+		loadEvidence(),
+		loadUnderstanding(),
+		loadWorkflows(),
+	]);
 	renderDevIntel();
 	renderKnowledgeSection();
 	renderDecisionSection();
 	renderLoopSection();
 	renderEvidenceSection();
+	renderUnderstandingSection();
+	renderWorkflowSection();
+}
+
+/* ── Workflow Intelligence (Phase 9) ─────────────────────────────── */
+
+let cachedWorkflows = null;
+
+async function loadWorkflows(missionId) {
+	try {
+		let mId = missionId;
+		if (!mId) {
+			const missions = await api('/missions');
+			const linked = missions.find(m => m.sessionId === state.sessionId);
+			if (!linked) return;
+			mId = linked.id;
+		}
+		const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+		const res = await fetch(`/api/v1/missions/${mId}/workflows`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (res.ok) {
+			cachedWorkflows = await res.json();
+		}
+	} catch {
+		cachedWorkflows = null;
+	}
+}
+
+function renderWorkflowSection() {
+	const container = document.getElementById('workflow-section');
+	if (!container) return;
+
+	if (!cachedWorkflows || cachedWorkflows.status === 'not_analyzed') {
+		container.innerHTML = '';
+		return;
+	}
+
+	const cov = cachedWorkflows.coverage || {};
+	const workflows = cachedWorkflows.workflows || [];
+	const parts = [];
+
+	parts.push('<div class="intel-group">');
+	parts.push('<h3 class="intel-group-title">⚙️ Workflow Validation</h3>');
+
+	// Coverage bar
+	const coveragePct = cov.coverageRate || 0;
+	const passPct = cov.passRate || 0;
+	parts.push('<div class="workflow-coverage-bar">');
+	parts.push(`<div class="coverage-stat">Coverage: <strong>${cov.tested || 0}/${cov.total || 0}</strong> (${coveragePct}%)</div>`);
+	parts.push(`<div class="coverage-stat">Pass Rate: <strong>${cov.passed || 0}/${cov.tested || 0}</strong> (${passPct}%)</div>`);
+	parts.push('</div>');
+
+	// Status chips
+	const statusChips = [];
+	if (cov.passed > 0) statusChips.push(`<span class="wf-chip wf-pass">✓ ${cov.passed} passed</span>`);
+	if (cov.failed > 0) statusChips.push(`<span class="wf-chip wf-fail">✗ ${cov.failed} failed</span>`);
+	if (cov.blocked > 0) statusChips.push(`<span class="wf-chip wf-blocked">⊘ ${cov.blocked} blocked</span>`);
+	if (cov.notTested > 0) statusChips.push(`<span class="wf-chip wf-nottested">? ${cov.notTested} not tested</span>`);
+	if (statusChips.length > 0) {
+		parts.push(`<div class="wf-chips">${statusChips.join(' ')}</div>`);
+	}
+
+	// Per-workflow details
+	parts.push('<div class="workflow-list">');
+	for (const wf of workflows.slice(0, 10)) {
+		const outcomeClass = wf.outcome === 'pass' ? 'wf-pass' :
+			(wf.outcome === 'failed' || wf.outcome === 'blocked') ? 'wf-fail' :
+			wf.outcome === 'partially_completed' ? 'wf-partial' : 'wf-nottested';
+		const outcomeLabel = wf.outcome?.replace(/_/g, ' ').toUpperCase() || 'UNKNOWN';
+
+		parts.push('<div class="workflow-item">');
+		parts.push(`<div class="workflow-header">`);
+		parts.push(`<span class="workflow-name">${escapeHtml((wf.name || '').replace(/_/g, ' '))}</span>`);
+		parts.push(`<span class="wf-outcome ${outcomeClass}">${outcomeLabel}</span>`);
+		parts.push(`</div>`);
+
+		// Step results
+		if (wf.steps) {
+			const stepIcons = wf.steps.map(s => {
+				if (s.outcome === 'passed') return '<span class="step-icon step-pass">✓</span>';
+				if (s.outcome === 'failed') return '<span class="step-icon step-fail">✗</span>';
+				if (s.outcome === 'blocked') return '<span class="step-icon step-blocked">⊘</span>';
+				return '<span class="step-icon step-unknown">?</span>';
+			});
+			parts.push(`<div class="workflow-steps">${stepIcons.join(' ')} <span class="step-count">(${wf.stepSummary?.passed || 0}/${wf.stepSummary?.total || 0} steps)</span></div>`);
+		}
+
+		// Priority + criticality (Phase 9.1: all escaped)
+		const meta = [];
+		if (wf.priority) meta.push(`Priority: ${escapeHtml(wf.priority)}`);
+		if (wf.criticality) meta.push(escapeHtml(wf.criticality));
+		if (wf.firstFailedStep) meta.push(`Failed: ${escapeHtml(wf.firstFailedStep.replace(/_/g, ' '))}`);
+		if (meta.length > 0) {
+			parts.push(`<div class="workflow-meta">${meta.join(' · ')}</div>`);
+		}
+
+		// Phase 9.1: Expected vs Actual + Evidence + Root Cause
+		if (wf.expectedOutcome || wf.actualOutcome) {
+			parts.push('<div class="wf-detail">');
+			if (wf.expectedOutcome) parts.push(`<div class="wf-detail-row"><strong>Expected:</strong> ${escapeHtml(wf.expectedOutcome)}</div>`);
+			if (wf.actualOutcome) parts.push(`<div class="wf-detail-row"><strong>Actual:</strong> ${escapeHtml(wf.actualOutcome)}</div>`);
+			parts.push('</div>');
+		}
+		if (wf.rootCause) {
+			parts.push(`<div class="wf-rootcause"><strong>Root cause:</strong> ${escapeHtml(wf.rootCause)}</div>`);
+		}
+		if (wf.evidenceRefs && wf.evidenceRefs.length > 0) {
+			const refs = wf.evidenceRefs.map(r => `<span class="wf-evidence-ref">${escapeHtml(r)}</span>`);
+			parts.push(`<div class="wf-evidence"><strong>Evidence:</strong> ${refs.join(' ')}</div>`);
+		}
+		if (wf.findingId) {
+			parts.push(`<div class="wf-finding-link">→ <a href="#" class="wf-finding-anchor" data-finding-id="${escapeHtml(wf.findingId)}">View finding</a></div>`);
+		}
+		if (wf.revalidationStatus) {
+			const revalClass = wf.revalidationStatus === 'improved' ? 'wf-reval-improved' : wf.revalidationStatus === 'no_change' ? 'wf-reval-nochange' : 'wf-reval-blocked';
+			parts.push(`<div class="wf-revalidation ${revalClass}">🔄 Revalidation: ${escapeHtml(wf.revalidationStatus)}</div>`);
+		}
+
+		parts.push('</div>');
+	}
+	parts.push('</div>');
+
+	parts.push('</div>');
+	container.innerHTML = parts.join('');
 }
 
 /* ── Decision Engine (Phase 4) ─────────────────────────────────── */
@@ -1040,7 +1174,7 @@ function renderEvidenceSection() {
 		html += '<div class="evidence-types-title">By Type</div>';
 		html += '<div class="evidence-type-grid">';
 		for (const [type, count] of Object.entries(stats.evidenceByType)) {
-			html += `<div class="evidence-type-chip"><span class="evidence-type-icon">${getEvidenceIcon(type)}</span> ${type} <span class="evidence-type-count">${count}</span></div>`;
+			html += `<div class="evidence-type-chip"><span class="evidence-type-icon">${getEvidenceIcon(type)}</span> ${escapeHtml(type)} <span class="evidence-type-count">${count}</span></div>`;
 		}
 		html += '</div>';
 		html += '</div>';
@@ -1060,4 +1194,121 @@ function getEvidenceIcon(type) {
 	return icons[type] || '📎';
 }
 
-export { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState, renderKnowledgeSection, loadKnowledge, renderDecisionSection, loadDecision, renderLoopSection, loadLoopStatus, renderEvidenceSection, loadEvidence };
+export { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState, renderKnowledgeSection, loadKnowledge, renderDecisionSection, loadDecision, renderLoopSection, loadLoopStatus, renderEvidenceSection, loadEvidence, renderUnderstandingSection, loadUnderstanding };
+
+// ─── Phase 8: Mission Understanding ─────────────────────────────────
+
+let cachedUnderstanding = null;
+
+async function loadUnderstanding(missionId) {
+	try {
+		let mId = missionId;
+		if (!mId) {
+			// Find the mission linked to the current session
+			const missions = await api('/missions');
+			const linked = missions.find(m => m.sessionId === state.sessionId);
+			if (!linked) return;
+			mId = linked.id;
+		}
+
+		const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+		const res = await fetch(`/api/v1/missions/${mId}/understanding`, {
+			headers: token ? { Authorization: `Bearer ${token}` } : {},
+		});
+		if (res.ok) {
+			cachedUnderstanding = await res.json();
+		}
+	} catch (e) {
+		// silent fail
+	}
+}
+
+function renderUnderstandingSection() {
+	const container = document.getElementById('understanding-section');
+	if (!container) return;
+
+	if (!cachedUnderstanding || cachedUnderstanding.status === 'not_analyzed') {
+		container.innerHTML = '';
+		return;
+	}
+
+	const u = cachedUnderstanding;
+	let html = '<div class="understanding-panel">';
+	html += '<h3 class="section-title">Application Understanding</h3>';
+
+	// Intent
+	if (u.intent) {
+		html += '<div class="understanding-row">';
+		html += `<span class="understanding-label">Intent</span>`;
+		html += `<span class="understanding-value">${escapeHtml(u.intent.intentAvailability || 'unknown')}</span>`;
+		if (u.intent.expectedFeatureCount > 0) {
+			html += `<span class="understanding-detail">${u.intent.expectedFeatureCount} expected features</span>`;
+		}
+		html += '</div>';
+	}
+
+	// Domain
+	if (u.domain) {
+		const d = u.domain;
+		const confPct = Math.round((d.confidence || 0) * 100);
+		const confColor = confPct >= 65 ? '#22c55e' : confPct >= 35 ? '#f59e0b' : '#ef4444';
+		html += '<div class="understanding-row">';
+		html += `<span class="understanding-label">Domain</span>`;
+		html += `<span class="understanding-value">${escapeHtml(d.domainName || d.domain)}</span>`;
+		html += `<span class="understanding-detail" style="color:${confColor}">${confPct}% confidence (${escapeHtml(d.method || 'unknown')})</span>`;
+		html += '</div>';
+
+		// Domain hypotheses
+		if (d.hypotheses && d.hypotheses.length > 1) {
+			html += '<div class="understanding-hypotheses">';
+			for (const h of d.hypotheses.slice(0, 3)) {
+				html += `<div class="hypothesis-chip">${escapeHtml(h.domainName)} (${h.sources.length} sources)</div>`;
+			}
+			html += '</div>';
+		}
+	}
+
+	// Expected vs Observed
+	if (u.expectedVsObserved && u.expectedVsObserved.summary) {
+		const s = u.expectedVsObserved.summary;
+		html += '<div class="understanding-features">';
+		html += '<div class="understanding-features-title">Expected vs Observed</div>';
+		html += '<div class="feature-status-grid">';
+		html += `<div class="feature-status-item implemented"><span class="feature-status-count">${s.implemented || 0}</span><span class="feature-status-label">Implemented</span></div>`;
+		html += `<div class="feature-status-item broken"><span class="feature-status-count">${s.implemented_but_broken || 0}</span><span class="feature-status-label">Broken</span></div>`;
+		html += `<div class="feature-status-item missing"><span class="feature-status-count">${s.missing || 0}</span><span class="feature-status-label">Missing</span></div>`;
+		html += `<div class="feature-status-item nottested"><span class="feature-status-count">${s.not_tested || 0}</span><span class="feature-status-label">Not Tested</span></div>`;
+		html += '</div>';
+		html += '</div>';
+	}
+
+	// Gaps
+	if (u.gapReport) {
+		const g = u.gapReport;
+		if (g.missingFeatures && g.missingFeatures.length > 0) {
+			html += '<div class="understanding-gaps">';
+			html += '<div class="understanding-gaps-title">Missing Features</div>';
+			for (const f of g.missingFeatures.slice(0, 8)) {
+				html += `<div class="gap-item">▸ ${escapeHtml(f.name)} <span class="gap-source">(${escapeHtml(f.source)})</span></div>`;
+			}
+			if (g.missingFeatures.length > 8) {
+				html += `<div class="gap-more">+${g.missingFeatures.length - 8} more</div>`;
+			}
+			html += '</div>';
+		}
+	}
+
+	// Deduplication
+	if (u.deduplication && u.deduplication.originalCount > 0) {
+		html += '<div class="understanding-dedup">';
+		html += `<span class="understanding-label">Findings</span>`;
+		html += `<span class="understanding-value">${u.deduplication.canonicalCount}/${u.deduplication.originalCount}</span>`;
+		if (u.deduplication.duplicateCount > 0) {
+			html += `<span class="understanding-detail">${u.deduplication.duplicateCount} duplicates suppressed</span>`;
+		}
+		html += '</div>';
+	}
+
+	html += '</div>';
+	container.innerHTML = html;
+}

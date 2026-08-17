@@ -21,6 +21,21 @@ const FRAME_QUALITY = Number(process.env.QASE_FRAME_QUALITY ?? 55);
 const CURSOR_DWELL_MS = Number(process.env.QASE_CURSOR_DWELL_MS ?? 420);
 /** How long to let a click's navigation land before reporting where we are. */
 const NAV_SETTLE_MS = Number(process.env.QASE_NAV_SETTLE_MS ?? 1600);
+/**
+ * Maximum time to wait for a browser interaction (click, fill, check, etc.)
+ * to resolve. Playwright's default is 30s, which blocks the agent for the
+ * full duration when the target element is hidden or not yet rendered.
+ * 8 seconds is long enough for animations and async renders, short enough
+ * that the agent gets an error and adapts instead of hanging indefinitely.
+ */
+const BROWSER_ACTION_TIMEOUT_MS = Number(process.env.QASE_BROWSER_ACTION_TIMEOUT_MS ?? 8000);
+/**
+ * How many consecutive browser failures before we force a browser restart.
+ * A dead or unresponsive Chrome process makes every subsequent operation
+ * fail; restarting the browser clears the dead state and lets the agent
+ * continue testing instead of spiraling into an unrecoverable failure loop.
+ */
+const BROWSER_RECOVERY_THRESHOLD = Number(process.env.QASE_BROWSER_RECOVERY_THRESHOLD ?? 3);
 
 /**
  * Methods that move the pointer somewhere the user should see it move.
@@ -46,7 +61,40 @@ export function attachBrowserBridge(session, service) {
 		frameTimer: undefined,
 		subscribers: 0,
 		lastFrame: undefined,
-		disposed: false
+		disposed: false,
+		/** Consecutive browser operation failures — used for dead-browser recovery. */
+		consecutiveFailures: 0,
+		/** Whether the browser has been force-restarted for this session. */
+		browserRestarted: false
+	};
+
+	/**
+	 * When the browser dies (Chrome process crash, dead page, broken context),
+	 * every subsequent operation fails with a connection error. This method
+	 * detects that pattern: after BROWSER_RECOVERY_THRESHOLD consecutive
+	 * failures, it disposes the dead browser so ensureContext() on the next
+	 * call will launch a fresh one.
+	 */
+	const trackFailure = (methodName) => {
+		bridge.consecutiveFailures++;
+		if (bridge.consecutiveFailures >= BROWSER_RECOVERY_THRESHOLD && !bridge.browserRestarted) {
+			console.log(`[browser-bridge] ${bridge.consecutiveFailures} consecutive failures — restarting browser for session ${session.id?.slice(0, 8)}`);
+			bridge.browserRestarted = true;
+			// Dispose the dead browser asynchronously — the next operation will
+			// trigger ensureContext() which launches a fresh Chrome.
+			service.dispose?.().catch(() => {});
+			// Reset the page reference so the bridge doesn't try to use the dead page
+			service.activePage = undefined;
+			// Reset counter so the agent has a fresh chance with the new browser
+			bridge.consecutiveFailures = 0;
+		}
+	};
+
+	const trackSuccess = () => {
+		if (bridge.consecutiveFailures > 0) {
+			bridge.consecutiveFailures = 0;
+			bridge.browserRestarted = false;
+		}
 	};
 
 	/*
@@ -329,7 +377,24 @@ export function attachBrowserBridge(session, service) {
 				// Fall through to the real action.
 			}
 
-			const result = await original(surface, input);
+			let result;
+			try {
+				result = await Promise.race([
+					original(surface, input),
+					new Promise((_, reject) =>
+						setTimeout(() => {
+							const targetDesc = typeof input === 'object' && input
+								? (input.selector || input.elementId || input.text || input.label || JSON.stringify(input).slice(0, 80))
+								: String(input).slice(0, 80);
+							reject(new Error(`Browser ${verb} timed out after ${BROWSER_ACTION_TIMEOUT_MS / 1000}s waiting for "${targetDesc}". The element may be hidden or not yet rendered.`));
+						}, BROWSER_ACTION_TIMEOUT_MS)
+					)
+				]);
+				trackSuccess();
+			} catch (err) {
+				trackFailure(method);
+				throw err;
+			}
 
 			try {
 				publishCursor(`${verb}:done`, target, input);
@@ -381,6 +446,37 @@ export function attachBrowserBridge(session, service) {
 		return originalType(surface, resolveSecrets(session.id, text));
 	};
 
+	/**
+	 * Non-pointer browser operations (snapshot, diagnostics, screenshot) also
+	 * need a timeout guard. When the browser is in a bad state after a failed
+	 * interaction, Playwright's evaluateAll can hang indefinitely waiting for
+	 * a dead page. This wraps those methods with the same action timeout.
+	 */
+	const READ_ONLY_METHODS = ['snapshot', 'getDiagnostics', 'screenshot'];
+	for (const method of READ_ONLY_METHODS) {
+		const original = service[method]?.bind(service);
+		if (!original) {
+			continue;
+		}
+		service[method] = async (...args) => {
+			try {
+				const result = await Promise.race([
+					original(...args),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error(
+							`Browser ${method} timed out after ${BROWSER_ACTION_TIMEOUT_MS / 1000}s. The page may be unresponsive.`
+						)), BROWSER_ACTION_TIMEOUT_MS)
+					)
+				]);
+				trackSuccess();
+				return result;
+			} catch (err) {
+				trackFailure(method);
+				throw err;
+			}
+		};
+	}
+
 	// Navigation is worth showing even though no pointer is involved.
 	for (const method of ['open', 'openInAgentManager', 'navigateBack', 'navigateForward', 'reload']) {
 		const original = service[method]?.bind(service);
@@ -388,7 +484,21 @@ export function attachBrowserBridge(session, service) {
 			continue;
 		}
 		service[method] = async (...args) => {
-			const result = await original(...args);
+			let result;
+			try {
+				result = await Promise.race([
+					original(...args),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error(
+							`Browser ${method} timed out after ${BROWSER_ACTION_TIMEOUT_MS / 1000}s. The page or browser may be unresponsive.`
+						)), BROWSER_ACTION_TIMEOUT_MS)
+					)
+				]);
+				trackSuccess();
+			} catch (err) {
+				trackFailure(method);
+				throw err;
+			}
 			emit(session, 'browser', {
 				browser: { url: result?.url, title: result?.title, loading: result?.loading, action: method }
 			});

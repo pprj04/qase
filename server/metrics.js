@@ -8,6 +8,8 @@
 import { listSessions, getSession } from './store.js';
 import { listTestCases } from './testCases.js';
 import { listRegressionRuns } from './regressionStore.js';
+import { getFixValidationMetrics } from './fixValidation.js';
+import { getUxMetrics } from './uxAssessment.js';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
 const TREND_LIMIT = 20;
@@ -101,6 +103,10 @@ export function getDashboardMetrics({ projectId } = {}) {
 			totalTests: totalRegressionTests,
 			overallPassRate,
 			recentTrend: regressionTrend
-		}
+		},
+		// Phase 18 observability — fix-validation telemetry on the dashboard.
+		fixValidations: getFixValidationMetrics(),
+		// Phase 17 observability — UX assessment telemetry on the dashboard.
+		uxAssessments: getUxMetrics(),
 	};
 }

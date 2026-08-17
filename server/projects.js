@@ -58,6 +58,8 @@ export function createProject(data) {
 		id: data.id ?? randomUUID(),
 		name: data.name?.trim() || DEFAULT_PROJECT_NAME,
 		baseUrl: data.baseUrl?.trim() || '',
+		// Phase 10: workspace ownership for integration authorization
+		workspaceId: data.workspaceId || null,
 		createdAt: Date.now(),
 		updatedAt: Date.now()
 	};
@@ -80,6 +82,10 @@ export function updateProject(id, patch) {
 
 	if (typeof patch.name === 'string') project.name = patch.name.trim();
 	if (typeof patch.baseUrl === 'string') project.baseUrl = patch.baseUrl.trim();
+	// Phase 10: workspaceId (set once during integration, not freely mutable)
+	if (typeof patch.workspaceId === 'string' && patch.workspaceId.trim() && !project.workspaceId) {
+		project.workspaceId = patch.workspaceId.trim();
+	}
 
 	project.updatedAt = Date.now();
 	persistSoon();

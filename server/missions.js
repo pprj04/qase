@@ -13,11 +13,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { getDefaultProjectId } from './projects.js';
+import { atomicWrite } from './atomicWrite.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -27,14 +28,14 @@ export const MISSION_TYPES = [
 	'full_audit', 'security', 'ux', 'regression', 'feature_gap', 'accessibility'
 ];
 export const MISSION_STATUS = [
-	'created', 'running', 'completed', 'failed', 'aborted'
+	'created', 'queued', 'running', 'completed', 'failed', 'aborted', 'cancelled', 'timeout'
 ];
 
 /**
  * Phase 1 reliability: terminal states that cannot be transitioned out of.
  * A mission in a terminal state rejects start/iterate operations.
  */
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'aborted', 'cancelled', 'timeout']);
 
 /** True if the mission status is terminal (no further transitions allowed). */
 export function isTerminalStatus(status) {
@@ -70,11 +71,11 @@ function scheduleSave() {
 		saveTimer = null;
 		if (!dirty) return;
 		dirty = false;
-		try {
-			mkdirSync(dirname(FILE), { recursive: true });
-			const arr = [...store.values()];
-			writeFileSync(FILE, JSON.stringify(arr, null, 2));
-		} catch (err) {
+			try {
+				mkdirSync(dirname(FILE), { recursive: true });
+				const arr = [...store.values()];
+				atomicWrite(FILE, JSON.stringify(arr, null, 2));
+			} catch (err) {
 			console.error('[missions] save failed:', err.message);
 		}
 	}, 500);
@@ -106,6 +107,11 @@ export function createMission(data = {}) {
 	const mission = {
 		id,
 		projectId,
+		// Phase 10: workspace + identity traceability
+		workspaceId: data.workspaceId || null,
+		createdByUserId: data.createdByUserId || null,
+		correlationId: data.correlationId || null,
+		idempotencyKey: data.idempotencyKey || null,
 		name: data.name || `Mission ${new Date(now).toLocaleString()}`,
 		type: MISSION_TYPES.includes(data.type) ? data.type : 'full_audit',
 		targetUrl: data.targetUrl || null,
@@ -139,6 +145,10 @@ export function createMission(data = {}) {
 		iterations: [],           // [{ number, sessionId, findings, qualityScore, verdict, ranAt, status }]
 		currentIteration: 0,      // 0 = not started, 1+ = iteration count
 
+		// ── Execution Timing ──
+		startedAt: null,          // Set when mission transitions to 'running'
+		estimatedDuration: null,  // Estimated total execution time (ms), computed from history
+
 		createdAt: now,
 		updatedAt: now,
 		completedAt: null
@@ -154,12 +164,30 @@ export function getMission(id) {
 	return store.get(id) || null;
 }
 
-export function listMissions({ projectId, status, type, source } = {}) {
+/**
+ * Phase 10: Find an existing mission by idempotency key.
+ * Used to deduplicate repeated integration requests.
+ *
+ * @param {string} key — idempotency key
+ * @returns {object|null}
+ */
+export function findByIdempotencyKey(key) {
+	if (!key) return null;
+	for (const mission of store.values()) {
+		if (mission.idempotencyKey === key) return mission;
+	}
+	return null;
+}
+
+export function listMissions({ projectId, status, type, source, workspaceId, correlationId } = {}) {
 	let list = [...store.values()];
 	if (projectId) list = list.filter(m => m.projectId === projectId);
 	if (status) list = list.filter(m => m.status === status);
 	if (type) list = list.filter(m => m.type === type);
 	if (source) list = list.filter(m => m.source === source);
+	// Phase 10: workspace + correlation filtering
+	if (workspaceId) list = list.filter(m => m.workspaceId === workspaceId);
+	if (correlationId) list = list.filter(m => m.correlationId === correlationId);
 	list.sort((a, b) => b.updatedAt - a.updatedAt);
 	return list;
 }
@@ -179,7 +207,11 @@ export function updateMission(id, patch = {}) {
 		'findings', 'summary', 'completedAt',
 		'iterations', 'currentIteration', 'context',
 		// Phase 5: Continuous Validation Loop fields
-		'stopReason', 'iterationMetadata'
+		'stopReason', 'iterationMetadata',
+		// Phase 10: Integration identity fields (set at creation, not mutated later)
+		'workspaceId', 'correlationId',
+		// Execution timing
+		'startedAt', 'estimatedDuration'
 	];
 
 	for (const key of allowed) {
@@ -243,6 +275,36 @@ export function deleteMission(id) {
 		bus.emit('mission:deleted', id);
 	}
 	return existed;
+}
+
+/**
+ * Estimates execution duration for a new mission based on historical data.
+ * Uses completed missions of the same type with known timing.
+ *
+ * Returns null if insufficient data (< 3 completed missions with timing).
+ *
+ * @param {string} [missionType] — optional type filter
+ * @returns {number|null} estimated duration in ms, or null
+ */
+export function estimateDuration(missionType) {
+	const completed = [...store.values()].filter(m =>
+		m.status === 'completed' &&
+		m.startedAt &&
+		m.completedAt &&
+		(!missionType || m.type === missionType)
+	);
+
+	if (completed.length < 3) return null;
+
+	// Use median of historical durations for robustness against outliers
+	const durations = completed
+		.map(m => m.completedAt - m.startedAt)
+		.sort((a, b) => a - b);
+
+	const mid = Math.floor(durations.length / 2);
+	return durations.length % 2 === 0
+		? Math.round((durations[mid - 1] + durations[mid]) / 2)
+		: durations[mid];
 }
 
 /**

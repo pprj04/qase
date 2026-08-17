@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PulseMonitor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; }
+.nav { background: #1e293b; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+.nav h1 { font-size: 1.25rem; color: #38bdf8; }
+.nav .links { display: flex; gap: 1.5rem; }
+.nav a { color: #94a3b8; text-decoration: none; font-size: 0.9rem; }
+.nav a:hover { color: #e2e8f0; }
+.container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
+.card { background: #1e293b; border-radius: 0.75rem; padding: 1.5rem; }
+.card h3 { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; margin-bottom: 0.5rem; }
+.card .value { font-size: 2rem; font-weight: 700; color: #f8fafc; }
+.card .change { font-size: 0.85rem; margin-top: 0.25rem; }
+.change.up { color: #4ade80; }
+.change.down { color: #f87171; }
+.chart-container { background: #1e293b; border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 2rem; }
+.chart-container h2 { font-size: 1rem; margin-bottom: 1rem; color: #e2e8f0; }
+.bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 200px; padding-top: 1rem; }
+.bar { flex: 1; background: linear-gradient(180deg, #38bdf8 0%, #0ea5e9 100%); border-radius: 4px 4px 0 0; transition: height 0.3s; }
+.incidents { background: #1e293b; border-radius: 0.75rem; padding: 1.5rem; }
+.incidents h2 { font-size: 1rem; margin-bottom: 1rem; }
+.incident { display: flex; justify-content: space-between; padding: 0.75rem 0; border-bottom: 1px solid #334155; }
+.incident:last-child { border-bottom: none; }
+.incident .severity { padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+.severity.critical { background: #7f1d1d; color: #fca5a5; }
+.severity.warning { background: #78350f; color: #fcd34d; }
+.severity.info { background: #1e3a5f; color: #93c5fd; }
+.actions { display: flex; gap: 1rem; margin-bottom: 2rem; }
+.btn { padding: 0.5rem 1.5rem; border-radius: 0.5rem; border: none; cursor: pointer; font-size: 0.9rem; }
+.btn-primary { background: #0ea5e9; color: white; }
+.btn-secondary { background: #334155; color: #e2e8f0; }
+</style>
+</head>
+<body>
+<nav class="nav">
+<h1>⚡ PulseMonitor</h1>
+<div class="links">
+<a href="#dashboard">Dashboard</a>
+<a href="#metrics">Metrics</a>
+<a href="#incidents">Incidents</a>
+<a href="#settings">Settings</a>
+</div>
+</nav>
+<div class="container">
+<div class="actions">
+<button class="btn btn-primary" onclick="refreshData()">Refresh</button>
+<button class="btn btn-secondary" onclick="exportReport()">Export Report</button>
+</div>
+<div class="grid">
+<div class="card">
+<h3>Uptime</h3>
+<div class="value" id="uptime">99.97%</div>
+<div class="change up">↑ 0.02% from last week</div>
+</div>
+<div class="card">
+<h3>Response Time</h3>
+<div class="value" id="response-time">142ms</div>
+<div class="change down">↓ 8ms improvement</div>
+</div>
+<div class="card">
+<h3>Active Incidents</h3>
+<div class="value" id="active-incidents">3</div>
+<div class="change down">↑ 1 new</div>
+</div>
+</div>
+<div class="chart-container">
+<h2>Response Time (Last 24 Hours)</h2>
+<div class="bar-chart" id="chart"></div>
+</div>
+<div class="incidents">
+<h2>Recent Incidents</h2>
+<div class="incident">
+<span>API Gateway timeout on us-east-1</span>
+<span class="severity critical">Critical</span>
+</div>
+<div class="incident">
+<span>Database connection pool exhaustion</span>
+<span class="severity warning">Warning</span>
+</div>
+<div class="incident">
+<span>Certificate renewal needed in 7 days</span>
+<span class="severity info">Info</span>
+</div>
+</div>
+</div>
+<script>
+// Generate chart bars
+const chart = document.getElementById('chart');
+const hours = 24;
+for (let i = 0; i < hours; i++) {
+const bar = document.createElement('div');
+bar.className = 'bar';
+bar.style.height = (40 + Math.random() * 60) + '%';
+chart.appendChild(bar);
+}
+function refreshData() {
+document.getElementById('uptime').textContent = (99.9 + Math.random() * 0.1).toFixed(2) + '%';
+document.getElementById('response-time').textContent = Math.floor(120 + Math.random() * 60) + 'ms';
+}
+function exportReport() {
+alert('Report exported successfully');
+}
+// BUG: The export button triggers an alert instead of actual export - not a real bug, just behavior
+// REAL BUG: Settings link is dead - goes nowhere
+// BUG: Refresh button doesn't update the chart data, only the cards
+</script>
+</body>
+</html>

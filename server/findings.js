@@ -10,17 +10,27 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
+import {
+	LIFECYCLE, REVIEW_STATUSES, REPRODUCIBILITIES, CATEGORIES, PRIORITIES,
+	validateLifecycleTransition, normalizeCategory,
+} from './findingIntelligence.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FINDINGS_FILE = join(__dirname, '..', '.qase', 'findings.json');
-const MIGRATION_MARKER = join(__dirname, '..', '.qase', '.findings-migrated');
+// QASE_DATA_DIR lets tests run against an isolated store; unset in production.
+const QASE_DIR = process.env.QASE_DATA_DIR ?? join(__dirname, '..', '.qase');
+const FINDINGS_FILE = join(QASE_DIR, 'findings.json');
+const MIGRATION_MARKER = join(QASE_DIR, '.findings-migrated');
+const INTELLIGENCE_BACKFILL_MARKER = join(QASE_DIR, '.finding-intelligence-backfill');
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const VALID_STATUSES = ['open', 'in_testing', 'resolved', 'closed'];
+
+// Phase 16: new reproducibility enum values accepted alongside legacy strings.
+const VALID_REPRODUCIBILITIES = [...REPRODUCIBILITIES, 'confirmed', 'unconfirmed', 'intermittent'];
 
 let findings = [];
 let saveTimer = null;
@@ -30,8 +40,22 @@ function load() {
 		if (existsSync(FINDINGS_FILE)) {
 			findings = JSON.parse(readFileSync(FINDINGS_FILE, 'utf-8'));
 		}
-	} catch {
+	} catch (error) {
+		// NEVER silently start empty: a read/parse failure means the store on
+		// disk is damaged (observed 2026-08-16: inode corruption after a
+		// container pause). Log loudly so operators notice data loss instead
+		// of discovering it via an empty UI later.
+		console.error('[findings] FAILED to load store:', error.message);
 		findings = [];
+	}
+	// Normalize records imported from other shapes (session-embedded findings,
+	// recovered backups): history/comments/testCaseIds must be arrays —
+	// transition/review/link handlers push onto them unconditionally.
+	for (const f of findings) {
+		if (!Array.isArray(f.history)) f.history = [];
+		if (!Array.isArray(f.comments)) f.comments = [];
+		if (!Array.isArray(f.testCaseIds)) f.testCaseIds = [];
+		if (!Array.isArray(f.steps)) f.steps = [];
 	}
 }
 
@@ -51,7 +75,48 @@ function flush() {
 	}
 }
 
+/** Phase 16: schedule an immediate debounced save (used by API handlers). */
+export function persistFindingsSoon() {
+	persistSoon();
+}
+
 load();
+
+/**
+ * Phase 16 — lazy intelligence upgrade on load: ensures every record carries the
+ * derived enum defaults derived ONLY from existing data (never fabricates). Old
+ * findings remain readable; fields are undefined when absent and derived on read.
+ * A one-time backfill marker guards the full-store normalization so we do not
+ * rewrite findings.json unnecessarily on every boot.
+ */
+function ensureIntelligenceFields(f) {
+	if (!f.finding_status) f.finding_status = 'DETECTED';
+	if (!f.review_status) f.review_status = 'unreviewed';
+	if (!f.priority) f.priority = undefined; // stays unset until triage/enrichment
+	if (f.primary_category === undefined) {
+		const norm = normalizeCategory(f.category);
+		if (norm) f.primary_category = norm;
+	}
+	if (f.reproducibility === undefined) {
+		f.reproducibility = f.reproducibility ?? undefined;
+	}
+	return f;
+}
+
+export function backfillIntelligenceFields() {
+	if (existsSync(INTELLIGENCE_BACKFILL_MARKER)) return 0;
+	let count = 0;
+	for (const f of findings) {
+		ensureIntelligenceFields(f);
+		count++;
+	}
+	if (count > 0) flush();
+	try {
+		mkdirSync(dirname(INTELLIGENCE_BACKFILL_MARKER), { recursive: true });
+		writeFileSync(INTELLIGENCE_BACKFILL_MARKER, new Date().toISOString());
+	} catch { /* non-fatal */ }
+	return count;
+}
 
 /* ── Project scoping ────────────────────────────────────────────── */
 
@@ -179,21 +244,42 @@ export function addFinding(data) {
 		impact: data.impact ? String(data.impact).trim() : undefined,
 		recommendation: data.recommendation ? String(data.recommendation).trim() : undefined,
 		fixPrompt: data.fixPrompt ? String(data.fixPrompt).trim() : undefined,
-		confidence: typeof data.confidence === 'number'
-			? Math.max(0, Math.min(1, data.confidence))
-			: undefined,
+		confidence: undefined, // Phase 16: caller-supplied confidence is never trusted; enrichment derives it
 		isDuplicate: typeof data.isDuplicate === 'boolean' ? data.isDuplicate : undefined,
 		duplicateOf: data.duplicateOf ? String(data.duplicateOf) : undefined,
-		reproducibility: ['confirmed', 'unconfirmed', 'intermittent'].includes(data.reproducibility)
+		reproducibility: VALID_REPRODUCIBILITIES.includes(data.reproducibility)
 			? data.reproducibility
-			: undefined
+			: undefined,
+
+		// ── Phase 16 Bug Intelligence fields (additive — backward compatible) ──
+		// SECURITY: finding_status/review_status/confidence are NEVER accepted
+		// from creation input. Lifecycle/review/confidence only change through
+		// the validated, audited endpoints (transition/review/revalidate) so
+		// an API client can never mint a VERIFIED finding.
+		finding_status: 'DETECTED',
+		review_status: 'unreviewed',
+		primary_category: CATEGORIES.includes(data.primary_category) ? data.primary_category : undefined,
+		secondary_categories: Array.isArray(data.secondary_categories)
+			? data.secondary_categories.filter(c => CATEGORIES.includes(c)).slice(0, 3)
+			: undefined,
+		priority: PRIORITIES.includes(data.priority) ? data.priority : undefined,
+		missionId: data.missionId ?? undefined,
+		workflowId: data.workflowId ?? undefined,
+		featureId: data.featureId ?? undefined,
+		evidenceRefs: Array.isArray(data.evidenceRefs) ? data.evidenceRefs.map(String) : undefined,
+		...(data.intelligence && typeof data.intelligence === 'object' ? { intelligence: data.intelligence } : {})
 	};
 	findings.push(finding);
 	persistSoon();
 	return finding;
 }
 
-export function listFindings({ projectId, severity, status, category, assignee, sessionId, q } = {}) {
+export function listFindings({
+	projectId, severity, status, category, assignee, sessionId, q,
+	// Phase 16 filters
+	primaryCategory, priority, findingStatus, reviewStatus, workflowId, featureId,
+	reproducibility, minConfidence, missionId, includeDuplicates = true,
+} = {}) {
 	return findings
 		.filter(f => {
 			if (projectId && f.projectId !== projectId) return false;
@@ -202,6 +288,20 @@ export function listFindings({ projectId, severity, status, category, assignee, 
 			if (category && f.category !== category) return false;
 			if (assignee && f.assignee !== assignee) return false;
 			if (sessionId && f.sessionId !== sessionId) return false;
+			// Phase 16 filters (old findings without the field match nothing except UNKNOWN)
+			if (primaryCategory) {
+				const pc = f.primary_category ?? normalizeCategory(f.category) ?? 'UNKNOWN';
+				if (pc !== primaryCategory) return false;
+			}
+			if (priority && (f.priority ?? 'UNTRIAGED') !== priority) return false;
+			if (findingStatus && (f.finding_status ?? 'DETECTED') !== findingStatus) return false;
+			if (reviewStatus && (f.review_status ?? 'unreviewed') !== reviewStatus) return false;
+			if (workflowId && f.workflowId !== workflowId) return false;
+			if (featureId && f.featureId !== featureId) return false;
+			if (missionId && f.missionId !== missionId) return false;
+			if (reproducibility && f.reproducibility !== reproducibility) return false;
+			if (typeof minConfidence === 'number' && ((f.confidence ?? 0) < minConfidence)) return false;
+			if (!includeDuplicates && f.isDuplicate) return false;
 			if (q) {
 				const lower = q.toLowerCase();
 				const haystack = `${f.title} ${f.category} ${f.url} ${f.expected} ${f.actual}`.toLowerCase();
@@ -242,11 +342,33 @@ export function updateFinding(id, patch) {
 	if (typeof patch.impact === 'string') f.impact = patch.impact.trim();
 	if (typeof patch.recommendation === 'string') f.recommendation = patch.recommendation.trim();
 	if (typeof patch.fixPrompt === 'string') f.fixPrompt = patch.fixPrompt.trim();
-	if (typeof patch.confidence === 'number') f.confidence = Math.max(0, Math.min(1, patch.confidence));
+	// Phase 16: raw confidence from a PUT body is never trusted — enrichment
+	// derives it from evidence. Use PATCH /:id/classification etc. for review.
 	if (typeof patch.isDuplicate === 'boolean') f.isDuplicate = patch.isDuplicate;
 	if (typeof patch.duplicateOf === 'string') f.duplicateOf = patch.duplicateOf || undefined;
-	if (typeof patch.reproducibility === 'string' && ['confirmed', 'unconfirmed', 'intermittent'].includes(patch.reproducibility)) {
+	if (typeof patch.reproducibility === 'string' && VALID_REPRODUCIBILITIES.includes(patch.reproducibility)) {
 		f.reproducibility = patch.reproducibility;
+	}
+
+	// ── Phase 16 Bug Intelligence fields ──
+	// SECURITY: finding_status/review_status are NOT settable via the generic
+	// PUT — lifecycle must go through transitionFindingStatus (validated
+	// transition table + evidence gate) and review through setReviewStatus.
+	// Both are audited. This prevents minting VERIFIED findings via PUT.
+	if (patch.primary_category === null) f.primary_category = undefined;
+	else if (typeof patch.primary_category === 'string' && CATEGORIES.includes(patch.primary_category)) f.primary_category = patch.primary_category;
+	if (Array.isArray(patch.secondary_categories)) f.secondary_categories = patch.secondary_categories.filter(c => CATEGORIES.includes(c)).slice(0, 3);
+	if (patch.priority === null) f.priority = undefined;
+	else if (typeof patch.priority === 'string' && PRIORITIES.includes(patch.priority)) f.priority = patch.priority;
+	if (patch.missionId !== undefined) f.missionId = patch.missionId ?? undefined;
+	if (patch.workflowId !== undefined) f.workflowId = patch.workflowId ?? undefined;
+	if (patch.featureId !== undefined) f.featureId = patch.featureId ?? undefined;
+	if (Array.isArray(patch.evidenceRefs)) f.evidenceRefs = patch.evidenceRefs.map(String);
+	if (typeof patch.reproduction_attempts === 'number') f.reproduction_attempts = Math.max(0, Math.round(patch.reproduction_attempts));
+	// Phase 18: fix-validation approval records the sufficiency verdict that
+	// unlocks the VERIFIED evidence gate (source-tagged for audit).
+	if (patch.evidence_sufficiency !== undefined && patch.evidence_sufficiency && typeof patch.evidence_sufficiency === 'object') {
+		f.evidence_sufficiency = patch.evidence_sufficiency;
 	}
 
 	persistSoon();
@@ -291,6 +413,134 @@ export function changeStatus(id, newStatus, by = 'user') {
 	const oldStatus = f.status;
 	f.status = newStatus;
 	f.history.push({ ts: Date.now(), from: oldStatus, to: newStatus, by });
+	persistSoon();
+	return f;
+}
+
+/* ── Phase 16: intelligence lifecycle + review ───────────────────── */
+
+/**
+ * Live evidence-sufficiency check for the VERIFIED gate. Pulls typed evidence
+ * from the evidence graph (dynamic import avoids a require cycle) and falls
+ * back to the stored verdict when the graph is unavailable.
+ */
+function computeStoredEvidenceSufficiency(f) {
+	try {
+		// eslint-disable-next-line no-undef
+		const cached = globalThis.__p16SufficiencyCache?.(f);
+		if (cached) return cached;
+	} catch { /* fall through */ }
+	const stored = f.evidence_sufficiency;
+	if (stored && typeof stored.sufficient === 'boolean') return stored;
+	return { sufficient: false, reasons: ['no evidence sufficiency assessment on record'] };
+}
+
+/**
+ * Intelligence-lifecycle transition (DETECTED → VERIFYING → VERIFIED → …).
+ * Validated against the deterministic transition table AND the evidence gate:
+ * entering VERIFIED requires evidence_sufficiency.sufficient on the record.
+ * Audited in history[]. Returns { ok, finding, reason }.
+ */
+export function transitionFindingStatus(id, to, by = 'system', detail = undefined) {
+	const f = findings.find(x => x.id === id);
+	if (!f) return { ok: false, reason: 'not_found' };
+	const from = f.finding_status ?? 'DETECTED';
+	const check = validateLifecycleTransition(from, to);
+	if (!check.ok) return { ok: false, finding: f, reason: check.reason };
+	// Evidence gate: VERIFIED is only reachable with sufficient typed evidence.
+	// Recomputed live from the evidence graph so the check can't be satisfied
+	// by a stale stored verdict.
+	if (to === 'VERIFIED' && from !== 'VERIFIED') {
+		const suff = computeStoredEvidenceSufficiency(f);
+		if (!suff.sufficient) {
+			return { ok: false, finding: f, reason: `cannot enter VERIFIED: insufficient evidence (${suff.reasons.join('; ')})` };
+		}
+	}
+	if (from !== to) {
+		f.finding_status = to;
+		f.history.push({ ts: Date.now(), from, to, by, detail, field: 'finding_status' });
+		persistSoon();
+	}
+	return { ok: true, finding: f };
+}
+
+/**
+ * Human review verdict: confirmed | false_positive | duplicate | needs_info | unreviewed.
+ * Audited; sets lifecycle FALSE_POSITIVE/DUPLICATE accordingly; false_positive keeps the
+ * finding visible but out of verified/active intelligence (separate representation).
+ */
+export function setReviewStatus(id, reviewStatus, by = 'user', note = undefined) {
+	const f = findings.find(x => x.id === id);
+	if (!f) return { ok: false, reason: 'not_found' };
+	if (!REVIEW_STATUSES.includes(reviewStatus)) return { ok: false, finding: f, reason: `invalid review status ${reviewStatus}` };
+	const from = f.review_status ?? 'unreviewed';
+	f.review_status = reviewStatus;
+	f.history.push({ ts: Date.now(), from, to: reviewStatus, by, detail: note, field: 'review_status' });
+
+	// Lifecycle coupling (validated transitions only; failure is non-fatal).
+	if (reviewStatus === 'false_positive') {
+		const t = validateLifecycleTransition(f.finding_status ?? 'DETECTED', 'FALSE_POSITIVE');
+		if (t.ok) f.finding_status = 'FALSE_POSITIVE';
+	} else if (reviewStatus === 'duplicate') {
+		const t = validateLifecycleTransition(f.finding_status ?? 'DETECTED', 'DUPLICATE');
+		if (t.ok) f.finding_status = 'DUPLICATE';
+	} else if (reviewStatus === 'confirmed') {
+		// Confirmation can advance an unreviewed/detected finding into the pipeline.
+		const t = validateLifecycleTransition(f.finding_status ?? 'DETECTED', 'VERIFYING');
+		if (t.ok) f.finding_status = 'VERIFYING';
+	}
+
+	persistSoon();
+	return { ok: true, finding: f };
+}
+
+/**
+ * Phase 16 enrichment merge: apply derived intelligence fields to a stored finding
+ * without overwriting agent-observed content (title/expected/actual/steps untouched).
+ */
+export function applyIntelligence(id, derived) {
+	const f = findings.find(x => x.id === id);
+	if (!f || !derived || typeof derived !== 'object') return undefined;
+	const guarded = { ...derived };
+	// Never overwrite the observation content via enrichment.
+	delete guarded.title;
+	delete guarded.expected;
+	delete guarded.actual;
+	delete guarded.steps;
+	delete guarded.observed;
+	delete guarded.severity; // severity changes go through PATCH /severity (audited)
+	// Linkage field-name unification: enrichment derives snake_case
+	// (workflow_id/feature_id) but the store + all consumers use camelCase.
+	// Map into the canonical fields, preferring an explicitly-set camelCase
+	// value over a derived one, and never store conflicting duplicates.
+	if (guarded.workflow_id != null && !f.workflowId) f.workflowId = guarded.workflow_id;
+	if (guarded.feature_id != null && !f.featureId) f.featureId = guarded.feature_id;
+	delete guarded.workflow_id;
+	delete guarded.feature_id;
+	Object.assign(f, guarded);
+	persistSoon();
+	return f;
+}
+
+/**
+ * Phase 16: mark a finding as duplicate of a canonical finding, preserving provenance.
+ */
+export function markDuplicate(id, canonicalId, provenance = {}) {
+	const f = findings.find(x => x.id === id);
+	if (!f) return undefined;
+	const canonical = findings.find(x => x.id === canonicalId);
+	if (!canonical || canonicalId === id) return undefined;
+	f.isDuplicate = true;
+	f.duplicateOf = canonicalId;
+	f.duplicate_provenance = {
+		originalIds: provenance.originalIds ?? [id, canonicalId],
+		sessions: provenance.sessions ?? [f.sessionId, canonical.sessionId].filter(Boolean),
+		missions: provenance.missions ?? [f.missionId, canonical.missionId].filter(Boolean),
+		evidenceCount: provenance.evidenceCount ?? ((f.evidenceRefs?.length ?? 0) + (canonical.evidenceRefs?.length ?? 0)),
+		mergedAt: new Date().toISOString(),
+	};
+	f.history.push({ ts: Date.now(), from: f.finding_status ?? 'DETECTED', to: 'DUPLICATE', by: 'system', field: 'finding_status', detail: `duplicate of ${canonicalId}` });
+	f.finding_status = 'DUPLICATE';
 	persistSoon();
 	return f;
 }
@@ -370,13 +620,17 @@ export function syncSessionFinding(session, finding) {
 			expected: finding.expected,
 			actual: finding.actual,
 			evidence: finding.evidence,
-			// Evidence Engine fields (sync if present on the session finding)
-			...(finding.observed != null && { observed: finding.observed }),
-			...(finding.impact != null && { impact: finding.impact }),
-			...(finding.recommendation != null && { recommendation: finding.recommendation }),
-			...(finding.confidence != null && { confidence: finding.confidence }),
-			...(finding.reproducibility != null && { reproducibility: finding.reproducibility })
-		});
+		// Evidence Engine fields (sync if present on the session finding)
+		...(finding.observed != null && { observed: finding.observed }),
+		...(finding.impact != null && { impact: finding.impact }),
+		...(finding.recommendation != null && { recommendation: finding.recommendation }),
+		...(finding.confidence != null && { confidence: finding.confidence }),
+		...(finding.reproducibility != null && { reproducibility: finding.reproducibility }),
+		// Phase 16: keep duplicate markers in sync (previously dropped here).
+		...(finding.isDuplicate != null && { isDuplicate: finding.isDuplicate }),
+		...(finding.duplicateOf != null && { duplicateOf: finding.duplicateOf }),
+		...(finding.missionId != null && { missionId: finding.missionId })
+	});
 		persistSoon();
 		return existing;
 	}
@@ -400,6 +654,9 @@ export function syncSessionFinding(session, finding) {
 		...(finding.recommendation != null && { recommendation: finding.recommendation }),
 		...(finding.confidence != null && { confidence: finding.confidence }),
 		...(finding.reproducibility != null && { reproducibility: finding.reproducibility }),
+		...(finding.isDuplicate != null && { isDuplicate: finding.isDuplicate }),
+		...(finding.duplicateOf != null && { duplicateOf: finding.duplicateOf }),
+		...(finding.missionId != null && { missionId: finding.missionId }),
 		createdBy: 'agent'
 	});
 }
@@ -417,6 +674,27 @@ export function getFindingStats({ projectId } = {}) {
 		bySeverity: SEVERITY_ORDER.reduce((acc, s) => {
 			acc[s] = filtered.filter(f => f.severity === s).length;
 			return acc;
-		}, {})
+		}, {}),
+		// Phase 16 additions
+		byFindingStatus: LIFECYCLE.reduce((acc, s) => {
+			acc[s] = filtered.filter(f => (f.finding_status ?? 'DETECTED') === s).length;
+			return acc;
+		}, {}),
+		byReviewStatus: REVIEW_STATUSES.reduce((acc, s) => {
+			acc[s] = filtered.filter(f => (f.review_status ?? 'unreviewed') === s).length;
+			return acc;
+		}, {}),
+		byPriority: PRIORITIES.reduce((acc, p) => {
+			acc[p] = filtered.filter(f => f.priority === p).length;
+			return acc;
+		}, {}),
+		duplicates: filtered.filter(f => f.isDuplicate).length
 	};
+}
+
+/**
+ * Phase 16: raw store access for the intelligence engine (dedup window etc.).
+ */
+export function getAllFindings() {
+	return findings;
 }

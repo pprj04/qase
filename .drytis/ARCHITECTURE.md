@@ -426,3 +426,43 @@ Output: {
   nextSteps: ["Fix X", "Implement Y"]
 }
 ```
+
+---
+
+## Phase 16 Addendum — Bug Intelligence 2.0 (2026-08)
+
+**New module `server/findingIntelligence.js`** (pure, deterministic, no LLM
+calls): classification, severity, priority, confidence, reproducibility,
+evidence sufficiency, expected/actual assessment, linkage, duplicate
+comparison, root cause, quality, risk, redaction, lifecycle transitions,
+dev summary. Version `phase16-v1`.
+
+**New module `server/findingEnrichment.js`**: async post-processing after
+mission finalize (`setImmediate`, never blocking) — applies intelligence to
+the session's findings, runs duplicate detection, exposes
+`/api/bug-intelligence/metrics` counters/latencies.
+
+**Findings store** gains additive fields (lifecycle, classification,
+severity/priority explainability, confidence reason, evidence sufficiency,
+linkage, duplicate provenance, root cause, quality, risk, dev summary).
+No destructive migration; lazy defaults + one-time guarded backfill marker.
+
+**Data flow:**
+
+```
+agent report_finding ──► session.findings ──► findings store (DETECTED)
+                                                        │ setImmediate after finalize
+                                                        ▼
+                                        findingEnrichment.enrichSessionFindings
+                                                        │
+                    findingIntelligence.enrichFinding (deterministic)
+                                                        │
+        ┌───────────────┬────────────────┬──────────────┴───────────┐
+        ▼               ▼                ▼                          ▼
+  evidence graph   duplicate detect   lifecycle derive        metrics counters
+  (typed refs)     (provenance)       (evidence gate)
+```
+
+Docs: `docs/BUG_INTELLIGENCE_MODEL.md`, `docs/FINDING_LIFECYCLE.md`,
+`docs/FINDING_CLASSIFICATION.md`, `docs/FINDING_REVIEW.md`,
+`docs/PHASE16_API_ADDENDUM.md`. Full phase report: `docs/PHASE_16_REPORT.md`.

@@ -154,6 +154,8 @@ export function detectAppMetadata(session) {
 
 	const allText = [
 		session.targetUrl || '',
+		session.missionName || '',
+		session.buildPrompt || '',
 		...(session.capturedSteps ?? []).map(s => `${s.url || ''} ${s.target || ''} ${s.label || ''} ${s.outcome?.titleAfter || ''}`),
 		...(session.activities ?? []).map(a => `${a.detail || ''} ${a.label || ''}`),
 		session.report?.summary || ''
@@ -378,10 +380,82 @@ function classifyType(issueNorm) {
 	if (/security|xss|injection|csrf|csp/.test(t)) return 'security_issue';
 	if (/performance|slow|timeout|load time/.test(t)) return 'performance_issue';
 	if (/responsive|viewport|mobile|layout break/.test(t)) return 'viewport_specific';
+	// Phase 18: fix-validation outcomes are their own type — they describe what
+	// a change did to a known defect, not a new defect pattern.
+	if (/fix validated|fix verified|still broken after change/.test(t)) return 'defect';
 	return 'defect';
 }
 
 /* ── Knowledge Query (Enhanced) ────────────────────────────────── */
+
+/**
+ * Phase 18 — write a fix-validation outcome through the EXISTING knowledge
+ * system (no second memory system). Called only from the fix-validation
+ * completion path, only for trustworthy outcomes (VERIFIED_FIXED /
+ * STILL_BROKEN with validationConfidence ≥ 0.7 — gated upstream by
+ * isTrustworthyForKnowledge in fixStatusEngine.js).
+ *
+ * The outcome is stored as a quality/defect pattern carrying the validation
+ * provenance, so future missions exploring the same app see both the original
+ * failure pattern AND what the change actually did.
+ */
+export function writeFixValidationKnowledge(run, originalFinding) {
+	if (!run || !originalFinding) return null;
+	const meta = { framework: null, authProvider: null, appType: null };
+	const now = Date.now();
+	const fixed = run.fixStatus === 'VERIFIED_FIXED';
+	const pattern = `FIX VALIDATION — ${fixed ? 'verified fixed' : 'still broken'}: ${normalizeIssue(originalFinding.title || '')}`.slice(0, 200);
+	const description = [
+		`Original finding: ${originalFinding.title || originalFinding.id}`,
+		`Validation id: ${run.id}; confidence: ${run.validationConfidence}`,
+		`Path: ${run.plan?.url || 'n/a'}; attempts: ${(run.attempts || []).length}`,
+	].join(' | ').slice(0, 500);
+	const existing = patterns.find(p =>
+		p.status !== KNOWLEDGE_STATUS.INACTIVE &&
+		isDuplicate(p, normalizeIssue(pattern), meta)
+	);
+	if (existing) {
+		existing.occurrences += 1;
+		existing.lastSeen = now;
+		existing.confidence = calculateConfidence(existing);
+		existing.sourceMissions.push({
+			missionId: run.missionId || null,
+			findingId: originalFinding.id,
+			sessionId: originalFinding.sessionId || null,
+			timestamp: now,
+			validationId: run.id,
+			fixStatus: run.fixStatus,
+			validationConfidence: run.validationConfidence,
+		});
+		scheduleSave();
+		return { action: 'accumulated', pattern: existing };
+	}
+	const item = sanitizeKnowledgeItem(createKnowledgeItem({
+		category: 'quality',
+		type: 'defect',
+		pattern,
+		description,
+		framework: null,
+		authProvider: null,
+		appType: null,
+		recommendation: fixed
+			? 'Fix pattern confirmed effective for this defect; retain targeted regression coverage.'
+			: 'Change did not fix the defect; re-open, investigate root cause before the next attempt.',
+		sourceMissionId: run.missionId || null,
+		sourceFindingId: originalFinding.id,
+		sourceSessionId: originalFinding.sessionId || null,
+	}));
+	// Validation provenance is part of the record, not a second system.
+	item.sourceMissions[0] = {
+		...item.sourceMissions[0],
+		validationId: run.id,
+		fixStatus: run.fixStatus,
+		validationConfidence: run.validationConfidence,
+	};
+	patterns.push(item);
+	scheduleSave();
+	return { action: 'created', pattern: item };
+}
 
 /**
  * Query the knowledge base for patterns relevant to this app.
@@ -752,6 +826,25 @@ export function generateExplorationHints(relevantPatterns) {
 		lines.push(`- [HISTORICAL SIGNAL] ${sanitizedPattern}`);
 		lines.push(`  Confidence: ${conf}% | Observed: ${p.occurrences || 1} mission(s)`);
 		if (sanitizedRec) lines.push(`  Suggestion: ${sanitizedRec}`);
+		lines.push('');
+	}
+
+	// Phase 13: Adaptive priority guidance — highlight areas where historical
+	// knowledge suggests the agent should spend MORE attention. This is NOT a
+	// new planning engine; it's structured context that helps the LLM prioritize
+	// its test plan based on accumulated experience.
+	const highConfidence = relevantPatterns.filter(p => p.confidence >= 0.40 && p.occurrences >= 2);
+	if (highConfidence.length > 0) {
+		lines.push('# Priority Focus Areas');
+		lines.push('');
+		lines.push('These areas have shown REPEATED issues across multiple missions on similar apps.');
+		lines.push('Prioritize testing these flows early in your run:');
+		lines.push('');
+		for (const p of highConfidence.slice(0, 3)) {
+			const sanitizedPattern = sanitizeText(p.pattern || p.issue || '');
+			const conf = Math.round((p.confidence || 0) * 100);
+			lines.push(`* ${sanitizedPattern} (${conf}% confidence, ${p.occurrences} missions)`);
+		}
 		lines.push('');
 	}
 

@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaskFlow — Team Task Manager</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+  .app { max-width: 900px; margin: 0 auto; padding: 20px; }
+  .header { background: #4a6fa5; color: white; padding: 20px; border-radius: 12px 12px 0 0; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 24px; }
+  .header .user { font-size: 14px; opacity: 0.9; }
+  .nav { display: flex; gap: 0; background: #3a5a8a; border-radius: 0 0 0 0; }
+  .nav button { flex: 1; padding: 12px; border: none; background: transparent; color: #c8d6ee; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+  .nav button.active { background: #f0f2f5; color: #1a1a2e; font-weight: 600; }
+  .nav button:hover { background: rgba(255,255,255,0.1); }
+  .nav button.active:hover { background: #f0f2f5; }
+  .content { background: white; padding: 24px; min-height: 400px; border-radius: 0 0 12px 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Tasks page */
+  .task-input { display: flex; gap: 8px; margin-bottom: 20px; }
+  .task-input input { flex: 1; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
+  .task-input input:focus { border-color: #4a6fa5; outline: none; }
+  .task-input button { padding: 10px 24px; background: #4a6fa5; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .task-input button:hover { background: #3a5a8a; }
+  .task-list { list-style: none; }
+  .task-item { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #f0f0f0; gap: 12px; }
+  .task-item .checkbox { width: 20px; height: 20px; }
+  .task-item .title { flex: 1; font-size: 15px; }
+  .task-item.done .title { text-decoration: line-through; color: #999; }
+  .task-item .priority { padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .task-item .priority.high { background: #fee; color: #c33; }
+  .task-item .priority.medium { background: #ffd; color: #aa0; }
+  .task-item .priority.low { background: #e8f5e9; color: #2e7d32; }
+  .task-item .delete { background: none; border: none; color: #c33; cursor: pointer; font-size: 18px; padding: 4px 8px; }
+  .task-count { margin-top: 16px; color: #666; font-size: 13px; }
+
+  /* Team page */
+  .team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+  .team-card { background: #f8f9fa; border-radius: 8px; padding: 16px; text-align: center; }
+  .team-card .avatar { width: 60px; height: 60px; border-radius: 50%; background: #4a6fa5; color: white; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 600; margin: 0 auto 12px; }
+  .team-card .name { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .team-card .role { color: #666; font-size: 13px; margin-bottom: 8px; }
+  .team-card .stats { display: flex; justify-content: center; gap: 12px; font-size: 12px; }
+  .team-card .stat { text-align: center; }
+  .team-card .stat .num { font-weight: 700; color: #4a6fa5; }
+
+  /* Reports page */
+  .report-card { background: #f8f9fa; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .report-card h3 { font-size: 16px; margin-bottom: 12px; color: #333; }
+  .report-card .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+  .report-card .stat-row:last-child { border-bottom: none; }
+  .report-card .label { color: #666; }
+  .report-card .value { font-weight: 600; }
+  .empty-state { text-align: center; padding: 60px 20px; color: #999; }
+  .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: #666; }
+
+  /* Settings page */
+  .settings-section { margin-bottom: 24px; }
+  .settings-section h3 { font-size: 15px; margin-bottom: 12px; color: #333; border-bottom: 2px solid #f0f0f0; padding-bottom: 8px; }
+  .setting-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; }
+  .setting-row label { font-size: 14px; color: #555; }
+  .setting-row input[type="checkbox"] { width: 40px; height: 20px; }
+  .setting-row select { padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+
+  /* Known issues */
+  .known-issue { background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 12px 0; border-radius: 0 8px 8px 0; font-size: 13px; color: #856404; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>📋 TaskFlow</h1>
+    <div class="user">Welcome, Demo User</div>
+  </div>
+  <div class="nav">
+    <button class="active" onclick="showPage('tasks')">Tasks</button>
+    <button onclick="showPage('team')">Team</button>
+    <button onclick="showPage('reports')">Reports</button>
+    <button onclick="showPage('settings')">Settings</button>
+  </div>
+  <div class="content">
+    <!-- TASKS PAGE -->
+    <div id="tasks-page" class="page active">
+      <div class="task-input">
+        <input type="text" id="taskInput" placeholder="Add a new task..." />
+        <button onclick="addTask()">Add Task</button>
+      </div>
+      <ul class="task-list" id="taskList">
+        <li class="task-item">
+          <input type="checkbox" class="checkbox" onchange="toggleTask(0)" />
+          <span class="title">Design new landing page</span>
+          <span class="priority high">High</span>
+          <button class="delete" onclick="deleteTask(0)">×</button>
+        </li>
+        <li class="task-item">
+          <input type="checkbox" class="checkbox" checked onchange="toggleTask(1)" />
+          <span class="title done" style="text-decoration: line-through; color: #999;">Set up CI/CD pipeline</span>
+          <span class="priority medium">Medium</span>
+          <button class="delete" onclick="deleteTask(1)">×</button>
+        </li>
+        <li class="task-item">
+          <input type="checkbox" class="checkbox" onchange="toggleTask(2)" />
+          <span class="title">Write API documentation</span>
+          <span class="priority low">Low</span>
+          <button class="delete" onclick="deleteTask(2)">×</button>
+        </li>
+      </ul>
+      <div class="task-count" id="taskCount">3 tasks (2 remaining)</div>
+    </div>
+
+    <!-- TEAM PAGE -->
+    <div id="team-page" class="page">
+      <div class="team-grid">
+        <div class="team-card">
+          <div class="avatar">JD</div>
+          <div class="name">Jane Doe</div>
+          <div class="role">Project Lead</div>
+          <div class="stats">
+            <div class="stat"><div class="num">12</div>Tasks</div>
+            <div class="stat"><div class="num">8</div>Done</div>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="avatar">AB</div>
+          <div class="name">Alex Brown</div>
+          <div class="role">Frontend Dev</div>
+          <div class="stats">
+            <div class="stat"><div class="num">9</div>Tasks</div>
+            <div class="stat"><div class="num">5</div>Done</div>
+          </div>
+        </div>
+        <div class="team-card">
+          <div class="avatar">SC</div>
+          <div class="avatar">SC</div>
+          <div class="name">Sam Chen</div>
+          <div class="role">Backend Dev</div>
+          <div class="stats">
+            <div class="stat"><div class="num">7</div>Tasks</div>
+            <div class="stat"><div class="num">6</div>Done</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- REPORTS PAGE -->
+    <div id="reports-page" class="page">
+      <div class="report-card">
+        <h3>📊 Productivity Overview</h3>
+        <div class="stat-row"><span class="label">Total Tasks</span><span class="value" id="totalTasks">28</span></div>
+        <div class="stat-row"><span class="label">Completed</span><span class="value" id="completedTasks">19</span></div>
+        <div class="stat-row"><span class="label">In Progress</span><span class="value" id="inProgressTasks">9</span></div>
+        <div class="stat-row"><span class="label">Completion Rate</span><span class="value">67.9%</span></div>
+      </div>
+      <div class="report-card">
+        <h3>⚡ Velocity (Last 4 Weeks)</h3>
+        <div class="stat-row"><span class="label">Week 1</span><span class="value">8 tasks</span></div>
+        <div class="stat-row"><span class="label">Week 2</span><span class="value">5 tasks</span></div>
+        <div class="stat-row"><span class="label">Week 3</span><span class="value">3 tasks</span></div>
+        <div class="stat-row"><span class="label">Week 4</span><span class="value">3 tasks</span></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS PAGE -->
+    <div id="settings-page" class="page">
+      <div class="settings-section">
+        <h3>Notifications</h3>
+        <div class="setting-row">
+          <label>Email notifications for new tasks</label>
+          <input type="checkbox" checked />
+        </div>
+        <div class="setting-row">
+          <label>Slack integration alerts</label>
+          <input type="checkbox" />
+        </div>
+        <div class="setting-row">
+          <label>Daily summary email</label>
+          <input type="checkbox" checked />
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>Preferences</h3>
+        <div class="setting-row">
+          <label>Default priority for new tasks</label>
+          <select><option>Low</option><option>Medium</option><option>High</option></select>
+        </div>
+        <div class="setting-row">
+          <label>Theme</label>
+          <select><option>Light</option><option>Dark</option><option>Auto</option></select>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>Account</h3>
+        <div class="setting-row">
+          <label>Display name</label>
+          <input type="text" value="Demo User" style="padding:6px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px;" />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Multi-page SPA navigation
+function showPage(pageName) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(pageName + '-page').classList.add('active');
+  event.target.classList.add('active');
+}
+
+// Task management
+var tasks = [
+  { title: 'Design new landing page', done: false, priority: 'high' },
+  { title: 'Set up CI/CD pipeline', done: true, priority: 'medium' },
+  { title: 'Write API documentation', done: false, priority: 'low' }
+];
+
+function addTask() {
+  var input = document.getElementById('taskInput');
+  var title = input.value.trim();
+  if (!title) return;
+  tasks.push({ title: title, done: false, priority: 'medium' });
+  renderTasks();
+  input.value = '';
+}
+
+function toggleTask(index) {
+  tasks[index].done = !tasks[index].done;
+  renderTasks();
+}
+
+function deleteTask(index) {
+  tasks.splice(index, 1);
+  renderTasks();
+}
+
+function renderTasks() {
+  var list = document.getElementById('taskList');
+  list.innerHTML = '';
+  tasks.forEach(function(task, i) {
+    var li = document.createElement('li');
+    li.className = 'task-item' + (task.done ? ' done' : '');
+    li.innerHTML = '<input type="checkbox" class="checkbox" ' + (task.done ? 'checked' : '') + ' onchange="toggleTask(' + i + ')" />' +
+      '<span class="title"' + (task.done ? ' style="text-decoration:line-through;color:#999;"' : '') + '>' + task.title + '</span>' +
+      '<span class="priority ' + task.priority + '">' + task.priority.charAt(0).toUpperCase() + task.priority.slice(1) + '</span>' +
+      '<button class="delete" onclick="deleteTask(' + i + ')">×</button>';
+    list.appendChild(li);
+  });
+  var remaining = tasks.filter(function(t) { return !t.done; }).length;
+  document.getElementById('taskCount').textContent = tasks.length + ' tasks (' + remaining + ' remaining)';
+}
+</script>
+</body>
+</html>

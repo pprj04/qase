@@ -59,7 +59,7 @@ export function loadSessions() {
 	}
 }
 
-export function createSession(title = 'New test run', projectId = undefined) {
+export function createSession(title = 'New test run', projectId = undefined, options = {}) {
 	const session = {
 		id: randomUUID(),
 		title,
@@ -78,7 +78,11 @@ export function createSession(title = 'New test run', projectId = undefined) {
 		/** Names of secrets held for this session — never the values. */
 		secretNames: [],
 		/** Browser-action steps captured for workflow extraction. */
-		capturedSteps: []
+		capturedSteps: [],
+		/** Optional device request ('iPhone 15 Pro', { device: 'Pixel 8' }, …) for mobile/tablet emulation. Null = desktop. */
+		deviceRequest: options.deviceRequest ?? undefined,
+		/** Resolved device context (set by the agent runtime once applied). */
+		device: undefined
 	};
 	sessions.set(session.id, session);
 	persistSoon();
@@ -87,6 +91,39 @@ export function createSession(title = 'New test run', projectId = undefined) {
 
 export function getSession(id) {
 	return sessions.get(id);
+}
+
+/**
+ * Phase 9.3: Session pruning — keep the N most recent sessions so the
+ * sessions.json state file stays bounded. Findings from pruned sessions
+ * already live in the findings store; only the session shells are dropped.
+ */
+export function pruneOldSessions(keep = 50) {
+	const all = [...sessions.values()].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+	let pruned = 0;
+	for (const session of all.slice(keep)) {
+		sessions.delete(session.id);
+		pruned += 1;
+	}
+	if (pruned > 0) {
+		persistSoon();
+	}
+	return pruned;
+}
+
+/**
+ * Phase 9.3: persist the session store now (bypasses the debounce).
+ * Used after cleanup pass slimming, where no add/delete happens to
+ * trigger persistSoon() naturally.
+ */
+export function persistSessionsNow() {
+	clearTimeout(saveTimer);
+	try {
+		fs.mkdirSync(STATE_DIR, { recursive: true });
+		atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
+	} catch {
+		// Non-fatal.
+	}
 }
 
 export function listSessions({ projectId } = {}) {

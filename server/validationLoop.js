@@ -373,16 +373,40 @@ export function resolveAction(decisionType, mission) {
     };
   }
 
-  // Check stop reasons first — even if decision says REVALIDATE,
-  // iteration limits take priority
-  const stopReason = getStopReason(mission);
-  if (stopReason) {
+  // REVALIDATE → start a new iteration.
+  // Checked BEFORE getStopReason because the mission is already finalized as
+  // 'completed' with a verdict at this point — getStopReason would return
+  // APPROVED/FAILED and block the revalidation. The iteration limit check
+  // below is the real safety guard.
+  if (decisionType === DECISION_TYPES.REVALIDATE) {
+    // Check iteration limit — first valid reason to block REVALIDATE
+    if (hasReachedIterationLimit(mission)) {
+      const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+      return {
+        action: 'stop',
+        reason: `REVALIDATE requested but max iterations (${limit}) reached`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.MAX_ITERATIONS
+      };
+    }
+    // Check no-improvement — second valid reason to block REVALIDATE.
+    // If multiple iterations have passed with no score improvement, continuing
+    // wastes resources; the loop should terminate.
+    if (hasNoImprovement(mission)) {
+      return {
+        action: 'stop',
+        reason: `REVALIDATE requested but convergence shows no improvement across iterations`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.NO_IMPROVEMENT
+      };
+    }
     return {
-      action: 'stop',
-      reason: `Validation loop stopping: ${stopReason}`,
-      shouldRevalidate: false,
-      shouldStop: true,
-      stopReason
+      action: 'revalidate',
+      reason: `Decision Engine returned REVALIDATE — starting next iteration`,
+      shouldRevalidate: true,
+      shouldStop: false
     };
   }
 
@@ -410,16 +434,6 @@ export function resolveAction(decisionType, mission) {
       shouldRevalidate: false,
       shouldStop: true,
       stopReason: STOP_REASONS.ESCALATED
-    };
-  }
-
-  // REVALIDATE → start a new iteration
-  if (decisionType === DECISION_TYPES.REVALIDATE) {
-    return {
-      action: 'revalidate',
-      reason: `Decision Engine returned REVALIDATE — starting next iteration`,
-      shouldRevalidate: true,
-      shouldStop: false
     };
   }
 
@@ -495,6 +509,23 @@ export function buildRevalidationPrompt(mission, previousIteration, knowledgeHin
     lines.push(previousIteration.improvementPrompt.slice(0, 500));
   }
 
+  // Broken / untested workflows from Phase 8 gap report
+  const gapReport = mission?.context?.phase8?.gapReport;
+  if (gapReport) {
+    if (gapReport.brokenWorkflows?.length > 0) {
+      lines.push('', '── Broken Workflows (steps that failed) ──');
+      for (const wf of gapReport.brokenWorkflows) {
+        lines.push(`- ${wf.name}: broken steps: ${(wf.brokenSteps || []).join(', ')}`);
+      }
+    }
+    if (gapReport.incompleteWorkflows?.length > 0) {
+      lines.push('', '── Untested Workflows (steps not yet validated) ──');
+      for (const wf of gapReport.incompleteWorkflows) {
+        lines.push(`- ${wf.name}: untested steps: ${(wf.untestedSteps || []).join(', ')}`);
+      }
+    }
+  }
+
   // Mission objectives
   if (mission.objectives?.length) {
     lines.push('', 'Mission objectives:');
@@ -523,7 +554,11 @@ export function buildRevalidationPrompt(mission, previousIteration, knowledgeHin
  */
 export function prepareKnowledgeForIteration(mission) {
   try {
-    const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
+    const appMeta = detectAppMetadata({
+      targetUrl: mission.targetUrl,
+      missionName: mission.name || '',
+      buildPrompt: mission.context?.buildPrompt || ''
+    });
     const result = queryKnowledge(appMeta);
     const patterns = result.patterns ?? [];
     const hintsText = generateExplorationHints(patterns);

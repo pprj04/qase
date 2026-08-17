@@ -13,6 +13,7 @@ import { createQaTools } from './qaTools.js';
 import { captureStep, finalizeStepOutcome } from './workflows.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
+import { resolveDeviceContext } from './deviceContext.js';
 import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration } from '@cleanslate/sdk';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -25,11 +26,23 @@ const MODEL_TIMEOUT_RETRIES = 2;
 const MODEL_TIMEOUT_RETRY_DELAY_MS = 2000;
 /**
  * Maximum wall-clock time a single session turn is allowed to run.
- * After this the turn is aborted and the session marked as 'error'.
- * The agent normally finishes in under 5 minutes; this is a safety net
- * for runaway loops that would otherwise hang forever.
+ * After this the turn is aborted and retried or marked as 'error'.
+ * This wraps the ENTIRE runTurn call (all internal model turns).
+ * Set to 20 minutes to allow a full mission of 20+ agent turns.
  */
-const SESSION_TURN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_TURN_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+
+/**
+ * Maximum wall-clock time to wait without any meaningful progress
+ * (tool result, assistant text, or model turn start). If the agent
+ * goes silent for this long — typically because the model API is
+ * stuck producing reasoning tokens or returned an empty response —
+ * the turn is aborted and retried.
+ *
+ * Set to 5 minutes: long enough for any legitimate model response,
+ * short enough to recover from hangs within a reasonable window.
+ */
+const MODEL_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 /** The tools the agent is allowed to use. */
 const ALLOWED_TOOLS = new Set([
@@ -38,6 +51,7 @@ const ALLOWED_TOOLS = new Set([
 	'browser_hover', 'browser_scroll', 'browser_screenshot',
 	'browser_snapshot', 'browser_diagnostics', 'browser_wait',
 	'browser_navigate_back', 'browser_tabs',
+	'browser_dialog', 'browser_new_tab', 'browser_select_tab', 'browser_close_tab',
 	'update_todo', 'ask_question', 'report_finding', 'finish_qa_report',
 	'set_viewport'
 ]);
@@ -59,6 +73,10 @@ const ACTIVITY_LABELS = {
 	browser_wait: 'Waiting',
 	browser_navigate_back: 'Going back',
 	browser_tabs: 'Switching tab',
+	browser_dialog: 'Handling dialog',
+	browser_new_tab: 'Opening tab',
+	browser_select_tab: 'Selecting tab',
+	browser_close_tab: 'Closing tab',
 	update_todo: 'Updating plan',
 	ask_question: 'Asking',
 	report_finding: 'Filing finding',
@@ -198,6 +216,22 @@ export async function ensureRuntime(session) {
 	const service = headless.getToolContext().browserAutomationService;
 	const bridge = attachBrowserBridge(session, service);
 
+	// ── Mobile/tablet device context (real emulation, not a CSS resize) ──
+	// The SDK creates the browser context lazily with a fixed desktop
+	// viewport. When a mission selected a device, the first page registration
+	// recreates the context with the REAL Playwright device descriptor
+	// (UA, viewport, DPR, isMobile, hasTouch). Desktop missions never take
+	// this path — their context is created exactly as before.
+	const deviceContext = resolveDeviceContext(session.deviceRequest ?? null);
+	if (deviceContext) {
+		const originalRegisterPage = service.registerPage.bind(service);
+		service.registerPage = page => {
+			applyDeviceContext(service, page, deviceContext, originalRegisterPage);
+		};
+		session.device = deviceContext;
+		emit(session, 'device', { device: deviceContext });
+	}
+
 	record.runtime = runtime;
 	record.bridge = bridge;
 	record.dispose = () => {
@@ -209,6 +243,66 @@ export async function ensureRuntime(session) {
 		}
 	};
 	return record;
+}
+
+/**
+ * Recreates the SDK's browser context as a REAL emulated device.
+ *
+ * The SDK's ensureContext() creates a desktop context (1440×900, desktop UA)
+ * on first use. When a device is selected we must swap that context for one
+ * built from the Playwright device registry BEFORE the agent drives the page:
+ *
+ *   1. remember the URL the SDK already navigated to (first open happens
+ *      before registerPage fires),
+ *   2. close the desktop context,
+ *   3. create a context with the device's viewport / UA / DPR / touch flags,
+ *   4. re-register + restore the page, navigating back to the remembered URL.
+ *
+ * Any failure falls back to the original desktop context so a bad device
+ * request can never kill a mission.
+ */
+async function applyDeviceContext(service, page, deviceContext, originalRegisterPage) {
+	try {
+		const url = page.url();
+		await service.context?.close();
+		const descriptor = getDeviceDescriptor(deviceContext);
+		service.context = await service.browser.newContext(descriptor);
+		const devicePage = await service.context.newPage();
+		originalRegisterPage(devicePage);
+		service.activePage = devicePage;
+		if (url && url !== 'about:blank') {
+			try {
+				await devicePage.goto(url, { waitUntil: 'commit', timeout: 15_000 }).catch(() => {});
+			} catch {
+				// Navigation failures leave the page on about:blank; the
+				// agent's next browser action re-navigates anyway.
+			}
+		}
+	} catch (err) {
+		console.warn(`[device] Falling back to desktop context: ${err instanceof Error ? err.message : String(err)}`);
+		try {
+			service.context = await service.browser?.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
+			const fallbackPage = await service.context?.newPage();
+			if (fallbackPage) {
+				originalRegisterPage(fallbackPage);
+				service.activePage = fallbackPage;
+			}
+		} catch {
+			// Nothing more we can do; the agent will surface the failure.
+		}
+	}
+}
+
+/** Raw Playwright context options for a resolved device context. */
+function getDeviceDescriptor(deviceContext) {
+	return {
+		viewport: { width: deviceContext.viewport.width, height: deviceContext.viewport.height },
+		userAgent: deviceContext.userAgent,
+		deviceScaleFactor: deviceContext.deviceScaleFactor,
+		isMobile: deviceContext.isMobile,
+		hasTouch: deviceContext.hasTouch,
+		acceptDownloads: true
+	};
 }
 
 /**
@@ -321,6 +415,21 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 	}, SESSION_TURN_TIMEOUT_MS);
 	turnTimeoutTimer.unref?.();
 
+	// Per-model-call idle watchdog: if no meaningful progress (tool result,
+	// assistant text, turn start) happens within MODEL_IDLE_TIMEOUT_MS,
+	// abort the turn so the retry logic can recover. The model API
+	// intermittently returns empty responses or hangs on reasoning, and
+	// without this guard the agent waits indefinitely.
+	let idleAborted = false;
+	let idleTimer = setTimeout(() => {
+		if (!controller.signal.aborted) {
+			idleAborted = true;
+			console.log(`[agent] Idle timeout (${MODEL_IDLE_TIMEOUT_MS / 1000}s) — aborting turn for retry`);
+			controller.abort();
+		}
+	}, MODEL_IDLE_TIMEOUT_MS);
+	idleTimer.unref?.();
+
 	try {
 		const stream = resumeAnswer === undefined
 			? runtime.run(task, controller.signal)
@@ -332,6 +441,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					// Anything it says out loud ends the thought that preceded it.
 					closeThinking();
 					appendText(part.content, part.kind);
+					// Reset idle watchdog — the model produced visible output
+					idleTimer.refresh();
 					break;
 
 				case 'chat_text_reset':
@@ -340,6 +451,11 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 
 				case 'reasoning':
 					appendThinking(part.content);
+					// Refresh idle timer on reasoning tokens — without this the
+					// watchdog fires during long reasoning phases (common with
+					// extended-thinking models) even though the model is actively
+					// producing output.
+					idleTimer.refresh();
 					break;
 
 				case 'reasoning_reset':
@@ -351,6 +467,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					assistant = undefined;
 					closeThinking();
 					emit(session, 'turn', { turnId: part.turnId, index: part.turnIndex });
+					// Reset idle watchdog — a new model turn started
+					idleTimer.refresh();
 					break;
 
 				case 'context_usage':
@@ -386,6 +504,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					// B1: Finalize the captured step's outcome from the tool result
 					finalizeStepOutcome(session, part.toolCallId, part.toolName, result);
 					openActivities.delete(part.toolCallId);
+
+					// Reset idle watchdog — a tool completed, proving progress
+					idleTimer.refresh();
 
 					if (part.toolName === 'update_todo' && ok) {
 						session.todos = normaliseTodos(part.result, session.todos);
@@ -427,7 +548,19 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			setStatus(session, 'idle');
 		}
 	} catch (error) {
-		if (controller.signal.aborted) {
+		if (idleAborted) {
+			// Idle timeout — treat as retryable model timeout
+			if (retryAttempt < MODEL_TIMEOUT_RETRIES) {
+				retryAfterTimeout = true;
+				setStatus(
+					session,
+					'running',
+					`The model went silent. Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
+				);
+			} else {
+				setStatus(session, 'idle', 'Model went silent after retries.');
+			}
+		} else if (controller.signal.aborted) {
 			setStatus(session, 'idle', 'Stopped by user.');
 		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModelTimeout(error)) {
 			retryAfterTimeout = true;
@@ -443,6 +576,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 		}
 	} finally {
 		clearTimeout(turnTimeoutTimer);
+		clearTimeout(idleTimer);
 		closeThinking();
 		record.running = false;
 		record.controller = undefined;
@@ -549,10 +683,10 @@ function looksLikeCredentialRequest(text, options) {
 	return CREDENTIAL_HINT.test(haystack);
 }
 
-/** True if the error looks like a transient model-side timeout. */
+/** True if the error looks like a transient model-side timeout or empty response. */
 function isRetryableModelTimeout(error) {
 	const message = error instanceof Error ? error.message : String(error);
-	return /timeout|timed out|deadline exceeded|ETIMEDOUT/i.test(message);
+	return /timeout|timed out|deadline exceeded|ETIMEDOUT|empty response|no content|MidStreamFallback|APIConnectionError|Upstream returned/i.test(message);
 }
 
 /**

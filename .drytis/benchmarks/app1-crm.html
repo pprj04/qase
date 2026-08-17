@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SalesFlow CRM — Sales Pipeline Management</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:system-ui,sans-serif}
+body{background:#f5f5f5;color:#333}
+.nav{background:#1a1a2e;color:#fff;padding:12px 24px;display:flex;gap:24px;align-items:center}
+.nav a{color:#fff;text-decoration:none;font-size:14px}
+.nav .logo{font-size:20px;font-weight:700;margin-right:auto}
+.container{max-width:1200px;margin:24px auto;padding:0 24px}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px;border-bottom:1px solid #eee;font-size:14px}
+th{background:#f8f8f8;font-weight:600}
+.badge{padding:2px 8px;border-radius:12px;font-size:12px;font-weight:600}
+.badge.new{background:#dbeafe;color:#1e40af}
+.badge.contacted{background:#fef3c7;color:#92400e}
+.badge.won{background:#dcfce7;color:#166534}
+.btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:14px}
+.btn-primary{background:#2563eb;color:#fff}
+.btn-danger{background:#dc2626;color:#fff}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;margin-bottom:4px;font-size:13px;font-weight:600}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:4px;font-size:14px}
+.stat{display:inline-block;margin-right:32px}
+.stat .num{font-size:28px;font-weight:700;color:#1a1a2e}
+.stat .label{font-size:12px;color:#666}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:100}
+.modal-overlay.active{display:flex;align-items:center;justify-content:center}
+.modal{background:#fff;border-radius:8px;padding:24px;width:480px;max-width:90%}
+</style>
+</head>
+<body>
+<div class="nav">
+<span class="logo">SalesFlow CRM</span>
+<a href="#dashboard">Dashboard</a>
+<a href="#contacts">Contacts</a>
+<a href="#leads">Leads</a>
+<a href="#pipeline">Pipeline</a>
+<a href="#settings">Settings</a>
+<a href="#login" id="login-link">Sign In</a>
+</div>
+<div class="container">
+<div id="dashboard-section">
+<h1 style="margin-bottom:16px">Dashboard</h1>
+<div class="card">
+<span class="stat"><div class="num" id="total-leads">5</div><div class="label">Total Leads</div></span>
+<span class="stat"><div class="num" id="won-deals">1</div><div class="label">Won Deals</div></span>
+<span class="stat"><div class="num" id="pipeline-value">$45,000</div><div class="label">Pipeline Value</div></span>
+</div>
+</div>
+
+<div id="contacts-section" style="display:none">
+<h1 style="margin-bottom:16px">Contacts</h1>
+<div class="card">
+<button class="btn btn-primary" id="add-contact-btn" onclick="openContactModal()">+ Add Contact</button>
+<table id="contacts-table">
+<thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Actions</th></tr></thead>
+<tbody id="contacts-body">
+<tr data-id="1"><td>John Smith</td><td>john@acme.com</td><td>Acme Corp</td><td><span class="badge contacted">Active</span></td><td><button class="btn btn-danger" onclick="deleteContact(1)">Delete</button></td></tr>
+<tr data-id="2"><td>Jane Doe</td><td>jane@tech.com</td><td>TechSoft</td><td><span class="badge new">New</span></td><td><button class="btn btn-danger" onclick="deleteContact(2)">Delete</button></td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div id="leads-section" style="display:none">
+<h1 style="margin-bottom:16px">Leads</h1>
+<div class="card">
+<button class="btn btn-primary" id="add-lead-btn" onclick="openLeadModal()">+ New Lead</button>
+<table id="leads-table">
+<thead><tr><th>Name</th><th>Source</th><th>Value</th><th>Stage</th><th>Actions</th></tr></thead>
+<tbody id="leads-body">
+<tr data-id="1"><td>Acme Corp Lead</td><td>Website</td><td>$15,000</td><td><span class="badge new">New</span></td><td><button class="btn btn-primary" onclick="advanceLead(1)">Advance</button></td></tr>
+<tr data-id="2"><td>TechSoft Demo</td><td>Referral</td><td>$30,000</td><td><span class="badge contacted">Contacted</span></td><td><button class="btn btn-primary" onclick="advanceLead(2)">Advance</button></td></tr>
+<tr data-id="3"><td>Global Inc</td><td>Cold Call</td><td>$0</td><td><span class="badge won">Won</span></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div id="pipeline-section" style="display:none">
+<h1 style="margin-bottom:16px">Sales Pipeline</h1>
+<div class="card">
+<p style="color:#666;margin-bottom:16px">Drag and drop deals between stages (coming soon). Current pipeline overview:</p>
+<div id="pipeline-kanban" style="display:flex;gap:12px">
+<div style="flex:1"><h3>New</h3><div id="stage-new"></div></div>
+<div style="flex:1"><h3>Contacted</h3><div id="stage-contacted"></div></div>
+<div style="flex:1"><h3>Negotiation</h3><div id="stage-negotiation"></div></div>
+<div style="flex:1"><h3>Won</h3><div id="stage-won"></div></div>
+</div>
+</div>
+</div>
+
+<div id="settings-section" style="display:none">
+<h1 style="margin-bottom:16px">Settings</h1>
+<div class="card">
+<div class="form-group"><label>Company Name</label><input type="text" value="SalesFlow" id="company-name"></div>
+<div class="form-group"><label>Currency</label><select><option>USD ($)</option><option>EUR (€)</option></select></div>
+<button class="btn btn-primary" id="save-settings" onclick="saveSettings()">Save Settings</button>
+</div>
+</div>
+</div>
+
+<div class="modal-overlay" id="contact-modal">
+<div class="modal">
+<h2 style="margin-bottom:16px">Add Contact</h2>
+<div class="form-group"><label>Name</label><input type="text" id="contact-name"></div>
+<div class="form-group"><label>Email</label><input type="email" id="contact-email"></div>
+<div class="form-group"><label>Company</label><input type="text" id="contact-company"></div>
+<button class="btn btn-primary" onclick="saveContact()">Save</button>
+<button class="btn" style="margin-left:8px" onclick="closeContactModal()">Cancel</button>
+<div id="contact-error" style="color:red;margin-top:8px;display:none"></div>
+</div>
+</div>
+
+<div class="modal-overlay" id="lead-modal">
+<div class="modal">
+<h2 style="margin-bottom:16px">New Lead</h2>
+<div class="form-group"><label>Lead Name</label><input type="text" id="lead-name"></div>
+<div class="form-group"><label>Source</label><select id="lead-source"><option>Website</option><option>Referral</option><option>Cold Call</option></select></div>
+<div class="form-group"><label>Value ($)</label><input type="number" id="lead-value" value="0"></div>
+<button class="btn btn-primary" onclick="saveLead()">Save</button>
+<button class="btn" style="margin-left:8px" onclick="closeLeadModal()">Cancel</button>
+</div>
+</div>
+
+<div id="toast" style="position:fixed;bottom:24px;right:24px;background:#333;color:#fff;padding:12px 20px;border-radius:6px;display:none;z-index:200"></div>
+
+<script>
+// Simple hash router
+const sections = ['dashboard','contacts','leads','pipeline','settings'];
+window.addEventListener('hashchange', route);
+function route(){
+  const hash = location.hash.slice(1) || 'dashboard';
+  sections.forEach(s => {
+    const el = document.getElementById(s + '-section');
+    if(el) el.style.display = (s === hash) ? 'block' : 'none';
+  });
+}
+route();
+
+// Contacts
+let contacts = [
+  {id:1, name:'John Smith', email:'john@acme.com', company:'Acme Corp', status:'Active'},
+  {id:2, name:'Jane Doe', email:'jane@tech.com', company:'TechSoft', status:'New'}
+];
+let nextContactId = 3;
+
+function openContactModal(){ document.getElementById('contact-modal').classList.add('active'); }
+function closeContactModal(){ document.getElementById('contact-modal').classList.remove('active'); document.getElementById('contact-error').style.display='none'; }
+
+function saveContact(){
+  const name = document.getElementById('contact-name').value.trim();
+  const email = document.getElementById('contact-email').value.trim();
+  const company = document.getElementById('contact-company').value.trim();
+  if(!name || !email){ document.getElementById('contact-error').textContent='Name and email required'; document.getElementById('contact-error').style.display='block'; return; }
+  contacts.push({id:nextContactId++, name, email, company, status:'New'});
+  renderContacts();
+  closeContactModal();
+  showToast('Contact added');
+  document.getElementById('contact-name').value='';
+  document.getElementById('contact-email').value='';
+  document.getElementById('contact-company').value='';
+}
+
+function deleteContact(id){
+  contacts = contacts.filter(c => c.id !== id);
+  renderContacts();
+  showToast('Contact deleted');
+}
+
+function renderContacts(){
+  const tbody = document.getElementById('contacts-body');
+  tbody.innerHTML = contacts.map(c => `<tr data-id="${c.id}"><td>${c.name}</td><td>${c.email}</td><td>${c.company}</td><td><span class="badge ${c.status==='New'?'new':'contacted'}">${c.status}</span></td><td><button class="btn btn-danger" onclick="deleteContact(${c.id})">Delete</button></td></tr>`).join('');
+}
+
+// Leads
+let leads = [
+  {id:1, name:'Acme Corp Lead', source:'Website', value:15000, stage:'New'},
+  {id:2, name:'TechSoft Demo', source:'Referral', value:30000, stage:'Contacted'},
+  {id:3, name:'Global Inc', source:'Cold Call', value:0, stage:'Won'}
+];
+let nextLeadId = 4;
+
+function openLeadModal(){ document.getElementById('lead-modal').classList.add('active'); }
+function closeLeadModal(){ document.getElementById('lead-modal').classList.remove('active'); }
+
+function saveLead(){
+  const name = document.getElementById('lead-name').value.trim();
+  const source = document.getElementById('lead-source').value;
+  const value = parseInt(document.getElementById('lead-value').value) || 0;
+  if(!name){ showToast('Lead name required'); return; }
+  leads.push({id:nextLeadId++, name, source, value, stage:'New'});
+  renderLeads();
+  closeLeadModal();
+  showToast('Lead added');
+  document.getElementById('lead-name').value='';
+  document.getElementById('lead-value').value='0';
+}
+
+function advanceLead(id){
+  const lead = leads.find(l => l.id === id);
+  if(!lead) return;
+  if(lead.stage === 'New'){ lead.stage = 'Contacted'; }
+  else if(lead.stage === 'Contacted'){ lead.stage = 'Negotiation'; }
+  else if(lead.stage === 'Negotiation'){ lead.stage = 'Won'; }
+  renderLeads();
+  showToast('Lead advanced');
+}
+
+function renderLeads(){
+  const tbody = document.getElementById('leads-body');
+  tbody.innerHTML = leads.map(l => {
+    const cls = l.stage==='New'?'new':(l.stage==='Won'?'won':'contacted');
+    const action = l.stage==='Won' ? '—' : `<button class="btn btn-primary" onclick="advanceLead(${l.id})">Advance</button>`;
+    return `<tr data-id="${l.id}"><td>${l.name}</td><td>${l.source}</td><td>$${l.value.toLocaleString()}</td><td><span class="badge ${cls}">${l.stage}</span></td><td>${action}</td></tr>`;
+  }).join('');
+}
+
+// Settings
+function saveSettings(){
+  showToast('Settings saved');
+}
+
+// Toast
+function showToast(msg){
+  const toast = document.getElementById('toast');
+  toast.textContent = msg;
+  toast.style.display = 'block';
+  setTimeout(() => toast.style.display = 'none', 2000);
+}
+
+// INTENTIONALLY BROKEN: Login link does nothing
+document.getElementById('login-link').addEventListener('click', function(e){
+  e.preventDefault();
+  // Does nothing — no login flow
+});
+
+// INTENTIONALLY MISSING: No reports/analytics section
+// INTENTIONALLY MISSING: No user management / team management
+// INTENTIONALLY MISSING: No email integration
+// INTENTIONALLY MISSING: No API settings
+// INTENTIONALLY BROKEN: Settings save button shows "Settings saved" but doesn't persist anywhere
+</script>
+</body>
+</html>

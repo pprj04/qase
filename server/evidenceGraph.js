@@ -144,7 +144,7 @@ const SOURCE_RELIABILITY = {
 
 /* ── Persistence ────────────────────────────────────────────────── */
 
-const DATA_DIR = join(process.cwd(), '.qase');
+const DATA_DIR = process.env.QASE_DATA_DIR ?? join(process.cwd(), '.qase');
 const GRAPH_FILE = join(DATA_DIR, 'evidence-graph.json');
 
 let evidenceStore = new Map();    // evidenceId → Evidence object

@@ -529,7 +529,10 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
   const budgetRemaining = computeBudgetRemaining(budget);
 
   // Session state
-  const sessionCompleted = session.status === 'done' || session.status === 'error' || session.status === 'interrupted';
+  // 'idle' means the agent finished naturally (budget exhausted or agent decided
+  // it was done) but the session wasn't formally closed to 'done'. Treat it as
+  // completed so the decision engine evaluates terminal decisions (STOP/REVALIDATE).
+  const sessionCompleted = session.status === 'done' || session.status === 'error' || session.status === 'interrupted' || session.status === 'idle';
   const awaitingInput = session.status === 'awaiting_input';
   const hasReport = !!session.report;
 

@@ -3,7 +3,11 @@
  *
  * Unlike exporters.js (which takes a session and exports all its findings),
  * these operate on individual finding objects for the Bugs Hub.
+ *
+ * Phase 16: all exported text fields pass through deterministic secret
+ * redaction (defense-in-depth on top of ingestion-time redaction).
  */
+import { redactString } from './findingIntelligence.js';
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
@@ -34,22 +38,25 @@ const LINEAR_PRIORITY = {
 function buildFindingBody(finding) {
 	const lines = [];
 
-	if (finding.url) lines.push(`**URL:** ${finding.url}`);
+	if (finding.url) lines.push(`**URL:** ${redactString(String(finding.url))}`);
 	if (finding.category) lines.push(`**Category:** ${finding.category}`);
 	if (finding.status) lines.push(`**Status:** ${finding.status}`);
 	lines.push('');
 
 	if (finding.steps?.length) {
 		lines.push('**Steps to reproduce:**');
-		finding.steps.forEach((step, i) => lines.push(`${i + 1}. ${step}`));
+		finding.steps.forEach((step, i) => lines.push(`${i + 1}. ${redactString(String(step))}`));
 		lines.push('');
 	}
 
-	lines.push(`**Expected:** ${finding.expected}`);
-	lines.push(`**Actual:** ${finding.actual}`);
+	lines.push(`**Expected:** ${redactString(String(finding.expected ?? ''))}`);
+	lines.push(`**Actual:** ${redactString(String(finding.actual ?? ''))}`);
 
+	if (finding.observed) {
+		lines.push('', `**Observed:** ${redactString(String(finding.observed))}`);
+	}
 	if (finding.evidence) {
-		lines.push('', '**Evidence:**', '```', finding.evidence, '```');
+		lines.push('', '**Evidence:**', '```', redactString(String(finding.evidence)), '```');
 	}
 
 	return lines.join('\n');
@@ -121,18 +128,19 @@ export function exportFindingsBulkMarkdown(findingsList) {
 		lines.push(`## ${i + 1}. ${f.title}`);
 		lines.push('');
 		lines.push(`**Severity:** ${f.severity} | **Status:** ${f.status} | **Category:** ${f.category}`);
-		if (f.url) lines.push(`**URL:** ${f.url}`);
+		if (f.primary_category) lines.push(`**Intelligence category:** ${f.primary_category}${f.priority ? ` | **Priority:** ${f.priority}` : ''}`);
+		if (f.url) lines.push(`**URL:** ${redactString(String(f.url))}`);
 		if (f.assignee) lines.push(`**Assignee:** ${f.assignee}`);
 		lines.push('');
 		if (f.steps?.length) {
 			lines.push('**Steps to reproduce:**');
-			f.steps.forEach((step, j) => lines.push(`${j + 1}. ${step}`));
+			f.steps.forEach((step, j) => lines.push(`${j + 1}. ${redactString(String(step))}`));
 			lines.push('');
 		}
-		lines.push(`**Expected:** ${f.expected}`);
-		lines.push(`**Actual:** ${f.actual}`);
+		lines.push(`**Expected:** ${redactString(String(f.expected ?? ''))}`);
+		lines.push(`**Actual:** ${redactString(String(f.actual ?? ''))}`);
 		if (f.evidence) {
-			lines.push('', '**Evidence:**', '```', f.evidence, '```');
+			lines.push('', '**Evidence:**', '```', redactString(String(f.evidence)), '```');
 		}
 		lines.push('', '---', '');
 	});

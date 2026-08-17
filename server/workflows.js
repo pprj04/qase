@@ -363,7 +363,7 @@ export function listWorkflows({ projectId, targetUrl } = {}) {
 			projectId: wf.projectId,
 			name: wf.name,
 			targetUrl: wf.targetUrl,
-			stepCount: wf.steps.length,
+			stepCount: (wf.steps ?? []).length,
 			tags: wf.tags,
 			createdAt: wf.createdAt,
 			updatedAt: wf.updatedAt

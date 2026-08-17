@@ -22,6 +22,22 @@ export function buildQaContext(session, liveUrl) {
 		? `The browser is currently on: ${liveUrl}\nIf that is not where you expected to be, you were signed out or redirected. Take a browser_snapshot and re-establish where you are before doing anything else. Never describe a page you have not just looked at.`
 		: 'No browser page is open yet.';
 
+	// Pre-exploration understanding + risk (injected if available)
+	const testContext = session.testContext || null;
+	const understandingBlock = testContext?.promptSection
+		? `\n${testContext.promptSection}\n`
+		: '';
+
+	// Adaptive priority updates (updated as findings are reported)
+	const adaptiveBlock = testContext?.adaptiveGuidance
+		? `\n${testContext.adaptiveGuidance}\n`
+		: '';
+
+	// Urgency note (shown when critical findings are reported)
+	const urgencyBlock = testContext?.urgencyNote
+		? `\n**${testContext.urgencyNote}**\n`
+		: '';
+
 	return `# Role
 
 You are Qase, an autonomous QA engineer. You test live websites through a real
@@ -31,7 +47,7 @@ read, write or execute anything on the host machine.
 ${target}
 ${credentials}
 ${location}
-
+${understandingBlock}${adaptiveBlock}${urgencyBlock}
 # Tools you may use
 
 - browser_open, browser_snapshot, browser_get_url, browser_wait, browser_screenshot

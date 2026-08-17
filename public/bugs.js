@@ -54,10 +54,12 @@ function getFilteredBugs() {
 	const sev = el.bugFilterSeverity.value;
 	const status = el.bugFilterStatus.value;
 	const cat = el.bugFilterCategory.value;
+	const fix = document.getElementById('bug-filter-fix-status')?.value || '';
 	const q = el.bugSearch.value.trim().toLowerCase();
 	if (sev) filtered = filtered.filter(f => f.severity === sev);
 	if (status) filtered = filtered.filter(f => f.status === status);
 	if (cat) filtered = filtered.filter(f => f.category === cat);
+	if (fix) filtered = filtered.filter(f => f.fixStatus === fix);
 	if (q) {
 		filtered = filtered.filter(f => {
 			const haystack = `${f.title} ${f.category} ${f.url} ${f.expected} ${f.actual}`.toLowerCase();
@@ -283,6 +285,10 @@ function renderBugDetail(bug) {
 	commentsSection.append(commentRow);
 	body.append(commentsSection);
 
+	// Fix Validation section (Phase 18) — lifecycle, confidence, attempts,
+	// before/after comparison, history, approve/reopen.
+	renderFixValidationSection(body, bug);
+
 	// Dev Intelligence section (Phase 13) — lazy, user-initiated.
 	const devSection = document.createElement('div');
 	devSection.className = 'bug-detail-section';
@@ -475,6 +481,9 @@ function initBugsWiring() {
 	if (el.bugFilterSeverity) el.bugFilterSeverity.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
 	if (el.bugFilterStatus) el.bugFilterStatus.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
 	if (el.bugFilterCategory) el.bugFilterCategory.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
+	const fixFilter = document.getElementById('bug-filter-fix-status');
+	if (fixFilter) fixFilter.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
+	initFixValidationWiring();
 
 	// View toggle (grid / list).
 	if (el.bugViewGrid) {
@@ -520,6 +529,238 @@ function initBugsWiring() {
 			}
 		});
 	});
+}
+
+/* ── Phase 18: Fix Validation UI ─────────────────────────────────── */
+
+const FIX_STATUS_LABELS = {
+	VERIFIED_FIXED: { cls: 'fx-ok', text: '✅ Verified Fixed' },
+	STILL_BROKEN: { cls: 'fx-bad', text: '❌ Still Broken' },
+	PARTIALLY_FIXED: { cls: 'fx-warn', text: '◐ Partially Fixed' },
+	REGRESSED: { cls: 'fx-bad', text: '⚠ Regressed' },
+	UNABLE_TO_VERIFY: { cls: 'fx-neutral', text: '? Unable to Verify' },
+};
+
+function fxBadge(status) {
+	const def = FIX_STATUS_LABELS[status] ?? { cls: 'fx-neutral', text: status || 'Not validated' };
+	const span = document.createElement('span');
+	span.className = `fx-badge ${def.cls}`;
+	span.textContent = def.text;
+	return span;
+}
+
+async function renderFixValidationSection(body, bug) {
+	const section = document.createElement('div');
+	section.className = 'bug-detail-section fx-section';
+	section.innerHTML = '<h4>🔬 Fix Validation</h4>';
+	const holder = document.createElement('div');
+	holder.innerHTML = '<div class="fx-loading">Loading validation state…</div>';
+	section.append(holder);
+	body.append(section);
+
+	let data = null;
+	let run = null;
+	try {
+		data = await api(`/v1/findings/${bug.id}/validation`);
+		run = data?.latest ?? null;
+	} catch { /* no validation record yet */ }
+
+	holder.replaceChildren();
+	if (!data?.latest && !bug.fixStatus) {
+		holder.innerHTML = '<div class="fx-hint">Not validated yet. Run a validation to verify whether a fix landed.</div>';
+	} else {
+		const card = document.createElement('div');
+		card.className = 'fx-head';
+		card.append(fxBadge(bug.fixStatus || run?.fixStatus));
+		if (run) {
+			if (run.validationConfidence != null) {
+				const conf = document.createElement('span');
+				conf.className = 'fx-confidence';
+				conf.textContent = `confidence ${(run.validationConfidence * 100).toFixed(0)}%`;
+				card.append(conf);
+			}
+			const attempts = run.attempts?.length ?? run.attemptCount ?? 0;
+			const att = document.createElement('span');
+			att.className = 'fx-attempts';
+			att.textContent = `attempts ${attempts}`;
+			card.append(att);
+		}
+		holder.append(card);
+
+		if (run?.comparison?.verdicts) {
+			const cmp = document.createElement('div');
+			cmp.className = 'fx-comparison';
+			cmp.innerHTML = '<h5>Before / After</h5>';
+			const grid = document.createElement('div');
+			grid.className = 'fx-cmp-grid';
+			for (const [k, v] of Object.entries(run.comparison.verdicts)) {
+				const row = document.createElement('div');
+				row.className = 'fx-cmp-row';
+				row.innerHTML = `<span>${escapeHtml(k)}</span><span class="${v ? 'fx-ok' : 'fx-bad'}">${v ? 'yes' : 'no'}</span>`;
+				grid.append(row);
+			}
+			cmp.append(grid);
+			holder.append(cmp);
+		}
+		if (run?.regressions?.length) {
+			const reg = document.createElement('div');
+			reg.className = 'fx-regressions';
+			reg.innerHTML = `<h5>Regressions detected (${run.regressions.length})</h5>`;
+			for (const r of run.regressions) {
+				const row = document.createElement('div');
+				row.className = 'fx-reg-row';
+				row.textContent = `${r.testName || r.test || r.name || 'test'} — ${r.status || ''}`;
+				reg.append(row);
+			}
+			holder.append(reg);
+		}
+	}
+
+	const actions = document.createElement('div');
+	actions.className = 'fx-actions';
+	const mk = (label, cls, fn) => {
+		const b = document.createElement('button');
+		b.type = 'button';
+		b.className = `btn btn-ghost btn-sm ${cls}`;
+		b.textContent = label;
+		b.addEventListener('click', fn);
+		return b;
+	};
+	actions.append(
+		mk('▶ Revalidate', '', () => triggerRevalidate(bug.id, `${bug.id.slice(0, 8)}-ui-${Date.now()}`)),
+		mk('History', '', () => openFixValidationHistory(bug.id)),
+		mk('View Original', '', () => openFixValidationHistory(bug.id, 'original')),
+		mk('View Validation', '', () => openFixValidationHistory(bug.id, 'validation')),
+		mk('Compare', '', () => openFixValidationHistory(bug.id, 'compare')),
+		mk('✓ Approve Closure', 'fx-ok', () => submitReview(bug.id, 'APPROVED', 'Approved from UI')),
+		mk('↺ Reopen', 'fx-warn', () => submitReview(bug.id, 'REOPENED', 'Reopened from UI')),
+	);
+	holder.append(actions);
+	if (run) {
+		holder.dataset.runId = run.id;
+		renderFixValidationSection.lastRun = run;
+	}
+}
+
+async function triggerRevalidate(findingId, key) {
+	try {
+		const res = await api(`/v1/findings/${findingId}/revalidate`, {
+			method: 'POST',
+			headers: { 'Idempotency-Key': `fxui-${key}` },
+		});
+		toast(`Validation ${res.validationId} started`, 'ok');
+	} catch (error) {
+		fail(error);
+	}
+}
+
+function ensureFxHistoryModal() {
+	let modal = document.getElementById('fx-history-modal');
+	if (modal) return modal;
+	modal = document.createElement('dialog');
+	modal.className = 'modal modal-wide fx-history-modal';
+	modal.id = 'fx-history-modal';
+	modal.innerHTML = `
+		<form method="dialog" class="modal-inner">
+			<header class="modal-head">
+				<h2>Fix Validation History</h2>
+				<button class="btn btn-ghost btn-sm" type="button" id="fx-history-close">✕</button>
+			</header>
+			<div class="modal-body" id="fx-history-body"></div>
+		</form>`;
+	document.body.append(modal);
+	modal.querySelector('#fx-history-close').addEventListener('click', () => modal.close());
+	return modal;
+}
+
+async function openFixValidationHistory(findingId, view = 'runs') {
+	const modal = ensureFxHistoryModal();
+	const body = modal.querySelector('#fx-history-body');
+	body.innerHTML = '<div class="fx-loading">Loading…</div>';
+	modal.showModal();
+	let data = null;
+	try {
+		data = await api(`/v1/findings/${findingId}/validation`);
+	} catch (error) {
+		body.innerHTML = '<div class="fx-hint">No validation history.</div>';
+		return;
+	}
+	body.replaceChildren();
+	const runs = [data.latest, ...(data.history ?? [])].filter(Boolean);
+	if (!runs.length) {
+		body.innerHTML = '<div class="fx-hint">No validation runs yet.</div>';
+		return;
+	}
+	if (view === 'compare' && data.latest?.comparison) {
+		const cmp = document.createElement('div');
+		cmp.className = 'fx-comparison';
+		cmp.innerHTML = '<h5>Before / After — latest run</h5>';
+		const grid = document.createElement('div');
+		grid.className = 'fx-cmp-grid';
+		for (const [k, v] of Object.entries(data.latest.comparison.verdicts ?? {})) {
+			const row = document.createElement('div');
+			row.className = 'fx-cmp-row';
+			row.innerHTML = `<span>${escapeHtml(k)}</span><span class="${v ? 'fx-ok' : 'fx-bad'}">${v ? 'yes' : 'no'}</span>`;
+			grid.append(row);
+		}
+		cmp.append(grid);
+		body.append(cmp);
+		return;
+	}
+	if (view === 'original' || view === 'validation') {
+		const run = data.latest;
+		const block = document.createElement('pre');
+		block.style.cssText = 'white-space:pre-wrap;font-size:12px;background:var(--surface);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:40vh;overflow:auto';
+		if (view === 'original') {
+			block.textContent = run?.originalFinding
+				? JSON.stringify(run.originalFinding, null, 2)
+				: 'Original finding snapshot not retained for this run.';
+		} else {
+			const { id, status, fixStatus, fixStatusReason, validationConfidence, attempts, regressions, comparison } = run ?? {};
+			block.textContent = JSON.stringify({ id, status, fixStatus, fixStatusReason, validationConfidence, attempts, regressions, comparison }, null, 2);
+		}
+		body.append(block);
+		return;
+	}
+	for (const run of runs) {
+		const row = document.createElement('div');
+		row.className = 'fx-run-state';
+		const head = document.createElement('div');
+		head.className = 'fx-head';
+		head.append(fxBadge(run.fixStatus));
+		const meta = document.createElement('span');
+		meta.className = 'fx-trail';
+		meta.textContent = `${run.id} · ${run.status} · ${run.fixStatusReason ?? ''} · conf ${(run.validationConfidence * 100).toFixed(0)}%`;
+		head.append(meta);
+		row.append(head);
+		if (run.attempts?.length) {
+			const at = document.createElement('div');
+			at.className = 'fx-attempts';
+			at.textContent = `attempts: ${run.attempts.map(a => a.succeeded ? '✓ pass' : a.originalFailureReproduced ? '✕ reproduce' : a.executed ? '✕ fail' : '?').join('  ')}`;
+			row.append(at);
+		}
+		body.append(row);
+	}
+}
+
+async function submitReview(findingId, decision, comment) {
+	try {
+		const endpoint = decision === 'APPROVED' ? 'approve' : 'reopen';
+		const res = await api(`/v1/findings/${findingId}/${endpoint}`, {
+			method: 'POST',
+			body: JSON.stringify({ decision, comment }),
+		});
+		toast(`Review: ${res.reviewState ?? decision}`, 'ok');
+		const updated = await api(`/findings/${findingId}`);
+		renderBugDetail(updated);
+	} catch (error) {
+		fail(error);
+	}
+}
+
+function initFixValidationWiring() {
+	// Filters + buttons are wired inline at render time; nothing to do here
+	// beyond ensuring the modal exists lazily on first open.
 }
 
 export { loadBugs, openBugDetail, initBugsWiring };
