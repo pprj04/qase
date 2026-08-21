@@ -1,0 +1,10 @@
+{
+  "leaks": [
+    "plaintext password",
+    "api key",
+    "bearer token",
+    "password in finding read",
+    "api key in finding read"
+  ],
+  "ok": false
+}

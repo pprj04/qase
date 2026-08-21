@@ -34,6 +34,7 @@
     </a>
   </div>
   <div class="topnav-spacer"></div>
+  <button class="btn btn-ghost btn-sm topnav-more" id="topnav-more" title="More options" hidden>⋯</button>
   <div class="topnav-right">
     <div class="topnav-project">
       <select id="project-select" class="project-select" title="Active project"></select>
@@ -45,6 +46,13 @@
     </button>
   </div>
 </nav>
+<!-- Mobile overflow menu — the real topnav-right controls get moved into it
+     by app.js when the viewport is narrow, so no duplicated IDs / state. -->
+<div class="topnav-menu" id="topnav-menu" hidden>
+  <div class="topnav-menu-item topnav-menu-project" id="menu-project-slot"></div>
+  <button class="topnav-menu-item" id="menu-new-project">＋ New project</button>
+  <button class="topnav-menu-item" id="menu-open-settings">⚙ Settings</button>
+</div>
 
 <!-- ── Page: Runs (agent workspace) ───────────────────────────── -->
 <div class="page" id="page-runs">
@@ -68,8 +76,10 @@
         <div class="chat-id">
           <h1 id="chat-title">No run selected</h1>
           <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
+          <p class="exec-meta subtle" id="exec-meta" hidden></p>
         </div>
         <div class="head-actions">
+          <span class="exec-mode-chip" id="exec-mode-chip" hidden></span>
           <span class="status-chip" id="status-chip" data-status="idle">idle</span>
           <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
         </div>
@@ -120,10 +130,18 @@
           </label>
           <label>Device
             <select id="intent-device">
-              <option value="">Any</option>
+              <option value="">Any (desktop)</option>
               <option value="desktop">Desktop</option>
-              <option value="mobile">Mobile</option>
-              <option value="tablet">Tablet</option>
+              <option value="mobile">Mobile — iPhone 15 (default)</option>
+              <option value="tablet">Tablet — iPad Pro 11 (default)</option>
+              <option value="iPhone 15 Pro">iPhone 15 Pro</option>
+              <option value="iPhone 15">iPhone 15</option>
+              <option value="iPhone SE">iPhone SE</option>
+              <option value="Pixel 8">Pixel 8</option>
+              <option value="Pixel 7">Pixel 7</option>
+              <option value="Galaxy S9+">Galaxy S9+</option>
+              <option value="iPad Pro 11">iPad Pro 11</option>
+              <option value="iPad Mini">iPad Mini</option>
             </select>
           </label>
           <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-up">Hide</button>
@@ -150,13 +168,6 @@
 
         <div class="stage" id="stage">
           <div class="device-strip" id="device-strip" hidden></div>
-          <div class="mission-stage-strip" id="mission-stage-strip" hidden>
-            <div class="mission-phases" id="mission-phases" hidden>
-              <div data-phase="explore"><span class="ph-mark"></span><span class="ph-name">Explore</span></div>
-              <div data-phase="test"><span class="ph-mark"></span><span class="ph-name">Test</span></div>
-              <div data-phase="report"><span class="ph-mark"></span><span class="ph-name">Report</span></div>
-            </div>
-          </div>
           <div class="exec-stats" id="exec-stats-bar" hidden>
             <span id="exec-stats-steps"></span><span id="exec-stats-pages"></span><span id="exec-stats-findings"></span><span id="exec-stats-dur"></span>
           </div>
@@ -191,13 +202,20 @@
       <nav class="tabs" id="tabs">
         <button class="tab is-active" data-tab="activity" id="tab-thinking">REASONING_LOG</button>
         <button class="tab" data-tab="analysis" id="tab-analysis">APPLICATION_ANALYSIS</button>
-        <button class="tab" data-tab="plan" id="tab-evidence">EVIDENCE <span class="count" id="count-plan"></span></button>
+        <button class="tab" data-tab="plan" id="tab-evidence">EVIDENCE <span class="count" id="count-evidence-tab"></span></button>
+        <button class="tab" data-tab="findings" id="tab-findings">FINDINGS <span class="count" id="count-findings-tab"></span></button>
         <button class="tab" data-tab="report" id="tab-report">REPORT</button>
       </nav>
 
       <div class="tab-body">
         <section class="tab-pane is-active" data-pane="activity">
           <div class="mission-stage-strip" id="mission-stage-strip"></div>
+          <div class="subtle tab-pane-hint" id="activity-hint">Tool-by-tool execution trace — the agent's narrative reasoning is in the transcript panel on the left.</div>
+            <div class="mission-phases" id="mission-phases" hidden>
+              <div data-phase="explore"><span class="ph-mark"></span><span class="ph-name">Explore</span></div>
+              <div data-phase="test"><span class="ph-mark"></span><span class="ph-name">Test</span></div>
+              <div data-phase="report"><span class="ph-mark"></span><span class="ph-name">Report</span></div>
+            </div>
           <div class="thinking-stream" id="activity-feed"></div>
         </section>
         <section class="tab-pane" data-pane="analysis">
@@ -212,7 +230,27 @@
           </div>
         </section>
         <section class="tab-pane" data-pane="plan">
-          <div class="evidence-grid" id="plan-list"></div>
+          <div class="evidence-experience" id="evidence-experience">
+            <details class="ev-plan-details" id="ev-plan-details" hidden>
+              <summary>AGENT TEST PLAN <span class="count" id="count-plan"></span></summary>
+              <div class="evidence-grid ev-plan-grid" id="plan-list"></div>
+            </details>
+            <div class="ev-toolbar">
+              <div class="ev-filters" id="ev-filters">
+                <button class="ev-filter is-active" data-ev-filter="all">All</button>
+                <button class="ev-filter" data-ev-filter="screenshot">Screenshots</button>
+                <button class="ev-filter" data-ev-filter="console">Console</button>
+                <button class="ev-filter" data-ev-filter="network">Network</button>
+                <button class="ev-filter" data-ev-filter="steps">Steps</button>
+                <button class="ev-filter" data-ev-filter="trace">Traces</button>
+              </div>
+              <span class="ev-count subtle" id="ev-count"></span>
+            </div>
+            <div class="ev-grid" id="ev-grid"></div>
+          </div>
+        </section>
+        <section class="tab-pane" data-pane="findings">
+          <div class="session-findings" id="session-findings"></div>
         </section>
         <section class="tab-pane" data-pane="report">
           <div class="mission-summary" id="mission-summary-bar" hidden>
@@ -294,17 +332,6 @@
 
   </div><!-- /.app -->
 </div><!-- /#page-runs -->
-
-<!-- Hidden containers for session-specific content rendered by JS.
-     These live outside the runs page because their tabs were moved to
-     dedicated pages (Bugs, Tests) or removed for simplicity. -->
-<div id="findings-list" hidden></div>
-<div id="workflow-pane" hidden></div>
-<div id="regression-pane" hidden></div>
-<span id="count-findings" hidden></span>
-<span id="count-workflows" hidden></span>
-<span id="count-testcases" hidden></span>
-<span id="count-regression" hidden></span>
 
 <!-- ── Page: Tests ──────────────────────────────────────────────── -->
 <div class="page" id="page-tests" hidden>
@@ -412,6 +439,14 @@
       </div>
       <div class="bugs-header-right">
         <input type="text" id="bug-search" class="bugs-search-input" placeholder="Search bugs…" autocomplete="off">
+        <div id="bug-dimension-bar" class="bugs-dimension-bar" role="group" aria-label="Filter findings by quality dimension"></div>
+        <select id="bug-sort" class="bugs-filter-select" title="Sort findings">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="severity">Severity</option>
+          <option value="confidence">Confidence</option>
+          <option value="evidence">Evidence count</option>
+        </select>
         <select id="bug-filter-severity" class="bugs-filter-select">
           <option value="">All severities</option>
           <option value="critical">🔴 Critical</option>
@@ -694,14 +729,22 @@
           </div>
         </label>
       </div>
+      <div class="cfg-bs-test-row">
+        <button class="btn btn-ghost btn-sm" type="button" id="cfg-browserstack-test-btn">Test BrowserStack Connection</button>
+        <div class="test-result" id="cfg-browserstack-test" hidden></div>
+      </div>
 
       <hr class="cfg-divider">
+
+      <label class="field">
+        <span>API token</span>
         <div class="cfg-token-row">
           <input id="cfg-api-token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty for local use">
           <button class="btn btn-ghost btn-sm" type="button" id="cfg-api-token-clear" title="Clear token">Clear</button>
         </div>
         <small id="cfg-api-token-note">Protects test-run/schedule-trigger endpoints. Leave empty when running locally.</small>
       </label>
+
 
       <div class="test-result" id="cfg-test"></div>
     </div>

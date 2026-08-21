@@ -30,6 +30,13 @@ npm-debug.log*
 # Project archive exports (not source)
 qase-project.tar.gz
 qase-project.zip
+qase-project-b03.zip
+
+# Root scratch files (session debris, never source)
+/1.txt
+/transcript5.txt
+/check1-*.yml
+/mtg-*
 
 # Drytis scratch scripts (contain literal test tokens — never publish)
 .drytis/*.js
@@ -46,3 +53,5 @@ public/downloads/
 /phase17-docs.zip
 /resp-body-root.txt
 /styles-inspect.txt
+corrupt-husk-aws/
+node_modules/

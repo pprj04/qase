@@ -1,0 +1,17 @@
+{
+  "passed": false,
+  "missionId": "40f71c91-b290-440e-b092-dbdcb8b07e72",
+  "sessionId": "75c7a116-e2f0-45d8-906b-b875931a5b0a",
+  "browserStarted": true,
+  "browserKilled": false,
+  "chromeBeforeKill": 12,
+  "chromeAfterKill": 0,
+  "recoveryTriggered": true,
+  "missionContinued": true,
+  "finalStatus": "running",
+  "stopReason": "approved",
+  "verdict": "pass",
+  "qualityScore": 100,
+  "activities": 11,
+  "findings": 0
+}

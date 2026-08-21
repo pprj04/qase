@@ -1,0 +1,74 @@
+{
+  "scenarioA": {
+    "finding": "92d9bad6-7acd-4474-8f64-6723f5a2fa02",
+    "preFix": {
+      "validationId": "fxv_2b0ec726-6077",
+      "fixStatus": "STILL_BROKEN",
+      "reason": "original_failure_reproduced",
+      "confidence": 0.95,
+      "durationMs": 10064
+    },
+    "postFix": {
+      "validationId": "fxv_c186d298-def9",
+      "fixStatus": "VERIFIED_FIXED",
+      "reason": "failure_absent_expected_observed_evidence_sufficient",
+      "confidence": 1,
+      "durationMs": 10038,
+      "attempts": 2
+    },
+    "comparison": {
+      "verdicts": {
+        "behaviorChanged": true,
+        "expectedAchieved": true,
+        "originalFailureReproduced": false,
+        "relatedFailuresIntroduced": false
+      },
+      "beforeCount": 1,
+      "afterCount": 2
+    },
+    "closure": {
+      "reviewState": "APPROVED",
+      "lifecycle": {
+        "ok": true,
+        "to": "RESOLVED"
+      },
+      "findingStatus": "RESOLVED"
+    },
+    "persistence": {
+      "runsVisible": 2,
+      "beforeEvidence": 1,
+      "afterEvidence": 2
+    }
+  },
+  "scenarioB": {
+    "finding": "e7581070-bdbf-495a-8665-ab4552755ec0",
+    "result": {
+      "validationId": "fxv_72be7f84-acab",
+      "fixStatus": "REGRESSED",
+      "reason": "verified_regression_in_targeted_set",
+      "regressions": {
+        "hasVerifiedRegression": true,
+        "verifiedRegressions": [
+          {
+            "id": "4d9def56-c9de-490a-a172-7b6b94b32b42",
+            "name": "LIFECYCLE-B regression: bulk import panel (legacy)"
+          }
+        ],
+        "suspectedRegressions": [],
+        "passed": 0,
+        "total": 1
+      },
+      "durationMs": 12034
+    },
+    "reopen": {
+      "reviewState": "REOPENED"
+    }
+  },
+  "timings": {
+    "note": "per-run durations embedded above (A pre-fix, A post-fix, B)"
+  },
+  "verdict": {
+    "scenarioA": true,
+    "scenarioB": true
+  }
+}

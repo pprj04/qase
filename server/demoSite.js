@@ -14,7 +14,7 @@ const SESSIONS = new Set();
 const CREDENTIALS = { email: 'demo@qase.dev', password: 'demo1234' };
 
 const shell = (title, body) => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>${title}</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>
 	body { font: 15px/1.6 system-ui, sans-serif; margin: 0; background: #f6f7fb; color: #1a1d24; }
 	header { background: #fff; border-bottom: 1px solid #e3e6ee; padding: 14px 28px; display: flex; gap: 20px; align-items: center; }

@@ -1,0 +1,64 @@
+{
+  "phase": "next-build",
+  "testType": "final-real-e2e",
+  "timestamp": "2026-08-12T18:01:02.411Z",
+  "steps": [
+    {
+      "step": "health-check",
+      "status": "pass"
+    },
+    {
+      "step": "target-reachable",
+      "status": "pass"
+    },
+    {
+      "step": "mission-created",
+      "status": "pass",
+      "missionId": "9423d805-4fd0-4fb3-9e20-23a7507a21b7"
+    },
+    {
+      "step": "tracked-while-running",
+      "status": "pass",
+      "statusAtTrack": "running",
+      "currentStage": "exploring"
+    },
+    {
+      "step": "terminal-state",
+      "status": "pass",
+      "finalStatus": "aborted"
+    },
+    {
+      "step": "result-retrieved",
+      "status": "pass"
+    },
+    {
+      "step": "evidence-available",
+      "status": "pass",
+      "evidenceCount": 0
+    },
+    {
+      "step": "no-secrets",
+      "status": "pass"
+    },
+    {
+      "step": "standalone-verified",
+      "status": "pass"
+    }
+  ],
+  "missionId": "9423d805-4fd0-4fb3-9e20-23a7507a21b7",
+  "correlationId": "19ea69d4-056e-4943-80ff-85fe8ec0811e",
+  "finalStatus": "aborted",
+  "report": {
+    "status": "aborted",
+    "verdict": null,
+    "qualityScore": null,
+    "releaseReady": null,
+    "findingsCount": 0,
+    "recommendationsCount": 0,
+    "elapsedMs": 15033,
+    "estimatedDuration": null
+  },
+  "evidenceCount": 0,
+  "totalSteps": 9,
+  "allStepsPassed": true
+}

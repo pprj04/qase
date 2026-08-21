@@ -11,7 +11,7 @@
  * dedicated page that works without a session context.
  */
 
-import { el, state, api, toast, fail, CRON_PRESETS, hostOf, relativeTime } from './shared.js';
+import { el, state, api, toast, fail, CRON_PRESETS, hostOf, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
 
 /* ── State ───────────────────────────────────────────────────────── */
 
@@ -24,18 +24,30 @@ const schedState = {
 /* ── Loading ─────────────────────────────────────────────────────── */
 
 async function loadSchedulesPage() {
+	const container = el.schedulesList;
+	const firstLoad = !schedState.loaded;
+	if (firstLoad) showPageLoading(container);
 	const projectId = state.projectId;
 	const pq = projectId ? `?projectId=${projectId}` : '';
+	let failed = null;
 	try {
 		schedState.schedules = await api(`/schedules${pq}`);
-	} catch {
+	} catch (error) {
 		schedState.schedules = [];
+		failed = error;
 	}
 	try {
 		schedState.trend = await api(`/regression/trend?limit=15${projectId ? `&projectId=${projectId}` : ''}`);
 	} catch {
 		schedState.trend = [];
 	}
+	schedState.loaded = true;
+	if (failed && firstLoad) {
+		// BUILD 1: a failed load must not look like "No schedules yet".
+		showPageError(container, loadSchedulesPage, `Could not load schedules — ${failed?.message ?? 'server unreachable'}.`);
+		return;
+	}
+	clearPageState(container);
 	renderSchedulesPage();
 }
 
@@ -84,26 +96,33 @@ function renderTrendSection() {
 		const bar = document.createElement('div');
 		bar.className = 'sched-chart-bar';
 
+		const noTests = !point.total;
 		const pct = point.passRate;
-		const color = pct >= 80 ? '#30d158' : pct >= 50 ? '#ff9f0a' : '#ff453a';
+		const color = noTests ? '#5e5e6a' /* stale / no tests recorded */
+			: pct >= 80 ? '#30d158'
+			: pct >= 50 ? '#ff9f0a'
+			: '#ff453a';
 
 		const fill = document.createElement('div');
 		fill.className = 'sched-chart-fill';
-		fill.style.height = `${Math.max(pct, 3)}%`;
+		fill.style.height = noTests ? '100%' : `${Math.max(pct, 3)}%`;
 		fill.style.background = color;
+		if (noTests) fill.style.opacity = '0.25';
 
 		const label = document.createElement('div');
 		label.className = 'sched-chart-label';
-		label.textContent = pct + '%';
+		label.textContent = noTests ? '—' : pct + '%';
 
 		bar.append(fill, label);
-		bar.title = `${new Date(point.ts).toLocaleString()}\n${point.passed}/${point.total} passed (${pct}%)${point.flaky ? `\n${point.flaky} flaky` : ''}`;
+		bar.title = noTests
+			? `${new Date(point.ts).toLocaleString()}\nno tests recorded (stale run against an unreachable target — excluded from pass rate)`
+			: `${new Date(point.ts).toLocaleString()}\n${point.passed}/${point.total} passed (${pct}%)${point.flaky ? `\n${point.flaky} flaky` : ''}`;
 		chart.append(bar);
 	}
 
 	const legend = document.createElement('div');
 	legend.className = 'sched-chart-legend';
-	legend.innerHTML = '<span style="color:#30d158">■ ≥80%</span> <span style="color:#ff9f0a">■ ≥50%</span> <span style="color:#ff453a">■ <50%</span>';
+	legend.innerHTML = '<span style="color:#30d158">■ ≥80%</span> <span style="color:#ff9f0a">■ ≥50%</span> <span style="color:#ff453a">■ <50%</span> <span style="color:#8e8e99">■ no tests recorded (stale)</span>';
 
 	el.schedulesTrend.append(chart, legend);
 }

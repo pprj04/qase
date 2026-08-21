@@ -13,7 +13,7 @@
  * and managing already-saved workflows across all sessions.
  */
 
-import { el, state, api, toast, fail, STEP_ICONS, hostOf, relativeTime } from './shared.js';
+import { el, state, api, toast, fail, STEP_ICONS, hostOf, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
 
 /* ── State ───────────────────────────────────────────────────────── */
 
@@ -22,13 +22,23 @@ const workflowState = state.workflowState;
 /* ── Loading ─────────────────────────────────────────────────────── */
 
 async function loadWorkflowsPage() {
+	const container = el.workflowsList;
+	const firstLoad = !workflowState.loaded;
+	if (firstLoad) showPageLoading(container);
 	const query = state.projectId ? `?projectId=${state.projectId}` : '';
 	try {
 		const data = await api(`/workflows${query}`);
 		workflowState.workflows = Array.isArray(data) ? data : [];
-	} catch {
+	} catch (error) {
 		workflowState.workflows = [];
+		workflowState.loaded = true;
+		if (firstLoad) {
+			showPageError(container, loadWorkflowsPage, `Could not load workflows — ${error?.message ?? 'server unreachable'}.`);
+			return;
+		}
 	}
+	workflowState.loaded = true;
+	clearPageState(container);
 	renderWorkflowsPage();
 }
 

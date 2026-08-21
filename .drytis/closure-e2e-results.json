@@ -1,0 +1,69 @@
+{
+  "scenarioA": {
+    "missionId": "7a707112-51f4-43dc-8d7e-5e93ec8cf2fe",
+    "sessionId": "aaaa1d32-c012-479f-a11d-05e549472669",
+    "missionStatus": "completed",
+    "sessionStatus": "idle",
+    "findings": [
+      {
+        "id": "3583c352-f399-4fbf-ae6c-95bf10a1cbff",
+        "ts": 1786474146753,
+        "title": "Added contacts do not persist after page reload",
+        "severity": "critical",
+        "category": "data-persistence",
+        "url": "http://localhost:9906/",
+        "steps": [
+          "1. Open http://localhost:9906 — 3 seed contacts shown (Alice, Bob, Carol)",
+          "2. Click 'Add Contact', fill Name='Dana Test', Email='dana@example.com', Phone='+1 555-0199', click Save",
+          "3. 'Dana Test' appears as the 4th contact; count shows '4 contacts'",
+          "4. Reload the page (navigate to http://localhost:9906 again)",
+          "5. List reverts to 3 seed contacts; 'Dana Test' is gone; count shows '3 contacts'"
+        ],
+        "expected": "The newly added contact should persist across a page reload, since the app's stated requirement is 'Add a contact, save it, reload the page, and verify the contact persists.' The contact list and count should remain '4 contacts' including 'Dana Test'.",
+        "actual": "After reload, the contact list reverts to the original 3 seed contacts and 'Dana Test' is lost. The count drops from 4 back to 3. The app stores data only in memory and re-seeds on every load, so no user-created contacts survive a reload.",
+        "observed": "Post-reload body text reads '3 contacts' with only Alice Johnson, Bob Smith, and Carol White. The Dana Test contact added moments before is no longer present.",
+        "impact": "The core function of a contact management app is to store contacts permanently. Because nothing persists, every contact a user adds is silently destroyed on refresh, making the app unusable for its intended purpose.",
+        "recommendation": "Persist contacts to durable storage (localStorage, IndexedDB, or a backend database) and load from that store on init instead of re-seeding the default list on every page load. Only seed defaults when the store is empty/uninitialized.",
+        "reproducibility": "confirmed"
+      },
+      {
+        "id": "344eada2-e719-4251-9983-6210c92761e5",
+        "ts": 1786474187314,
+        "title": "Phone number entered in the Add Contact form is never displayed or stored",
+        "severity": "high",
+        "category": "forms",
+        "url": "http://localhost:9906/",
+        "steps": [
+          "1. Click 'Add Contact'",
+          "2. Enter Name='Phone Check', Email='phone@example.com', Phone='+1 555-9999'",
+          "3. Click Save",
+          "4. Inspect the newly created contact card in the list"
+        ],
+        "expected": "The contact card should display the phone number that was entered in the Phone field, and the phone value should be stored as part of the contact record.",
+        "actual": "After saving, the contact card renders only two spans — Name and Email. The phone number is never displayed anywhere in the UI. The card structure (div > div > span[1]=name, span[2]=email) contains no element for phone, so the value entered into the Phone field is silently discarded on save.",
+        "observed": "New 'Phone Check' contact card shows only 'Phone Check' and 'phone@example.com'. The phone value '+1 555-9999' is absent from the entire page.",
+        "impact": "Users who rely on phone numbers lose that data silently — they type it, it appears to save, but the number is never stored or shown. For a contact manager, phone numbers are a primary field, so this is significant data loss.",
+        "recommendation": "Store the phone value in the contact object in the save handler and render a third span/element in the contact card template to display it.",
+        "reproducibility": "confirmed"
+      }
+    ],
+    "activities": 25,
+    "decisions": [],
+    "stopReason": "failed",
+    "iterations": 1,
+    "iterationMetadata": []
+  },
+  "scenarioB": {
+    "missionId": "9a092532-f251-4376-8eab-33aa97e7d135",
+    "sessionId": "37054310-44d9-4450-9f9a-c24d0df0bc58",
+    "missionStatus": "completed",
+    "sessionStatus": "idle",
+    "findings": [],
+    "activities": 25,
+    "decisions": [],
+    "stopReason": "approved",
+    "iterations": 1,
+    "iterationMetadata": []
+  },
+  "timestamp": "2026-08-11T18:59:54.970Z"
+}

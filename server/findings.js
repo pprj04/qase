@@ -267,7 +267,15 @@ export function addFinding(data) {
 		workflowId: data.workflowId ?? undefined,
 		featureId: data.featureId ?? undefined,
 		evidenceRefs: Array.isArray(data.evidenceRefs) ? data.evidenceRefs.map(String) : undefined,
-		...(data.intelligence && typeof data.intelligence === 'object' ? { intelligence: data.intelligence } : {})
+		...(data.intelligence && typeof data.intelligence === 'object' ? { intelligence: data.intelligence } : {}),
+
+		// ── BUILD B0.2 — execution provenance (additive, never fabricated) ──
+		// device: free-form label of the device context the agent ran under
+		// (e.g. "iPhone 15 Pro · iOS 17"). environment: where the finding was
+		// actually observed. Both stay undefined when unknown; syncSessionFinding
+		// never overwrites an existing correct value with null/undefined.
+		device: data.device != null ? String(data.device) : undefined,
+		environment: (data.environment && typeof data.environment === 'object') ? data.environment : undefined,
 	};
 	findings.push(finding);
 	persistSoon();
@@ -629,7 +637,11 @@ export function syncSessionFinding(session, finding) {
 		// Phase 16: keep duplicate markers in sync (previously dropped here).
 		...(finding.isDuplicate != null && { isDuplicate: finding.isDuplicate }),
 		...(finding.duplicateOf != null && { duplicateOf: finding.duplicateOf }),
-		...(finding.missionId != null && { missionId: finding.missionId })
+		...(finding.missionId != null && { missionId: finding.missionId }),
+		// B0.2 provenance sync — guarded: never overwrite an existing correct
+		// value with null/undefined.
+		...(finding.device != null && { device: finding.device }),
+		...(finding.environment != null && { environment: finding.environment })
 	});
 		persistSoon();
 		return existing;
@@ -657,6 +669,8 @@ export function syncSessionFinding(session, finding) {
 		...(finding.isDuplicate != null && { isDuplicate: finding.isDuplicate }),
 		...(finding.duplicateOf != null && { duplicateOf: finding.duplicateOf }),
 		...(finding.missionId != null && { missionId: finding.missionId }),
+		...(finding.device != null && { device: finding.device }),
+		...(finding.environment != null && { environment: finding.environment }),
 		createdBy: 'agent'
 	});
 }

@@ -1,0 +1,113 @@
+{
+  "passed": false,
+  "missionId": "4b0889c5-de55-450b-b940-bb6f1b27190d",
+  "iteration1": {
+    "sessionId": "ed666e86-ef46-4e60-ba2a-7b50650d5a00",
+    "activities": 10,
+    "findings": 0,
+    "capturedSteps": 9,
+    "qualityScore": 100,
+    "verdict": "pass"
+  },
+  "decision": {
+    "id": "dec_msp3yasd_1if20m",
+    "decision": "REVALIDATE",
+    "reason": "Evidence coverage is insufficient (30% < 50% threshold). Only 1 page(s) explored. Budget remains (80%) — revalidation recommended.",
+    "confidence": 0.26,
+    "factors": {
+      "evidenceCompleteness": 0.3,
+      "pagesExplored": 1,
+      "budgetRemaining": 0.8,
+      "inputSignature": "s:null|v:null|f:0|c:0|h:0|b:1|ba:0.8|e:0.3|kc:0|au:null|sc:1|as:0",
+      "confidenceBasis": [
+        "evidence completeness: 30%"
+      ]
+    },
+    "evidenceRefs": [],
+    "knowledgeRefs": [],
+    "recommendedAction": "Re-explore the application focusing on uncovered areas: authentication, forms, navigation, edge cases.",
+    "timestamp": "2026-08-11T20:23:29.053Z",
+    "policyVersion": "4.0.0",
+    "missionId": "4b0889c5-de55-450b-b940-bb6f1b27190d",
+    "sessionId": "ed666e86-ef46-4e60-ba2a-7b50650d5a00"
+  },
+  "revalidationTriggered": true,
+  "iteration2SessionId": "3ae0722e-a9a3-4a64-89ef-66511b5ff9f8",
+  "iterations": [
+    {
+      "number": 1,
+      "sessionId": "ed666e86-ef46-4e60-ba2a-7b50650d5a00",
+      "status": "idle",
+      "activities": 10,
+      "messages": 7,
+      "findings": [],
+      "capturedSteps": 9,
+      "qualityScore": 100,
+      "verdict": "pass"
+    }
+  ],
+  "iterationCount": 1,
+  "finalDecision": "REVALIDATE",
+  "finalStatus": "running",
+  "stopReason": "approved",
+  "finalVerdict": "pass",
+  "finalQualityScore": 100,
+  "loopStatus": {
+    "missionId": "4b0889c5-de55-450b-b940-bb6f1b27190d",
+    "currentIteration": 1,
+    "totalIterations": 1,
+    "maxIterations": 3,
+    "canRevalidate": true,
+    "stopReason": null,
+    "convergence": {
+      "state": "insufficient_data",
+      "trend": "unknown",
+      "scoreDelta": null,
+      "fixedCount": 0,
+      "remainingCount": 0,
+      "newCount": 0,
+      "regressionCount": 0,
+      "iterationsWithoutImprovement": 0,
+      "detail": "Need at least 2 iterations to assess convergence."
+    },
+    "comparison": null,
+    "latestDecision": null,
+    "latestScore": 100,
+    "latestVerdict": "pass",
+    "iterations": [
+      {
+        "number": 1,
+        "sessionId": "ed666e86-ef46-4e60-ba2a-7b50650d5a00",
+        "qualityScore": 100,
+        "verdict": "pass",
+        "releaseReady": true,
+        "findingCount": 0,
+        "ranAt": 1786479809053
+      }
+    ]
+  },
+  "decisions": [
+    {
+      "id": "dec_msp3yasd_1if20m",
+      "decision": "REVALIDATE",
+      "reason": "Evidence coverage is insufficient (30% < 50% threshold). Only 1 page(s) explored. Budget remains (80%) — revalidation recommended.",
+      "confidence": 0.26,
+      "factors": {
+        "evidenceCompleteness": 0.3,
+        "pagesExplored": 1,
+        "budgetRemaining": 0.8,
+        "inputSignature": "s:null|v:null|f:0|c:0|h:0|b:1|ba:0.8|e:0.3|kc:0|au:null|sc:1|as:0",
+        "confidenceBasis": [
+          "evidence completeness: 30%"
+        ]
+      },
+      "evidenceRefs": [],
+      "knowledgeRefs": [],
+      "recommendedAction": "Re-explore the application focusing on uncovered areas: authentication, forms, navigation, edge cases.",
+      "timestamp": "2026-08-11T20:23:29.053Z",
+      "policyVersion": "4.0.0",
+      "missionId": "4b0889c5-de55-450b-b940-bb6f1b27190d",
+      "sessionId": "ed666e86-ef46-4e60-ba2a-7b50650d5a00"
+    }
+  ]
+}

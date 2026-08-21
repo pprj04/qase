@@ -58,6 +58,16 @@ function parseHash() {
 	return PAGES.includes(raw) ? raw : 'runs';
 }
 
+/**
+ * Deep-link target for the runs page: `#/runs/<sessionId>` selects that
+ * session on load. Returns null when no id is present.
+ */
+export function runIdFromHash() {
+	const parts = location.hash.replace(/^#\/?/, '').split('/');
+	if (parts[0].toLowerCase() === 'runs' && parts[1]) return parts[1];
+	return null;
+}
+
 /** Swap visible page container + update nav state. */
 function render(page) {
 	if (page === current && initialized) return; // no-op if same page

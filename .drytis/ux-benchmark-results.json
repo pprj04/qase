@@ -1,0 +1,199 @@
+{
+  "ranAt": "2026-08-16T21:33:18.917Z",
+  "uxRecall": 1,
+  "uxPrecision": 1,
+  "fpRate": 0,
+  "evidenceCompleteness": 1,
+  "unverifiedSurvives": true,
+  "gapHonestNeverConfirmed": true,
+  "gapRecallPositivePath": 1,
+  "gapPrecisionPositivePath": 1,
+  "implementedDetected": 5,
+  "implementedLabels": 5,
+  "perApp": [
+    {
+      "app": "SalesFlow CRM",
+      "url": "http://localhost:9901",
+      "flaggedChecks": [
+        "navigation_dead_end",
+        "clarity_page_heading",
+        "hierarchy_heading_order",
+        "resp_horizontal_overflow",
+        "resp_touch_targets",
+        "consistency_cross_page"
+      ],
+      "matchedLabels": [
+        "ux_nav_dead_end",
+        "ux_resp_overflow_mobile",
+        "ux_resp_touch_targets",
+        "ux_consistency_titles"
+      ],
+      "missedLabels": [],
+      "falsePositives": [],
+      "issues": 6,
+      "unverifiedAreas": 27,
+      "evidenceComplete": true,
+      "unverifiedSurvives": true,
+      "confirmedGaps": [],
+      "gapFP": [],
+      "implementedDetected": [],
+      "sweepDurationMs": 2949,
+      "positivePath": {
+        "confirmedGaps": [
+          "Reports / analytics section",
+          "Search functionality"
+        ],
+        "correctlyConfirmed": 2,
+        "incorrectlyConfirmed": 0,
+        "implementedDetected": [
+          "Contacts list"
+        ]
+      }
+    },
+    {
+      "app": "TaskBoard",
+      "url": "http://localhost:9902",
+      "flaggedChecks": [
+        "navigation_dead_end",
+        "hierarchy_heading_order",
+        "resp_horizontal_overflow",
+        "resp_touch_targets",
+        "consistency_cross_page"
+      ],
+      "matchedLabels": [
+        "ux_nav_dead_end",
+        "ux_consistency_titles",
+        "ux_resp_overflow_mobile"
+      ],
+      "missedLabels": [],
+      "falsePositives": [],
+      "issues": 5,
+      "unverifiedAreas": 27,
+      "evidenceComplete": true,
+      "unverifiedSurvives": true,
+      "confirmedGaps": [],
+      "gapFP": [],
+      "implementedDetected": [],
+      "sweepDurationMs": 2941,
+      "positivePath": {
+        "confirmedGaps": [
+          "Search/filter",
+          "Due dates"
+        ],
+        "correctlyConfirmed": 2,
+        "incorrectlyConfirmed": 0,
+        "implementedDetected": [
+          "Kanban board"
+        ]
+      }
+    },
+    {
+      "app": "ShopHub E-commerce",
+      "url": "http://localhost:9903",
+      "flaggedChecks": [
+        "navigation_dead_end",
+        "navigation_broken_internal_links",
+        "clarity_page_heading",
+        "hierarchy_heading_order",
+        "console_errors",
+        "resp_horizontal_overflow",
+        "resp_touch_targets",
+        "consistency_cross_page"
+      ],
+      "matchedLabels": [
+        "ux_resp_touch_targets",
+        "ux_nav_dead_end"
+      ],
+      "missedLabels": [],
+      "falsePositives": [],
+      "issues": 8,
+      "unverifiedAreas": 24,
+      "evidenceComplete": true,
+      "unverifiedSurvives": true,
+      "confirmedGaps": [],
+      "gapFP": [],
+      "implementedDetected": [],
+      "sweepDurationMs": 2889,
+      "positivePath": {
+        "confirmedGaps": [
+          "User reviews"
+        ],
+        "correctlyConfirmed": 1,
+        "incorrectlyConfirmed": 0,
+        "implementedDetected": [
+          "Cart"
+        ]
+      }
+    },
+    {
+      "app": "MetricsPro Analytics",
+      "url": "http://localhost:9904",
+      "flaggedChecks": [
+        "navigation_dead_end",
+        "hierarchy_heading_order",
+        "resp_horizontal_overflow",
+        "resp_touch_targets",
+        "consistency_cross_page"
+      ],
+      "matchedLabels": [
+        "ux_resp_overflow_mobile",
+        "ux_resp_touch_targets"
+      ],
+      "missedLabels": [],
+      "falsePositives": [],
+      "issues": 5,
+      "unverifiedAreas": 27,
+      "evidenceComplete": true,
+      "unverifiedSurvives": true,
+      "confirmedGaps": [],
+      "gapFP": [],
+      "implementedDetected": [],
+      "sweepDurationMs": 2910,
+      "positivePath": {
+        "confirmedGaps": [
+          "Export data (CSV)"
+        ],
+        "correctlyConfirmed": 1,
+        "incorrectlyConfirmed": 0,
+        "implementedDetected": [
+          "Dashboard stats"
+        ]
+      }
+    },
+    {
+      "app": "SaaSLaunch Marketing",
+      "url": "http://localhost:9905",
+      "flaggedChecks": [
+        "navigation_dead_end",
+        "navigation_broken_internal_links",
+        "resp_horizontal_overflow",
+        "resp_touch_targets",
+        "consistency_cross_page"
+      ],
+      "matchedLabels": [
+        "ux_resp_overflow_mobile",
+        "ux_nav_dead_end"
+      ],
+      "missedLabels": [],
+      "falsePositives": [],
+      "issues": 5,
+      "unverifiedAreas": 27,
+      "evidenceComplete": true,
+      "unverifiedSurvives": true,
+      "confirmedGaps": [],
+      "gapFP": [],
+      "implementedDetected": [],
+      "sweepDurationMs": 3016,
+      "positivePath": {
+        "confirmedGaps": [
+          "Blog"
+        ],
+        "correctlyConfirmed": 1,
+        "incorrectlyConfirmed": 0,
+        "implementedDetected": [
+          "Pricing section"
+        ]
+      }
+    }
+  ]
+}

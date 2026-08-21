@@ -8,13 +8,14 @@
  */
 
 import { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
-import { initRouter, navigate, currentPage } from './router.js';
+import { initRouter, navigate, currentPage, runIdFromHash } from './router.js';
 import { loadTestCases, renderTestCases, initTestsWiring } from './tests.js';
 import { loadBugs, openBugDetail, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 import { classifyViewport } from './deviceClassify.js';
+import { renderExecMeta, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
 
 async function refreshRuns() {
 	const query = state.projectId ? `?projectId=${state.projectId}` : '';
@@ -59,8 +60,15 @@ function renderRun(run) {
 		event.stopPropagation();
 		await api(`/sessions/${run.id}`, { method: 'DELETE' }).catch(fail);
 		if (run.id === state.sessionId) {
-			const remaining = await api('/sessions');
-			await (remaining[0] ? selectSession(remaining[0].id) : startRun());
+			// Select the next run if one exists; otherwise show the empty hero
+			// (no auto-created replacement shell).
+			state.sessionId = null;
+			state.session = null;
+			const remaining = await api('/sessions').catch(() => []);
+			await (remaining[0] ? selectSession(remaining[0].id) : refreshRuns());
+			if (!remaining.length) {
+				el.chatEmpty.hidden = false;
+			}
 		} else {
 			await refreshRuns();
 		}
@@ -79,6 +87,13 @@ async function selectSession(id) {
 	// inherits the previous device session's frame dimensions.
 	state.viewport = null;
 	localStorage.setItem('qase.session', id);
+	// Keep the URL shareable: #/runs/<sessionId> deep-links to this run.
+	if (currentPage() === 'runs') {
+		const wanted = `#/runs/${id}`;
+		if (location.hash !== wanted && !location.hash.startsWith(`#/runs/${id}`)) {
+			history.replaceState(null, '', wanted);
+		}
+	}
 
 	const session = await api(`/sessions/${id}`).catch(err => {
 		fail(err);
@@ -120,12 +135,15 @@ async function selectSession(id) {
 
 	// Render everything synchronously first — this is instant.
 	renderHeader();
+	renderExecMeta(session);
 	renderTranscript();
 	resetThinking();
 	renderQuestion();
 	renderActivities();
 	renderTodos();
 	renderFindings();
+	renderSessionFindings(session);
+	handleTabActivation(document.querySelector('.tab.is-active')?.dataset.tab ?? null);
 	renderReport();
 	updateExecStats();
 
@@ -180,11 +198,23 @@ function renderHeader() {
 	el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title;
 	el.chatTarget.textContent = session.targetUrl ?? 'Send a URL to begin';
 	setStatus(session.status);
+	// BUILD 1: late joiners (selecting an already-running session) should see
+	// the same phase tracker a live viewer gets — hydrate from current status.
+	updateMissionPhase(session.status, session.latestActivity ?? null);
 }
 
 function setStatus(status) {
-	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = status === 'awaiting_input' ? 'waiting for you' : status;
+	// Engine fact: the turn watchdog aborts the agent and the engine settles
+	// the session in `idle`. A bare "idle" chip reads as "waiting" — relabel
+	// it from the transcript so it communicates the real terminal state.
+	let label = status === 'awaiting_input' ? 'waiting for you' : status;
+	if (status === 'idle' && state.session && watchdogEnded(state.session)) {
+		label = 'interrupted — session limit';
+		el.statusChip.dataset.status = 'interrupted'; // reuse the amber terminal style
+	} else {
+		el.statusChip.dataset.status = status;
+	}
+	el.statusChip.textContent = label;
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
 	el.sendBtn.disabled = running;
@@ -253,6 +283,12 @@ function countPages(session) {
 	return urls.size;
 }
 
+function watchdogEnded(session) {
+	const messages = session.messages ?? [];
+	const last = messages[messages.length - 1];
+	return Boolean(last?.role === 'system' && /timed out after \d+ minutes/i.test(last.text ?? ''));
+}
+
 function updateExecStats() {
 	const bar = document.getElementById('exec-stats-bar');
 	if (!bar) return;
@@ -296,8 +332,16 @@ function updateExecStats() {
 		stats.push('<span class="es-item es-live"><span class="es-pulse"></span> LIVE</span>');
 	} else if (session.status === 'done') {
 		stats.push('<span class="es-item es-done">✓ RUN COMPLETED</span>');
-	} else if (session.status === 'error' || session.status === 'interrupted') {
+	} else if (session.status === 'error') {
 		stats.push('<span class="es-item es-failed">✕ RUN FAILED</span>');
+	} else if (session.status === 'interrupted') {
+		stats.push('<span class="es-item es-failed">⏸ RUN INTERRUPTED</span>');
+	} else if (session.status === 'idle' && watchdogEnded(session)) {
+		// Engine fact: the 20-minute turn watchdog aborts the agent and the
+		// engine settles the session in `idle` (same as a manual stop). The
+		// transcript's final system message is the honest signal — surface it
+		// as a terminal state so an exec never reads "idle" as "waiting".
+		stats.push('<span class="es-item es-failed">⏸ RUN INTERRUPTED — 20-minute session limit</span>');
 	}
 
 	bar.innerHTML = stats.join('');
@@ -792,9 +836,10 @@ function renderTodos() {
 	const todos = state.session.todos ?? [];
 	const done = todos.filter(todo => todo.status === 'completed').length;
 	el.countPlan.textContent = todos.length > 0 ? `${done}/${todos.length}` : '';
+	const planDetails = document.getElementById('ev-plan-details');
+	if (planDetails) planDetails.hidden = todos.length === 0;
 	el.planList.replaceChildren();
 	if (todos.length === 0) {
-		el.planList.innerHTML = '<div class="feed-empty">The agent has not written a test plan yet</div>';
 		return;
 	}
 	for (const todo of todos) {
@@ -814,233 +859,13 @@ function renderTodos() {
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
 function renderFindings() {
-	const findings = state.session.findings ?? [];
-	el.countFindings.textContent = findings.length > 0 ? `${findings.length}` : '';
-	el.countFindings.classList.toggle('is-alert', findings.some(finding => finding.severity === 'critical'));
+	// BUILD 1: the session findings pane was removed with the Phase 15 tab
+	// restructure — findings live on the dedicated Bugs page and in the
+	// session report. Only the exec-stats counter remains here.
 	updateExecStats();
-
-	el.findingsList.replaceChildren();
-	if (findings.length === 0) {
-		el.findingsList.innerHTML = '<div class="feed-empty">No findings filed yet</div>';
-		return;
-	}
-
-	// Group findings by category
-	const groups = {};
-	for (const f of findings) {
-		const cat = f.category || f.severity || 'other';
-		if (!groups[cat]) groups[cat] = [];
-		groups[cat].push(f);
-	}
-
-	// Order categories by priority
-	const CATEGORY_ORDER = [
-		'critical', 'security', 'feature_gap', 'feature gap', 'ux', 'accessibility',
-		'performance', 'high', 'medium', 'low', 'info', 'other'
-	];
-	const sortedCats = Object.keys(groups).sort((a, b) => {
-		const ai = CATEGORY_ORDER.indexOf(a.toLowerCase());
-		const bi = CATEGORY_ORDER.indexOf(b.toLowerCase());
-		return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-	});
-
-	for (const cat of sortedCats) {
-		const group = groups[cat];
-		const header = document.createElement('div');
-		header.className = 'finding-group-header';
-		header.textContent = `${cat.toUpperCase()} (${group.length})`;
-		el.findingsList.append(header);
-
-		// Sort within group by severity
-		const sorted = [...group].sort(
-			(a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
-		);
-		for (const finding of sorted) {
-			el.findingsList.append(renderFinding(finding));
-		}
-	}
 }
 
-function renderFinding(finding) {
-	const node = document.createElement('article');
-	node.className = 'finding';
-	node.dataset.sev = finding.severity;
 
-	const head = document.createElement('button');
-	head.className = 'finding-head';
-	head.type = 'button';
-	const title = document.createElement('span');
-	title.className = 'finding-title';
-	title.textContent = finding.title;
-	const sev = document.createElement('span');
-	sev.className = 'sev';
-	sev.textContent = finding.severity;
-	head.append(title, sev);
-	// Status badge (open/confirmed/resolved)
-	if (finding.status && finding.status !== 'open') {
-		const statusBadge = document.createElement('span');
-		statusBadge.className = 'sev finding-status';
-		statusBadge.textContent = finding.status;
-		head.append(statusBadge);
-	}
-	head.onclick = () => node.classList.toggle('is-open');
-
-	const body = document.createElement('div');
-	body.className = 'finding-body';
-
-	const meta = document.createElement('div');
-	meta.className = 'finding-meta';
-	const metaParts = [];
-	if (finding.severity) metaParts.push(finding.severity.toUpperCase());
-	if (finding.category) metaParts.push(finding.category);
-	if (finding.url) metaParts.push(finding.url);
-	if (finding.ts) metaParts.push(new Date(finding.ts).toLocaleString());
-	meta.textContent = metaParts.join(' · ');
-	body.append(meta);
-
-	if (finding.steps?.length) {
-		const steps = document.createElement('ol');
-		for (const step of finding.steps) {
-			const item = document.createElement('li');
-			item.textContent = step;
-			steps.append(item);
-		}
-		body.append(steps);
-	}
-
-	const list = document.createElement('dl');
-	for (const [term, value] of [
-		['Expected', finding.expected],
-		['Actual', finding.actual],
-		['Observed', finding.observed],
-		['Recommendation', finding.recommendation],
-		['Impact', finding.impact],
-	]) {
-		if (!value) continue;
-		const dt = document.createElement('dt');
-		dt.textContent = term;
-		const dd = document.createElement('dd');
-		dd.textContent = value;
-		list.append(dt, dd);
-	}
-	body.append(list);
-
-	// Confidence + reproducibility badges
-	if (finding.confidence != null || finding.reproducibility) {
-		const badges = document.createElement('div');
-		badges.className = 'finding-badges';
-		if (finding.confidence != null) {
-			const conf = document.createElement('span');
-			conf.className = 'finding-badge';
-			conf.textContent = `Confidence: ${Math.round(finding.confidence * 100)}%`;
-			badges.append(conf);
-		}
-		if (finding.reproducibility) {
-			const repro = document.createElement('span');
-			repro.className = 'finding-badge';
-			repro.textContent = `Reproducibility: ${finding.reproducibility}`;
-			badges.append(repro);
-		}
-		body.append(badges);
-	}
-
-	if (finding.evidence) {
-		const ev = document.createElement('div');
-		ev.className = 'finding-evidence-text';
-		const label = document.createElement('div');
-		label.className = 'finding-evidence-label';
-		label.textContent = 'Evidence:';
-		const pre = document.createElement('pre');
-		pre.textContent = finding.evidence;
-		ev.append(label, pre);
-		body.append(ev);
-	}
-
-	// Typed evidence from the evidence graph — loaded on demand, only real data.
-	const evSection = document.createElement('div');
-	evSection.className = 'finding-graph-evidence';
-	evSection.hidden = true;
-	body.append(evSection);
-
-	const actions = document.createElement('div');
-	actions.className = 'finding-actions';
-
-	const viewEv = document.createElement('button');
-	viewEv.className = 'btn btn-ghost btn-sm';
-	viewEv.type = 'button';
-	viewEv.textContent = 'View Evidence';
-	let evLoaded = false;
-	viewEv.onclick = async () => {
-		if (!evSection.hidden) {
-			evSection.hidden = true;
-			viewEv.textContent = 'View Evidence';
-			return;
-		}
-		evSection.hidden = false;
-		viewEv.textContent = 'Hide Evidence';
-		if (evLoaded) return;
-		evSection.innerHTML = '<div class="ev-loading">Loading evidence…</div>';
-		try {
-			const items = await api(`/findings/${finding.id}/evidence`);
-			evLoaded = true;
-			renderGraphEvidence(evSection, items);
-		} catch (error) {
-			evSection.innerHTML = `<div class="ev-error">Unable to load evidence. <button type="button" class="btn btn-ghost btn-sm ev-retry">Retry</button></div>`;
-			evSection.querySelector('.ev-retry')?.addEventListener('click', () => {
-				evLoaded = false;
-				viewEv.click();
-				viewEv.click();
-			});
-		}
-	};
-	actions.append(viewEv);
-
-	// Revalidate — re-runs the owning mission as a new iteration via the
-	// existing validation loop. Only shown when a mission is linked.
-	if (state.missionId) {
-		const reval = document.createElement('button');
-		reval.className = 'btn btn-ghost btn-sm';
-		reval.type = 'button';
-		reval.textContent = 'Revalidate';
-		reval.onclick = async () => {
-			reval.disabled = true;
-			reval.textContent = 'Starting…';
-			try {
-				const res = await fetch(`/api/v1/missions/${state.missionId}/revalidate`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					credentials: 'same-origin'
-				});
-				if (!res.ok) {
-					const body = await res.json().catch(() => ({}));
-					throw new Error(body.error ?? `Revalidate failed (${res.status})`);
-				}
-				const data = await res.json();
-				toast(`Revalidation started — session ${String(data.sessionId).slice(0, 8)}`, 'good');
-			} catch (error) {
-				fail(error);
-			} finally {
-				reval.disabled = false;
-				reval.textContent = 'Revalidate';
-			}
-		};
-		actions.append(reval);
-	}
-
-	const copy = document.createElement('button');
-	copy.className = 'btn btn-ghost btn-sm';
-	copy.type = 'button';
-	copy.textContent = 'Copy as ticket';
-	copy.onclick = async () => {
-		await navigator.clipboard.writeText(findingAsTicket(finding));
-		toast('Finding copied to the clipboard.', 'good');
-	};
-	actions.append(copy);
-	body.append(actions);
-
-	node.append(head, body);
-	return node;
-}
 
 function findingAsTicket(finding) {
 	return [
@@ -1126,12 +951,28 @@ const VERDICTS = {
 	blocked: { mark: '—', label: 'Blocked', tone: 'dim' }
 };
 
-function renderReport() {
+async function renderReport() {
 	const report = state.session.report;
 	el.reportView.replaceChildren();
 	loadUxQualityPanel();
 	if (!report) {
-		el.reportView.innerHTML = '<div class="feed-empty">The report is published when the run finishes</div>';
+		// The agent never called its publish_report tool (watchdog-ended
+		// runs never do) — but the server still generates report.md on the
+		// fly with an honest verdict. Render that instead of a bare
+		// "published when the run finishes" placeholder that never resolves.
+		el.reportView.innerHTML = '<div class="feed-empty">Loading report…</div>';
+		try {
+			const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+			const res = await fetch(`/api/sessions/${state.sessionId}/report.md`, {
+				headers: token ? { Authorization: `Bearer ${token}` } : {}
+			});
+			if (!res.ok) throw new Error(`report API ${res.status}`);
+			const markdownText = await res.text();
+			if (state.session.report) return; // agent published meanwhile
+			renderGeneratedReport(markdownText);
+		} catch (err) {
+			el.reportView.innerHTML = `<div class="feed-empty">The report is published when the run finishes.<br><span class="subtle">${escapeHtml(err.message)}</span></div>`;
+		}
 		return;
 	}
 
@@ -1192,6 +1033,63 @@ function renderReport() {
 	el.reportView.append(actions);
 }
 
+/**
+ * Renders the server-generated report.md (honest fallback for runs that
+ * never published a structured report — e.g. watchdog-ended sessions).
+ * Parses the lightweight markdown the server emits: title, metadata list,
+ * headings and list items.
+ */
+function renderGeneratedReport(markdownText) {
+	const wrap = document.createElement('div');
+	wrap.className = 'report-generated';
+
+	const note = document.createElement('div');
+	note.className = 'ev-empty ev-note';
+	note.innerHTML = '📝 This report was <b>generated from the run transcript</b> — the agent did not publish its final report before the session ended. Details reflect what was completed up to that point.';
+	wrap.append(note);
+
+	const body = document.createElement('div');
+	body.className = 'report-md';
+	const lines = String(markdownText).split('\n');
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const node = document.createElement('div');
+		if (line.startsWith('### ')) { node.className = 'report-md-h3'; node.textContent = line.slice(4); }
+		else if (line.startsWith('## ')) { node.className = 'report-md-h2'; node.textContent = line.slice(3); }
+		else if (line.startsWith('# ')) { node.className = 'report-md-h1'; node.textContent = line.slice(2); }
+		else if (/^[-*] /.test(line)) {
+			node.className = 'report-md-li';
+			const clean = line.slice(2).replace(/\*\*/g, '');
+			node.textContent = '• ' + clean;
+		} else {
+			node.className = 'report-md-p';
+			node.textContent = line.replace(/\*\*/g, '').replace(/^[-*]\s*/, '');
+		}
+		body.append(node);
+	}
+	wrap.append(body);
+
+	const actions = document.createElement('div');
+	actions.className = 'report-actions';
+	const download = document.createElement('a');
+	download.className = 'btn btn-ghost btn-sm';
+	download.href = `/api/sessions/${state.sessionId}/report.md`;
+	download.download = 'qase-report.md';
+	download.textContent = 'Download .md';
+	const copy = document.createElement('button');
+	copy.className = 'btn btn-ghost btn-sm';
+	copy.type = 'button';
+	copy.textContent = 'Copy report';
+	copy.onclick = async () => {
+		await navigator.clipboard.writeText(markdownText);
+		toast('Report copied to the clipboard.', 'good');
+	};
+	actions.append(download, copy);
+	wrap.append(actions);
+
+	el.reportView.replaceChildren(wrap);
+}
+
 function section(heading, body) {
 	const node = document.createElement('div');
 	node.className = 'report-section';
@@ -1227,81 +1125,12 @@ async function loadWorkflows() {
 }
 
 function renderWorkflows() {
-	el.workflowPane.replaceChildren();
-	el.countWorkflows.textContent = state.capturedSteps.length || '';
-
-	if (state.capturedSteps.length === 0 && savedWorkflows.length === 0) {
-		const empty = document.createElement('div');
-		empty.className = 'workflow-empty';
-		empty.innerHTML = '<p>No workflow steps yet.</p><small>Browser actions taken by the agent will appear here as a captureable timeline.</small>';
-		el.workflowPane.append(empty);
-		return;
-	}
-
-	/* ── Captured steps timeline ── */
-	if (state.capturedSteps.length > 0) {
-		const captureSection = document.createElement('div');
-		captureSection.className = 'wf-section';
-
-		const heading = document.createElement('h3');
-		heading.className = 'wf-section-heading';
-		heading.textContent = `Captured steps (${state.capturedSteps.length})`;
-
-		const saveForm = document.createElement('div');
-		saveForm.className = 'wf-save-form';
-
-		const nameInput = document.createElement('input');
-		nameInput.type = 'text';
-		nameInput.placeholder = 'Workflow name (e.g. "Login flow")';
-		nameInput.className = 'wf-name-input';
-
-		const saveBtn = document.createElement('button');
-		saveBtn.className = 'wf-save-btn';
-		saveBtn.textContent = 'Save as workflow';
-		saveBtn.onclick = async () => {
-			const name = nameInput.value.trim();
-			if (!name) {
-				toast('Enter a name for the workflow.', 'bad');
-				return;
-			}
-			try {
-				saveBtn.disabled = true;
-				saveBtn.textContent = 'Saving…';
-				const wf = await api(`/sessions/${state.sessionId}/workflow`, {
-					method: 'POST',
-					body: JSON.stringify({ name })
-				});
-				savedWorkflows.unshift({
-					id: wf.id, name: wf.name, stepCount: wf.steps.length,
-					targetUrl: wf.targetUrl, tags: wf.tags,
-					createdAt: wf.createdAt, updatedAt: wf.updatedAt
-				});
-				nameInput.value = '';
-				renderSavedWorkflows();
-				toast(`Workflow "${wf.name}" saved.`, 'good');
-			} catch (error) {
-				fail(error);
-			} finally {
-				saveBtn.disabled = false;
-				saveBtn.textContent = 'Save as workflow';
-			}
-		};
-
-		saveForm.append(nameInput, saveBtn);
-
-		const timeline = document.createElement('div');
-		timeline.className = 'wf-timeline';
-
-		for (const step of state.capturedSteps) {
-			timeline.append(renderWorkflowStep(step));
-		}
-
-		captureSection.append(heading, saveForm, timeline);
-		el.workflowPane.append(captureSection);
-	}
-
-	renderSavedWorkflows();
+	// BUILD 1: session workflow capture renders via the Workflows page
+	// (workflows.js). The hidden #workflow-pane from the Phase 15 tabs is
+	// gone; keep captured-steps state fresh for that page.
+	state.capturedSteps = Array.isArray(state.capturedSteps) ? state.capturedSteps : [];
 }
+
 
 function renderWorkflowStep(step) {
 	const node = document.createElement('div');
@@ -1347,89 +1176,6 @@ function renderWorkflowStep(step) {
 	return node;
 }
 
-function renderSavedWorkflows() {
-	const existing = el.workflowPane.querySelector('.wf-saved-section');
-	if (existing) {
-		existing.remove();
-	}
-
-	if (savedWorkflows.length === 0) {
-		return;
-	}
-
-	const section = document.createElement('div');
-	section.className = 'wf-section wf-saved-section';
-
-	const heading = document.createElement('h3');
-	heading.className = 'wf-section-heading';
-	heading.textContent = `Saved workflows (${savedWorkflows.length})`;
-
-	const list = document.createElement('div');
-	list.className = 'wf-saved-list';
-
-	for (const wf of savedWorkflows) {
-		const item = document.createElement('div');
-		item.className = 'wf-saved-item';
-
-		const name = document.createElement('span');
-		name.className = 'wf-saved-name';
-		name.textContent = wf.name;
-
-		const meta = document.createElement('span');
-		meta.className = 'wf-saved-meta';
-		const parts = [`${wf.stepCount} steps`];
-		if (wf.targetUrl) {
-			parts.push(hostOf(wf.targetUrl));
-		}
-		parts.push(relativeTime(wf.updatedAt ?? wf.createdAt));
-		meta.textContent = parts.join(' · ');
-
-		const del = document.createElement('button');
-		del.className = 'wf-saved-delete';
-		del.textContent = 'Delete';
-		del.title = 'Delete workflow';
-		del.onclick = async () => {
-			try {
-				await api(`/workflows/${wf.id}`, { method: 'DELETE' });
-				savedWorkflows = savedWorkflows.filter(w => w.id !== wf.id);
-				renderSavedWorkflows();
-				toast(`Deleted "${wf.name}".`, 'good');
-			} catch (error) {
-				fail(error);
-			}
-		};
-
-		const gen = document.createElement('button');
-		gen.className = 'wf-saved-gen';
-		gen.textContent = 'Gen Tests';
-		gen.title = 'Generate test cases from this workflow';
-		gen.onclick = async () => {
-			try {
-				gen.disabled = true;
-				gen.textContent = 'Generating…';
-				const created = await api(`/workflows/${wf.id}/generate-tests`, { method: 'POST' });
-				if (Array.isArray(created)) {
-					for (const tc of created) {
-						state.testCases.unshift(tc);
-					}
-					renderTestCases();
-					toast(`Generated ${created.length} test case${created.length === 1 ? '' : 's'}.`, 'good');
-				}
-			} catch (error) {
-				fail(error);
-			} finally {
-				gen.disabled = false;
-				gen.textContent = 'Gen Tests';
-			}
-		};
-
-		item.append(name, meta, gen, del);
-		list.append(item);
-	}
-
-	section.append(heading, list);
-	el.workflowPane.append(section);
-}
 
 async function loadRegression() {
 	state.schedules = [];
@@ -1446,34 +1192,10 @@ async function loadRegression() {
 }
 
 function renderRegression() {
-	el.regressionPane.replaceChildren();
-	el.countRegression.textContent = state.schedules.length || '';
-
-	// Trend chart
-	if (state.regressionTrend.length > 0) {
-		el.regressionPane.append(renderTrendChart(state.regressionTrend));
-	}
-
-	// Create schedule form
-	el.regressionPane.append(renderCreateScheduleForm());
-
-	// Schedule list
-	if (state.schedules.length === 0) {
-		const empty = document.createElement('div');
-		empty.className = 'reg-empty';
-		empty.innerHTML = '<p>No schedules yet.</p><small>Create a schedule above to auto-run test suites on a recurring basis.</small>';
-		el.regressionPane.append(empty);
-	} else {
-		const heading = document.createElement('div');
-		heading.className = 'reg-section-heading';
-		heading.textContent = `Schedules (${state.schedules.length})`;
-		el.regressionPane.append(heading);
-
-		for (const sched of state.schedules) {
-			el.regressionPane.append(renderScheduleCard(sched));
-		}
-	}
+	// BUILD 1: schedules + regression trend render on the Schedules page
+	// (schedules.js). The hidden #regression-pane is gone.
 }
+
 
 function renderTrendChart(trend) {
 	const wrap = document.createElement('div');
@@ -1712,7 +1434,6 @@ function renderScheduleCard(sched) {
 			await api(`/schedules/${sched.id}`, { method: 'DELETE' });
 			state.schedules = state.schedules.filter(s => s.id !== sched.id);
 			card.remove();
-			el.countRegression.textContent = state.schedules.length || '';
 			toast(`Deleted "${sched.name}".`, 'good');
 		} catch (error) {
 			fail(error);
@@ -1974,6 +1695,8 @@ const cfg = {
 	browserstackUser: $('cfg-browserstack-user'),
 	browserstackKey: $('cfg-browserstack-key'),
 	browserstackKeyClear: $('cfg-browserstack-key-clear'),
+	browserstackTestBtn: $('cfg-browserstack-test-btn'),
+	browserstackTest: $('cfg-browserstack-test'),
 	selfHealEnabled: $('cfg-self-heal-enabled'),
 	selfHealThreshold: $('cfg-self-heal-threshold'),
 	test: $('cfg-test'),
@@ -2023,6 +1746,19 @@ function fillSettings(config) {
 	cfg.browserstackUser.value = config.browserstackUser ?? '';
 	cfg.browserstackKey.value = '';
 	cfg.browserstackKey.placeholder = config.hasBrowserstackKey ? '•••• (set — leave blank to keep)' : 'your-access-key';
+	if (cfg.browserstackTest) {
+		cfg.browserstackTest.className = 'test-result';
+		cfg.browserstackTest.hidden = false;
+		const last = config.browserstackLastVerified;
+		if (last) {
+			cfg.browserstackTest.className = `test-result ${last.ok ? 'ok' : 'bad'}`;
+			cfg.browserstackTest.textContent = last.ok
+				? `✓ Last verified ${new Date(last.ts).toLocaleString()} — connected`
+				: `✗ Last test ${new Date(last.ts).toLocaleString()} — failed: ${last.message ?? 'credentials rejected'}`;
+		} else {
+			cfg.browserstackTest.textContent = 'Not verified yet.';
+		}
+	}
 
 	// Self-Healing
 	cfg.selfHealEnabled.checked = config.selfHealEnabled !== false;
@@ -2152,6 +1888,44 @@ cfg.testBtn.onclick = async () => {
 		: result.message;
 };
 
+// BUILD B0.1 — Test BrowserStack Connection (real auth + CDP probe).
+// The access key is only ever SENT; it is never displayed or logged.
+cfg.browserstackTestBtn.onclick = async () => {
+	if (!cfg.browserstackTestBtn) return;
+	const btn = cfg.browserstackTestBtn;
+	const out = cfg.browserstackTest;
+	btn.disabled = true;
+	out.className = 'test-result busy';
+	out.hidden = false;
+	out.textContent = 'Testing BrowserStack (auth + CDP)…';
+	const body = { browserstackUser: cfg.browserstackUser.value.trim() };
+	if (cfg.browserstackKey.value.trim()) body.browserstackKey = cfg.browserstackKey.value.trim();
+	else if (cfg.browserstackKey.dataset.cleared !== '1' && $('cfg-browserstack-enabled')?.checked !== true) {
+		// leave blank → the server tests the SAVED credentials, which is the
+		// desired behaviour when the user has not typed anything new.
+	}
+	try {
+		const result = await api('/config/test-browserstack', { method: 'POST', body: JSON.stringify(body) });
+		out.className = `test-result ${result.ok ? 'ok' : 'bad'}`;
+		const when = result.lastVerifiedTs ? ` · ${new Date(result.lastVerifiedTs).toLocaleString()}` : '';
+		if (result.ok) {
+			// B0.1: never hide a partial result — if the CDP execution path was
+			// not probed, the user must see that qualifier.
+			out.textContent = result.cdp?.ok === true
+				? `✓ Connected${result.maskedUser ? ` as ${result.maskedUser}` : ''} — credentials valid, execution endpoint reachable.${when}`
+				: `✓ Authenticated${result.maskedUser ? ` as ${result.maskedUser}` : ''} — credentials valid.${result.cdp?.code === 'not_probed' ? ' (CDP execution endpoint not probed in this runtime.)' : ''}${when}`;
+		} else {
+			out.textContent = `✗ Failed — ${result.message || 'unknown error'}${when}`;
+		}
+	} catch (error) {
+		out.className = 'test-result bad';
+		out.hidden = false;
+		out.textContent = `✗ Failed — ${error instanceof Error ? error.message : String(error)}`;
+	} finally {
+		btn.disabled = false;
+	}
+};
+
 cfg.saveBtn.onclick = async () => {
 	try {
 		const config = await api('/config', { method: 'PUT', body: JSON.stringify(readSettings()) });
@@ -2185,9 +1959,19 @@ if (intentToggleUp) intentToggleUp.onclick = () => { intentPanel.hidden = true; 
 
 el.composer.onsubmit = async event => {
 	event.preventDefault();
-	const text = el.composerInput.value.trim();
-	if (!text || !state.sessionId) {
+	let text = el.composerInput.value.trim();
+	if (!text) {
 		return;
+	}
+	// No session yet (fresh project / all runs deleted) — create one on the
+	// fly rather than silently ignoring the send. (Build 4)
+	if (!state.sessionId) {
+		try {
+			await startRun();
+		} catch (err) {
+			fail(err);
+			return;
+		}
 	}
 
 	// Check if intent fields are provided — if so, create a mission via the API
@@ -2278,6 +2062,7 @@ for (const tab of document.querySelectorAll('.tab')) {
 		for (const pane of document.querySelectorAll('.tab-pane')) {
 			pane.classList.toggle('is-active', pane.dataset.pane === tab.dataset.tab);
 		}
+		handleTabActivation(tab.dataset.tab);
 	};
 }
 
@@ -2308,13 +2093,13 @@ async function selectProject(id) {
 	localStorage.setItem('qase.project', id || '');
 	renderProjectSelect();
 	await refreshRuns();
-	// If there's no session yet for this project, start a new run.
+	// If there's no session yet for this project, show the empty hero —
+	// the user starts a run explicitly with "New run" or the composer.
+	// (Build 4: no silent auto-create — it polluted the run list.)
 	if (state.session?.projectId !== id) {
 		const runs = await api(`/sessions${id ? `?projectId=${id}` : ''}`).catch(err => { fail(err); return []; });
 		if (runs.length > 0) {
 			await selectSession(runs[0].id);
-		} else {
-			try { await startRun(); } catch (err) { fail(err); }
 		}
 	}
 }
@@ -2736,6 +2521,14 @@ document.addEventListener('click', event => {
 		if (page === 'workflows') loadWorkflowsPage();
 		if (page === 'schedules') loadSchedulesPage();
 	});
+	// Deep link #/runs/<sessionId> — select the run when the hash changes
+	// (works from cold load too via boot()).
+	window.addEventListener('hashchange', () => {
+		const id = runIdFromHash();
+		if (id && id !== state.sessionId) {
+			void selectSession(id);
+		}
+	});
 	initRouter();
 
 	// Wire up event listeners.
@@ -2743,6 +2536,7 @@ document.addEventListener('click', event => {
 	initTestsWiring();
 	initWorkflowsWiring();
 	initSchedulesWiring();
+	initExecutionDetail();
 	initThemeToggle();
 
 	// Fire independent boot requests in parallel (config + projects).
@@ -2774,19 +2568,77 @@ document.addEventListener('click', event => {
 		return [];
 	});
 	const remembered = localStorage.getItem('qase.session');
-	const target = runs.find(run => run.id === remembered) ?? runs[0];
+	// Deep link #/runs/<id> wins over the remembered/first run.
+	const deepLinked = runIdFromHash();
+	const target = (deepLinked && runs.some(r => r.id === deepLinked) ? { id: deepLinked } : null)
+		?? runs.find(run => run.id === remembered) ?? runs[0];
 
 	if (target) {
 		await selectSession(target.id);
-	} else {
-		// No sessions exist — create a fresh one (but handle errors).
-		try {
-			await startRun();
-		} catch (err) {
-			fail(err);
-		}
+	}
+	// No sessions exist → show the empty hero ("No run selected") instead of
+	// silently creating one. Build 4: the boot-time auto-create left a trail
+	// of idle "New test run" shells that read as duplicates to a new user.
+	if (!state.sessionId) {
+		el.chatEmpty.hidden = false;
+	}
+	// No session (and therefore no event stream) — say so instead of
+	// leaving the boot-time "connecting…" label up forever.
+	if (!state.sessionId) {
+		el.connDot.className = 'dot';
+		el.connLabel.textContent = 'idle — no run selected';
 	}
 	el.composerInput.focus();
+
+	// ── Mobile topnav overflow menu (Build 4) ────────────────────────
+	// On phones the right cluster (project select / new project / settings)
+	// doesn't fit and .topnav hides overflow — collapse it behind ⋯.
+	const moreBtn = document.getElementById('topnav-more');
+	const moreMenu = document.getElementById('topnav-menu');
+	if (moreBtn && moreMenu) {
+		const projectSelect = document.getElementById('project-select');
+		const projectPlus = document.getElementById('new-project');
+		const menuSlot = document.getElementById('menu-project-slot');
+		const homeProject = projectSelect?.parentElement;
+
+		const syncMenuPlacement = () => {
+			const narrow = window.matchMedia('(max-width: 480px)').matches;
+			if (narrow && menuSlot && projectSelect) {
+				// Move the LIVE elements (same nodes, no duplicated ids/state).
+				menuSlot.append(projectSelect);
+				if (projectPlus) menuSlot.append(projectPlus);
+			} else if (homeProject) {
+				homeProject.append(projectSelect);
+				if (projectPlus) homeProject.append(projectPlus);
+			}
+		};
+		syncMenuPlacement();
+		window.addEventListener('resize', () => { syncMenuPlacement(); if (!moreMenu.hidden) moreMenu.hidden = true; });
+
+		moreBtn.addEventListener('click', event => {
+			event.stopPropagation();
+			syncMenuPlacement();
+			moreMenu.hidden = !moreMenu.hidden;
+			// Clicking a partially-offscreen ⋯ makes the browser auto-scroll
+			// the overflow-clipped topnav (scrollLeft ≠ 0), shifting the brand
+			// left on close. Snap it back so the bar never looks displaced.
+			if (moreMenu.hidden) {
+				const bar = moreBtn.closest('.topnav');
+				if (bar && bar.scrollLeft !== 0) bar.scrollLeft = 0;
+			}
+		});
+		document.addEventListener('click', event => {
+			if (!moreMenu.hidden && !moreMenu.contains(event.target)) moreMenu.hidden = true;
+		});
+		document.getElementById('menu-open-settings')?.addEventListener('click', () => {
+			moreMenu.hidden = true;
+			$('open-settings').click();
+		});
+		document.getElementById('menu-new-project')?.addEventListener('click', () => {
+			moreMenu.hidden = true;
+			el.newProjectBtn?.click();
+		});
+	}
 
 	// ── Mobile viewer toggle ─────────────────────────────────────────
 	const viewerToggle = document.getElementById('viewer-toggle');

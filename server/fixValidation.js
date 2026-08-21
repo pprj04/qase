@@ -192,7 +192,7 @@ export function appendAttempt(id, attempt) {
  * fixStatusEngine (never from an LLM). Also gates knowledge updates.
  * knowledgeWriter: (run) => void — provided by the executor wiring.
  */
-export function completeRun(id, { fixStatus, fixStatusReason, validationConfidence, confidenceSignals, partialFix, regressions, comparison, timings }, knowledgeWriter) {
+export function completeRun(id, { fixStatus, fixStatusReason, validationConfidence, confidenceSignals, partialFix, regressions, comparison, timings, executedOn, executionEnvironment }, knowledgeWriter) {
 	const run = getRun(id);
 	if (!run) return null;
 	run.status = VALIDATION_RUN_STATUSES.COMPLETED;
@@ -204,6 +204,10 @@ export function completeRun(id, { fixStatus, fixStatusReason, validationConfiden
 	run.regressions = regressions ?? null;
 	run.comparison = comparison ?? null;
 	run.timings = timings ?? {};
+	// B0.2 — truthful execution provenance on the run itself. Additive; older
+	// runs without these fields stay null/absent (never backfilled, never faked).
+	run.executedOn = executedOn ?? run.executedOn ?? run.completedAt;
+	run.executionEnvironment = executionEnvironment ?? run.executionEnvironment ?? null;
 	run.completedAt = Date.now();
 	run.updatedAt = run.completedAt;
 	// Additive pointer fields on the finding (spec: results never merged into

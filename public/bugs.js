@@ -1,7 +1,4 @@
-/**
- * Bugs Hub module — bug finding management, board, detail drawer, editor.
- */
-import { el, state, api, toast, fail, escapeHtml, markdown, relativeTime } from './shared.js';
+import { el, state, api, toast, fail, escapeHtml, markdown, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
 
 const bugState = {
 	findings: [],
@@ -30,11 +27,28 @@ function timeAgo(ts) {
 }
 
 async function loadBugs() {
+	const container = el.bugsBoard;
+	const firstLoad = !bugState.loaded;
+	if (firstLoad) showPageLoading(container);
 	const projectId = state.projectId ?? '';
 	const params = new URLSearchParams();
 	if (projectId) params.set('projectId', projectId);
 	const query = params.toString() ? `?${params.toString()}` : '';
-	bugState.findings = await api(`/findings${query}`);
+	try {
+		bugState.findings = await api(`/findings${query}`);
+	} catch (error) {
+		bugState.findings = [];
+		bugState.loaded = true;
+		// BUILD 1: server failure ≠ "No bugs". Show the error with Retry.
+		if (firstLoad) {
+			el.navCountBugs.textContent = '';
+			showPageError(container, loadBugs, `Could not load findings — ${error?.message ?? 'server unreachable'}.`);
+			return;
+		}
+		throw error;
+	}
+	bugState.loaded = true;
+	clearPageState(container);
 
 	// Populate category dropdown from data.
 	const cats = [...new Set(bugState.findings.map(f => f.category).filter(Boolean))].sort();
@@ -212,9 +226,15 @@ function renderBugDetail(bug) {
 
 	// Evidence.
 	if (bug.evidence) {
+		// Workflow-generated findings carry evidence as an ARRAY of
+		// evidence-node refs — normalize so escapeHtml never receives a
+		// non-string (this threw and killed the whole detail render).
+		const evidenceText = Array.isArray(bug.evidence)
+			? bug.evidence.map(String).join('\n')
+			: String(bug.evidence);
 		const ev = document.createElement('div');
 		ev.className = 'bug-detail-section';
-		ev.innerHTML = `<h4>Evidence</h4><pre style="white-space:pre-wrap;font-size:12px;background:var(--surface);padding:8px;border-radius:6px;border:1px solid var(--border)">${escapeHtml(bug.evidence)}</pre>`;
+		ev.innerHTML = `<h4>Evidence</h4><pre style="white-space:pre-wrap;font-size:12px;background:var(--surface);padding:8px;border-radius:6px;border:1px solid var(--border)">${escapeHtml(evidenceText)}</pre>`;
 		body.append(ev);
 	}
 
@@ -539,6 +559,8 @@ const FIX_STATUS_LABELS = {
 	PARTIALLY_FIXED: { cls: 'fx-warn', text: '◐ Partially Fixed' },
 	REGRESSED: { cls: 'fx-bad', text: '⚠ Regressed' },
 	UNABLE_TO_VERIFY: { cls: 'fx-neutral', text: '? Unable to Verify' },
+	READY_FOR_VALIDATION: { cls: 'fx-neutral', text: '◆ Ready for Validation' },
+	VALIDATING: { cls: 'fx-warn', text: '⏳ Validating…' },
 };
 
 function fxBadge(status) {
@@ -560,13 +582,18 @@ async function renderFixValidationSection(body, bug) {
 
 	let data = null;
 	let run = null;
+	let loadError = null;
 	try {
 		data = await api(`/v1/findings/${bug.id}/validation`);
 		run = data?.latest ?? null;
-	} catch { /* no validation record yet */ }
+	} catch (error) {
+		loadError = error; // distinguish API failure from "never validated"
+	}
 
 	holder.replaceChildren();
-	if (!data?.latest && !bug.fixStatus) {
+	if (loadError) {
+		holder.innerHTML = `<div class="fx-hint fx-err">⚠ Could not load validation state: ${escapeHtml(loadError.message || 'API error')}</div>`;
+	} else if (!data?.latest && !bug.fixStatus) {
 		holder.innerHTML = '<div class="fx-hint">Not validated yet. Run a validation to verify whether a fix landed.</div>';
 	} else {
 		const card = document.createElement('div');
@@ -602,6 +629,10 @@ async function renderFixValidationSection(body, bug) {
 			cmp.append(grid);
 			holder.append(cmp);
 		}
+		// BUILD 18.4 — structured BEFORE/AFTER evidence blocks + screenshots.
+		renderFxShotStrip(holder, run, { allRuns: data.history });
+		renderFxOriginalBlock(holder, run, { collapsed: true });
+		renderFxAfterBlock(holder, run, { collapsed: true });
 		if (run?.regressions?.length) {
 			const reg = document.createElement('div');
 			reg.className = 'fx-regressions';
@@ -649,9 +680,348 @@ async function triggerRevalidate(findingId, key) {
 			headers: { 'Idempotency-Key': `fxui-${key}` },
 		});
 		toast(`Validation ${res.validationId} started`, 'ok');
+		pollFixValidation(findingId, res.validationId);
 	} catch (error) {
 		fail(error);
 	}
+}
+
+/**
+ * Phase 18 UI (BUILD 18.2): after starting a validation, show a live
+ * VALIDATING indicator in the Fix Validation section and refresh it when the
+ * run completes. Bounded polling (10s interval, 15 min cap) — no infinite
+ * spinners; on timeout the section keeps its last known state and the user
+ * can reopen the finding manually.
+ */
+let fxPollTimers = new Map();
+function pollFixValidation(findingId, validationId) {
+	// Only poll while the finding's detail drawer is showing this section.
+	const section = document.querySelector('#bug-detail-body .fx-section');
+	if (!section || bugState.detailId !== findingId) return;
+	const badge = document.createElement('div');
+	badge.className = 'fx-run-state fx-loading';
+	badge.id = `fx-polling-${validationId}`;
+	badge.textContent = `⏳ VALIDATING — run ${validationId} in progress…`;
+	section.prepend(badge);
+	if (fxPollTimers.has(findingId)) clearInterval(fxPollTimers.get(findingId));
+	let elapsed = 0;
+	const timer = setInterval(async () => {
+		elapsed += 10;
+		const stillOpen = document.getElementById(`fx-polling-${validationId}`);
+		if (!stillOpen || bugState.detailId !== findingId) {
+			clearInterval(timer);
+			fxPollTimers.delete(findingId);
+			return;
+		}
+		try {
+			const data = await api(`/v1/findings/${findingId}/validation`);
+			const run = data?.latest;
+			if (!run || ['REQUESTED', 'QUEUED', 'RUNNING'].includes(run?.status)) {
+				if (elapsed >= 900) { // 15 min cap
+					stillOpen.textContent = `⏳ Still validating after 15 min — check History for run ${validationId}.`;
+					clearInterval(timer);
+					fxPollTimers.delete(findingId);
+				}
+				return;
+			}
+			clearInterval(timer);
+			fxPollTimers.delete(findingId);
+			// Run finished: re-render the finding detail (fetches fresh state).
+			try {
+				const fresh = await api(`/findings/${findingId}`);
+				renderBugDetail(fresh);
+				toast(`Validation finished: ${run.fixStatus ?? run.status}`, 'ok');
+			} catch { /* leave indicator in place */ }
+		} catch { /* transient fetch error — keep polling until cap */ }
+	}, 10000);
+	fxPollTimers.set(findingId, timer);
+}
+
+/* ── BUILD 18.4 — structured evidence rendering helpers ────────────
+ * All renderers are defensive: any malformed/partial run data must
+ * render "Not captured" rows, never crash the drawer or modal. */
+
+function fxNewEl(tag, cls, text) {
+	const el = document.createElement(tag);
+	if (cls) el.className = cls;
+	if (text != null) el.textContent = text;
+	return el;
+}
+
+function fmtTs(ts) {
+	if (!ts) return '—';
+	try {
+		return new Date(typeof ts === 'number' ? ts : Number(ts)).toLocaleString();
+	} catch {
+		return '—';
+	}
+}
+
+function fmtDur(ms) {
+	if (ms == null || Number.isNaN(Number(ms))) return '—';
+	const s = Number(ms) / 1000;
+	return s >= 60 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${s.toFixed(1)}s`;
+}
+
+/** Rows of evidence with persisted screenshot artifacts, from ALL runs of a
+ * finding (latest first). The drawer strip shows the LATEST run only; if the
+ * latest is a pass with no failure screenshots, older runs' BEFORE/AFTER
+ * artifacts are still relevant and must stay reachable. */
+function fxShotRows(run, { allRuns = null } = {}) {
+	const rows = [];
+	for (const phase of ['before', 'after']) {
+		for (const ev of run?.evidence?.[phase] ?? []) {
+			if (ev?.artifactPath) rows.push({ ...ev, phase, runId: run?.id });
+		}
+	}
+	for (const r of allRuns ?? []) {
+		if (!r || r.id === run?.id) continue;
+		for (const phase of ['after', 'before']) {
+			for (const ev of r.evidence?.[phase] ?? []) {
+				if (ev?.artifactPath) rows.push({ ...ev, phase, runId: r.id, fromOlderRun: true });
+			}
+		}
+	}
+	return rows;
+}
+
+function fxArtifactUrl(artifactPath) {
+	// artifactPath shape: "<dir>/<file>" → /api/artifacts/<dir>/<file> (per-segment encoded)
+	const segs = String(artifactPath).split('/').filter(Boolean).map(encodeURIComponent);
+	return segs.length ? `/api/artifacts/${segs.join('/')}` : null;
+}
+
+/** Small overlay to enlarge a screenshot (click a thumbnail). */
+function ensureFxImageModal() {
+	let modal = document.getElementById('fx-image-modal');
+	if (modal) return modal;
+	modal = document.createElement('dialog');
+	modal.className = 'modal fx-image-modal';
+	modal.id = 'fx-image-modal';
+	modal.innerHTML = `
+		<form method="dialog" class="modal-inner">
+			<header class="modal-head">
+				<h2 id="fx-image-title">Screenshot</h2>
+				<button class="btn btn-ghost btn-sm" type="button" id="fx-image-close">✕</button>
+			</header>
+			<div class="modal-body fx-image-body">
+				<img id="fx-image-el" alt="evidence screenshot" />
+				<p class="fx-image-meta" id="fx-image-meta"></p>
+			</div>
+		</form>`;
+	document.body.append(modal);
+	modal.querySelector('#fx-image-close').addEventListener('click', () => modal.close());
+	return modal;
+}
+
+function openFxImage(src, title, meta) {
+	const modal = ensureFxImageModal();
+	modal.querySelector('#fx-image-title').textContent = title || 'Screenshot';
+	modal.querySelector('#fx-image-el').src = src;
+	modal.querySelector('#fx-image-meta').textContent = meta || '';
+	if (!modal.open) modal.showModal();
+}
+
+/**
+ * BEFORE / AFTER screenshot strip. Each thumbnail shows which phase it
+ * belongs to, which attempt produced it, and enlarges on click.
+ */
+function renderFxShotStrip(container, run, { limit = 6, allRuns = null, heading = null } = {}) {
+	const all = fxShotRows(run, { allRuns });
+	const rows = all.slice(0, limit);
+	const wrap = fxNewEl('div', 'fx-shot-strip');
+	const head = fxNewEl('div', 'fx-shot-head');
+	head.append(fxNewEl('h5', null, heading ?? `📸 Screenshots (${all.length})`));
+	if (all.length > rows.length) head.append(fxNewEl('span', 'fx-shot-more', `+${all.length - rows.length} more in History`));
+	wrap.append(head);
+	if (!rows.length) {
+		wrap.append(fxNewEl('p', 'fx-notcaptured', 'Not captured for this run.'));
+		container.append(wrap);
+		return;
+	}
+	const strip = fxNewEl('div', 'fx-shot-row');
+	for (const ev of rows) {
+		const url = fxArtifactUrl(ev.artifactPath);
+		if (!url) continue;
+		const card = fxNewEl('button', 'fx-shot');
+		card.type = 'button';
+		const img = document.createElement('img');
+		img.src = url;
+		img.alt = ev.title || 'evidence screenshot';
+		img.loading = 'lazy';
+		img.addEventListener('error', () => { card.classList.add('fx-shot-missing'); img.alt = 'screenshot unavailable'; }, { once: true });
+		card.append(img);
+		const tag = fxNewEl('span', `fx-shot-tag fx-${ev.phase === 'before' ? 'before' : 'after'}`, ev.phase === 'before' ? 'BEFORE' : 'AFTER');
+		card.append(tag);
+		if (ev.fromOlderRun) card.append(fxNewEl('span', 'fx-shot-tag fx-shot-older', 'older run'));
+		card.title = `${ev.phase.toUpperCase()} · ${ev.title || ''}${ev.runId ? ` · ${ev.runId}` : ''}`;
+		card.addEventListener('click', () => openFxImage(url, ev.title || 'Screenshot', `${ev.phase.toUpperCase()} · ${fmtTs(ev.ts)}${ev.fromOlderRun ? ' · from earlier run' : ''} · ${ev.runId ?? run?.id ?? ''}`));
+		strip.append(card);
+	}
+	wrap.append(strip);
+	container.append(wrap);
+}
+
+/** Structured key/value panel (no raw JSON). */
+function renderFxKv(container, pairs, { title, cls = '' } = {}) {
+	const panel = fxNewEl('div', `fx-kv-panel ${cls}`);
+	if (title) panel.append(fxNewEl('h5', null, title));
+	for (const [label, value, valueCls = ''] of pairs) {
+		const row = fxNewEl('div', 'fx-kv-row');
+		row.append(fxNewEl('span', 'fx-kv-label', label));
+		const v = fxNewEl('span', `fx-kv-value ${valueCls}`);
+		v.textContent = value;
+		row.append(v);
+		panel.append(row);
+	}
+	container.append(panel);
+	return panel;
+}
+
+/** Original finding (immutable snapshot) rendered as structured panels. */
+function renderFxOriginalBlock(container, run, { collapsed = true } = {}) {
+	const of = run?.originalFinding;
+	const det = document.createElement('details');
+	det.className = 'fx-block fx-block-original';
+	det.open = !collapsed;
+	const sum = document.createElement('summary');
+	sum.textContent = '📋 ORIGINAL — finding as first reported (immutable)';
+	det.append(sum);
+	if (!of) {
+		det.append(fxNewEl('p', 'fx-notcaptured', 'Original finding snapshot not retained for this run.'));
+		container.append(det);
+		return;
+	}
+	renderFxKv(det, [
+		['Title', of.title ?? '—'],
+		['Expected', of.expected ?? '—'],
+		['Actual (observed failure)', of.actual ?? '—'],
+		['Severity / priority', `${of.severity ?? '—'} · ${of.priority ?? '—'}`],
+		['URL', of.url ?? '—'],
+		['Environment', [of.browser, of.device, of.viewport ? `${of.viewport.width}×${of.viewport.height}` : null].filter(Boolean).join(' · ') || 'Not captured'],
+		['Mission / workflow', [of.missionId, of.workflowId].filter(Boolean).join(' · ') || '—'],
+		['Reproduced', of.reproductionAttempts ? `${of.reproductionSuccesses ?? 0}/${of.reproductionAttempts} attempts` : 'Not captured'],
+	], { cls: 'fx-before' });
+	const steps = of.steps?.length ? of.steps : (of.reproductionSteps ?? []);
+	if (steps.length) {
+		const ol = document.createElement('ol');
+		ol.className = 'fx-steps';
+		for (const s of steps) {
+			const li = document.createElement('li');
+			li.textContent = typeof s === 'string' ? s : (s?.action ? `${s.action}${s.target ? ` ${s.target}` : ''}` : JSON.stringify(s));
+			ol.append(li);
+		}
+		const stepsWrap = fxNewEl('div', 'fx-kv-panel');
+		stepsWrap.append(fxNewEl('h5', null, 'Reproduction steps'));
+		stepsWrap.append(ol);
+		det.append(stepsWrap);
+	}
+	const evCount = Array.isArray(of.evidence) ? of.evidence.length : (of.evidence ? 1 : 0);
+	det.append(fxNewEl('p', 'fx-evidence-count', `🔗 ${evCount} original evidence node${evCount === 1 ? '' : 's'} linked (see evidence graph)`));
+	container.append(det);
+}
+
+/** Per-attempt execution cards: assertions, steps, duration, errors. */
+function renderFxAttempts(container, run, { collapsed = true, max = null } = {}) {
+	const attempts = run?.attempts ?? [];
+	const det = document.createElement('details');
+	det.className = 'fx-block fx-block-attempts';
+	det.open = !collapsed;
+	const passes = attempts.filter(a => a?.succeeded).length;
+	det.append(fxNewEl('summary', null, `🧪 VALIDATION ATTEMPTS — ${passes}/${attempts.length} reproduced expected behavior`));
+	if (!attempts.length) {
+		det.append(fxNewEl('p', 'fx-notcaptured', 'Not captured — run has no attempts.'));
+		container.append(det);
+		return;
+	}
+	const list = max ? attempts.slice(-max) : attempts;
+	for (const a of list) {
+		const card = fxNewEl('div', `fx-attempt ${a?.succeeded ? 'fx-attempt-ok' : 'fx-attempt-bad'}`);
+		const head = fxNewEl('div', 'fx-attempt-head');
+		head.append(fxNewEl('span', 'fx-attempt-num', `Attempt ${a?.attempt ?? '?'}`));
+		const res = fxNewEl('span', `fx-attempt-res ${a?.succeeded ? 'fx-ok' : 'fx-bad'}`);
+		res.textContent = !a?.executed ? '⚠ not executed' : a?.succeeded ? '✓ pass' : a?.originalFailureReproduced ? '✕ original failure reproduced' : '✕ failed';
+		head.append(res);
+		head.append(fxNewEl('span', 'fx-attempt-dur', fmtDur(a?.durationMs)));
+		head.append(fxNewEl('span', 'fx-attempt-ts', fmtTs(a?.ts)));
+		card.append(head);
+
+		if (a?.assertions?.length) {
+			const table = document.createElement('table');
+			table.className = 'fx-assert-table';
+			table.innerHTML = '<thead><tr><th>Assertion</th><th>Result</th><th>Expected</th><th>Observed</th></tr></thead>';
+			const tbody = document.createElement('tbody');
+			for (const asrt of a.assertions) {
+				const tr = document.createElement('tr');
+				tr.className = asrt?.passed ? '' : 'fx-assert-fail';
+				const t = fxNewEl('td', null, asrt?.type ?? 'unknown');
+				const r = fxNewEl('td', asrt?.passed ? 'fx-ok' : 'fx-bad', asrt?.passed ? '✓ pass' : '✕ fail');
+				const e = fxNewEl('td', null, asrt?.expected ?? '—');
+				const o = fxNewEl('td', null, asrt?.actual ?? '—');
+				tr.append(t, r, e, o);
+				tbody.append(tr);
+			}
+			table.append(tbody);
+			const wrap = fxNewEl('div', 'fx-attempt-asserts');
+			wrap.append(table);
+			card.append(wrap);
+		} else {
+			card.append(fxNewEl('p', 'fx-notcaptured', 'Assertions: not captured'));
+		}
+
+		if (a?.steps?.length) {
+			const line = a.steps.map(s => `${s?.status === 'pass' ? '✓' : s?.status === 'fail' ? '✕' : '•'} ${s?.action ?? 'step'}`).join(' → ');
+			card.append(fxNewEl('p', 'fx-attempt-steps', line));
+		}
+		if (a?.error) card.append(fxNewEl('p', 'fx-err', `⚠ ${a.error}`));
+		if (a?.missingEvidence?.length) card.append(fxNewEl('p', 'fx-warn', `Missing evidence: ${a.missingEvidence.join(', ')}`));
+		det.append(card);
+	}
+	container.append(det);
+}
+
+/** AFTER-side evidence: what the validation observed + environment + timings. */
+function renderFxAfterBlock(container, run, { collapsed = true } = {}) {
+	const det = document.createElement('details');
+	det.className = 'fx-block fx-block-after';
+	det.open = !collapsed;
+	det.append(fxNewEl('summary', null, '🧾 AFTER — validation execution evidence'));
+	const of = run?.originalFinding ?? {};
+	const t = run?.timings ?? {};
+	renderFxKv(det, [
+		['Run', run?.id ?? '—'],
+		['Executed', fmtTs(run?.completedAt ?? run?.updatedAt)],
+		['Result', run?.fixStatus ?? '—', run?.fixStatus === 'VERIFIED_FIXED' ? 'fx-ok' : 'fx-bad'],
+		['Why', run?.fixStatusReason ?? '—'],
+		['Validation confidence', run?.validationConfidence != null ? `${(run.validationConfidence * 100).toFixed(0)}% (new measurement)` : 'Not captured'],
+		['Observed', run?.comparison?.after?.[0]?.actual ?? (run?.attempts?.length ? (run.attempts.every(a => a.succeeded) ? 'expected behavior observed' : 'original behavior persisted') : '—')],
+		['Expected (from original)', of.expected ?? '—'],
+		['URL validated', run?.plan?.url ?? of.url ?? '—'],
+		['Environment', [run?.plan?.browser, run?.plan?.device, run?.plan?.viewport ? `${run.plan.viewport.width}×${run.plan.viewport.height}` : null].filter(Boolean).join(' · ') || 'local Chromium'],
+		['Console / network', run?.comparison?.after?.[0] ? `${run.comparison.after[0].console ?? '—'} / ${run.comparison.after[0].network ?? '—'}` : 'Not captured'],
+		['Duration (total / attempts)', `${fmtDur(t.totalMs)} / ${fmtDur(t.attemptsMs)}`],
+	], { cls: 'fx-after' });
+	if (Array.isArray(run?.environmentDeltas) && run.environmentDeltas.length) {
+		const deltas = fxNewEl('p', 'fx-warn', `⚠ Environment differences vs original: ${run.environmentDeltas.map(d => `${d?.field ?? '?'}: ${d?.from ?? '?'} → ${d?.to ?? '?'}`).join(', ')}`);
+		det.append(deltas);
+	}
+	if (run?.regressions && (run.regressions.verifiedRegressions?.length || run.regressions.suspectedRegressions?.length)) {
+		const reg = fxNewEl('div', 'fx-regressions');
+		reg.append(fxNewEl('h5', null, `⚠ Regressions (${run.regressions.verifiedRegressions?.length ?? 0} verified / ${run.regressions.suspectedRegressions?.length ?? 0} suspected)`));
+		for (const r of [...(run.regressions.verifiedRegressions ?? []), ...(run.regressions.suspectedRegressions ?? [])]) {
+			reg.append(fxNewEl('div', 'fx-reg-row', `${r?.testName ?? r?.test ?? r?.name ?? 'test'} — ${r?.status ?? ''}`));
+		}
+		det.append(reg);
+	}
+	if (run?.reviewTrail?.length) {
+		const trail = fxNewEl('div', 'fx-kv-panel');
+		trail.append(fxNewEl('h5', null, 'Review trail'));
+		for (const rv of run.reviewTrail) {
+			trail.append(fxNewEl('div', 'fx-kv-row', `${fmtTs(rv?.ts)} · ${rv?.from ?? '∅'} → ${rv?.to ?? '?'} · ${rv?.by ?? 'system'}${rv?.comment ? ` — “${rv.comment}”` : ''}`));
+		}
+		det.append(trail);
+	}
+	container.append(det);
 }
 
 function ensureFxHistoryModal() {
@@ -682,7 +1052,7 @@ async function openFixValidationHistory(findingId, view = 'runs') {
 	try {
 		data = await api(`/v1/findings/${findingId}/validation`);
 	} catch (error) {
-		body.innerHTML = '<div class="fx-hint">No validation history.</div>';
+		body.innerHTML = `<div class="fx-hint fx-err">⚠ Could not load validation history: ${escapeHtml(error.message || 'API error')}</div>`;
 		return;
 	}
 	body.replaceChildren();
@@ -691,55 +1061,90 @@ async function openFixValidationHistory(findingId, view = 'runs') {
 		body.innerHTML = '<div class="fx-hint">No validation runs yet.</div>';
 		return;
 	}
-	if (view === 'compare' && data.latest?.comparison) {
-		const cmp = document.createElement('div');
-		cmp.className = 'fx-comparison';
-		cmp.innerHTML = '<h5>Before / After — latest run</h5>';
-		const grid = document.createElement('div');
-		grid.className = 'fx-cmp-grid';
-		for (const [k, v] of Object.entries(data.latest.comparison.verdicts ?? {})) {
-			const row = document.createElement('div');
-			row.className = 'fx-cmp-row';
-			row.innerHTML = `<span>${escapeHtml(k)}</span><span class="${v ? 'fx-ok' : 'fx-bad'}">${v ? 'yes' : 'no'}</span>`;
-			grid.append(row);
+	// ── BUILD 18.4: structured views — no raw JSON as primary experience ──
+	if (view === 'compare' && runs.length) {
+		const run = data.latest ?? runs[0];
+		body.append(fxNewEl('h5', 'fx-cmp-title', `${run.id} — deterministic comparison flags`));
+		if (run.comparison?.verdicts) {
+			const grid = document.createElement('div');
+			grid.className = 'fx-cmp-grid';
+			const LABELS = {
+				behaviorChanged: 'Behavior changed?',
+				expectedAchieved: 'Expected behavior achieved?',
+				originalFailureReproduced: 'Original failure reproduced?',
+				relatedFailuresIntroduced: 'Related failures introduced?',
+			};
+			const INVERT = { originalFailureReproduced: true, relatedFailuresIntroduced: true };
+			for (const [k, v] of Object.entries(run.comparison.verdicts)) {
+				// Glyph/word show the LITERAL flag value; color shows whether
+				// that value is good news (inverted for the two failure flags).
+				const good = INVERT[k] ? !v : !!v;
+				const row = document.createElement('div');
+				row.className = 'fx-cmp-row';
+				row.innerHTML = `<span>${escapeHtml(LABELS[k] ?? k)}</span><span class="${good ? 'fx-ok' : 'fx-bad'}">${v ? '✓ yes' : '✕ no'}</span>`;
+				grid.append(row);
+			}
+			body.append(grid);
+		} else {
+			body.append(fxNewEl('p', 'fx-notcaptured', 'Comparison not captured for this run.'));
 		}
-		cmp.append(grid);
-		body.append(cmp);
+		renderFxOriginalBlock(body, run, { collapsed: false });
+		renderFxAfterBlock(body, run, { collapsed: false });
+		renderFxShotStrip(body, run, { allRuns: data.history });
 		return;
 	}
 	if (view === 'original' || view === 'validation') {
 		const run = data.latest;
-		const block = document.createElement('pre');
-		block.style.cssText = 'white-space:pre-wrap;font-size:12px;background:var(--surface);padding:8px;border-radius:6px;border:1px solid var(--border);max-height:40vh;overflow:auto';
-		if (view === 'original') {
-			block.textContent = run?.originalFinding
-				? JSON.stringify(run.originalFinding, null, 2)
-				: 'Original finding snapshot not retained for this run.';
-		} else {
-			const { id, status, fixStatus, fixStatusReason, validationConfidence, attempts, regressions, comparison } = run ?? {};
-			block.textContent = JSON.stringify({ id, status, fixStatus, fixStatusReason, validationConfidence, attempts, regressions, comparison }, null, 2);
+		if (!run) {
+			body.append(fxNewEl('p', 'fx-notcaptured', 'No validation run recorded for this finding.'));
+			return;
 		}
-		body.append(block);
+		if (view === 'original') {
+			renderFxOriginalBlock(body, run, { collapsed: false });
+		} else {
+			renderFxAfterBlock(body, run, { collapsed: false });
+			renderFxAttempts(body, run, { collapsed: false });
+			renderFxShotStrip(body, run, { allRuns: data.history });
+		}
 		return;
 	}
 	for (const run of runs) {
 		const row = document.createElement('div');
-		row.className = 'fx-run-state';
+		row.className = 'fx-run-state fx-run-clickable';
 		const head = document.createElement('div');
 		head.className = 'fx-head';
 		head.append(fxBadge(run.fixStatus));
 		const meta = document.createElement('span');
 		meta.className = 'fx-trail';
-		meta.textContent = `${run.id} · ${run.status} · ${run.fixStatusReason ?? ''} · conf ${(run.validationConfidence * 100).toFixed(0)}%`;
+		meta.textContent = [
+			run.id,
+			fmtTs(run.createdAt ?? run.completedAt ?? run.updatedAt),
+			run.status,
+		].filter(Boolean).join(' · ');
 		head.append(meta);
 		row.append(head);
-		if (run.attempts?.length) {
-			const at = document.createElement('div');
-			at.className = 'fx-attempts';
-			at.textContent = `attempts: ${run.attempts.map(a => a.succeeded ? '✓ pass' : a.originalFailureReproduced ? '✕ reproduce' : a.executed ? '✕ fail' : '?').join('  ')}`;
-			row.append(at);
-		}
+		const sub = document.createElement('div');
+		sub.className = 'fx-run-sub';
+		const evTotal = (run.evidence?.after?.length ?? 0) + (run.evidence?.before?.length ?? 0);
+		sub.textContent = [
+			run.validationConfidence != null ? `conf ${(run.validationConfidence * 100).toFixed(0)}%` : null,
+			`attempts ${run.attempts?.length ?? 0}`,
+			fmtDur(run.timings?.totalMs) !== '—' ? fmtDur(run.timings?.totalMs) : null,
+			`evidence ✓${evTotal}`,
+			run.fixStatusReason ?? '',
+		].filter(Boolean).join(' · ');
+		row.append(sub);
+		row.addEventListener('click', () => {
+			if (row.querySelector('.fx-block')) return; // already expanded
+			renderFxOriginalBlock(row, run, { collapsed: false });
+			renderFxAttempts(row, run, { collapsed: true });
+			renderFxShotStrip(row, run);
+			row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+		});
 		body.append(row);
+	}
+	if (!runs.length) {
+		body.append(fxNewEl('p', 'fx-notcaptured', 'No validation runs recorded for this finding.'));
 	}
 }
 

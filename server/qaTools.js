@@ -43,6 +43,10 @@ const reportFinding = {
 			},
 			async run(input) {
 				const severity = SEVERITIES.includes(input.severity) ? input.severity : 'medium';
+				// B0.2 — truthful provenance: if the mission runs under a real
+				// device context (agent emulation path), the finding carries it.
+				// Local emulation is labeled as such — never a real-device claim.
+				const deviceContext = session.device ?? null;
 				const finding = redact(session.id, {
 					id: randomUUID(),
 					ts: Date.now(),
@@ -61,7 +65,26 @@ const reportFinding = {
 					recommendation: input.recommendation ? String(input.recommendation).trim() : undefined,
 					reproducibility: ['confirmed', 'unconfirmed', 'intermittent'].includes(input.reproducibility)
 						? input.reproducibility
-						: undefined
+						: undefined,
+
+					// B0.2/B0.3 execution provenance (agent missions run locally on
+					// Chromium; ANY device context here is DEVICE EMULATION —
+					// engineEmulated is true whether or not the platform engine
+					// happens to match, because the device itself is emulated).
+					...(deviceContext ? {
+						device: `${deviceContext.deviceName}${deviceContext.os ? ` · ${deviceContext.os}` : ''}`,
+						environment: {
+							provider: 'local',
+							device: deviceContext.deviceName ?? null,
+							browser: `${deviceContext.browser ?? 'chromium'} (emulated on Chromium)`,
+							browserVersion: null,
+							os: deviceContext.os ?? null,
+							osVersion: null,
+							viewport: deviceContext.viewport ?? null,
+							engineEmulated: true,
+							executedOn: Date.now()
+						}
+					} : {})
 				});
 
 			if (!finding.title) {

@@ -1,0 +1,203 @@
+{
+  "currentApp": 5,
+  "missionIds": {
+    "app3": "d8125a39-365d-4154-9926-1f60bc585463",
+    "app4": "85243d65-4bd1-4c79-97d2-fd03d92a0d1b",
+    "app5": "c49e8005-447c-44ee-9661-847385fd507d"
+  },
+  "completed": [
+    {
+      "app": "ShopHub E-commerce",
+      "expectedDomain": "ecommerce",
+      "missionId": "d8125a39-365d-4154-9926-1f60bc585463",
+      "sessionId": "f9c41f3a-90d0-4a9b-a630-19fd6b6f8b2f",
+      "status": "completed",
+      "startedAt": 1786855897335,
+      "completedAt": 1786856346336,
+      "duration_s": 449,
+      "missionFindings": [
+        {
+          "id": "wf_browse_to_checkout_browse_to_checkout_step_1",
+          "title": "browse to checkout: browse products failed",
+          "severity": "critical",
+          "category": "workflow_failure"
+        },
+        {
+          "id": "560162e5-e356-48ca-a6fd-3eb298730b37",
+          "title": "All product images fail to load — every card renders without a picture",
+          "severity": "medium",
+          "category": "content"
+        }
+      ],
+      "phase16_findings": [
+        {
+          "id": "wf_browse_to_checkout_browse_to_checkout_step_1",
+          "title": "browse to checkout: browse products failed",
+          "severity": "critical",
+          "category": "workflow_failure",
+          "confidence": 0.4,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "impact": "The browse to checkout workflow cannot complete successfully.",
+          "workflowId": "browse_to_checkout"
+        },
+        {
+          "id": "560162e5-e356-48ca-a6fd-3eb298730b37",
+          "title": "All product images fail to load — every card renders without a picture",
+          "severity": "medium",
+          "category": "content",
+          "confidence": 0.7,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "All 6 product cards render their product photos.",
+          "actual": "",
+          "impact": "The storefront looks unfinished/broken on first impression. Every product on the homepage is affected, which undermines trust in the store."
+        }
+      ],
+      "qualityScore": 15
+    },
+    {
+      "app": "MetricsPro Analytics",
+      "expectedDomain": "analytics",
+      "missionId": "85243d65-4bd1-4c79-97d2-fd03d92a0d1b",
+      "sessionId": "7daf65c9-0ef0-4fd7-85a5-36ea0d0daaca",
+      "status": "completed",
+      "startedAt": 1786856356574,
+      "completedAt": 1786857556003,
+      "duration_s": 1199,
+      "missionFindings": [
+        {
+          "id": "wf_user_login_user_login_step_1",
+          "title": "user login: navigate to login failed",
+          "severity": "critical",
+          "category": "workflow_failure"
+        },
+        {
+          "id": "ec6e6f69-fdc0-4478-b8a1-65282021c70b",
+          "title": "Mobile layout unusable: fixed 220px sidebar leaves 155px for content, tables and cards overflow off-screen",
+          "severity": "high",
+          "category": "layout"
+        },
+        {
+          "id": "78e3cd3d-8c27-4f22-a528-2adc7dfbf7fb",
+          "title": "Invite User form accepts invalid email with no validation or any success/failure feedback",
+          "severity": "medium",
+          "category": "forms"
+        },
+        {
+          "id": "d3041850-b4ba-479b-8e09-d8c5d44c23bf",
+          "title": "Dashboard chart is a placeholder — no actual chart is rendered anywhere in the app",
+          "severity": "medium",
+          "category": "missing_feature"
+        },
+        {
+          "id": "3d382b0b-0a80-4cd4-b423-a430af5f730b",
+          "title": "'No API keys configured.' message stays visible after an API key is generated",
+          "severity": "low",
+          "category": "content"
+        },
+        {
+          "id": "1a8c1ecd-33ba-4d45-937b-1cf22abcbe4d",
+          "title": "Unknown hash routes render a blank page with a stale title instead of a 404/fallback view",
+          "severity": "low",
+          "category": "navigation"
+        }
+      ],
+      "phase16_findings": [
+        {
+          "id": "wf_user_login_user_login_step_1",
+          "title": "user login: navigate to login failed",
+          "severity": "critical",
+          "category": "workflow_failure",
+          "confidence": 0.85,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "impact": "The user login workflow cannot complete successfully.",
+          "workflowId": "user_login"
+        },
+        {
+          "id": "ec6e6f69-fdc0-4478-b8a1-65282021c70b",
+          "title": "Mobile layout unusable: fixed 220px sidebar leaves 155px for content, tables and cards overflow off-screen",
+          "severity": "high",
+          "category": "layout",
+          "confidence": 0.75,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "At mobile widths, the sidebar should collapse (hamburger / stacked nav) and content should fit the 375px viewport without horizontal scrolling to read data.",
+          "actual": "At 375px the sidebar still occupies a fixed 220px (59% of the viewport), leaving a 155px-wide scrolling strip for all content. On #users, the users table renders 448px wide starting at x=264, running to x=712 — ~337px of the table is unreachable off the right edge. On #dashboard, the 4 stat cards each render 200px wide in the 155px column, overflowing. Nav link tap targets overlap partially off-screen (Sign In at x=479). The layout never collapses: no hamburger, no stacked nav, no responsive breakpoints.",
+          "impact": "Mobile users cannot read any data — user emails, plan, status and join dates are cut off, and the dashboard stat cards bleed off-screen. The app is effectively desktop-only despite being a live web app."
+        },
+        {
+          "id": "78e3cd3d-8c27-4f22-a528-2adc7dfbf7fb",
+          "title": "Invite User form accepts invalid email with no validation or any success/failure feedback",
+          "severity": "medium",
+          "category": "forms",
+          "confidence": 1,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "The form should validate the email address, show an error message such as 'Please enter a valid email', or if accepted, show a confirmation that the invite was sent.\",",
+          "actual": "The modal closes immediately with no validation error, no toast, no success message, and no new row in the users table. The user has no way to know whether the invite was sent or silently discarded. An empty-email submit likewise shows no error.",
+          "impact": "Admins cannot tell whether an invitation was actually sent. Invalid addresses are accepted without complaint, so typos silently produce dead invites.\","
+        },
+        {
+          "id": "d3041850-b4ba-479b-8e09-d8c5d44c23bf",
+          "title": "Dashboard chart is a placeholder — no actual chart is rendered anywhere in the app",
+          "severity": "medium",
+          "category": "missing_feature",
+          "confidence": 1,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "A 'Revenue Trend (Last 30 Days)' chart should render actual data (lines/bars) as the card title promises.",
+          "actual": "The only chart in the app is a grey box containing the literal text '📈 Chart visualization area'. There is no line, bar, or any other visualization, and no canvas/svg elements. Hovering does nothing.",
+          "impact": "The core 'view metrics/charts' workflow is not implemented. Users cannot see any trend data, which is the primary purpose of an analytics dashboard."
+        },
+        {
+          "id": "3d382b0b-0a80-4cd4-b423-a430af5f730b",
+          "title": "'No API keys configured.' message stays visible after an API key is generated",
+          "severity": "low",
+          "category": "content",
+          "confidence": 1,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "The empty-state message should be hidden once a key exists, replaced by the key display.",
+          "actual": "After clicking Generate API Key, a key (e.g. 'mk_f712xuzzna') appears in #api-key-display, but the paragraph 'No API keys configured.' (#settings-view > div:nth-of-type(2) > p) remains visible directly above it.",
+          "impact": "Contradictory UI ('No API keys configured' next to a configured key) confuses users about the actual state of their workspace."
+        },
+        {
+          "id": "1a8c1ecd-33ba-4d45-937b-1cf22abcbe4d",
+          "title": "Unknown hash routes render a blank page with a stale title instead of a 404/fallback view",
+          "severity": "low",
+          "category": "navigation",
+          "confidence": 0.75,
+          "reproducibility": "confirmed",
+          "isDuplicate": false,
+          "evidence_sufficient": null,
+          "expected": "An unknown route should show a '404 / page not found' message or fall back to the default dashboard view.",
+          "actual": "Navigating to an unmapped hash such as #nonexistent leaves the content area blank while keeping the previous view's stale title, with no console error and no 'page not found' message.",
+          "impact": "Users who mistype or follow a broken deep link see a dead blank page with a misleading title, with no way to know what happened."
+        }
+      ],
+      "qualityScore": 15
+    },
+    {
+      "app": "SaaSLaunch Marketing",
+      "expectedDomain": "marketing",
+      "missionId": "c49e8005-447c-44ee-9661-847385fd507d",
+      "sessionId": "abcb4476-26c4-4391-bcee-52ced4c568eb",
+      "status": "completed",
+      "startedAt": 1786857564095,
+      "completedAt": 1786858792113,
+      "duration_s": 1228,
+      "missionFindings": [],
+      "phase16_findings": [],
+      "qualityScore": 100
+    }
+  ]
+}

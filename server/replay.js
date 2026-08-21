@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { getConfig, resolveViewport } from './config.js';
+import { buildExecutionEnvironment, BrowserStackStrictError, redactSecrets } from './executionEnvironment.js';
+import { resolveDeviceContext, validateDeviceRequest, isBrowserstackRealDevice, BROWSERSTACK_REAL_DEVICES, contextOptionsFor } from './deviceContext.js';
 import { getBaseline, setBaseline, autoCaptureBaselines } from './baselines.js';
 import { isSelectorFailure, capturePageDom, analyzeFailure, patchTestCase, createHealRecord } from './selfHeal.js';
 import { updateTestCase } from './testCases.js';
@@ -72,32 +74,143 @@ const BROWSERSTACK_OS_MAP = {
 	safari: { browser: 'Safari', os: 'OS X', os_version: 'Sonoma' }
 };
 
-async function launchBrowser(opts = {}) {
-	const config = getConfig();
-
-	// ── BrowserStack CDP path ──
-	if (config.browserstackEnabled && config.browserstackUser && config.browserstackKey) {
-		const browserType = opts.browser || 'chrome';
-		const osInfo = BROWSERSTACK_OS_MAP[browserType] || BROWSERSTACK_OS_MAP.chrome;
+/**
+ * Pure launch-plan resolver (BUILD B0.2 — unit-testable without a browser).
+ * Returns { mode: 'browserstack' | 'local', strict, caps?, osInfo?, device? }.
+ *
+ * BUILD B0.3: opts.device (a RESOLVED Playwright device name) adds
+ * real-device / emulated-device semantics:
+ *   - BrowserStack selected + device in BROWSERSTACK_REAL_DEVICES
+ *     → caps carry { device, os:'android', real_mobile:true } (REAL_DEVICE)
+ *   - BrowserStack selected + device NOT real-device capable (e.g. iOS)
+ *     → { unsupported: 'Unsupported device configuration: <name> …' }
+ *     deterministic — the caller must fail; NEVER substitutes or downgrades.
+ *   - BrowserStack NOT selected → local emulated context (device descriptor
+ *     applied to browser.newContext — see launchLocal/launchBrowser).
+ */
+export function resolveLaunchPlan(config = {}, opts = {}) {
+	const browserstackSelected = config.browserstackEnabled === true
+		&& Boolean(config.browserstackUser) && Boolean(config.browserstackKey);
+	const deviceName = opts.device != null ? String(opts.device) : null;
+	if (!browserstackSelected) {
+		return { mode: 'local', strict: false, device: deviceName };
+	}
+	// ── BrowserStack real-device path (B0.3) ──
+	if (deviceName) {
+		if (!isBrowserstackRealDevice(deviceName)) {
+			return {
+				mode: 'browserstack',
+				strict: true,
+				device: deviceName,
+				unsupported: `Unsupported device configuration: ${deviceName} cannot run on BrowserStack real devices. Real devices available via the Playwright CDP path: ${Object.keys(BROWSERSTACK_REAL_DEVICES).join(', ')}.`
+			};
+		}
+		if ((opts.browser || 'chrome') !== 'chrome') {
+			return {
+				mode: 'browserstack',
+				strict: true,
+				device: deviceName,
+				unsupported: `Unsupported device configuration: BrowserStack real-device execution requires Chrome (requested ${(opts.browser || 'chrome')}).`
+			};
+		}
 		const caps = {
-			browser: osInfo.browser,
-			os: osInfo.os,
-			os_version: osInfo.os_version,
+			browser: 'chrome',
+			os: 'android',
+			os_version: null,
+			device: BROWSERSTACK_REAL_DEVICES[deviceName],
+			real_mobile: 'true',
 			'browserstack.user': config.browserstackUser,
 			'browserstack.key': config.browserstackKey,
 			'name': opts.testName || `Qase test run`,
 			'browserstack.local': 'false'
 		};
-		const cdpUrl = `wss://cdp.browserstack.com/playwright?caps=${encodeURIComponent(JSON.stringify(caps))}`;
+		return { mode: 'browserstack', strict: true, caps, osInfo: { browser: 'chrome', os: 'android', os_version: null }, browserType: 'chrome', device: deviceName };
+	}
+	const browserType = opts.browser || 'chrome';
+	const osInfo = BROWSERSTACK_OS_MAP[browserType] || BROWSERSTACK_OS_MAP.chrome;
+	const caps = {
+		browser: osInfo.browser,
+		os: osInfo.os,
+		os_version: osInfo.os_version,
+		'browserstack.user': config.browserstackUser,
+		'browserstack.key': config.browserstackKey,
+		'name': opts.testName || `Qase test run`,
+		'browserstack.local': 'false'
+	};
+	// B0.2: STRICT by default — silent local fallback is forbidden when the
+	// user explicitly selected BrowserStack. browserstackStrict=false (set
+	// deliberately) is the only escape hatch, and even then the fallback is
+	// LOUDLY logged and the result still records the failed BS attempt.
+	const strict = config.browserstackStrict !== false;
+	return { mode: 'browserstack', strict, caps, osInfo, browserType, device: null };
+}
+
+/**
+ * Launch the browser and return { browser, environment, contextOptions } (B0.2/B0.3).
+ * environment is the truthful execution environment of THIS launch —
+ * provider, browser/os as actually requested/running, executedOn timestamp.
+ * Never fabricates: unknown fields are null.
+ *
+ * B0.3: opts.device (resolved device name) —
+ *   BrowserStack path: real-device caps from resolveLaunchPlan (REAL_DEVICE).
+ *   Local path: a REAL Playwright device descriptor is applied to the
+ *   browser context (UA/viewport/DPR/isMobile/hasTouch) → EMULATED_DEVICE.
+ * contextOptions is returned when the caller must build the context itself
+ * (runTestCase); null otherwise.
+ */
+async function launchBrowser(opts = {}) {
+	const config = getConfig();
+	const plan = resolveLaunchPlan(config, opts);
+
+	// ── BrowserStack CDP path ──
+	if (plan.mode === 'browserstack') {
+		if (plan.unsupported) {
+			// B0.3: deterministic failure — no substitution, no downgrade,
+			// never a silent local run.
+			console.error(`[BrowserStack] ${plan.unsupported}`);
+			const err = new Error(plan.unsupported);
+			err.unsupportedDevice = true;
+			throw err;
+		}
+		const cdpUrl = `wss://cdp.browserstack.com/playwright?caps=${encodeURIComponent(JSON.stringify(plan.caps))}`;
 		try {
 			const browser = await chromium.connectOverCDP(cdpUrl);
-			return browser;
+			let browserVersion = null;
+			try { browserVersion = await browser.version(); } catch { /* CDP may not expose it */ }
+			const deviceContext = plan.device ? resolveDeviceContext(plan.device) : null;
+			const environment = buildExecutionEnvironment({
+				provider: 'browserstack',
+				browser: plan.device ? 'chrome' : plan.osInfo.browser,
+				browserVersion,
+				os: plan.device ? 'Android' : plan.osInfo.os,
+				// Real-device OS build is NOT observable via CDP — null, never
+				// invented from the local descriptor's UA template (B0.3 review).
+				osVersion: plan.device ? null : plan.osInfo.os_version,
+				device: plan.device,
+				engineEmulated: false,
+				executedOn: Date.now()
+			});
+			return { browser, environment, contextOptions: deviceContext ? contextOptionsFor(deviceContext) : null };
 		} catch (error) {
-			console.warn(`[BrowserStack] CDP connection failed, falling back to local: ${error.message}`);
+			if (plan.strict) {
+				// STRICT MODE (B0.2/B0.3): the run must fail clearly. Never execute
+				// locally when BrowserStack was explicitly selected.
+				console.error(`[BrowserStack] CDP connection failed — STRICT mode, local fallback disabled: ${redactSecrets(error.message)}`);
+				throw new BrowserStackStrictError(error);
+			}
+			// Legacy non-strict fallback: LOUD, and the environment records
+			// the failed BrowserStack attempt so results stay truthful.
+			console.warn(`[BrowserStack] CDP connection failed — falling back to local (strict mode OFF): ${redactSecrets(error.message)}`);
+			const { browser, environment, contextOptions } = await launchLocal(config, opts);
+			return { browser, environment: { ...environment, fallbackFrom: 'browserstack' }, contextOptions };
 		}
 	}
 
-	// ── Local Chromium path (default / fallback) ──
+	// ── Local Chromium path (default) ──
+	return launchLocal(config, opts);
+}
+
+async function launchLocal(config, opts) {
 	const launchOptions = {
 		headless: config.headless !== false,
 		args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
@@ -108,7 +221,32 @@ async function launchBrowser(opts = {}) {
 		launchOptions.executablePath = exe;
 	}
 
-	return chromium.launch(launchOptions);
+	const browser = await chromium.launch(launchOptions);
+	let browserVersion = null;
+	try { browserVersion = await browser.version(); } catch { /* not exposed */ }
+	// B0.2/B0.3 truth: local viewport presets are NOT devices. Only an
+	// explicit device descriptor (agent device-context path, or the B0.3
+	// replay path below) counts — and locally it is always ENGINE
+	// EMULATION on local Chromium, never a real-device claim.
+	const deviceContext = opts.device != null ? resolveDeviceContext(opts.device) : null;
+	if (opts.device != null && !deviceContext) {
+		// The device name didn't resolve to a Playwright descriptor — fail
+		// deterministically rather than silently running desktop.
+		const err = new Error(`Unsupported device configuration: ${String(opts.device).slice(0, 60)}`);
+		err.unsupportedDevice = true;
+		throw err;
+	}
+	const environment = buildExecutionEnvironment({
+		provider: 'local',
+		browser: deviceContext?.browser ? `${deviceContext.browser} (emulated on Chromium)` : 'chromium',
+		browserVersion,
+		os: deviceContext?.os || process.platform,
+		osVersion: os.release(),
+		device: deviceContext?.deviceName ?? null,
+		engineEmulated: deviceContext != null,
+		executedOn: Date.now()
+	});
+	return { browser, environment, contextOptions: deviceContext ? contextOptionsFor(deviceContext) : null };
 }
 
 /**
@@ -508,13 +646,52 @@ async function evaluateVisualMatch(page, assertion, runContext) {
  * @param {object} options   — { credentials, onProgress }
  * @returns {Promise<ReplayResult>}
  */
-export async function runTestCase(testCase, { credentials, onProgress, attempt = 1, viewport, browser: browserType } = {}) {
+export async function runTestCase(testCase, { credentials, onProgress, attempt = 1, viewport, browser: browserType, device } = {}) {
 	const startTime = Date.now();
 	const collector = createCollector();
 	const stepResults = [];
 	const assertionResults = [];
 	const screenshots = [];
 	const screenshotPaths = [];
+	// B0.3 — the effective device for this run: explicit device argument
+	// first, then the test case's own device. Validated here so ALL callers
+	// (validation executor, suites, scheduler) fail deterministically on an
+	// unsupported name instead of silently running desktop.
+	const deviceInput = device != null ? device : (testCase.device ?? null);
+	const deviceCheck = deviceInput != null ? validateDeviceRequest(deviceInput) : null;
+	const deviceName = deviceCheck ? deviceCheck.deviceName : null;
+	if (deviceCheck && !deviceCheck.ok) {
+		const startTimeFailed = Date.now();
+		return {
+			id: randomUUID(),
+			testCaseId: testCase.id,
+			testCaseName: testCase.name,
+			ts: startTime,
+			result: 'error',
+			flaky: false,
+			attempt,
+			viewport: resolveViewport(viewport ?? testCase.viewport),
+			browser: browserType || 'chromium',
+			executionEnvironment: buildExecutionEnvironment({
+				provider: getConfig().browserstackEnabled === true ? 'browserstack' : 'local',
+				browser: browserType || 'chromium',
+				browserVersion: null,
+				os: null,
+				osVersion: null,
+				device: null,
+				engineEmulated: false,
+				executedOn: startTimeFailed,
+				failed: true
+			}),
+			durationMs: Date.now() - startTime,
+			stepResults: [],
+			assertionResults: [],
+			screenshots: [],
+			tracePath: undefined,
+			error: deviceCheck.error,
+			unsupportedDevice: true
+		};
+	}
 
 	const result = {
 		id: randomUUID(),
@@ -526,6 +703,10 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 		attempt,
 		viewport: resolveViewport(viewport ?? testCase.viewport),
 		browser: browserType || 'chromium',
+		// B0.2 — truthful execution provenance (provider/device/os/executedOn).
+		// Populated right after launch; on launch failure it records the
+		// failed provider so the result can never masquerade as local.
+		executionEnvironment: null,
 		durationMs: 0,
 		stepResults,
 		assertionResults,
@@ -538,11 +719,22 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 	let context;
 
 	try {
-		browser = await launchBrowser({ testName: testCase.name, browser: browserType });
-		// Use a context so we can enable trace recording.
-		const vp = resolveViewport(viewport ?? testCase.viewport);
+		const launched = await launchBrowser({ testName: testCase.name, browser: browserType, device: deviceName });
+		browser = launched.browser;
+		result.executionEnvironment = { ...launched.environment, viewport: { ...result.viewport } };
+		// Use a context so we can enable trace recording. B0.3: when a device
+		// is in play, the launch already produced REAL device context options
+		// (Playwright registry descriptor for local emulation / BS real
+		// device viewport) — apply them instead of a plain viewport resize.
+		const deviceVp = launched.contextOptions?.viewport
+			? { width: launched.contextOptions.viewport.width, height: launched.contextOptions.viewport.height }
+			: null;
+		const vp = deviceVp || resolveViewport(viewport ?? testCase.viewport);
+		result.viewport = { ...vp };
+		result.executionEnvironment.viewport = { width: vp.width, height: vp.height };
 		context = await browser.newContext({
-			viewport: { width: vp.width, height: vp.height }
+			viewport: { width: vp.width, height: vp.height },
+			...(launched.contextOptions ?? {})
 		});
 		await context.tracing.start({
 			screenshots: true,
@@ -649,6 +841,53 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 	} catch (error) {
 		result.result = 'error';
 		result.error = error.message;
+		// B0.2 — a BrowserStack strict failure must be visibly a BrowserStack
+		// failure, never a generic or "local" error. Stamp the failed BS
+		// environment (provider browserstack, failed: true).
+		// B0.3 — the failed environment keeps the requested device name.
+		if (error instanceof BrowserStackStrictError && !result.executionEnvironment) {
+			result.executionEnvironment = buildExecutionEnvironment({
+				provider: 'browserstack',
+				browser: browserType || 'chrome',
+				browserVersion: null,
+				os: null,
+				osVersion: null,
+				device: deviceName,
+				engineEmulated: false,
+				executedOn: Date.now(),
+				failed: true
+			});
+		} else if (error?.unsupportedDevice && !result.executionEnvironment) {
+			// B0.3 — deterministic unsupported-device failure from the launcher.
+			result.result = 'error';
+			result.error = error.message;
+			result.unsupportedDevice = true;
+			result.executionEnvironment = buildExecutionEnvironment({
+				provider: getConfig().browserstackEnabled === true ? 'browserstack' : 'local',
+				browser: browserType || 'chromium',
+				browserVersion: null,
+				os: null,
+				osVersion: null,
+				device: null,
+				engineEmulated: false,
+				executedOn: Date.now(),
+				failed: true
+			});
+		} else if (!result.executionEnvironment) {
+			// Launch failed before the environment existed — record local with
+			// failed:true rather than leaving null (never invent details).
+			result.executionEnvironment = buildExecutionEnvironment({
+				provider: 'local',
+				browser: 'chromium',
+				browserVersion: null,
+				os: process.platform,
+				osVersion: os.release(),
+				device: deviceName,
+				engineEmulated: deviceName != null,
+				executedOn: Date.now(),
+				failed: true
+			});
+		}
 	} finally {
 		// Stop trace recording and save as artifact.
 		if (context) {
@@ -702,7 +941,7 @@ function cleanHealArtifacts(result) {
 	return result;
 }
 
-async function runWithRetry(testCase, { credentials, onProgress, retries = 0, viewport, browser } = {}) {
+async function runWithRetry(testCase, { credentials, onProgress, retries = 0, viewport, browser, device } = {}) {
 	const maxAttempts = retries + 1;
 	let lastResult;
 	let healingApplied = false;
@@ -714,7 +953,8 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0, vi
 			onProgress,
 			attempt,
 			viewport,
-			browser
+			browser,
+			device
 		});
 
 		// Pass → done. If it took more than 1 attempt, mark flaky.
@@ -798,7 +1038,7 @@ async function runWithRetry(testCase, { credentials, onProgress, retries = 0, vi
  * @param {number} [options.retries] — retries per failed test (default: QASE_RETRIES or 1)
  * @returns {Promise<object>} { id, total, passed, failed, errored, flaky, durationMs, results }
  */
-export async function runTestSuite(testCases, { credentials, onProgress, concurrency, retries, browsers } = {}) {
+export async function runTestSuite(testCases, { credentials, onProgress, concurrency, retries, browsers, device } = {}) {
 	const startTime = Date.now();
 	const poolSize = Math.max(1, concurrency ?? Number(process.env.QASE_PARALLEL) ?? 3);
 	const retryCount = Math.max(0, retries ?? Number(process.env.QASE_RETRIES) ?? 1);
@@ -837,7 +1077,10 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 				onProgress: data => onProgress?.({ testCaseIndex: entry.originalIndex, subIndex: myIndex, ...data }),
 				retries: retryCount,
 				viewport: entry.viewport,
-				browser: entry.browser
+				browser: entry.browser,
+				// B0.3 — suite-level device override; a test case's own device
+				// wins only when no suite override was given.
+				device: device ?? entry.testCase.device ?? null
 			});
 			results[myIndex] = result;
 		}
@@ -877,14 +1120,24 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 					viewport: r.viewport,
 					result: r.result,
 					durationMs: r.durationMs,
-					flaky: r.flaky
-				}))
+					flaky: r.flaky,
+					// B0.2 — keep per-execution provenance on each sub-result.
+					executionEnvironment: r.executionEnvironment ?? null
+				})),
+				// Multi-viewport aggregation spans multiple environments; the
+				// top-level environment of the aggregate is the first one, and
+				// per-viewport truth lives above.
+				executionEnvironment: vr[0]?.executionEnvironment ?? null
 			};
 			finalResults.push(aggregated);
 		} else if (vr.length === 1) {
 			finalResults.push(vr[0]);
 		}
 	}
+
+	// B0.2 — summary-level provenance: the set of providers that actually
+	// executed (null environments from legacy shapes are simply absent).
+	const providers = [...new Set(finalResults.map(r => r.executionEnvironment?.provider).filter(Boolean))];
 
 	const summary = {
 		id: randomUUID(),
@@ -894,6 +1147,14 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 		errored: finalResults.filter(r => r.result === 'error').length,
 		flaky: finalResults.filter(r => r.flaky).length,
 		durationMs: Date.now() - startTime,
+		// B0.2 — what actually executed this suite. providers is empty only
+		// when nothing ran (or a legacy shape without provenance).
+		execution: {
+			providers: providers,
+			strictBrowserstack: providers.length === 1 && providers[0] === 'browserstack'
+				? (getConfig().browserstackStrict !== false)
+				: undefined
+		},
 		results: finalResults
 	};
 

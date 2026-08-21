@@ -25,6 +25,8 @@ import {
 import { createEvidence, linkEvidenceToFinding, EVIDENCE_TYPES } from './evidenceGraph.js';
 import { redactString } from './findingIntelligence.js';
 import { runTestCase } from './replay.js';
+import { buildExecutionEnvironment } from './executionEnvironment.js';
+import { validateDeviceRequest } from './deviceContext.js';
 import { VALIDATION_RUN_STATUSES } from './fixStatusEngine.js';
 
 /** Attempts per validation (spec §10 configurable). */
@@ -41,7 +43,7 @@ function viewportEquivalent(a, b) {
 }
 
 /** Record an evidence node into the graph AND the run's evidence list. */
-function recordEvidence(run, phase, type, { title, description = '', artifactPath = null, url = null }) {
+function recordEvidence(run, phase, type, { title, description = '', artifactPath = null, url = null, environment = null }) {
 	const node = createEvidence({
 		type,
 		source: 'fix_validation',
@@ -53,6 +55,9 @@ function recordEvidence(run, phase, type, { title, description = '', artifactPat
 			findingId: run.findingId,
 			phase,
 			...(artifactPath ? { artifactPath } : {}),
+			// B0.2 — evidence identifies its execution environment (provider,
+			// device, browser, OS, execution time). Nulls allowed, never faked.
+			...(environment ? { executionEnvironment: environment } : {}),
 		},
 	});
 	if (node?.id) {
@@ -65,6 +70,9 @@ function recordEvidence(run, phase, type, { title, description = '', artifactPat
 		description: redactString(String(description || '')).slice(0, 800),
 		...(node?.id ? { evidenceNodeId: node.id } : {}),
 		...(artifactPath ? { artifactPath } : {}),
+		// B0.2 — the row itself identifies its environment (the graph node
+		// carries the same under metadata.executionEnvironment).
+		...(environment ? { executionEnvironment: environment } : {}),
 	});
 }
 
@@ -235,6 +243,15 @@ export async function executeValidation(runId, { getFinding } = {}) {
 
 		// ── Attempts (replay the finding's own steps) ──
 		const testCase = buildValidationTestCase(of);
+		// B0.3 — preserve the finding's device for same-condition validation.
+		// GUARDED: only a device that actually resolves passes through; legacy
+		// findings with unparseable device strings keep today's desktop
+		// behavior (validateDeviceRequest returns ok+null for unknowns →
+		// desktop) so frozen Phase 18 behavior cannot regress. An explicit
+		// unsupported device NEVER silently changes the environment: it is
+		// recorded as an environment delta by computeEnvironmentDeltas.
+		const findingDeviceCheck = validateDeviceRequest(of.device ?? null);
+		const findingDevice = findingDeviceCheck.ok ? findingDeviceCheck.deviceName : null;
 		const tAtt = Date.now();
 		const attemptRecords = [];
 		let finalAttempt = null;
@@ -242,7 +259,7 @@ export async function executeValidation(runId, { getFinding } = {}) {
 			const at = Date.now();
 			let res = null;
 			try {
-				res = await runTestCase(testCase, { attempt: i, viewport: testCase.viewport });
+				res = await runTestCase(testCase, { attempt: i, viewport: testCase.viewport, device: findingDevice });
 			} catch (err) {
 				res = { result: 'error', error: String(err?.message || err) };
 			}
@@ -271,12 +288,16 @@ export async function executeValidation(runId, { getFinding } = {}) {
 				error: res.error ? redactString(String(res.error)) : null,
 				assertions,
 				steps: (res.stepResults || []).map(s => ({ action: s.action, status: s.status })),
+				// B0.2 — truthful provenance for THIS attempt (provider, os,
+				// viewport, executedOn; nulls when unknown).
+				executionEnvironment: res.executionEnvironment ?? null,
 			};
 			attemptRecords.push(record);
 			appendAttempt(run.id, record);
 			recordEvidence(run, 'after', res.result === 'fail' || res.result === 'error' ? EVIDENCE_TYPES.SCREENSHOT : EVIDENCE_TYPES.STEP_OUTCOME, {
 				title: `Attempt ${i}: ${expectedObserved ? 'expected behavior observed' : 'original path still failing'}`,
 				description: assertions.map(a => `${a.passed ? '✅' : '❌'} ${a.type}`).join(' | ').slice(0, 300),
+				environment: res.executionEnvironment ?? null,
 			});
 			if ((res.screenshots || []).length > 0) {
 				recordEvidence(run, 'after', EVIDENCE_TYPES.SCREENSHOT, {
@@ -295,7 +316,7 @@ export async function executeValidation(runId, { getFinding } = {}) {
 		const selected = finding ? selectRegressionSet(finding) : [];
 		for (const { tc } of selected.slice(0, REGRESSION_BUDGET)) {
 			try {
-				const res = await runTestCase(tc, { attempt: 1 });
+				const res = await runTestCase(tc, { attempt: 1, device: findingDevice });
 				const passed = res.result === 'pass';
 				const verified = res.result !== 'error' && !res.flaky;
 				regressionResults.push({ id: tc.id, name: tc.name, passed, verified });
@@ -352,6 +373,9 @@ export async function executeValidation(runId, { getFinding } = {}) {
 			partialFix: detectPartialFix(subConditions),
 			regressions: classifyRegressions(regressionResults),
 			comparison,
+			// B0.2 — run-level provenance: when the executor actually ran.
+			executedOn: Date.now(),
+			executionEnvironment: finalAttempt?.executionEnvironment ?? null,
 			timings: { ...run.timings, totalMs: Date.now() - t0 },
 		}, (completed) => {
 			if (typeof knowledgeWriter === 'function') knowledgeWriter(completed, of);

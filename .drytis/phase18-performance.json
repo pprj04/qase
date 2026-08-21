@@ -1,0 +1,15 @@
+{
+  "seedMs": 17,
+  "requestLatencyMs": 3,
+  "startStatus": "REQUESTED",
+  "totalMs": 5317,
+  "evidenceBeforeMs": 0,
+  "attemptsMs": 5317,
+  "regressionMs": 0,
+  "attempts": 2,
+  "evidenceAfterItems": 4,
+  "idempotentReplayMs": 2,
+  "getValidationMs": 2,
+  "getComparisonMs": 1,
+  "metricsMs": 2
+}

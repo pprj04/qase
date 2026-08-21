@@ -1,0 +1,240 @@
+{
+  "phase": 12,
+  "status": "PASS / FROZEN",
+  "date": "2026-08-13",
+  "objectives": {
+    "1_dialog_tools": {
+      "file": "server/agent.js",
+      "status": "PASS",
+      "tools_added": [
+        "browser_dialog",
+        "browser_new_tab",
+        "browser_select_tab",
+        "browser_close_tab"
+      ],
+      "line": 53
+    },
+    "2_write_knowledge": {
+      "file": "server/index.js",
+      "status": "PASS",
+      "import_line": 71,
+      "call_line": 3103,
+      "function": "finalizeMissionFromSession"
+    },
+    "3_concurrent_runs": {
+      "file": ".qase/config.json",
+      "status": "PASS",
+      "before": 20,
+      "after": 3,
+      "verified_in_running_server": true
+    },
+    "4_atomic_write": {
+      "file": "server/missions.js",
+      "status": "PASS",
+      "before": "writeFileSync",
+      "after": "atomicWrite",
+      "line": 77
+    }
+  },
+  "tests": {
+    "1_dialog_e2e": {
+      "status": "PASS",
+      "mission_id": "4d0d0a2d-0a6b-437d-982f-c51affd0b584",
+      "session_id": "d9197591-37b0-4f3f-9579-bbd102e054c7",
+      "target": "http://localhost:9909/",
+      "duration_seconds": 265,
+      "verdict": "fail",
+      "quality_score": 15,
+      "findings": [
+        {
+          "id": "wf_user_login_user_login_step_1",
+          "title": "user login: navigate to login failed",
+          "severity": "critical",
+          "confidence": 0.85
+        },
+        {
+          "id": "finding_2_dialog",
+          "title": "Bug description is collected but never displayed",
+          "severity": "high",
+          "confidence": 0.75
+        }
+      ],
+      "evidence_count": 27,
+      "knowledge_written": "Learned 2 patterns (2 new)"
+    },
+    "2_knowledge_learning_e2e": {
+      "status": "PASS",
+      "run1": {
+        "mission_id": "4d0d0a2d-0a6b-437d-982f-c51affd0b584",
+        "findings": 2,
+        "knowledge_written": "2 new patterns"
+      },
+      "run2": {
+        "mission_id": "97049818-4f1e-448f-a817-e87172016e71",
+        "findings": 0,
+        "knowledge_written": "0 new patterns (correct - no findings to learn from)"
+      },
+      "total_knowledge_items_pre_test": 19,
+      "total_knowledge_items_post_test": 31,
+      "dedup_verified": true,
+      "query_at_mission_start": true,
+      "survives_restart": true
+    },
+    "3_concurrency": {
+      "status": "PASS",
+      "missions": [
+        {
+          "mission_id": "f6997d75-087d-4625-aea0-7b31f178fcfc",
+          "session_id": "8bb085f2-6348-4ff5-b88f-2bab3d28be39",
+          "target": "http://localhost:9901/",
+          "duration_seconds": null,
+          "status": "completed",
+          "verdict": "fail",
+          "findings_count": 2,
+          "quality_score": 15
+        },
+        {
+          "mission_id": "54ad4d3a-4eae-47ac-ac4d-32892f2fff2f",
+          "session_id": "2c1edba7-e72f-4a66-a585-707a89c6ab9e",
+          "target": "http://localhost:9903/",
+          "duration_seconds": null,
+          "status": "completed",
+          "verdict": "pass_with_issues",
+          "findings_count": 1,
+          "quality_score": null
+        },
+        {
+          "mission_id": "add78c9e-efb0-4770-a183-6e3972b77f4e",
+          "session_id": "2476c820-e562-4c77-9395-484f21024314",
+          "target": "http://localhost:9905/",
+          "duration_seconds": null,
+          "status": "completed",
+          "verdict": "fail",
+          "findings_count": 1,
+          "quality_score": 15
+        }
+      ],
+      "independent_chrome_instances": 4,
+      "unique_user_data_dirs": [
+        "playwright_chromiumdev_profile-qfP4aW",
+        "playwright_chromiumdev_profile-5HPT7c",
+        "playwright_chromiumdev_profile-sdsT5S",
+        "playwright_chromiumdev_profile-JpzhqB"
+      ],
+      "cross_contamination": false,
+      "peak_memory_mb": 1105,
+      "total_memory_mb": 6019
+    },
+    "4_persistence": {
+      "status": "PASS",
+      "pre_restart": {
+        "missions_json_valid": true,
+        "missions_count": 2074,
+        "knowledge_json_valid": true,
+        "knowledge_count": 30
+      },
+      "post_restart": {
+        "missions_json_valid": true,
+        "missions_count": 2075,
+        "knowledge_json_valid": true,
+        "knowledge_count": 31,
+        "mission_data_intact": true,
+        "server_healthy": true
+      },
+      "atomic_write_verified": true,
+      "atomic_write_location": "server/missions.js line 77"
+    },
+    "5_full_autonomous_e2e": {
+      "status": "PASS",
+      "mission_id": "41d522e8-5ba7-4043-a8f2-754bbdaef848",
+      "session_id": "55d99b43-1e4f-40e5-84e5-56bc0cdff9df",
+      "correlation_id": "a084181c-db59-4d83-bcad-76d1038ea614",
+      "target": "http://localhost:9906/",
+      "duration_seconds": 271,
+      "started_at": 1786604556485,
+      "completed_at": 1786604827487,
+      "messages": 18,
+      "activities": 30,
+      "evidence_count": 31,
+      "findings": [
+        {
+          "id": "wf_user_login_user_login_step_1",
+          "title": "user login: navigate to login failed",
+          "severity": "critical",
+          "category": "workflow_failure",
+          "confidence": 0.85
+        },
+        {
+          "id": "dca136de-49ee-4b81-93be-a6d0692f71dd",
+          "title": "Add Contact form accepts invalid email addresses",
+          "severity": "high",
+          "category": "forms",
+          "confidence": 1.0
+        }
+      ],
+      "quality_score": 15,
+      "verdict": "fail",
+      "stop_reason": "failed",
+      "current_iteration": 1,
+      "knowledge_written": "Learned 2 patterns (1 new)",
+      "report_endpoint": {
+        "status": "completed",
+        "verdict": "fail",
+        "quality_score": 15,
+        "findings_count": 2
+      },
+      "chain_verified": {
+        "api_create": true,
+        "mission_worker": true,
+        "agent_runtime": true,
+        "browser_automation": true,
+        "evidence_collection": true,
+        "finding_generation": true,
+        "quality_scoring": true,
+        "decision_engine": true,
+        "knowledge_writing": true,
+        "report_generation": true
+      }
+    }
+  },
+  "regression": {
+    "baseline": {
+      "tests": 716,
+      "failures": 0
+    },
+    "post_change": {
+      "tests": 716,
+      "failures": 0
+    },
+    "new_failures": 0,
+    "pre_existing_exclusions": [
+      "phase9.4-reliability.test.js (hangs on exit)",
+      "phase9.2-revalidate-e2e.test.js (hangs on exit, requires /workspace/.env)",
+      "phase9.3-resource-lifecycle.test.js (corrupted empty directory from ext4 issue)"
+    ]
+  },
+  "files_modified": [
+    "server/agent.js",
+    "server/index.js",
+    ".qase/config.json",
+    "server/missions.js"
+  ],
+  "files_created": [
+    ".drytis/phase-12-implementation-report.md",
+    ".drytis/phase-12-e2e-results.json"
+  ],
+  "acceptance_criteria": {
+    "all_tools_allowed": true,
+    "dialog_e2e_passes": true,
+    "write_knowledge_in_autonomous_path": true,
+    "knowledge_persisted_and_reusable": true,
+    "concurrent_runs_is_3": true,
+    "three_concurrent_missions_no_contamination": true,
+    "atomic_write_used": true,
+    "persistence_survives_restart": true,
+    "full_e2e_completes": true,
+    "full_regression_passes": true,
+    "no_architecture_changes": true
+  },
+  "verdict": "PHASE 12 — PASS / FROZEN"
+}

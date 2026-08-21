@@ -43,16 +43,9 @@ const el = {
 
 	activityFeed: $('activity-feed'),
 	planList: $('plan-list'),
-	findingsList: $('findings-list'),
 	reportView: $('report-view'),
-	workflowPane: $('workflow-pane'),
 	countPlan: $('count-plan'),
-	countFindings: $('count-findings'),
-	countWorkflows: $('count-workflows'),
 	testcasePane: $('testcase-pane'),
-	countTestcases: $('count-testcases'),
-	regressionPane: $('regression-pane'),
-	countRegression: $('count-regression'),
 	metricsOverview: $('metrics-overview'),
 	projectSelect: $('project-select'),
 	newProjectBtn: $('new-project'),
@@ -222,7 +215,14 @@ function hostOf(url) {
 
 function relativeTime(ts) {
 	const seconds = Math.round((Date.now() - ts) / 1000);
-	if (seconds < 60) return 'just now';
+	if (seconds >= -60 && seconds < 60) return 'just now';
+	// Future timestamps (e.g. a schedule's nextRunAt) read as "in …", not "just now".
+	if (seconds < 0) {
+		const ahead = Math.abs(seconds);
+		if (ahead < 3600) return `in ${Math.round(ahead / 60)}m`;
+		if (ahead < 86_400) return `in ${Math.round(ahead / 3600)}h`;
+		return new Date(ts).toLocaleDateString();
+	}
 	if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
 	if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
 	return new Date(ts).toLocaleDateString();
@@ -269,4 +269,50 @@ const CRON_PRESETS = [
 	{ label: 'Weekdays 9am',  value: '0 9 * * 1-5' }
 ];
 
-export { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle };
+/* ── BUILD 1: shared page loading / error / retry states ─────────── */
+
+/**
+ * Show the first-load skeleton in a page's list container.
+ * `container` is the element that will hold the rendered content.
+ */
+function showPageLoading(container) {
+	if (!container) return;
+	container.replaceChildren();
+	const bar = document.createElement('div');
+	bar.className = 'page-loading';
+	bar.setAttribute('aria-busy', 'true');
+	bar.innerHTML = '<div class="page-loading-bar"></div><div class="page-loading-bar is-short"></div><div class="page-loading-bar is-faint"></div>';
+	container.append(bar);
+}
+
+/**
+ * Show an inline error banner with a Retry button. `retry` is re-invoked on
+ * click. Any previous banner/loading state in the container is replaced.
+ */
+function showPageError(container, retry, message) {
+	if (!container) return;
+	container.replaceChildren();
+	const box = document.createElement('div');
+	box.className = 'page-error';
+	box.setAttribute('role', 'alert');
+	const msg = document.createElement('p');
+	msg.textContent = message || 'Could not load this page.';
+	const btn = document.createElement('button');
+	btn.type = 'button';
+	btn.className = 'btn btn-sm';
+	btn.textContent = 'Retry';
+	btn.addEventListener('click', () => { void retry(); });
+	box.append(msg, btn);
+	container.append(box);
+}
+
+/** Clear loading/error state from a container before rendering content. */
+function clearPageState(container) {
+	if (!container) return;
+	const loading = container.querySelector(':scope > .page-loading');
+	if (loading) loading.remove();
+	const error = container.querySelector(':scope > .page-error');
+	if (error) error.remove();
+}
+
+export { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle, showPageLoading, showPageError, clearPageState };

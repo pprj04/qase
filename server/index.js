@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { closeBrowser, ensureRuntime, runTurn } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
+import { testBrowserstackConnection } from './browserstackTest.js';
 import { mountDemoSite } from './demoSite.js';
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
+import { validateDeviceRequest } from './deviceContext.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
 	listSessions, liveFor, loadSessions, setStatus, startWatchdog, pruneOldSessions
@@ -309,13 +311,56 @@ app.post('/api/config/test', requireApiToken, async (request, response) => {
 	response.json(await testConnection(request.body ?? {}));
 });
 
+/**
+ * BUILD B0.1 — REAL BrowserStack connection test (auth + CDP reachability).
+ * Accepts unsaved Settings values (browserstackUser/browserstackKey in the
+ * body); falls back to the effective config when they are blank. The access
+ * key is used for the probe and never echoed back or logged.
+ */
+app.post('/api/config/test-browserstack', requireApiToken, async (request, response) => {
+	try {
+		const body = request.body ?? {};
+		const effective = getConfig();
+		const user = String(body.browserstackUser ?? '').trim() || effective.browserstackUser || '';
+		const key = String(body.browserstackKey ?? '').trim() || effective.browserstackKey || '';
+		const result = await testBrowserstackConnection({ user, key });
+		// Persist the redacted outcome so the UI can show "last verified" and
+		// so a restart does not silently lose it. Best-effort only.
+		try {
+			saveConfig({
+				browserstackLastVerified: {
+					ts: result.lastVerifiedTs,
+					ok: result.ok,
+					code: result.code,
+					message: result.message,
+					maskedUser: result.maskedUser
+				}
+			});
+		} catch (persistError) {
+			console.error('[config] could not persist browserstackLastVerified:', persistError?.message);
+		}
+		response.json(result);
+	} catch (error) {
+		// Never leak credential material through error paths.
+		response.status(500).json({ ok: false, code: 'internal_error', message: 'Connection test failed unexpectedly. Check server logs.' });
+		console.error('[config] browserstack test error:', error?.message);
+	}
+});
+
 app.get('/api/sessions', (request, response) => {
 	response.json(listSessions({ projectId: request.query.projectId }));
 });
 
 app.post('/api/sessions', requireApiToken, (request, response) => {
 	const projectId = request.body?.projectId ?? getDefaultProjectId();
-	response.status(201).json(createSession('New test run', projectId));
+	// B0.3 — optional deviceRequest ('iPhone 15 Pro', { device: 'Pixel 8' },
+	// class 'mobile'/'tablet'). Unsupported names → 400 (never silent desktop).
+	const deviceInput = request.body?.deviceRequest ?? null;
+	const deviceCheck = deviceInput != null ? validateDeviceRequest(deviceInput) : null;
+	if (deviceCheck && !deviceCheck.ok) {
+		return response.status(400).json({ error: deviceCheck.error });
+	}
+	response.status(201).json(createSession('New test run', projectId, deviceCheck?.deviceName ? { deviceRequest: deviceCheck.deviceName } : {}));
 });
 
 app.get('/api/sessions/:id', (request, response) => {
@@ -341,6 +386,12 @@ app.get('/api/sessions/:id', (request, response) => {
 		findingCount: (session.findings ?? []).length,
 		messageCount: (session.messages ?? []).length,
 		stepCount: (session.capturedSteps ?? []).length,
+		// BUILD 2: honest environment display — expose the resolved device
+		// context (or the request if the runtime never applied it) so the
+		// session header can show DESKTOP vs EMULATED_DEVICE vs REAL_DEVICE.
+		device: session.device ?? null,
+		deviceRequest: session.deviceRequest ?? null,
+		viewportsExplored: session.viewportsExplored ?? [],
 		secretNames: secretNames(session.id),
 		running: Boolean(record.running),
 		frame: record.bridge?.getLastFrame?.(),
@@ -980,8 +1031,14 @@ app.post('/api/test-cases/:id/run', requireApiToken, async (request, response) =
 		return response.status(404).json({ error: 'Test case not found' });
 	}
 	try {
-		const { credentials, browser } = request.body ?? {};
-		const result = await runTestCase(tc, { credentials, browser });
+		const { credentials, browser, device } = request.body ?? {};
+		// B0.3 — device may be a name, class string, or { device: 'Pixel 8' }.
+		// Unsupported → 400 (deterministic, no substitution/downgrade).
+		const deviceCheck = device != null ? validateDeviceRequest(device) : null;
+		if (deviceCheck && !deviceCheck.ok) {
+			return response.status(400).json({ error: deviceCheck.error });
+		}
+		const result = await runTestCase(tc, { credentials, browser, device: deviceCheck?.deviceName });
 		// Clean internal healing artifacts before storing/returning.
 		delete result._domSnapshot;
 		delete result._failedStepIndex;
@@ -994,7 +1051,12 @@ app.post('/api/test-cases/:id/run', requireApiToken, async (request, response) =
 });
 
 app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
-	const { testCaseIds, credentials, browsers } = request.body ?? {};
+	const { testCaseIds, credentials, browsers, device } = request.body ?? {};
+	// B0.3 — suite-level device override, same validation as single-run.
+	const deviceCheck = device != null ? validateDeviceRequest(device) : null;
+	if (deviceCheck && !deviceCheck.ok) {
+		return response.status(400).json({ error: deviceCheck.error });
+	}
 	const config = getConfig();
 	const concurrency = Number(request.body?.concurrency) || config.concurrentRuns;
 	const retries = Number.isFinite(Number(request.body?.retries)) ? Number(request.body.retries) : config.retriesCount;
@@ -1008,7 +1070,7 @@ app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
 		if (cases.length === 0) {
 			return response.status(404).json({ error: 'No test cases found for the given IDs' });
 		}
-		const summary = await runTestSuite(cases, { credentials, concurrency, retries, browsers });
+		const summary = await runTestSuite(cases, { credentials, concurrency, retries, browsers, device: deviceCheck?.deviceName });
 		// Persist each individual result.
 		for (const result of summary.results) {
 			addRun(result);
@@ -1525,6 +1587,17 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		}
 	}
 
+	// B0.3 — validate the mission's device constraint BEFORE creating a
+	// session, so an unsupported device fails the mission create with 400
+	// instead of silently running desktop. Class strings ('mobile'/'tablet')
+	// and named devices pass through; desktop/empty stay desktop.
+	const missionDeviceInput = body.constraints?.device ?? body.deviceRequest ?? null;
+	const missionDeviceCheck = missionDeviceInput != null ? validateDeviceRequest(missionDeviceInput) : null;
+	if (missionDeviceCheck && !missionDeviceCheck.ok) {
+		return response.status(400).json({ error: missionDeviceCheck.error });
+	}
+	const missionDevice = missionDeviceCheck ? missionDeviceCheck.deviceName : null;
+
 	// Create the mission
 	const mission = createMission({
 		projectId: body.projectId,
@@ -1535,7 +1608,7 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		capabilities: body.capabilities,
 		source: body.source || 'api',
 		generationId: body.generationId,
-		constraints: body.constraints,
+		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}) },
 		successCriteria: body.successCriteria,
 		context: contextForMission
 	});
@@ -1543,7 +1616,7 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 	// Optionally auto-start: create a session and kick off the agent
 	if (body.autoStart !== false) {
 		try {
-			const session = createSession(mission.name || 'API Mission', mission.projectId);
+			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
 			session.targetUrl = mission.targetUrl;
 
 			// Migrate temp vault credentials to session scope
@@ -1630,7 +1703,12 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 	}
 
 	try {
-		const session = createSession(mission.name || 'API Mission', mission.projectId);
+		// B0.3 — the mission's stored device constraint drives the session.
+		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+		if (!missionDeviceCheck.ok) {
+			return response.status(400).json({ error: missionDeviceCheck.error });
+		}
+		const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
 		session.targetUrl = mission.targetUrl;
 
 		// Migrate temp vault credentials to session scope (for missions created with autoStart: false)
@@ -1787,7 +1865,17 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 	}
 
 	try {
-		const session = createSession(`${mission.name} — Iteration ${mission.currentIteration + 1}`, mission.projectId);
+		// B0.3 — carry the mission's device constraint into the iteration
+		// session so mobile missions keep their device across iterations.
+		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+		if (!missionDeviceCheck.ok) {
+			return response.status(400).json({ error: missionDeviceCheck.error });
+		}
+		const session = createSession(
+			`${mission.name} — Iteration ${mission.currentIteration + 1}`,
+			mission.projectId,
+			missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
+		);
 		session.targetUrl = mission.targetUrl;
 
 		// Set status to running
@@ -1874,10 +1962,16 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 
 	try {
 		// Create session for the new iteration
+		// B0.3 — preserve the mission device constraint across revalidations.
+		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+		if (!missionDeviceCheck.ok) {
+			return response.status(400).json({ error: missionDeviceCheck.error });
+		}
 		const iterationNumber = (mission.currentIteration || 0) + 1;
 		const session = createSession(
 			`${mission.name} — Revalidation ${iterationNumber}`,
-			mission.projectId
+			mission.projectId,
+			missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
 		);
 		session.targetUrl = mission.targetUrl;
 
@@ -2315,6 +2409,24 @@ function buildMissionPrompt(mission) {
 function finalizeMissionFromSession(mission, session) {
 	// Idempotency: if the mission is already terminal, skip
 	if (isTerminalStatus(mission.status)) {
+		return getMission(mission.id);
+	}
+
+	// BUILD 1 honesty guard: a session that ended in error/interrupted never ran
+	// its agent to completion — finalizing it as "completed/pass" fabricates a
+	// success. Route dead sessions to mission status 'failed' with a minimal
+	// report instead of a quality score.
+	if (session.status === 'error' || session.status === 'interrupted') {
+		const firstErr = (session.transcript ?? []).find((m) => m.role === 'system' && /error/i.test(m.text ?? ''));
+		finalizeMission(mission.id, {
+			status: 'failed',
+			failureReason: firstErr ? String(firstErr.text).slice(0, 300)
+				: session.status === 'interrupted'
+					? 'Session interrupted (watchdog limit or manual stop) before the mission could finish its report.'
+					: `Session ended ${session.status} before the agent could run.`,
+			findings: [],
+			summary: null
+		});
 		return getMission(mission.id);
 	}
 

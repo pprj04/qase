@@ -1,7 +1,7 @@
 /**
  * Tests module — test case management, suites, test editor, and test execution.
  */
-import { el, state, api, toast, fail, escapeHtml, hostOf, relativeTime, truncate, STEP_ICONS } from './shared.js';
+import { el, state, api, toast, fail, escapeHtml, hostOf, relativeTime, truncate, STEP_ICONS, showPageLoading, showPageError, clearPageState } from './shared.js';
 
 /* ── Tests page search/filter wiring ──────────────────────────────── */
 function initTestsWiring() {
@@ -66,15 +66,22 @@ const ASSERTION_ICONS = {
 };
 
 async function loadTestCases() {
-	state.testCases = [];
+	const firstLoad = !state.testCasesLoaded;
+	if (firstLoad) showPageLoading(el.testcasePane);
 	const projectId = state.session?.projectId ?? state.projectId;
 	const params = new URLSearchParams();
 	if (projectId) params.set('projectId', projectId);
 	const query = params.toString() ? `?${params.toString()}` : '';
 	try {
 		state.testCases = await api(`/test-cases${query}`);
-	} catch {
+	} catch (error) {
 		state.testCases = [];
+		state.testCasesLoaded = true;
+		// BUILD 1: a load failure must not masquerade as an empty project.
+		if (firstLoad || !state.suites?.length) {
+			showPageError(el.testcasePane, loadTestCases, `Could not load test cases — ${error?.message ?? 'server unreachable'}.`);
+			return;
+		}
 	}
 
 	// Load suites for the project.
@@ -83,6 +90,8 @@ async function loadTestCases() {
 	} catch {
 		state.suites = [];
 	}
+	state.testCasesLoaded = true;
+	clearPageState(el.testcasePane);
 
 	renderSuiteTree();
 	renderTestsStats();
@@ -131,7 +140,6 @@ function renderTestCases() {
 		});
 	}
 
-	el.countTestcases.textContent = state.testCases.length || '';
 
 	// Tag filter chips — render into tag bar wrap area (above the grid).
 	if (el.testsTagBarWrap) {
@@ -232,8 +240,7 @@ function renderTestCaseCard(tc) {
 			await api(`/test-cases/${tc.id}`, { method: 'DELETE' });
 			state.testCases = state.testCases.filter(t => t.id !== tc.id);
 			card.remove();
-			el.countTestcases.textContent = state.testCases.length || '';
-			toast(`Deleted "${tc.name}".`, 'good');
+					toast(`Deleted "${tc.name}".`, 'good');
 		} catch (error) {
 			fail(error);
 		}
@@ -249,8 +256,7 @@ function renderTestCaseCard(tc) {
 			const clone = await api(`/test-cases/${tc.id}/clone`, { method: 'POST' });
 			state.testCases.unshift(clone);
 			el.testcasePane.insertBefore(renderTestCaseCard(clone), card.nextSibling);
-			el.countTestcases.textContent = state.testCases.length || '';
-			toast(`Cloned "${tc.name}".`, 'good');
+					toast(`Cloned "${tc.name}".`, 'good');
 		} catch (error) {
 			fail(error);
 		}
@@ -758,6 +764,29 @@ function renderRunResult(container, result) {
 	const icon = result.result === 'pass' ? '✓' : result.result === 'fail' ? '✗' : '⚠';
 	const label = result.result === 'pass' ? 'PASSED' : result.result === 'fail' ? 'FAILED' : 'ERROR';
 	let bannerHtml = `<span class="tc-result-icon">${icon}</span> ${label} · ${Math.round(result.durationMs / 1000)}s`;
+	// B0.2 — truthful execution provenance badge. The environment says where
+	// the test ACTUALLY ran; the legacy result.browser field only says what
+	// was REQUESTED. Never render a provider from the request alone.
+	if (result.executionEnvironment?.provider === 'browserstack') {
+		const bsEnv = result.executionEnvironment;
+		const failed = bsEnv.failed === true;
+		// B0.3 — a BrowserStack run with a device is a REAL-DEVICE run;
+		// without one it's a cloud desktop browser. The badge says which.
+		const isDevice = Boolean(bsEnv.device);
+		const badgeText = isDevice
+			? `☁️ ${bsEnv.device} · BrowserStack · real device`
+			: '☁️ BrowserStack';
+		const badgeTitle = isDevice
+			? `${bsEnv.device} · real device · ${bsEnv.browser ?? 'chrome'} · ${bsEnv.os ?? ''}${bsEnv.osVersion ? ` ${bsEnv.osVersion}` : ''}`
+			: `${bsEnv.browser ?? ''} ${bsEnv.os ?? ''} ${bsEnv.osVersion ?? ''}`.trim() || 'BrowserStack';
+		bannerHtml += ` <span class="tc-browser-badge tc-bs-badge${failed ? ' tc-bs-failed' : ''}" title="${escapeHtml(badgeTitle)}">${escapeHtml(badgeText)}${failed ? ' (failed — local fallback disabled)' : ''}</span>`;
+	} else if (result.executionEnvironment?.provider === 'local') {
+		// Local runs stay quiet unless something notable: emulated device or
+		// a non-chromium request label.
+		if (result.executionEnvironment.engineEmulated && result.executionEnvironment.device) {
+			bannerHtml += ` <span class="tc-browser-badge" title="${escapeHtml(result.executionEnvironment.device)} (local Chromium — emulated)">📱 ${escapeHtml(result.executionEnvironment.device)} · emulated</span>`;
+		}
+	}
 	if (result.browser && result.browser !== 'chromium') {
 		const browserIcons = { chrome: '🌐', firefox: '🦊', safari: '🧭', edge: '🔵' };
 		const safeBrowser = escapeHtml(result.browser);
@@ -1359,8 +1388,7 @@ el.tcEditorSave.onclick = async () => {
 
 		el.tcEditor.close();
 		renderTestCases();
-		el.countTestcases.textContent = state.testCases.length || '';
-	} catch (error) {
+		} catch (error) {
 		fail(error);
 	} finally {
 		el.tcEditorSave.disabled = false;

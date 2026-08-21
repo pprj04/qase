@@ -48,19 +48,82 @@ const ENGINE_BY_PLATFORM = {
 };
 
 /**
+ * BUILD B0.3 — deterministic class defaults.
+ * 'mobile' / 'tablet' class strings (mission constraints, legacy callers)
+ * resolve to one canonical device each — never a silent desktop downgrade.
+ */
+export const DEFAULT_DEVICE_BY_CLASS = {
+	mobile: 'iPhone 15',
+	tablet: 'iPad Pro 11'
+};
+
+/**
+ * BUILD B0.3 — devices BrowserStack's Playwright CDP endpoint can run on
+ * REAL hardware (Android + Chrome only: the CDP path cannot drive iOS).
+ * Maps our resolved device name → BrowserStack's canonical caps.
+ */
+export const BROWSERSTACK_REAL_DEVICES = {
+	'Pixel 8': 'Google Pixel 8',
+	'Pixel 7': 'Google Pixel 7',
+	'Pixel 5': 'Google Pixel 5',
+	'Galaxy S9+': 'Samsung Galaxy S9 Plus'
+};
+
+/** True when the device name has a BrowserStack REAL_DEVICE execution path. */
+export function isBrowserstackRealDevice(name) {
+	return Object.prototype.hasOwnProperty.call(BROWSERSTACK_REAL_DEVICES, String(name ?? ''));
+}
+
+/**
+ * BUILD B0.3 — validate a normalized device request WITHOUT silently
+ * downgrading. Returns { ok, deviceName, error }:
+ *   ok:true  + deviceName   → supported named device
+ *   ok:true  + deviceName:null → desktop (no device / 'desktop' / 'none' / '')
+ *   ok:false + error        → unsupported request — caller MUST fail
+ */
+export function validateDeviceRequest(input) {
+	const request = normalizeDeviceRequest(input);
+	if (request == null) return { ok: true, deviceName: null };
+	if (/^(mobile|tablet|phone)$/i.test(request)) {
+		return { ok: true, deviceName: DEFAULT_DEVICE_BY_CLASS[/^tablet$/i.test(request) ? 'tablet' : 'mobile'] };
+	}
+	const name = DEVICE_ALIASES[request]
+		|| DEVICE_ALIASES[String(request).toLowerCase()]
+		|| (playwrightDevices[request] ? request : null);
+	if (!name || !playwrightDevices[name]) {
+		return {
+			ok: false,
+			deviceName: null,
+			error: `Unsupported device configuration: ${String(input?.device ?? input?.deviceName ?? input).slice(0, 60)}. Supported devices: ${Object.keys(DEVICE_ALIASES).join(', ')}.`
+		};
+	}
+	return { ok: true, deviceName: name };
+}
+
+/**
  * Resolves a device request into a full device context, or null for desktop.
  *
  * Accepts either a device name string ("iPhone 15 Pro", "Pixel 8") or a
  * structured object { device: 'Pixel 8' } / { device: 'mobile' } /
  * { deviceType: 'phone' } / { mode: 'mobile' } — callers vary.
  *
+ * BUILD B0.3: class strings ('mobile'/'tablet') resolve to the canonical
+ * class device so they no longer silently downgrade to desktop. Unknown
+ * names still return null HERE (legacy behavior for the agent runtime
+ * fallback) — API boundaries use validateDeviceRequest() to fail loudly.
+ *
  * Returns null when nothing mobile/tablet-like is requested (desktop default).
  */
 export function resolveDeviceContext(input) {
 	const request = normalizeDeviceRequest(input);
 	if (!request) return null;
-	const name = DEVICE_ALIASES[request] || DEVICE_ALIASES[String(request).toLowerCase()]
-		|| (playwrightDevices[request] ? request : null);
+	let name = null;
+	if (/^(mobile|tablet|phone)$/i.test(request)) {
+		name = DEFAULT_DEVICE_BY_CLASS[/^tablet$/i.test(request) ? 'tablet' : 'mobile'];
+	} else {
+		name = DEVICE_ALIASES[request] || DEVICE_ALIASES[String(request).toLowerCase()]
+			|| (playwrightDevices[request] ? request : null);
+	}
 	if (!name) return null;
 	const descriptor = playwrightDevices[name];
 	if (!descriptor) return null;

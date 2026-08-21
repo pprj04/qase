@@ -126,6 +126,36 @@ export function getConfig() {
 			}
 		}
 	}
+	// BUILD B0.1 — BrowserStack credential authority: Settings-saved values
+	// must WIN over .env. The generic merge above lets env override stored for
+	// every field (the bootstrap-friendly order for LLM settings), which caused
+	// the restart flip-flop: stale/garbage env BrowserStack creds silently
+	// re-became effective on every boot while the stored key was empty.
+	// Invert the order for these two fields only: stored beats env when the
+	// stored value exists; env still seeds the very first boot.
+	const storedBs = readStored();
+	if (storedBs.browserstackUser) {
+		merged.browserstackUser = storedBs.browserstackUser;
+	}
+	if (storedBs.browserstackKey) {
+		merged.browserstackKey = storedBs.browserstackKey;
+	}
+	// ...and the enable flag must not resurrect itself from a malformed env
+	// value (e.g. doubly-quoted "\"false\"") when Settings has an explicit one.
+	if (storedBs.browserstackEnabled !== undefined) {
+		merged.browserstackEnabled = storedBs.browserstackEnabled === true;
+	}
+	// BUILD B0.2 — strict mode: default TRUE (never silently fall back to
+	// local Chromium when BrowserStack was explicitly selected). Only an
+	// explicit stored/browserstackStrict=false turns the loud-but-permissive
+	// legacy behavior on; env can only make it strict.
+	if (storedBs.browserstackStrict !== undefined) {
+		merged.browserstackStrict = storedBs.browserstackStrict === true;
+	} else if (process.env.QASE_BROWSERSTACK_STRICT === 'false') {
+		merged.browserstackStrict = false;
+	} else {
+		merged.browserstackStrict = true;
+	}
 	return merged;
 }
 
@@ -186,6 +216,9 @@ export function getPublicConfig() {
 		hasBrowserstackKey: Boolean(config.browserstackKey),
 		browserstackUser: config.browserstackUser || '',
 		browserstackKeyFromEnv: Boolean(fromEnv().browserstackKey) && !readStored().browserstackKey,
+		browserstackLastVerified: readStored().browserstackLastVerified ?? null,
+		browserstackCredentialSource: readStored().browserstackKey ? 'settings' : (fromEnv().browserstackKey ? 'env' : 'none'),
+		browserstackStrict: config.browserstackStrict !== false,
 		ready: isReady(config),
 		problem: describeProblem(config)
 	};
@@ -218,6 +251,11 @@ export function saveConfig(patch) {
 			} else if (key === 'apiToken') {
 				// Explicitly clear the token when an empty string is sent.
 				delete next.apiToken;
+			} else if (key === 'browserstackUser' || key === 'browserstackKey') {
+				// BUILD B0.1 — explicit clear (Settings "Clear" button sends '').
+				// Without this, a stored credential could never be removed and
+				// env garbage would reapply on every restart.
+				delete next[key];
 			}
 		}
 	}
@@ -242,13 +280,25 @@ export function saveConfig(patch) {
 			next.selfHealThreshold = t;
 		}
 	}
-	for (const boolKey of ['autoSaveWorkflow', 'autoGenerateTests', 'autoSmokeRun', 'autoCreateSchedule', 'autoDevReport', 'exploreViewports', 'browserstackEnabled', 'selfHealEnabled']) {
+	for (const boolKey of ['autoSaveWorkflow', 'autoGenerateTests', 'autoSmokeRun', 'autoCreateSchedule', 'autoDevReport', 'exploreViewports', 'browserstackEnabled', 'selfHealEnabled', 'browserstackStrict']) {
 		if (patch[boolKey] !== undefined) {
 			next[boolKey] = Boolean(patch[boolKey]);
 		}
 	}
 	if (typeof patch.defaultScheduleCron === 'string' && patch.defaultScheduleCron.trim()) {
 		next.defaultScheduleCron = patch.defaultScheduleCron.trim();
+	}
+	// BUILD B0.1 — persist the last BrowserStack connection-test outcome.
+	// Only the redacted summary is stored; never any credential material.
+	if (patch.browserstackLastVerified && typeof patch.browserstackLastVerified === 'object') {
+		const lv = patch.browserstackLastVerified;
+		next.browserstackLastVerified = {
+			ts: Number(lv.ts) || Date.now(),
+			ok: lv.ok === true,
+			code: String(lv.code ?? '').slice(0, 64),
+			message: String(lv.message ?? '').slice(0, 400),
+			maskedUser: String(lv.maskedUser ?? '').slice(0, 64)
+		};
 	}
 	if (next.provider && !PROVIDERS.includes(next.provider)) {
 		throw new Error(`Unknown provider: ${next.provider}`);

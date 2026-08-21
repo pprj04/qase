@@ -1,0 +1,47 @@
+{
+  "phase": 11,
+  "testType": "real-standalone-e2e",
+  "timestamp": "2026-08-12T18:00:30.408Z",
+  "steps": [
+    {
+      "step": "health-check",
+      "status": "pass"
+    },
+    {
+      "step": "target-reachable",
+      "status": "pass"
+    },
+    {
+      "step": "create-mission",
+      "status": "pass",
+      "missionId": "9c84898e-dae9-4310-ab74-51c8e0e0369f"
+    },
+    {
+      "step": "get-status",
+      "status": "pass",
+      "missionStatus": "created"
+    },
+    {
+      "step": "get-report",
+      "status": "pass"
+    },
+    {
+      "step": "get-evidence",
+      "status": "pass",
+      "evidenceCount": 0
+    },
+    {
+      "step": "no-drytis-dependency",
+      "status": "pass"
+    }
+  ],
+  "missionId": "9c84898e-dae9-4310-ab74-51c8e0e0369f",
+  "correlationId": "a91a416c-d476-4a92-b373-7833a61ce57e",
+  "report": {
+    "status": "created",
+    "verdict": null,
+    "qualityScore": null,
+    "findingsCount": 0,
+    "recommendationsCount": 0
+  }
+}

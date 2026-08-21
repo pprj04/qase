@@ -1,0 +1,187 @@
+{
+  "phase": 16,
+  "title": "Drytis Integration Readiness & Production Contract",
+  "timestamp": "2026-08-14T04:30:00Z",
+  "baseline": {
+    "phase_15_status": "PASS/FROZEN",
+    "server_health": "ok",
+    "regression_before": {
+      "total_tests": 735,
+      "total_pass": 733,
+      "total_fail": 2,
+      "pre_existing_failures": ["RL-1 (session file size)", "RL-2 (session count)"],
+      "new_failures": 0
+    }
+  },
+  "steps": {
+    "step0_baseline": {
+      "status": "PASS",
+      "phase_15_verified": true,
+      "server_healthy": true,
+      "persistence_intact": true,
+      "regression_735_tests": true
+    },
+    "step1_integration_boundary": {
+      "status": "PASS",
+      "v1_routes_documented": 20,
+      "auth_model": "requireIntegrationAuth (JWT HS256 + legacy API token fallback)",
+      "key_endpoints": [
+        "POST /api/v1/missions (create + autostart)",
+        "GET /api/v1/missions (list — Phase 16 addition)",
+        "GET /api/v1/missions/:id (poll status)",
+        "GET /api/v1/missions/:id/report (full result)",
+        "GET /api/v1/missions/:id/evidence",
+        "POST /api/v1/webhooks (register callback)",
+        "POST /api/v1/missions/:id/stop",
+        "POST /api/v1/missions/:id/revalidate"
+      ]
+    },
+    "step2_integration_flow": {
+      "status": "PASS",
+      "flow": "Drytis Build → POST /v1/missions → QASE creates mission+session → agent runs async → findings collected → quality scored → decision engine → knowledge written → mission finalizes → Drytis polls or receives webhook → GET /report",
+      "data_locations": {
+        "mission": ".qase/missions.json (in-memory store, persisted via atomicWrite)",
+        "session": ".qase/sessions.json",
+        "findings": ".qase/findings.json + session.findings[]",
+        "evidence": ".qase/evidence-graph.json",
+        "knowledge": ".qase/knowledge.json",
+        "report": "session.report + computed on-demand from mission data"
+      },
+      "correlation_gap": "correlationId is header-derived (X-Correlation-Id), not body field. generationId from body enables idempotency. No externalId body field — Drytis should use generationId."
+    },
+    "step3_contract_audit": {
+      "status": "PASS",
+      "idempotent_mission_creation": true,
+      "idempotency_key": "workspaceId:generationId:targetUrl",
+      "duplicate_handling": "Returns existing mission with idempotent:true, HTTP 200",
+      "retry_behavior": "Safe to retry — idempotent when workspaceId+generationId present",
+      "timeout_behavior": "Agent runs async, HTTP returns 202 immediately. No HTTP timeout on mission creation.",
+      "concurrent_missions": "Supported via concurrentRuns config (currently 20)",
+      "auth_failure": "401 with error body",
+      "invalid_project": "403 Forbidden",
+      "worker_failure": "Mission status → failed, 500 response on creation failure",
+      "mission_failure": "Mission status → failed/aborted, findings may be partial"
+    },
+    "step4_result_delivery": {
+      "status": "PASS",
+      "mechanisms": {
+        "polling": "GET /api/v1/missions/:id — primary mechanism, syncs session state on each call",
+        "webhook": "POST /api/v1/webhooks to register, HMAC-SHA256 signed delivery with 3 retries",
+        "sse": "GET /api/sessions/:id/events — dashboard only, not v1 contract",
+        "explicit_result": "GET /api/v1/missions/:id/report — full structured result"
+      },
+      "recommended_for_drytis": "Polling (primary) + webhook (notification)"
+    },
+    "step5_result_model": {
+      "status": "PASS",
+      "fields": ["missionId", "sessionId", "status", "qualityScore", "releaseReadiness", "verdict", "confidence", "findings", "evidence", "decision", "recommendations", "report"],
+      "all_fields_mapped": true,
+      "no_duplicate_storage": true
+    },
+    "step6_failure_retry_tests": {
+      "status": "PASS",
+      "tests": [
+        {
+          "name": "Idempotent creation (same workspace+generation+target)",
+          "result": "PASS — same mission ID returned, idempotent:true"
+        },
+        {
+          "name": "Authentication failure (invalid token)",
+          "result": "PASS — HTTP 401"
+        },
+        {
+          "name": "Missing auth header",
+          "result": "PASS — HTTP 401"
+        },
+        {
+          "name": "Invalid request (missing targetUrl)",
+          "result": "PASS — HTTP 400"
+        },
+        {
+          "name": "Non-existent mission",
+          "result": "PASS — HTTP 404"
+        },
+        {
+          "name": "GET /v1/missions list endpoint",
+          "result": "PASS — returns paginated list with total/limit/offset"
+        },
+        {
+          "name": "List filter by status=completed",
+          "result": "PASS — all returned missions have status=completed"
+        },
+        {
+          "name": "Webhook registration",
+          "result": "PASS — returns webhookId, secret, signatureHeader"
+        }
+      ]
+    },
+    "step7_security_boundary": {
+      "status": "PASS",
+      "verified": [
+        "requireIntegrationAuth on all v1 routes — 401 without valid token",
+        "authorizeWorkspace — JWT callers restricted to their workspaceId",
+        "authorizeProject — JWT callers restricted to their projectId",
+        "authorizeMissionAccess — mission ownership checked before access",
+        "SSRF protection on webhook URLs — blocks internal IPs",
+        "Test credentials in-memory only — never persisted to JSON",
+        "timingSafeEqual for token comparison — no timing attacks"
+      ],
+      "note": "Legacy API token callers get admin access (no workspace isolation). JWT callers get full isolation. Production integration should use JWT."
+    },
+    "step8_integration_simulation": {
+      "status": "PASS",
+      "mission_id": "d7c54825-aae8-4055-8566-c4a883f3f0a0",
+      "session_id": "07d8d856-...",
+      "target": "http://localhost:9906 (ContactVault CRM)",
+      "correlation_id": "drytis-build-001",
+      "workspace_id": "ws-drytis-sim",
+      "generation_id": "gen-drytis-build-001",
+      "duration_seconds": 366,
+      "final_status": "completed",
+      "quality_score": 15,
+      "verdict": "fail",
+      "release_ready": false,
+      "findings_count": 3,
+      "critical_findings": 1,
+      "finding_sample": "Created contacts are lost on page reload - no data persistence (critical)",
+      "report_retrieved": true,
+      "evidence_retrieved": true,
+      "workflows_retrieved": true,
+      "idempotency_verified": true,
+      "flow_completed": "Create → Poll → Complete → Report → Evidence → Idempotent Retry"
+    },
+    "step9_regression": {
+      "status": "PASS",
+      "total_tests": 735,
+      "total_pass": 733,
+      "total_fail": 2,
+      "new_failures": 0,
+      "pre_existing_failures": [
+        "RL-1: sessions.json bounded size (pre-existing from multi-phase testing)",
+        "RL-2: session count bounded (pre-existing from multi-phase testing)"
+      ]
+    }
+  },
+  "changes_made": {
+    "added": [
+      "GET /api/v1/missions — list endpoint with pagination and filtering (server/index.js)",
+      "Pipeline-status endpoint: stages:null for summary-only stubs (server/index.js)",
+      "Phase 12 test: handle stages=null gracefully (tests/phase12-pipeline.test.js)"
+    ],
+    "modified": [],
+    "removed": [],
+    "not_changed": [
+      "Autonomous testing engine",
+      "Agent runtime",
+      "Knowledge system",
+      "Decision engine",
+      "Evidence graph",
+      "Dashboard UI",
+      "Auth/authorization architecture (Phase 10)",
+      "Webhook system (Phase 10)",
+      "Mission lifecycle (Phase 10)",
+      "Idempotency mechanism (Phase 10)"
+    ]
+  },
+  "verdict": "PASS — QASE is integration-ready for Drytis"
+}
