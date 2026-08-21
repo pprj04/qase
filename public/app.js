@@ -9,8 +9,8 @@
 
 import { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
 import { initRouter, navigate, currentPage, runIdFromHash } from './router.js';
-import { loadTestCases, renderTestCases, initTestsWiring } from './tests.js';
-import { loadBugs, openBugDetail, initBugsWiring } from './bugs.js';
+import { loadTestCases, initTestsWiring } from './tests.js';
+import { loadBugs, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
@@ -2144,12 +2144,12 @@ async function loadMetrics() {
  *  FINDINGS tab can offer Revalidate and mission context. */
 async function loadSessionMission(sessionId) {
 	state.missionId = null;
-	state.missionInfo = null;
 	try {
-		const mission = await api(`/sessions/${sessionId}/mission`);
-		if (mission && mission.id) {
-			state.missionId = mission.id;
-			state.missionInfo = mission;
+		const res = await fetch(`/api/missions/${sessionId}/mission-for-session`);
+		if (!res.ok) return;
+		const mission = await res.json();
+		if (mission && mission.missionId) {
+			state.missionId = mission.missionId;
 			// Findings already rendered — re-render with mission context.
 			renderFindings();
 		}
@@ -2868,7 +2868,7 @@ async function reviewUxIssue(issue, reviewState, btn) {
 	if (!missionId) return;
 	btn.disabled = true;
 	try {
-		const res = await fetch(`/api/missions/${missionId}/ux/issues/${encodeURIComponent(issue.id)}/review-ui`, {
+		const res = await fetch(`/api/v1/missions/${missionId}/ux/issues/${encodeURIComponent(issue.id)}/review`, {
 			method: 'PATCH',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ reviewState, reason: 'reviewed in dashboard', by: 'dashboard' }),
@@ -2891,7 +2891,7 @@ document.addEventListener('click', (e) => {
 	const btn = e.target.closest('.uxq-filter');
 	if (!btn) return;
 	for (const b of document.querySelectorAll('.uxq-filter')) b.classList.toggle('is-active', b === btn);
-	uxQualityState.filter = btn.dataset.sev;
+	uxQualityState.filter = btn.dataset.filter;
 	if (uxQualityState.data) renderUxIssues();
 });
 document.addEventListener('click', (e) => {
