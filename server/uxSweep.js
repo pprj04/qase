@@ -16,6 +16,7 @@
 
 import { chromium } from 'playwright';
 import { redactString } from './findingIntelligence.js';
+import { validateTargetUrl, installRedirectBoundary } from './targetGuard.js';
 
 export const VIEWPORTS = Object.freeze([
 	{ label: 'desktop', width: 1280, height: 800 },
@@ -371,6 +372,12 @@ async function collectPageData(context, url, viewport, signal) {
 	page.on('pageerror', (err) => consoleErrors.push({ text: String(err?.message || err) }));
 	page.setDefaultTimeout(PAGE_TIMEOUT_MS);
 	try {
+		// M1-P4.1 — same target boundary as missions/replay (uxSweep
+		// auto-navigates to session-derived URLs after finalize).
+		const navCheck = await validateTargetUrl(url);
+		if (!navCheck.ok) {
+			return { url, dataCollection: { ok: false, error: `blocked by security boundary (${navCheck.code})` } };
+		}
 		await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS, signal });
 		await page.waitForTimeout(700); // settle: render, hydration, layout
 		let data = await page.evaluate(EXTRACT_SCRIPT);
@@ -419,6 +426,8 @@ export async function runUxSweep(opts = {}) {
 				if (Date.now() - startedAt > timeoutMs - 5_000) { sweepMeta.timedOut = true; break; }
 				try {
 					const context = await browser.newContext({ viewport: { width: vp.width, height: vp.height } });
+					// M1-P4.1 — redirect boundary on UX sweep navigation too.
+					installRedirectBoundary(context);
 					const pd = await collectPageData(context, url, vp, ac.signal);
 					await context.close();
 					pd.viewport = { ...vp };

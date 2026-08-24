@@ -12,7 +12,8 @@ import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js'
 import { validateDeviceRequest } from './deviceContext.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
-	listSessions, liveFor, loadSessions, setStatus, startWatchdog, pruneOldSessions
+	listSessions, liveFor, loadSessions, setStatus, startWatchdog, pruneOldSessions,
+	flushSessionsForShutdown
 } from './store.js';
 import {
 	saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, updateWorkflow
@@ -43,6 +44,7 @@ import {
 	changeStatus, addComment, linkTestCase, unlinkTestCase,
 	migrateFromSessions, getFindingStats
 } from './findings.js';
+import { flushFindingsForShutdown } from './findings.js';
 import {
 	exportFindingsBulkGitHub, exportFindingsBulkJira, exportFindingsBulkLinear,
 	exportFindingsBulkMarkdown
@@ -56,9 +58,25 @@ import {
 } from './devIntelligence.js';
 import {
 	createMission, getMission, listMissions, updateMission, deleteMission,
-	finalizeMission, loadMissionsFromDisk, missionBus, recordIteration,
-	getComparisonIterations, isTerminalStatus
+	finalizeMission, loadMissionsFromDisk, recoverInterruptedMissions, missionBus, recordIteration,
+	getComparisonIterations, isTerminalStatus, listQueuedMissionIds,
+	flushMissionsForShutdown
 } from './missions.js';
+// M1-P4.4 Phase 2 — graceful-shutdown flush registry (SIGINT/SIGTERM).
+import { registerStoreFlush, flushAllStores } from './shutdown.js';
+import { flushEvidenceGraphForShutdown, pruneUnlinked } from './evidenceGraph.js';
+import { flushFixValidationForShutdown } from './fixValidation.js';
+import { flushReplayRunsForShutdown, pruneRunsByIds } from './replayStore.js';
+import { flushUxAssessmentsForShutdown, pruneAssessmentsByIds } from './uxAssessment.js';
+import { flushRegressionRunsForShutdown } from './regressionStore.js';
+import { flushTestCasesForShutdown } from './testCases.js';
+import { flushWorkflowsForShutdown } from './workflows.js';
+import { flushKnowledgeForShutdown } from './knowledge.js';
+import { flushBaselinesForShutdown } from './baselines.js';
+import { flushSchedulesForShutdown } from './scheduler.js';
+// M1-P4.4 Phases 3–4 — store hygiene + artifact lifecycle diagnostics.
+import { analyzeStoreHygiene, applyStoreHygiene } from './storeHygiene.js';
+import { analyzeArtifacts, applyArtifactsCleanup } from './artifactLifecycle.js';
 import { buildDevReportMarkdown } from './devReport.js';
 import {
 	createSuite, listSuites, getSuite, updateSuite, deleteSuite
@@ -80,8 +98,8 @@ import {
 	createIterationMetadata
 } from './validationLoop.js';
 import {
-	createEvidence, getEvidence, getMissionEvidence, getSessionEvidence,
-	getFindingEvidence, getEvidenceChainForApi, createObservation, getSessionObservations,
+	createEvidence, getEvidence, getMissionEvidence, getMissionEvidencePage, getSessionEvidence, getSessionEvidencePage,
+	getFindingEvidence, getEvidenceChainForApi, createObservation, getSessionObservations, getSessionObservationsPage,
 	linkEvidenceToFinding, collectSessionEvidence, computeEvidenceCoverage,
 	computeEvidenceConfidence, determineEvidenceStatus, validateGraphIntegrity,
 	detectOrphans, getGraphStats, compareIterationEvidence, getHistoricalEvidence,
@@ -119,6 +137,11 @@ mountDemoSite(app);
 
 loadSessions();
 loadAssessments(); // Phase 17 UX assessment store (survives restarts)
+// M1-P4.1: prune immediately after load so a store that ballooned during a
+// long session (heavyweight multi-MB sessions created by the gate itself)
+// settles to the byte budget right away, instead of waiting up to 30 minutes
+// for the first resource-cleanup tick — RL-1 reads the file on disk.
+pruneOldSessions();
 startScheduler();
 startWatchdog();
 
@@ -149,7 +172,11 @@ function runResourceCleanup() {
 	try {
 		for (const summary of listSessions()) {
 			const record = liveFor(summary.id);
-			if (summary.status && !['running', 'awaiting_input'].includes(summary.status) && record?.browser) {
+			// M1-P4.2 fix: the old check `record?.browser` never matched — the
+			// live record carries `bridge`/`runtime`, not `browser` — so this
+			// browser-reclaim branch was dead code and idle Chromiums survived
+			// until the next runTurn's closeOtherBrowsers.
+			if (summary.status && !['running', 'awaiting_input'].includes(summary.status) && record?.bridge) {
 				void closeBrowser(summary.id).catch(() => { /* best effort */ });
 			}
 		}
@@ -223,18 +250,26 @@ function requireApiToken(request, response, next) {
 }
 
 /**
- * Sets the auth cookie on same-origin requests so the browser UI
- * works transparently.  The cookie is httpOnly so JavaScript can't
- * read it (XSS-resistant) and same-origin only.
+ * M1-P3 P0-5: the auth cookie is NO LONGER auto-granted on anonymous
+ * responses. Previously this middleware handed the full mutation bearer
+ * token to ANY visitor (including a first anonymous page load), making the
+ * token gate cosmetic for anyone who could reach the origin.
+ *
+ * The SPA does not need the auto-grant to function: public reads remain open
+ * (single-tenant posture) and the token for mutations is pasted once in
+ * Settings → stored in localStorage (`qase_token`), which every fetch wrapper
+ * already falls back to. Same-origin demo UX is preserved without
+ * broadcasting the token to every request.
  */
 function setAuthCookie(request, response, next) {
 	const token = getConfig().apiToken;
-	if (token) {
-		// Set cookie if not already present or matching.
-		const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
-		if (!cookieMatch || !safeEqual(cookieMatch[1], token)) {
-			response.setHeader('Set-Cookie', `qase_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
-		}
+	if (!token) return next();
+	// Honor an existing valid cookie (no-op refresh keeps sessions stable),
+	// but never SET the token cookie from scratch on an anonymous request.
+	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
+	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
+		// Refresh the expiry of an already-valid cookie only.
+		response.setHeader('Set-Cookie', `qase_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
 	}
 	next();
 }
@@ -242,17 +277,23 @@ function setAuthCookie(request, response, next) {
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
 
 /** Pulls the site under test out of whatever the user typed. */
-function extractUrl(text) {
+async function extractUrl(text) {
 	const match = text.match(URL_PATTERN);
 	if (!match) {
 		return undefined;
 	}
 	const raw = match[0].replace(/[.,;:)]+$/, '');
+	let candidate;
 	try {
-		return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).toString();
+		candidate = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).toString();
 	} catch {
 		return undefined;
 	}
+	// M1-P4.1 — the chat-side target must pass the same SSRF boundary as
+	// mission creation. A blocked URL is ignored (treated as if no URL was
+	// given) rather than erroring the whole chat turn.
+	const check = await validateTargetUrl(candidate);
+	return check.ok ? candidate : undefined;
 }
 
 function requireSession(request, response) {
@@ -271,6 +312,27 @@ function startTurn(session, options) {
 		addMessage(session, { role: 'system', text: message, kind: 'error' });
 		setStatus(session, 'error', message);
 	});
+}
+
+/* ── M1-P4.2: mission execution governor ─────────────────────────── */
+
+import {
+	submitMission, releaseMission, cancelMission as governorCancelMission,
+	startGovernorWatchdog, governorStats, queuePositionOf
+} from './missionGovernor.js';
+
+/**
+ * The ONLY path from a mission to an agent execution. Every start route
+ * (create+autoStart, /start, /iterate, /revalidate, boot requeue) hands its
+ * "actually begin execution" closure to the governor; a slot is granted or
+ * the mission waits in `queued`. A mission cannot bypass this and consume
+ * an execution slot directly.
+ *
+ * `begin()` executes synchronously inside the slot grant: it creates the
+ * session, links it, stamps running+startedAt, and kicks startTurn.
+ */
+function startMissionExecution(mission, begin) {
+	return submitMission(mission.id, () => begin());
 }
 
 app.get('/api/config', (_request, response) => {
@@ -348,7 +410,13 @@ app.post('/api/config/test-browserstack', requireApiToken, async (request, respo
 });
 
 app.get('/api/sessions', (request, response) => {
-	response.json(listSessions({ projectId: request.query.projectId }));
+	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	// Ordered newest-first (lastActivity) so pages are stable.
+	const list = listSessions({ projectId: request.query.projectId })
+		.slice()
+		.sort((a, b) => (b.lastActivity ?? b.createdAt ?? 0) - (a.lastActivity ?? a.createdAt ?? 0));
+	const { body } = paginateList(list, request.query);
+	response.json(body);
 });
 
 app.post('/api/sessions', requireApiToken, (request, response) => {
@@ -443,7 +511,7 @@ app.post('/api/sessions/:id/message', requireApiToken, async (request, response)
 
 	addMessage(session, { role: 'user', text });
 
-	const url = extractUrl(text);
+	const url = await extractUrl(text);
 	if (url && !session.targetUrl) {
 		session.targetUrl = url;
 		session.title = new URL(url).host;
@@ -845,7 +913,9 @@ app.post('/api/sessions/:id/workflow', requireApiToken, (request, response) => {
 });
 
 app.get('/api/workflows', (request, response) => {
-	response.json(listWorkflows({ projectId: request.query.projectId, targetUrl: request.query.targetUrl }));
+	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	const { body } = paginateList(listWorkflows({ projectId: request.query.projectId, targetUrl: request.query.targetUrl }), request.query);
+	response.json(body);
 });
 
 app.get('/api/workflows/:id', (request, response) => {
@@ -905,7 +975,9 @@ app.get('/api/test-cases', (request, response) => {
 	for (const tc of cases) {
 		tc.hasBaselines = idsWithBaselines.has(tc.id);
 	}
-	response.json(cases);
+	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	const { body } = paginateList(cases, request.query);
+	response.json(body);
 });
 
 app.get('/api/test-cases/export', (request, response) => {
@@ -933,8 +1005,16 @@ app.get('/api/test-cases/export', (request, response) => {
 
 /* ── Manual test case create + clone + tags ─────────────────────── */
 
-app.post('/api/test-cases', requireApiToken, (request, response) => {
+app.post('/api/test-cases', requireApiToken, async (request, response) => {
 	const data = request.body ?? {};
+	// M1-P4.1 — stored targetUrl is executed later by the replay runner; it
+	// must pass the SSRF boundary at ingest.
+	if (data.targetUrl && String(data.targetUrl).trim() !== '') {
+		const check = await validateTargetUrl(String(data.targetUrl));
+		if (!check.ok) {
+			return response.status(400).json({ error: check.message, code: check.code });
+		}
+	}
 	const tc = createTestCase({
 		projectId: data.projectId ?? getDefaultProjectId(),
 		suiteId: data.suiteId ?? null,
@@ -971,7 +1051,14 @@ app.get('/api/test-cases/:id', (request, response) => {
 	response.json(tc);
 });
 
-app.put('/api/test-cases/:id', requireApiToken, (request, response) => {
+app.put('/api/test-cases/:id', requireApiToken, async (request, response) => {
+	// M1-P4.1 — targetUrl updates pass the SSRF boundary before persisting.
+	if (request.body?.targetUrl && String(request.body.targetUrl).trim() !== '') {
+		const check = await validateTargetUrl(String(request.body.targetUrl));
+		if (!check.ok) {
+			return response.status(400).json({ error: check.message, code: check.code });
+		}
+	}
 	const tc = updateTestCase(request.params.id, request.body ?? {});
 	if (!tc) {
 		return response.status(404).json({ error: 'Test case not found' });
@@ -1270,17 +1357,19 @@ app.get('/api/metrics/dashboard', (request, response) => {
 	response.json(getDashboardMetrics({ projectId: request.query.projectId }));
 });
 
-/* ── Findings / Bugs Hub routes ──────────────────────────────────── */
-
-// Phase 16/17/18 additive surface — mounted BEFORE the legacy findings
-// routes so specific paths (e.g. /api/findings/grouped) win over the
-// generic /api/findings/:id parameter route below.
-import { phaseRouter } from './phaseRouter.js';
-import { getAssessmentForMission, loadAssessments } from './uxAssessment.js';
-app.use('/api', phaseRouter(requireApiToken));
+/* M1-P3 P0-5 follow-up: the projects LIST and findings LIST are public reads
+ * (Bugs hub + boot fetches — same single-tenant posture as /api/config and
+ * /api/sessions). Both worked anonymously ONLY because the S1 auto-cookie
+ * authorized the SPA's boot fetches; registered BEFORE the phaseRouter mount
+ * (whose router.use(auth) gates everything under /api) so they stay public.
+ * All mutations on these resources remain token-gated. */
+app.get('/api/projects', (_request, response) => {
+	response.json(listProjects());
+});
 
 app.get('/api/findings', (request, response) => {
-	response.json(listFindings({
+	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	const { body } = paginateList(listFindings({
 		projectId: request.query.projectId,
 		severity: request.query.severity,
 		status: request.query.status,
@@ -1288,8 +1377,51 @@ app.get('/api/findings', (request, response) => {
 		assignee: request.query.assignee,
 		sessionId: request.query.sessionId,
 		q: request.query.q
-	}));
+	}), request.query);
+	response.json(body);
 });
+
+app.get('/api/missions', (request, response) => {
+	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	const { body } = paginateList(listMissions({
+		projectId: request.query.projectId,
+		status: request.query.status,
+		type: request.query.type,
+		source: request.query.source
+	}), request.query);
+	response.json(body);
+});
+
+/* ── Findings / Bugs Hub routes ──────────────────────────────────── */
+
+// Phase 16/17/18 additive surface — mounted BEFORE the legacy findings
+// routes so specific paths (e.g. /api/findings/grouped) win over the
+// generic /api/findings/:id parameter route below.
+import { phaseRouter } from './phaseRouter.js';
+import { getAssessmentForMission, loadAssessments } from './uxAssessment.js';
+// M1-P4.1 — target URL security boundary (SSRF).
+import { validateTargetUrl, classifyUrlFast, validateWebhookUrl } from './targetGuard.js';
+// M1-P4.3 — mission status transition validation (PATCH contract).
+import { isLegalMissionTransition } from './stateTransitions.js';
+// M1-P4.3 — cross-store integrity diagnostic.
+import { checkStateIntegrity } from './stateIntegrity.js';
+// M1-P4.3 — backward-compatible pagination for large collections.
+import { paginateList } from './pagination.js';
+const PUBLIC_READ_GET = [
+	/^\/findings\/[^/]+\/evidence$/,
+	/^\/missions\/[^/]+\/mission-for-session$/,
+	/^\/findings\/[^/]+$/,
+	/^\/missions\/[^/]+\/ux-quality$/,
+	/^\/v1\/findings\/[^/]+\/validation$/,
+	/^\/v1\/missions\/[^/]+\/loop-status$/,
+	/^\/v1\/missions\/[^/]+\/evidence-coverage$/,
+	/^\/v1\/evidence\/stats$/
+];
+app.use('/api', phaseRouter(requireApiToken, PUBLIC_READ_GET));
+
+// NOTE: GET /api/findings is registered ABOVE the phaseRouter mount (M1-P3
+// public-read fix) — this duplicate registration is unreachable; left as a
+// pointer to the legacy findings block (detail/mutation routes below).
 
 app.get('/api/findings/stats', (request, response) => {
 	response.json(getFindingStats({ projectId: request.query.projectId }));
@@ -1379,7 +1511,8 @@ app.delete('/api/findings/:id', requireApiToken, (request, response) => {
 	response.status(deleted ? 204 : 404).end();
 });
 
-app.patch('/api/findings/:id/status', (request, response) => {
+// M1-P3 P0-6: mutation endpoints require the token (was open).
+app.patch('/api/findings/:id/status', requireApiToken, (request, response) => {
 	const { status, by } = request.body ?? {};
 	const finding = changeStatus(request.params.id, status, by);
 	if (!finding) {
@@ -1469,10 +1602,6 @@ app.get('/api/sessions/:id/export/findings', (request, response) => {
 
 /* ── Project routes ─────────────────────────────────────────────── */
 
-app.get('/api/projects', (_request, response) => {
-	response.json(listProjects());
-});
-
 app.post('/api/projects', requireApiToken, (request, response) => {
 	const project = createProject(request.body ?? {});
 	response.status(201).json(project);
@@ -1491,18 +1620,18 @@ app.delete('/api/projects/:id', requireApiToken, (request, response) => {
 	response.status(deleted ? 204 : 404).end();
 });
 
-/* ── Mission management routes (dashboard) ──────────────────────── */
+// NOTE: GET /api/missions is registered ABOVE the phaseRouter mount (M1-P3
+// public-read fix) — this duplicate is unreachable; mission detail reads +
+// gated mutations follow.
 
-app.get('/api/missions', (request, response) => {
-	response.json(listMissions({
-		projectId: request.query.projectId,
-		status: request.query.status,
-		type: request.query.type,
-		source: request.query.source
-	}));
-});
-
-app.post('/api/missions', requireApiToken, (request, response) => {
+app.post('/api/missions', requireApiToken, async (request, response) => {
+	// M1-P4.1 — same SSRF boundary as the v1 route.
+	if (request.body?.targetUrl) {
+		const legacyTargetCheck = await validateTargetUrl(request.body.targetUrl);
+		if (!legacyTargetCheck.ok) {
+			return response.status(400).json({ error: legacyTargetCheck.message, code: legacyTargetCheck.code });
+		}
+	}
 	const mission = createMission(request.body ?? {});
 	response.status(201).json(mission);
 });
@@ -1515,7 +1644,42 @@ app.get('/api/missions/:id', (request, response) => {
 	response.json(mission);
 });
 
-app.put('/api/missions/:id', requireApiToken, (request, response) => {
+app.put('/api/missions/:id', requireApiToken, async (request, response) => {
+	// M1-P4.1 — targetUrl is in the update allowlist; it must pass the SSRF
+	// boundary before being persisted (stored URLs are executed later).
+	if (typeof request.body?.targetUrl === 'string' && request.body.targetUrl.trim() !== '') {
+		const check = await validateTargetUrl(request.body.targetUrl);
+		if (!check.ok) {
+			return response.status(400).json({ error: check.message, code: check.code });
+		}
+	}
+	// M1-P4.3 — status changes via PUT must be legal transitions; the store
+	// silently drops illegal ones, so detect the attempt here and 409 so API
+	// clients get truthful feedback instead of a silently-unchanged record.
+	if (request.body?.status != null) {
+		const current = getMission(request.params.id);
+		if (current && request.body.status !== current.status) {
+			// The ONE sanctioned resurrection (completed→running) belongs to the
+			// revalidate route, which creates a new session/iteration. Plain PUT
+			// must not re-open a completed mission around a stale sessionId.
+			if (current.status === 'completed' && request.body.status === 'running') {
+				return response.status(409).json({
+					error: 'Completed missions are re-opened via POST /api/v1/missions/:id/revalidate (creates a new session/iteration), not via status update.',
+					code: 'ILLEGAL_MISSION_TRANSITION',
+					from: current.status,
+					to: request.body.status
+				});
+			}
+			if (!isLegalMissionTransition(current.status, request.body.status)) {
+				return response.status(409).json({
+					error: `Illegal mission status transition ${current.status} → ${request.body.status}`,
+					code: 'ILLEGAL_MISSION_TRANSITION',
+					from: current.status,
+					to: request.body.status
+				});
+			}
+		}
+	}
 	const mission = updateMission(request.params.id, request.body ?? {});
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -1532,7 +1696,7 @@ app.delete('/api/missions/:id', requireApiToken, (request, response) => {
  * Links a mission to an existing session and copies session findings
  * into the mission, then runs quality scoring.
  */
-app.post('/api/missions/:id/link-session', requireApiToken, (request, response) => {
+app.post('/api/missions/:id/link-session', requireApiToken, async (request, response) => {
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -1540,6 +1704,15 @@ app.post('/api/missions/:id/link-session', requireApiToken, (request, response) 
 	const session = getSession(request.body?.sessionId);
 	if (!session) {
 		return response.status(404).json({ error: 'Session not found' });
+	}
+
+	// M1-P4.1 — session.targetUrl passes through the SSRF boundary before it
+	// can be adopted by a mission (stored URLs can outlive policy changes).
+	if (session.targetUrl) {
+		const check = await validateTargetUrl(session.targetUrl);
+		if (!check.ok) {
+			return response.status(400).json({ error: check.message, code: check.code });
+		}
 	}
 
 	updateMission(mission.id, {
@@ -1568,6 +1741,15 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 	// Validate required fields
 	if (!body.targetUrl) {
 		return response.status(400).json({ error: 'targetUrl is required' });
+	}
+
+	// M1-P4.1 — SSRF boundary: validate the target URL BEFORE creating the
+	// mission. Public http(s) targets pass; loopback only on QASE's own
+	// practice ports (demo + benchmarks); everything private/link-local/
+	// reserved/metadata is rejected with a deterministic code.
+	const targetCheck = await validateTargetUrl(body.targetUrl);
+	if (!targetCheck.ok) {
+		return response.status(400).json({ error: targetCheck.message, code: targetCheck.code });
 	}
 
 	// Build mission context — testCredentials go to in-memory vault, not persisted JSON
@@ -1615,7 +1797,10 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 
 	// Optionally auto-start: create a session and kick off the agent
 	if (body.autoStart !== false) {
-		try {
+		// M1-P4.2 — route through the execution governor. The heavy work
+		// (session + Chromium + LLM) only begins when a slot is granted;
+		// otherwise the mission waits in `queued`.
+		const outcome = startMissionExecution(mission, () => {
 			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
 			session.targetUrl = mission.targetUrl;
 
@@ -1632,8 +1817,9 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			// Link mission to session
 			updateMission(mission.id, {
 				sessionId: session.id,
-					status: 'running'
-				});
+				status: 'running',
+				startedAt: Date.now()
+			});
 
 			// Phase 3: Query knowledge BEFORE exploration and inject as hints
 			let knowledgeHints = '';
@@ -1659,31 +1845,32 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 
 			// Start the agent (async — returns immediately)
-			await ensureRuntime(session);
-			startTurn(session, { task: taskPrompt });
-
-			response.status(202).json({
-				missionId: mission.id,
-				sessionId: session.id,
-				status: 'running',
-				message: 'Mission started. Poll GET /api/v1/missions/:id for results.',
-				reportUrl: `/api/v1/missions/${mission.id}/report`
+			ensureRuntime(session).then(() => {
+				startTurn(session, { task: taskPrompt });
+			}).catch(startError => {
+				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
+				setStatus(session, 'error', startError.message);
+				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
 			});
-		} catch (error) {
-			updateMission(mission.id, { status: 'failed' });
-			response.status(500).json({
-				missionId: mission.id,
-				error: 'Failed to start agent',
-				detail: error instanceof Error ? error.message : String(error)
-			});
-		}
-	} else {
-		response.status(201).json({
-			missionId: mission.id,
-			status: 'created',
-			message: 'Mission created but not started. POST /api/v1/missions/:id/start to begin.'
 		});
+
+		if (outcome === 'queued') {
+			updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
+		}
+
+		response.status(202).json({
+			missionId: mission.id,
+			status: outcome === 'queued' ? 'queued' : 'running',
+			queuePosition: outcome === 'queued' ? queuePositionOf(mission.id) : undefined,
+			governor: governorStats()
+		});
+		return;
 	}
+	response.status(201).json({
+		missionId: mission.id,
+		status: 'created',
+		message: 'Mission created but not started. POST /api/v1/missions/:id/start to begin.'
+	});
 });
 
 /**
@@ -1701,62 +1888,77 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 	if (mission.status === 'running') {
 		return response.status(409).json({ error: 'Mission is already running' });
 	}
-
-	try {
-		// B0.3 — the mission's stored device constraint drives the session.
-		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
-		if (!missionDeviceCheck.ok) {
-			return response.status(400).json({ error: missionDeviceCheck.error });
-		}
-		const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
-		session.targetUrl = mission.targetUrl;
-
-		// Migrate temp vault credentials to session scope (for missions created with autoStart: false)
-		if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
-			const tempVault = vaultFor('mission-temp');
-			if (tempVault.size > 0) {
-				storeSecrets(session.id, Object.fromEntries(tempVault));
-				clearSecrets('mission-temp');
-				session.secretNames = [...tempVault.keys()];
-			}
-		}
-
-		updateMission(mission.id, { sessionId: session.id, status: 'running' });
-
-		// Phase 3: Query knowledge BEFORE exploration and inject as hints
-		let knowledgeHints = '';
-		let relevantPatterns = [];
-		try {
-			const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
-			const knowledgeResult = queryKnowledge(appMeta);
-			relevantPatterns = knowledgeResult.patterns || [];
-			knowledgeHints = generateExplorationHints(relevantPatterns);
-			// Store for post-mission validation
-			session.knowledgeHints = knowledgeResult.hints || [];
-			session.knowledgePatternsUsed = relevantPatterns.map(p => p.id);
-			if (knowledgeHints) {
-				console.log(`[knowledge] Injected ${relevantPatterns.length} historical pattern(s) as exploration hints for session ${session.id}`);
-			}
-		} catch (err) {
-			console.warn('[knowledge] Pre-exploration query failed:', err.message);
-		}
-
-		const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
-		await ensureRuntime(session);
-		startTurn(session, { task: taskPrompt });
-
-		response.status(202).json({
-			missionId: mission.id,
-			sessionId: session.id,
-			status: 'running'
-		});
-	} catch (error) {
-		updateMission(mission.id, { status: 'failed' });
-		response.status(500).json({
-			error: 'Failed to start agent',
-			detail: error instanceof Error ? error.message : String(error)
-		});
+	if (mission.status === 'queued') {
+		return response.status(409).json({ error: 'Mission is already queued' });
 	}
+
+	// M1-P4.1 — re-validate the stored targetUrl at execution time (stored
+	// values can predate the guard or change DNS posture later).
+	const targetCheck = await validateTargetUrl(mission.targetUrl);
+	if (!targetCheck.ok) {
+		return response.status(400).json({ error: targetCheck.message, code: targetCheck.code });
+	}
+
+	// M1-P4.2 — through the governor; execution begins only on slot grant.
+	const outcome = startMissionExecution(mission, () => {
+		try {
+			// B0.3 — the mission's stored device constraint drives the session.
+			const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+			if (!missionDeviceCheck.ok) {
+				throw new Error(missionDeviceCheck.error);
+			}
+			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
+			session.targetUrl = mission.targetUrl;
+
+			// Migrate temp vault credentials to session scope (for missions created with autoStart: false)
+			if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
+				const tempVault = vaultFor('mission-temp');
+				if (tempVault.size > 0) {
+					storeSecrets(session.id, Object.fromEntries(tempVault));
+					clearSecrets('mission-temp');
+					session.secretNames = [...tempVault.keys()];
+				}
+			}
+
+			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+
+			// Phase 3: Query knowledge BEFORE exploration and inject as hints
+			let knowledgeHints = '';
+			try {
+				const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
+				const knowledgeResult = queryKnowledge(appMeta);
+				knowledgeHints = generateExplorationHints(knowledgeResult.patterns || []);
+				session.knowledgeHints = knowledgeResult.hints || [];
+				session.knowledgePatternsUsed = (knowledgeResult.patterns || []).map(p => p.id);
+			} catch (err) {
+				console.warn('[knowledge] Pre-exploration query failed:', err.message);
+			}
+
+			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
+			ensureRuntime(session).then(() => {
+				startTurn(session, { task: taskPrompt });
+			}).catch(startError => {
+				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
+				setStatus(session, 'error', startError.message);
+				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
+			});
+		} catch (error) {
+			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
+			throw error; // let the governor release the slot
+		}
+	});
+
+	if (outcome === 'queued') {
+		updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
+	}
+	const current = getMission(request.params.id);
+	response.status(202).json({
+		missionId: mission.id,
+		status: outcome === 'queued' ? 'queued' : (current?.status ?? 'running'),
+		sessionId: current?.sessionId,
+		queuePosition: outcome === 'queued' ? queuePositionOf(mission.id) : undefined,
+		governor: governorStats()
+	});
 });
 
 /**
@@ -1819,18 +2021,43 @@ app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
 		stopReason: mission.stopReason ?? null,
 		constraints: mission.constraints ?? {},
 		createdAt: mission.createdAt,
-		completedAt: mission.completedAt
+		completedAt: mission.completedAt,
+		// M1-P4.2: execution-governor fields
+		queuedAt: mission.queuedAt ?? null,
+		startedAt: mission.startedAt ?? null,
+		queuePosition: mission.status === 'queued' ? queuePositionOf(mission.id) : null,
+		failureReason: mission.failureReason ?? null,
+		cancelledAt: mission.cancelledAt ?? null,
+		cancellationReason: mission.cancellationReason ?? null,
+		executionDurationMs: (mission.startedAt && mission.completedAt)
+			? mission.completedAt - mission.startedAt
+			: null
 	});
 });
 
 /**
- * Aborts a running mission.
+ * Aborts a running mission or cancels a queued one.
  */
 app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
 	}
+
+	// M1-P4.2 — QUEUED missions cancel without ever executing.
+	if (mission.status === 'queued') {
+		const result = governorCancelMission(mission.id);
+		if (result === 'cancelled-queued') {
+			updateMission(mission.id, {
+				status: 'cancelled',
+				cancelledAt: Date.now(),
+				cancellationReason: 'cancelled_before_execution'
+			});
+			return response.json({ missionId: mission.id, status: 'cancelled', cancelledWhile: 'queued' });
+		}
+		return response.status(409).json({ error: 'Mission is not tracked by the execution queue' });
+	}
+
 	if (mission.status !== 'running') {
 		return response.status(409).json({ error: 'Mission is not running' });
 	}
@@ -1843,6 +2070,9 @@ app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
 	}
 
 	updateMission(mission.id, { status: 'aborted', completedAt: Date.now(), stopReason: 'manual_stop' });
+	// M1-P4.2 — aborted is terminal: free the slot immediately so the queue
+	// pumps (the governor watchdog would also catch it within 30s).
+	releaseMission(mission.id);
 	response.json({ missionId: mission.id, status: 'aborted', stopReason: 'manual_stop' });
 });
 
@@ -1860,47 +2090,67 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 	if (mission.status === 'running') {
 		return response.status(409).json({ error: 'Mission is already running. Stop it first.' });
 	}
+	if (mission.status === 'queued') {
+		return response.status(409).json({ error: 'Mission is already queued. Stop it first.' });
+	}
 	if (!mission.targetUrl) {
 		return response.status(400).json({ error: 'Mission has no targetUrl' });
 	}
 
-	try {
-		// B0.3 — carry the mission's device constraint into the iteration
-		// session so mobile missions keep their device across iterations.
-		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
-		if (!missionDeviceCheck.ok) {
-			return response.status(400).json({ error: missionDeviceCheck.error });
-		}
-		const session = createSession(
-			`${mission.name} — Iteration ${mission.currentIteration + 1}`,
-			mission.projectId,
-			missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
-		);
-		session.targetUrl = mission.targetUrl;
-
-		// Set status to running
-		updateMission(mission.id, { sessionId: session.id, status: 'running' });
-
-		// Build prompt — includes awareness of previous iterations
-		const taskPrompt = buildMissionPrompt(mission);
-
-		await ensureRuntime(session);
-		startTurn(session, { task: taskPrompt });
-
-		response.status(202).json({
-			missionId: mission.id,
-			sessionId: session.id,
-			iteration: mission.currentIteration + 1,
-			status: 'running',
-			message: `Iteration ${mission.currentIteration + 1} started. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/comparison for delta.`
-		});
-	} catch (error) {
-		updateMission(mission.id, { status: 'failed' });
-		response.status(500).json({
-			error: 'Failed to start iteration',
-			detail: error instanceof Error ? error.message : String(error)
-		});
+	// M1-P4.1 — re-validate at iteration time (same boundary as start).
+	const iterateTargetCheck = await validateTargetUrl(mission.targetUrl);
+	if (!iterateTargetCheck.ok) {
+		return response.status(400).json({ error: iterateTargetCheck.message, code: iterateTargetCheck.code });
 	}
+
+	// M1-P4.2 — through the governor.
+	const outcome = startMissionExecution(mission, () => {
+		try {
+			// B0.3 — carry the mission's device constraint into the iteration
+			// session so mobile missions keep their device across iterations.
+			const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+			if (!missionDeviceCheck.ok) {
+				throw new Error(missionDeviceCheck.error);
+			}
+			const session = createSession(
+				`${mission.name} — Iteration ${mission.currentIteration + 1}`,
+				mission.projectId,
+				missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
+			);
+			session.targetUrl = mission.targetUrl;
+
+			// Set status to running
+			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+
+			// Build prompt — includes awareness of previous iterations
+			const taskPrompt = buildMissionPrompt(mission);
+
+			ensureRuntime(session).then(() => {
+				startTurn(session, { task: taskPrompt });
+			}).catch(startError => {
+				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
+				setStatus(session, 'error', startError.message);
+				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
+			});
+		} catch (error) {
+			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
+			throw error;
+		}
+	});
+
+	if (outcome === 'queued') {
+		updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
+	}
+	const current = getMission(request.params.id);
+	response.status(202).json({
+		missionId: mission.id,
+		sessionId: current?.sessionId,
+		iteration: mission.currentIteration + 1,
+		status: outcome === 'queued' ? 'queued' : (current?.status ?? 'running'),
+		queuePosition: outcome === 'queued' ? queuePositionOf(mission.id) : undefined,
+		message: `Iteration ${mission.currentIteration + 1} ${outcome === 'queued' ? 'queued (execution slots full — starts automatically when one frees)' : 'started'}. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/comparison for delta.`,
+		governor: governorStats()
+	});
 });
 
 /**
@@ -1937,6 +2187,13 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 		return response.status(400).json({ error: 'Mission has no targetUrl' });
 	}
 
+	// M1-P4.1 — re-validate at revalidate time (fix-validation executes the
+	// stored target; same boundary as start/iterate).
+	const revalTargetCheck = await validateTargetUrl(mission.targetUrl);
+	if (!revalTargetCheck.ok) {
+		return response.status(400).json({ error: revalTargetCheck.message, code: revalTargetCheck.code });
+	}
+
 	// Guard: iteration limit reached
 	if (hasReachedIterationLimit(mission)) {
 		const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
@@ -1960,69 +2217,81 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 		});
 	}
 
-	try {
-		// Create session for the new iteration
-		// B0.3 — preserve the mission device constraint across revalidations.
-		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
-		if (!missionDeviceCheck.ok) {
-			return response.status(400).json({ error: missionDeviceCheck.error });
+	// M1-P4.2 — through the governor.
+	const outcome = startMissionExecution(mission, () => {
+		try {
+			// Create session for the new iteration
+			// B0.3 — preserve the mission device constraint across revalidations.
+			const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+			if (!missionDeviceCheck.ok) {
+				throw new Error(missionDeviceCheck.error);
+			}
+			const iterationNumber = (mission.currentIteration || 0) + 1;
+			const session = createSession(
+				`${mission.name} — Revalidation ${iterationNumber}`,
+				mission.projectId,
+				missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
+			);
+			session.targetUrl = mission.targetUrl;
+
+			// Update mission to running
+			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+
+			// Phase 3: Query knowledge BEFORE exploration
+			const knowledgeData = prepareKnowledgeForIteration(mission);
+			session.knowledgeHints = knowledgeData.patterns;
+			session.knowledgePatternsUsed = knowledgeData.patternIds;
+
+			// Get previous iteration data for revalidation prompt
+			const previousIterations = mission.iterations ?? [];
+			const lastIteration = previousIterations.length > 0
+				? previousIterations[previousIterations.length - 1]
+				: null;
+
+			// Build revalidation prompt with awareness of previous findings
+			const taskPrompt = lastIteration
+				? buildRevalidationPrompt(mission, lastIteration, knowledgeData.hints)
+				: buildMissionPrompt(mission) + knowledgeData.hints;
+
+			// Store iteration metadata
+			const iterMeta = createIterationMetadata(mission, session);
+			iterMeta.status = ITERATION_STATUS.RUNNING;
+			const meta = mission.iterationMetadata ? [...mission.iterationMetadata] : [];
+			meta.push(iterMeta);
+			updateMission(mission.id, { iterationMetadata: meta });
+
+			// Start the agent
+			const injectedPatterns = knowledgeData.patternIds.length;
+			const previousFindings = lastIteration?.findings?.length ?? 0;
+			ensureRuntime(session).then(() => {
+				startTurn(session, { task: taskPrompt });
+				console.log(`[validation-loop] Started revalidation iteration ${iterationNumber} for mission ${mission.id} (session ${session.id})`);
+			}).catch(startError => {
+				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
+				setStatus(session, 'error', startError.message);
+				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
+			});
+			return { injectedPatterns, previousFindings };
+		} catch (error) {
+			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
+			throw error;
 		}
-		const iterationNumber = (mission.currentIteration || 0) + 1;
-		const session = createSession(
-			`${mission.name} — Revalidation ${iterationNumber}`,
-			mission.projectId,
-			missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
-		);
-		session.targetUrl = mission.targetUrl;
+	});
 
-		// Update mission to running
-		updateMission(mission.id, { sessionId: session.id, status: 'running' });
-
-		// Phase 3: Query knowledge BEFORE exploration
-		const knowledgeData = prepareKnowledgeForIteration(mission);
-		session.knowledgeHints = knowledgeData.patterns;
-		session.knowledgePatternsUsed = knowledgeData.patternIds;
-
-		// Get previous iteration data for revalidation prompt
-		const previousIterations = mission.iterations ?? [];
-		const lastIteration = previousIterations.length > 0
-			? previousIterations[previousIterations.length - 1]
-			: null;
-
-		// Build revalidation prompt with awareness of previous findings
-		const taskPrompt = lastIteration
-			? buildRevalidationPrompt(mission, lastIteration, knowledgeData.hints)
-			: buildMissionPrompt(mission) + knowledgeData.hints;
-
-		// Store iteration metadata
-		const iterMeta = createIterationMetadata(mission, session);
-		iterMeta.status = ITERATION_STATUS.RUNNING;
-		const meta = mission.iterationMetadata ? [...mission.iterationMetadata] : [];
-		meta.push(iterMeta);
-		updateMission(mission.id, { iterationMetadata: meta });
-
-		// Start the agent
-		await ensureRuntime(session);
-		startTurn(session, { task: taskPrompt });
-
-		console.log(`[validation-loop] Started revalidation iteration ${iterationNumber} for mission ${mission.id} (session ${session.id})`);
-
-		response.status(202).json({
-			missionId: mission.id,
-			sessionId: session.id,
-			iteration: iterationNumber,
-			status: 'running',
-			message: `Revalidation iteration ${iterationNumber} started. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/loop-status for validation loop status.`,
-			knowledgePatternsInjected: knowledgeData.patternIds.length,
-			previousFindingsCount: lastIteration?.findings?.length ?? 0
-		});
-	} catch (error) {
-		updateMission(mission.id, { status: 'failed' });
-		response.status(500).json({
-			error: 'Failed to start revalidation iteration',
-			detail: error instanceof Error ? error.message : String(error)
-		});
+	if (outcome === 'queued') {
+		updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
 	}
+	const current = getMission(request.params.id);
+	const queuedNow = current?.status === 'queued';
+	response.status(202).json({
+		missionId: mission.id,
+		sessionId: current?.sessionId,
+		iteration: (mission.currentIteration || 0) + 1,
+		status: current?.status ?? 'running',
+		queuePosition: queuedNow ? queuePositionOf(mission.id) : undefined,
+		message: `Revalidation iteration ${(mission.currentIteration || 0) + 1} ${queuedNow ? 'queued (execution slots full — starts automatically when one frees)' : 'started'}. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/loop-status for validation loop status.`,
+		governor: governorStats()
+	});
 });
 
 /**
@@ -2031,7 +2300,7 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
  * Returns the complete iteration history, convergence analysis,
  * comparison, latest decision, and stop reason.
  */
-app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response) => {
+app.get('/api/v1/missions/:id/loop-status', (request, response) => { // M1-P3 public read (pipeline validation loop panel)
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -2166,8 +2435,7 @@ app.get('/api/v1/missions/:id/evidence', requireApiToken, (request, response) =>
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
 	const offset = parseInt(request.query.offset) || 0;
-	const evidence = getMissionEvidence(mission.id, { limit, offset });
-	const total = getMissionEvidence(mission.id, { limit: 999999 }).length;
+	const { items: evidence, total } = getMissionEvidencePage(mission.id, { limit, offset });
 
 	response.json({ missionId: mission.id, evidence, total, limit, offset });
 });
@@ -2205,7 +2473,7 @@ app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiTok
  * Phase 6: Get evidence coverage for a mission.
  * Returns the percentage of findings backed by evidence.
  */
-app.get('/api/v1/missions/:id/evidence-coverage', requireApiToken, (request, response) => {
+app.get('/api/v1/missions/:id/evidence-coverage', (request, response) => { // M1-P3 public read (pipeline evidence panel)
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -2238,8 +2506,94 @@ app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, re
 /**
  * Phase 6: Get evidence graph stats.
  */
-app.get('/api/v1/evidence/stats', requireApiToken, (request, response) => {
+app.get('/api/v1/evidence/stats', (request, response) => { // M1-P3 public read (pipeline evidence panel)
 	response.json(getGraphStats());
+});
+
+/**
+ * M1-P4.3 — Cross-store state integrity diagnostic (read-only).
+ * Structured orphan/consistency report across missions/sessions/findings/
+ * evidence graph. Token-gated (mutations-grade data exposure).
+ */
+app.get('/api/v1/diagnostics/state-integrity', requireApiToken, (request, response) => {
+	const deep = request.query.deep === '1' || request.query.deep === 'true';
+	const result = checkStateIntegrity({ deep });
+	response.status(200).json(result);
+});
+
+/**
+ * M1-P4.4 Phase 3 — store hygiene DRY-RUN report (read-only, token-gated).
+ * Never mutates; reports reclaimable bytes/records per store.
+ */
+app.get('/api/v1/diagnostics/store-hygiene', requireApiToken, (request, response) => {
+	const t0 = Date.now();
+	const report = analyzeStoreHygiene();
+	response.status(200).json({ ...report, analysisMs: Date.now() - t0 });
+});
+
+/**
+ * M1-P4.4 Phase 3 — EXECUTE store hygiene cleanup. Requires explicit
+ * { apply: true }; a bare POST is a 400 no-op (safety interlock).
+ */
+app.post('/api/v1/diagnostics/store-hygiene/cleanup', requireApiToken, (request, response) => {
+	if (request.body?.apply !== true) {
+		return response.status(400).json({
+			error: 'Cleanup requires { "apply": true } — this endpoint deletes data.',
+			hint: 'Call GET /api/v1/diagnostics/store-hygiene first for the dry-run report.'
+		});
+	}
+	const result = applyStoreHygiene({}, {
+		deleteMission,
+		pruneRunsByIds,
+		pruneAssessmentsByIds,
+		pruneUnlinked
+	});
+	response.status(200).json({
+		appliedAt: result.appliedAt,
+		pruned: {
+			missions: result.pruned.missions?.length ?? 0,
+			'replay-runs': result.pruned['replay-runs']?.length ?? 0,
+			'ux-assessments': result.pruned['ux-assessments']?.length ?? 0,
+			'evidence-graph': result.pruned['evidence-graph'] ?? { prunedEvidence: 0, prunedObservations: 0 }
+		},
+		skipped: result.skipped
+	});
+});
+
+/**
+ * M1-P4.4 Phase 4 — artifact orphan report (read-only, token-gated).
+ */
+app.get('/api/v1/diagnostics/artifacts/orphans', requireApiToken, (request, response) => {
+	const t0 = Date.now();
+	const report = analyzeArtifacts();
+	response.status(200).json({
+		totalDirs: report.totalDirs,
+		referenced: report.referenced,
+		orphanCount: report.orphans.length,
+		orphanBytes: report.orphans.reduce((n, o) => n + o.bytes, 0),
+		unreadableCount: report.unreadable.length,
+		unreadable: report.unreadable,
+		note: report.note,
+		analysisMs: Date.now() - t0
+	});
+});
+
+/**
+ * M1-P4.4 Phase 4 — EXECUTE artifact cleanup. Requires explicit { apply: true }.
+ */
+app.post('/api/v1/diagnostics/artifacts/cleanup', requireApiToken, (request, response) => {
+	if (request.body?.apply !== true) {
+		return response.status(400).json({
+			error: 'Cleanup requires { "apply": true } — this endpoint deletes artifact directories.',
+			hint: 'Call GET /api/v1/diagnostics/artifacts/orphans first.'
+		});
+	}
+	const result = applyArtifactsCleanup(null, { orphanOlderThanDays: 0 });
+	response.status(200).json({
+		deletedCount: result.deleted.length,
+		reclaimedBytes: result.reclaimedBytes,
+		failed: result.failed
+	});
 });
 
 /**
@@ -2264,9 +2618,9 @@ app.get('/api/v1/sessions/:id/observations', requireApiToken, (request, response
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
 	const offset = parseInt(request.query.offset) || 0;
-	const observations = getSessionObservations(session.id, { limit, offset });
+	const { items: observations, total } = getSessionObservationsPage(session.id, { limit, offset });
 
-	response.json({ sessionId: session.id, observations, total: observations.length });
+	response.json({ sessionId: session.id, observations, total, limit, offset });
 });
 
 /**
@@ -2280,9 +2634,9 @@ app.get('/api/v1/sessions/:id/evidence', requireApiToken, (request, response) =>
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
 	const offset = parseInt(request.query.offset) || 0;
-	const evidence = getSessionEvidence(session.id, { limit, offset });
+	const { items: evidence, total } = getSessionEvidencePage(session.id, { limit, offset });
 
-	response.json({ sessionId: session.id, evidence, total: evidence.length });
+	response.json({ sessionId: session.id, evidence, total, limit, offset });
 });
 
 /**
@@ -2533,24 +2887,16 @@ function finalizeMissionFromSession(mission, session) {
  * Fires registered webhooks for a completed mission.
  * Blocks internal/loopback IPs to prevent SSRF.
  */
-function fireMissionWebhooks(missionId, report) {
+async function fireMissionWebhooks(missionId, report) {
 	const hooks = webhooks.get(missionId);
 	if (!hooks?.length) return;
 
 	for (const hook of hooks) {
-		// Basic SSRF protection: block internal addresses
-		let parsedUrl;
-		try {
-			parsedUrl = new URL(hook.url);
-		} catch {
-			continue;
-		}
-		const blockedPatterns = ['127.0.0.1', 'localhost', '169.254', '10.', '172.16.', '172.17.', '172.18.',
-			'172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.',
-			'172.28.', '172.29.', '172.30.', '172.31.', '192.168.', '0.0.0.0', '::1', 'metadata'];
-		if (blockedPatterns.some(pattern => parsedUrl.hostname.includes(pattern))) {
-			continue;
-		}
+		// M1-P4.1 — webhook URLs go through the same SSRF boundary as mission
+		// targets (replaces the bypassable substring blocklist; see
+		// targetGuard.js). Validation is async; delivery stays fire-and-forget.
+		const check = await validateWebhookUrl(hook.url).catch(() => null);
+		if (!check?.ok) continue;
 
 		fetch(hook.url, {
 			method: 'POST',
@@ -2635,12 +2981,38 @@ function buildMissionReportMarkdown(mission, report) {
 // Chromium is a child process; without this it outlives the server that
 // started it and the user is left closing browsers by hand.
 let shuttingDown = false;
+// M1-P4.4 Phase 2 — register every debounced store with the shutdown
+// registry so SIGINT/SIGTERM flushes pending writes BEFORE exit. Each
+// flusher is idempotent and reports { dirty, ok } for per-store logging.
+registerStoreFlush('sessions', flushSessionsForShutdown);
+registerStoreFlush('missions', flushMissionsForShutdown);
+registerStoreFlush('findings', flushFindingsForShutdown);
+registerStoreFlush('evidence-graph', flushEvidenceGraphForShutdown);
+registerStoreFlush('fix-validations', flushFixValidationForShutdown);
+registerStoreFlush('replay-runs', flushReplayRunsForShutdown);
+registerStoreFlush('ux-assessments', flushUxAssessmentsForShutdown);
+registerStoreFlush('regression-runs', flushRegressionRunsForShutdown);
+registerStoreFlush('test-cases', flushTestCasesForShutdown);
+registerStoreFlush('workflows', flushWorkflowsForShutdown);
+registerStoreFlush('knowledge', flushKnowledgeForShutdown);
+registerStoreFlush('baselines', flushBaselinesForShutdown);
+registerStoreFlush('schedules', flushSchedulesForShutdown);
 for (const signal of ['SIGINT', 'SIGTERM']) {
 	process.on(signal, async () => {
 		if (shuttingDown) {
+			// Second signal during a wedged shutdown: exit immediately.
 			process.exit(1);
 		}
 		shuttingDown = true;
+		// 1) Flush every dirty store (synchronous atomic writes; failures are
+		//    logged per store and never abort the remaining stores).
+		const t0 = Date.now();
+		const { flushed, failed, clean } = flushAllStores();
+		console.log(
+			`[shutdown] store flush complete in ${Date.now() - t0}ms — ` +
+			`${flushed.length} flushed, ${clean.length} clean, ${failed.length} failed`
+		);
+		// 2) Abort in-flight agent turns and close browsers (existing behavior).
 		await Promise.all(listSessions().map(summary => {
 			liveFor(summary.id).controller?.abort();
 			return closeBrowser(summary.id);
@@ -2666,6 +3038,140 @@ try {
 
 // Load missions from disk + backfill project IDs
 loadMissionsFromDisk();
+// M1-P3 P0-4: reap missions stranded in running/awaiting_input whose session
+// was pruned or lost before lazy finalization could settle them.
+recoverInterruptedMissions(getSession);
+
+/* ── M1-P4.2: execution governor wiring ──────────────────────────── */
+
+// Any terminal write releases the mission's slot immediately (completed,
+// failed, aborted, cancelled, timeout, interrupted via finalizeMission).
+missionBus.on('mission:updated', (mission) => {
+	if (['completed', 'failed', 'aborted', 'cancelled', 'timeout'].includes(mission.status)) {
+		releaseMission(mission.id);
+	}
+});
+missionBus.on('mission:finalized', (mission) => {
+	releaseMission(mission.id);
+});
+missionBus.on('mission:deleted', (id) => {
+	releaseMission(id);
+});
+
+/**
+ * Re-submit persisted `queued` missions after a restart (M1-P4.2 Phase 6).
+ * A queued mission never had a worker — requeueing is safe, deterministic,
+ * and honest. FIFO by queuedAt. The mission goes through the SAME path as a
+ * fresh /start, so it cannot bypass validation (target re-check happens at
+ * grant time via the standard start flow).
+ */
+function requeuePersistedMissions() {
+	const queuedIds = listQueuedMissionIds();
+	if (queuedIds.length === 0) return;
+	console.log(`[governor] restart: re-queueing ${queuedIds.length} persisted queued mission(s)`);
+	for (const missionId of queuedIds) {
+		const mission = getMission(missionId);
+		if (!mission || mission.status !== 'queued') continue;
+		submitMission(missionId, () => {
+			// Identical to the /start grant path — validated, session-created,
+			// running-stamped. Reuse by issuing the same internal flow.
+			startQueuedMission(mission);
+		});
+	}
+}
+
+/** Grant-path executor shared by requeue and the /start route (via closures). */
+async function startQueuedMission(mission) {
+	try {
+		const targetCheck = await validateTargetUrl(mission.targetUrl);
+		if (!targetCheck.ok) {
+			updateMission(mission.id, { status: 'failed', failureReason: `blocked target: ${targetCheck.code}` });
+			return;
+		}
+		const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
+		if (!missionDeviceCheck.ok) {
+			updateMission(mission.id, { status: 'failed', failureReason: missionDeviceCheck.error });
+			return;
+		}
+		const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
+		session.targetUrl = mission.targetUrl;
+
+		if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
+			const tempVault = vaultFor('mission-temp');
+			if (tempVault.size > 0) {
+				storeSecrets(session.id, Object.fromEntries(tempVault));
+				clearSecrets('mission-temp');
+				session.secretNames = [...tempVault.keys()];
+			}
+		}
+
+		updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+
+		let knowledgeHints = '';
+		try {
+			const appMeta = detectAppMetadata({ targetUrl: mission.targetUrl });
+			const knowledgeResult = queryKnowledge(appMeta);
+			knowledgeHints = generateExplorationHints(knowledgeResult.patterns || []);
+			session.knowledgeHints = knowledgeResult.hints || [];
+			session.knowledgePatternsUsed = (knowledgeResult.patterns || []).map(p => p.id);
+		} catch { /* knowledge is best-effort */ }
+
+		const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
+		await ensureRuntime(session);
+		startTurn(session, { task: taskPrompt });
+		console.log(`[governor] mission ${mission.id} started from queue`);
+	} catch (error) {
+		updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
+	}
+}
+
+startGovernorWatchdog({
+	getMissionStatus: (id) => getMission(id)?.status,
+	getMissionStartedAt: (id) => getMission(id)?.startedAt,
+	getSessionIdFor: (id) => getMission(id)?.sessionId ?? null,
+	probeSession: (sessionId) => {
+		const session = getSession(sessionId);
+		if (!session) return { settled: true, running: false, settledAt: Date.now(), status: 'gone' };
+		const record = liveFor(sessionId);
+		const settledStatuses = ['idle', 'done', 'error', 'interrupted'];
+		const settled = settledStatuses.includes(session.status);
+		return {
+			settled,
+			running: Boolean(record?.running),
+			// updatedAt as the settle timestamp: session records are re-stamped
+			// on every mutation, so updatedAt ≈ when it last changed state.
+			settledAt: session.updatedAt ?? Date.now(),
+			status: session.status
+		};
+	},
+	onStuck: (missionId) => {
+		// Same honesty finalizer the lazy GET path uses — no duplicate logic.
+		const mission = getMission(missionId);
+		if (!mission || mission.status !== 'running' || !mission.sessionId) return;
+		const session = getSession(mission.sessionId);
+		if (!session) return;
+		finalizeMissionFromSession(mission, session);
+	},
+	onTimeout: (missionId) => {
+		const mission = getMission(missionId);
+		if (!mission || !isTerminalStatus(mission.status)) {
+			finalizeMission(missionId, {
+				status: 'failed',
+				failureReason: `execution_timeout: exceeded the ${getConfig().missionTimeoutMinutes}-minute wall clock`,
+				findings: [],
+				summary: null
+			});
+			if (mission?.sessionId) {
+				const record = liveFor(mission.sessionId);
+				record?.controller?.abort();
+				void closeBrowser(mission.sessionId);
+			}
+		}
+	},
+	log: (message) => console.log(message)
+});
+
+requeuePersistedMissions();
 
 // Listen for mission_finalized events from the capability orchestrator
 // and fire webhooks (webhook registry lives here in index.js)

@@ -38,7 +38,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 /* ── Constants ──────────────────────────────────────────────────── */
@@ -151,6 +151,7 @@ let evidenceStore = new Map();    // evidenceId → Evidence object
 let observationStore = new Map(); // observationId → Observation object
 let edges = [];                   // [{ from, to, type, metadata }]
 let saveTimer = null;
+let pendingSave = false;
 
 /**
  * Loads the evidence graph from disk. Called on module init.
@@ -170,8 +171,18 @@ function loadFromDisk() {
         edges = data.edges;
       }
     }
-  } catch {
-    // Fresh start — no data yet
+  } catch (err) {
+    // M1-P3 P0-1: a corrupt graph must NEVER silently reset to empty — that
+    // erases the entire evidence history with no trace. Fail LOUD (matches
+    // findings.js policy) and preserve the corrupt file for recovery.
+    console.error(
+      '[evidence-graph] FAILED to load evidence store:', err?.message || err,
+      '— evidence graph starts EMPTY. The corrupt file was preserved at',
+      GRAPH_FILE + '.corrupt'
+    );
+    try {
+      renameSync(GRAPH_FILE, GRAPH_FILE + '.corrupt');
+    } catch { /* nothing to preserve */ }
   }
 }
 
@@ -180,6 +191,7 @@ function loadFromDisk() {
  */
 function scheduleSave() {
   if (saveTimer) return;
+  pendingSave = true;
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
@@ -190,14 +202,82 @@ function scheduleSave() {
         edges,
         savedAt: Date.now()
       };
+      // M1-P3 P0-1: write tmp then RENAME — a copy (writeFileSync of a
+      // readFileSync) is non-atomic: a crash mid-copy truncates the store and
+      // the loader used to silently reset to empty. renameSync is atomic on
+      // the same filesystem (see server/atomicWrite.js).
       const tmp = GRAPH_FILE + '.tmp';
       writeFileSync(tmp, JSON.stringify(data, null, 0));
-      writeFileSync(GRAPH_FILE, readFileSync(tmp, 'utf-8'));
-      try { unlinkSync(tmp); } catch {}
+      renameSync(tmp, GRAPH_FILE);
+      pendingSave = false;
     } catch (err) {
       console.error('[evidence-graph] Failed to save:', err.message);
     }
   }, 250);
+}
+
+/**
+ * M1-P4.4 Phase 3 — retention prune. Removes ONLY zero-degree (unlinked)
+ * evidence nodes and observations, oldest-first, capped at `maxEvidence`.
+ * Linked evidence is NEVER pruned — a finding's evidence chain is untouchable.
+ * Returns { prunedEvidence, prunedObservations } counts.
+ */
+export function pruneUnlinked(maxEvidence = 60_000) {
+  const linked = new Set();
+  for (const e of edges) {
+    if (e?.from) linked.add(e.from);
+    if (e?.to) linked.add(e.to);
+  }
+  let prunedEvidence = 0;
+  let prunedObservations = 0;
+  if (evidenceStore.size > maxEvidence) {
+    const excess = evidenceStore.size - maxEvidence;
+    const candidates = [...evidenceStore.values()]
+      .filter(n => !linked.has(n.id))
+      .sort((a, b) => String(a.createdAt ?? 0).localeCompare(String(b.createdAt ?? 0)));
+    for (const node of candidates) {
+      if (prunedEvidence >= excess) break;
+      evidenceStore.delete(node.id);
+      prunedEvidence++;
+    }
+  }
+  if (observationStore.size > maxEvidence) {
+    const excess = observationStore.size - maxEvidence;
+    const candidates = [...observationStore.values()]
+      .filter(n => !linked.has(n.id))
+      .sort((a, b) => String(a.createdAt ?? 0).localeCompare(String(b.createdAt ?? 0)));
+    for (const node of candidates) {
+      if (prunedObservations >= excess) break;
+      observationStore.delete(node.id);
+      prunedObservations++;
+    }
+  }
+  if (prunedEvidence > 0 || prunedObservations > 0) scheduleSave();
+  return { prunedEvidence, prunedObservations };
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent.
+ */
+export function flushEvidenceGraphForShutdown() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (!pendingSave) return { dirty: false, ok: true };
+  pendingSave = false;
+  try {
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    const data = {
+      evidence: [...evidenceStore.values()],
+      observations: [...observationStore.values()],
+      edges,
+      savedAt: Date.now()
+    };
+    const tmp = GRAPH_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(data, null, 0));
+    renameSync(tmp, GRAPH_FILE);
+    return { dirty: true, ok: true };
+  } catch (err) {
+    return { dirty: true, ok: false, error: err.message };
+  }
 }
 
 // Load on init
@@ -310,6 +390,22 @@ export function getMissionEvidence(missionId, { limit = 100, offset = 0 } = {}) 
 }
 
 /**
+ * M1-P3 P1-1/P1-2: page + total in ONE pass. The previous route pattern
+ * computed `total` from a second unbounded query (O(n) scan + sort ×2) or,
+ * worse, from the sliced result (total === page size — clients could never
+ * page). Keep the array-returning functions for internal callers; the HTTP
+ * layer uses this.
+ */
+export function getMissionEvidencePage(missionId, { limit = 100, offset = 0 } = {}) {
+  const results = [];
+  for (const ev of evidenceStore.values()) {
+    if (ev.missionId === missionId) results.push(ev);
+  }
+  results.sort((a, b) => a.timestamp - b.timestamp);
+  return { items: results.slice(offset, offset + limit), total: results.length };
+}
+
+/**
  * Gets all evidence for a session.
  */
 export function getSessionEvidence(sessionId, { limit = 100, offset = 0 } = {}) {
@@ -319,6 +415,16 @@ export function getSessionEvidence(sessionId, { limit = 100, offset = 0 } = {}) 
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
+}
+
+/** M1-P3 P1-1: page + total in one pass (see getMissionEvidencePage). */
+export function getSessionEvidencePage(sessionId, { limit = 100, offset = 0 } = {}) {
+  const results = [];
+  for (const ev of evidenceStore.values()) {
+    if (ev.sessionId === sessionId) results.push(ev);
+  }
+  results.sort((a, b) => a.timestamp - b.timestamp);
+  return { items: results.slice(offset, offset + limit), total: results.length };
 }
 
 /**
@@ -400,6 +506,16 @@ export function getSessionObservations(sessionId, { limit = 100, offset = 0 } = 
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
+}
+
+/** M1-P3 P1-1: page + total in one pass (see getMissionEvidencePage). */
+export function getSessionObservationsPage(sessionId, { limit = 100, offset = 0 } = {}) {
+  const results = [];
+  for (const obs of observationStore.values()) {
+    if (obs.sessionId === sessionId) results.push(obs);
+  }
+  results.sort((a, b) => a.timestamp - b.timestamp);
+  return { items: results.slice(offset, offset + limit), total: results.length };
 }
 
 /* ── Graph Edges (Step 1, 3, 6) ──────────────────────────────────── */

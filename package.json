@@ -3,13 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Qase — an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
+  "description": "Qase \u2014 an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "install-browser": "playwright install chromium",
-    "package": "node scripts/package.mjs"
+    "package": "node scripts/package.mjs",
+    "test": "node scripts/run-tests.mjs all",
+    "test:all": "node scripts/run-tests.mjs all",
+    "test:gate": "node scripts/run-tests.mjs gate",
+    "test:core": "node scripts/run-tests.mjs core",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:api": "node scripts/run-tests.mjs contract",
+    "test:contract": "node scripts/run-tests.mjs contract",
+    "test:e2e": "node scripts/run-tests.mjs e2e",
+    "test:accessibility": "node scripts/run-tests.mjs accessibility",
+    "test:responsive": "node scripts/run-tests.mjs responsive",
+    "test:performance": "node scripts/run-tests.mjs performance",
+    "test:security": "node scripts/run-tests.mjs security",
+    "test:truthfulness": "node scripts/run-tests.mjs truthfulness"
   },
   "engines": {
     "node": ">=20"
@@ -22,5 +35,8 @@
     "pixelmatch": "^7.2.0",
     "pngjs": "^7.0.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "axe-core": "4.10.2"
   }
 }

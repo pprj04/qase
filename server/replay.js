@@ -23,6 +23,7 @@ import { resolveDeviceContext, validateDeviceRequest, isBrowserstackRealDevice, 
 import { getBaseline, setBaseline, autoCaptureBaselines } from './baselines.js';
 import { isSelectorFailure, capturePageDom, analyzeFailure, patchTestCase, createHealRecord } from './selfHeal.js';
 import { updateTestCase } from './testCases.js';
+import { validateTargetUrl, classifyUrlFast, installRedirectBoundary } from './targetGuard.js';
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 
@@ -348,6 +349,13 @@ async function executeStep(page, step, credentials, baseUrl) {
 				let url = target || value;
 				if (!url) return fail('No URL to navigate to');
 				url = resolveUrl(url, baseUrl);
+				// M1-P4.1 — navigate steps are validated too (a step's URL can
+				// differ from the test case target). The context-level redirect
+				// boundary catches what a single goto misses.
+				const navCheck = classifyUrlFast(url);
+				if (!navCheck.ok) {
+					return fail(`Navigation blocked by security boundary (${navCheck.code})`);
+				}
 				await page.goto(url, { timeout: NAV_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
 				break;
 			}
@@ -660,6 +668,47 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 	const deviceInput = device != null ? device : (testCase.device ?? null);
 	const deviceCheck = deviceInput != null ? validateDeviceRequest(deviceInput) : null;
 	const deviceName = deviceCheck ? deviceCheck.deviceName : null;
+	// M1-P4.1 — SSRF pre-flight: the test case's target must pass the same
+	// boundary as mission creation. ALL callers (validation executor, suites,
+	// cron scheduler) converge here, so a stored/private target fails
+	// deterministically before any browser launch. Blocked targets return an
+	// honest error result with the guard's code.
+	if (testCase.targetUrl) {
+		const targetCheck = await validateTargetUrl(testCase.targetUrl);
+		if (!targetCheck.ok) {
+			const startTimeFailed = Date.now();
+			return {
+				id: randomUUID(),
+				testCaseId: testCase.id,
+				testCaseName: testCase.name,
+				ts: startTime,
+				result: 'error',
+				flaky: false,
+				attempt,
+				viewport: resolveViewport(viewport ?? testCase.viewport),
+				browser: browserType || 'chromium',
+				executionEnvironment: buildExecutionEnvironment({
+					provider: getConfig().browserstackEnabled === true ? 'browserstack' : 'local',
+					browser: browserType || 'chromium',
+					browserVersion: null,
+					os: null,
+					osVersion: null,
+					device: null,
+					engineEmulated: false,
+					executedOn: startTimeFailed,
+					failed: true
+				}),
+				durationMs: Date.now() - startTime,
+				stepResults: [],
+				assertionResults: [],
+				screenshots: [],
+				tracePath: undefined,
+				error: `Target blocked by security boundary: ${targetCheck.code}`,
+				targetBlocked: true
+			};
+		}
+	}
+
 	if (deviceCheck && !deviceCheck.ok) {
 		const startTimeFailed = Date.now();
 		return {
@@ -736,6 +785,10 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 			viewport: { width: vp.width, height: vp.height },
 			...(launched.contextOptions ?? {})
 		});
+		// M1-P4.1 — redirect boundary: every navigation (initial target AND
+		// redirects) is classified; private/internal destinations abort with
+		// net::ERR_BLOCKED_BY_CLIENT so the step records an honest failure.
+		installRedirectBoundary(context);
 		await context.tracing.start({
 			screenshots: true,
 			snapshots: true,

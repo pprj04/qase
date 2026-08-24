@@ -14,6 +14,7 @@ import { captureStep, finalizeStepOutcome } from './workflows.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
 import { resolveDeviceContext } from './deviceContext.js';
+import { validateTargetUrl, classifyUrlFast, installPageBoundary } from './targetGuard.js';
 import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration } from '@cleanslate/sdk';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -209,12 +210,32 @@ export async function ensureRuntime(session) {
 	// executor the loop calls.
 	const originalExecute = headless.executeTool.bind(headless);
 	headless.executeTool = async function* (toolName, input, toolCallId, signal) {
-		record.onToolStart?.(toolName, input, toolCallId);
+		// onToolStart became async (M1-P4.1 target validation) — its result is
+		// not needed for the tool stream, so drift is fine.
+		void Promise.resolve(record.onToolStart?.(toolName, input, toolCallId)).catch(() => {});
 		yield* originalExecute(toolName, input, toolCallId, signal);
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
 	const bridge = attachBrowserBridge(session, service);
+
+	// M1-P4.1 — SSRF boundary for agent-driven pages. The SDK owns context
+	// creation, so the boundary installs per PAGE at registration: every
+	// navigation (initial open, new tabs, redirects) is classified; blocked
+	// destinations abort and the tool call reports an honest navigation
+	// failure. registerPage is the SDK's single funnel for pages (both the
+	// default context's pages and any device-swapped context).
+	const originalRegisterPageBase = service.registerPage.bind(service);
+	service.registerPage = page => {
+		// installPageBoundary is async (CDP Fetch.enable must complete before
+		// the first navigation). The SDK calls registerPage synchronously right
+		// before navigating, so we kick the attach off immediately; the route
+		// base-layer installs synchronously inside the promise. Redirect chains
+		// are caught by the CDP layer as soon as enable resolves; the SDK's
+		// initial goto of an ALLOWED target is never delayed by this.
+		void Promise.resolve(installPageBoundary(page)).catch(() => { /* best-effort add-on */ });
+		originalRegisterPageBase(page);
+	};
 
 	// ── Mobile/tablet device context (real emulation, not a CSS resize) ──
 	// The SDK creates the browser context lazily with a fixed desktop
@@ -377,7 +398,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 
 	const openActivities = new Map();
 
-	const beginActivity = (toolName, input, toolCallId) => {
+	const beginActivity = async (toolName, input, toolCallId) => {
 		closeThinking();
 		const safeInput = redact(session.id, input);
 		const activity = addActivity(session, {
@@ -391,7 +412,12 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 		});
 		openActivities.set(toolCallId ?? activity.id, activity.id);
 		if (toolName === 'browser_open' && typeof input?.url === 'string') {
-			session.targetUrl ??= input.url;
+			// M1-P4.1 — the LLM-chosen URL must pass the same boundary as the
+			// mission target before it becomes the session target. Blocked
+			// URLs are simply not adopted (the page-level route boundary will
+			// also stop the actual navigation).
+			const chosen = await validateTargetUrl(input.url).catch(() => null);
+			if (chosen?.ok) session.targetUrl ??= input.url;
 		}
 		// Capture browser actions as structured workflow steps.
 		captureStep(session, { toolName, input: safeInput, toolCallId });

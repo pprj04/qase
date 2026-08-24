@@ -1768,7 +1768,9 @@ function fillSettings(config) {
 	cfg.apiToken.value = '';
 	cfg.apiToken.placeholder = config.hasApiToken ? `${config.apiTokenHint} — leave blank to keep` : 'Leave empty for local use';
 	cfg.apiTokenNote.textContent = config.hasApiToken
-		? (config.apiTokenFromEnv ? 'Currently set in .env. Saving one here overrides it.' : 'Stored in .qase/config.json. Required as Authorization: Bearer header for CI/CD triggers.')
+		? (config.apiTokenFromEnv
+			? `Currently set in .env (${config.apiTokenHint}). Paste it above once to enable browser mutations; saving here overrides .env.`
+			: `Stored in .qase/config.json (${config.apiTokenHint}). Required as Authorization: Bearer for CI/CD. Paste it above once to enable browser mutations.`)
 		: 'Protects test-run/schedule-trigger endpoints. Leave empty when running locally.';
 
 	// The stored key is never sent to the browser; leaving the box empty keeps it.
@@ -1928,6 +1930,11 @@ cfg.browserstackTestBtn.onclick = async () => {
 
 cfg.saveBtn.onclick = async () => {
 	try {
+		// If the user just typed an API token, remember it for this browser so
+		// mutations work in the UI without the (removed) auto-granted cookie.
+		if (cfg.apiToken.value.trim()) {
+			localStorage.setItem('qase_token', cfg.apiToken.value.trim());
+		}
 		const config = await api('/config', { method: 'PUT', body: JSON.stringify(readSettings()) });
 		paintConfig(config);
 		if (config.problem) {

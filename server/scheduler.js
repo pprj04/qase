@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CronExpressionParser } from 'cron-parser';
@@ -33,7 +33,14 @@ function load() {
 		if (existsSync(SCHEDULES_FILE)) {
 			schedules = JSON.parse(readFileSync(SCHEDULES_FILE, 'utf-8'));
 		}
-	} catch {
+	} catch (err) {
+		// M1-P4.4 Phase 5 — preserve damaged store for forensics, start empty.
+		try {
+			renameSync(SCHEDULES_FILE, `${SCHEDULES_FILE}.corrupt-${Date.now()}`);
+			console.error(`[schedules] STORE CORRUPT: ${err.message}. File preserved — starting EMPTY.`);
+		} catch {
+			console.error(`[schedules] STORE CORRUPT: ${err.message} — starting EMPTY.`);
+		}
 		schedules = [];
 	}
 	// Backfill nextRun for any schedule missing it.
@@ -65,6 +72,15 @@ export function saveSchedulesRaw() {
 	} catch (error) {
 		console.error('Failed to persist schedules:', error.message);
 	}
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Schedules persist IMMEDIATELY
+ * (no debounce) on every mutation, so this is always clean; kept for uniform
+ * registry semantics.
+ */
+export function flushSchedulesForShutdown() {
+	return { dirty: false, ok: true };
 }
 
 /**

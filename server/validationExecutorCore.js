@@ -25,6 +25,7 @@ import {
 import { createEvidence, linkEvidenceToFinding, EVIDENCE_TYPES } from './evidenceGraph.js';
 import { redactString } from './findingIntelligence.js';
 import { runTestCase } from './replay.js';
+import { validateTargetUrl } from './targetGuard.js';
 import { buildExecutionEnvironment } from './executionEnvironment.js';
 import { validateDeviceRequest } from './deviceContext.js';
 import { VALIDATION_RUN_STATUSES } from './fixStatusEngine.js';
@@ -243,6 +244,22 @@ export async function executeValidation(runId, { getFinding } = {}) {
 
 		// ── Attempts (replay the finding's own steps) ──
 		const testCase = buildValidationTestCase(of);
+		// M1-P4.1 — SSRF boundary: the finding-derived target (finding.url or
+		// a URL mined from step text) is validated BEFORE any replay. A blocked
+		// target records an honest UNABLE_TO_VERIFY outcome with the guard's
+		// code — it can never influence fix-status derivation as evidence.
+		if (testCase.targetUrl) {
+			const fvCheck = await validateTargetUrl(testCase.targetUrl);
+			if (!fvCheck.ok) {
+				recordEvidence(run, 'before', EVIDENCE_TYPES.OBSERVATION, {
+					title: 'Target blocked by security boundary',
+					description: `Validation target ${fvCheck.code}: no replay attempted.`,
+				});
+				run.blockedReason = `target ${fvCheck.code}`;
+				transitionRun(run.id, { status: 'FAILED', error: `Target blocked by security boundary: ${fvCheck.code}` }, 'target-guard');
+				return;
+			}
+		}
 		// B0.3 — preserve the finding's device for same-condition validation.
 		// GUARDED: only a device that actually resolves passes through; legacy
 		// findings with unparseable device strings keep today's desktop

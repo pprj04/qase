@@ -146,10 +146,14 @@ const state = {
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 async function api(path, options) {
-	const response = await fetch(`/api${path}`, {
-		headers: { 'Content-Type': 'application/json' },
-		...options
-	});
+	// Same-origin convenience: mutations attach the token the user pasted in
+	// Settings (stored in localStorage). The server no longer auto-grants the
+	// qase_token cookie to anonymous visitors (M1-P3 P0-5) — an existing valid
+	// cookie from before that change still works via the cookie jar.
+	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+	const headers = { 'Content-Type': 'application/json', ...(options?.headers ?? {}) };
+	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+const response = await fetch(`/api${path}`, { headers, ...options });
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
 		throw new Error(body.error ?? `Request failed (${response.status})`);

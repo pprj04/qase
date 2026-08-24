@@ -24,17 +24,37 @@ export const bus = new EventEmitter();
 bus.setMaxListeners(0);
 
 let saveTimer;
+let pendingWrite = false;
 
 function persistSoon() {
+	pendingWrite = true;
 	clearTimeout(saveTimer);
 	saveTimer = setTimeout(() => {
 		try {
 			fs.mkdirSync(STATE_DIR, { recursive: true });
 			atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
+			pendingWrite = false;
 		} catch {
 			// A dashboard that cannot write its history is still a usable dashboard.
 		}
 	}, 250).unref?.();
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush for sessions. Idempotent.
+ */
+export function flushSessionsForShutdown() {
+	clearTimeout(saveTimer);
+	saveTimer = null;
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		fs.mkdirSync(STATE_DIR, { recursive: true });
+		atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
+		pendingWrite = false;
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 export function loadSessions() {
@@ -54,8 +74,18 @@ export function loadSessions() {
 			session.projectId = session.projectId ?? undefined;
 			sessions.set(session.id, session);
 		}
-	} catch {
-		// No history yet.
+	} catch (err) {
+		if (err && err.code === 'ENOENT') return; // no history yet — normal first boot
+		// M1-P4.4 Phase 5 — damaged store file: preserve for forensics, start
+		// empty. Never overwrite a corrupt file with a fresh valid one.
+		try {
+			fs.renameSync(STATE_FILE, `${STATE_FILE}.corrupt-${Date.now()}`);
+			console.error(
+				`[sessions] STORE CORRUPT: load failed (${err.message}). File preserved as sessions.json.corrupt-<ts> — starting EMPTY.`
+			);
+		} catch (renameErr) {
+			console.error(`[sessions] STORE CORRUPT: ${err.message} (preserve failed: ${renameErr.message}) — starting EMPTY.`);
+		}
 	}
 }
 
@@ -97,18 +127,50 @@ export function getSession(id) {
  * Phase 9.3: Session pruning — keep the N most recent sessions so the
  * sessions.json state file stays bounded. Findings from pruned sessions
  * already live in the findings store; only the session shells are dropped.
+ *
+ * M1-P3 Phase 5 (Option A): pruning is now ALSO byte-bounded. Count-based
+ * pruning alone let heavyweight agent sessions (multi-MB messages[]) blow
+ * past the 15MB hygiene bound (observed 58 sessions / 31.9MB). After the
+ * count cap, evict oldest-first until the payload is under BUDGET_BYTES,
+ * always keeping at least MIN_KEEP sessions so a fresh install never prunes
+ * itself to zero.
  */
-export function pruneOldSessions(keep = 50) {
+const SESSION_COUNT_KEEP = 50;
+const SESSION_BYTE_BUDGET = 12 * 1024 * 1024; // 12MB — under the 15MB test bound with margin
+const SESSION_MIN_KEEP = 5;
+
+export function pruneOldSessions(keep = SESSION_COUNT_KEEP) {
 	const all = [...sessions.values()].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-	let pruned = 0;
-	for (const session of all.slice(keep)) {
-		sessions.delete(session.id);
-		pruned += 1;
+	let survivors = all.slice(0, keep);
+	const doomed = all.slice(keep);
+	// Byte-budget pass: evict from the OLDEST end of the survivors until the
+	// persisted payload fits. findLastIndex finds the oldest index that still
+	// fits, so everything after it is dropped.
+	// NOTE: budget is computed against the PERSISTED form (pretty-printed with
+	// tabs — see persistSoon), not the compact form: JSON.stringify with an
+	// indent multiplies payload size ~29% on deep session objects, and RL-1
+	// reads the file on disk.
+	let payload = 0;
+	for (const session of survivors) payload += JSON.stringify(session, undefined, '\t').length;
+	if (payload > SESSION_BYTE_BUDGET) {
+		let cutoff = survivors.length;
+		let running = 0;
+		for (let i = 0; i < survivors.length; i += 1) {
+			const size = JSON.stringify(survivors[i], undefined, '\t').length;
+			if (running + size > SESSION_BYTE_BUDGET || survivors.length - i < SESSION_MIN_KEEP) break;
+			running += size;
+			cutoff = i + 1;
+		}
+		doomed.push(...survivors.slice(cutoff));
+		survivors = survivors.slice(0, cutoff);
 	}
-	if (pruned > 0) {
+	for (const session of doomed) {
+		sessions.delete(session.id);
+	}
+	if (doomed.length > 0) {
 		persistSoon();
 	}
-	return pruned;
+	return doomed.length;
 }
 
 /**

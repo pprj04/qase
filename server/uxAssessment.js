@@ -12,7 +12,7 @@
  * unverified areas recorded.
  */
 
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -43,29 +43,68 @@ export function loadAssessments() {
 		for (const a of arr) assessments.set(a.id, a);
 		return arr.length;
 	} catch (err) {
-		console.error('[ux-assessments] load failed:', err.message);
+		// M1-P4.4 Phase 5 — preserve damaged store for forensics, start empty.
+		try {
+			renameSync(FILE, `${FILE}.corrupt-${Date.now()}`);
+			console.error(`[ux-assessments] STORE CORRUPT: ${err.message}. File preserved — starting EMPTY.`);
+		} catch {
+			console.error(`[ux-assessments] STORE CORRUPT: ${err.message} — starting EMPTY.`);
+		}
 		return 0;
 	}
 }
 
 let saveTimer = null;
+let pendingWrite = false;
 function scheduleSave() {
+	pendingWrite = true;
 	if (saveTimer) return;
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
 		try {
 			mkdirSync(dirname(FILE), { recursive: true });
 			atomicWrite(FILE, JSON.stringify([...assessments.values()], null, 2));
+			pendingWrite = false;
 		} catch (err) {
 			console.error('[ux-assessments] save failed:', err.message);
 		}
 	}, 400);
 }
 
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent.
+ */
+export function flushUxAssessmentsForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		mkdirSync(dirname(FILE), { recursive: true });
+		atomicWrite(FILE, JSON.stringify([...assessments.values()], null, 2));
+		pendingWrite = false;
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
+}
+
 export function saveAssessment(record) {
 	assessments.set(record.id, record);
 	scheduleSave();
 	return record;
+}
+
+/**
+ * M1-P4.4 Phase 3 — retention prune: remove assessments by id (store-hygiene
+ * cleanup). Returns the ids actually removed.
+ */
+export function pruneAssessmentsByIds(ids) {
+	if (!Array.isArray(ids) || ids.length === 0) return [];
+	const removed = [];
+	for (const id of ids) {
+		if (assessments.delete(id)) removed.push(id);
+	}
+	if (removed.length > 0) scheduleSave();
+	return removed;
 }
 
 export function listAssessments({ missionId, sessionId, limit = 50, offset = 0 } = {}) {

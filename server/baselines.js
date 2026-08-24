@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, copyFileSync, renameSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
@@ -25,27 +25,52 @@ const BASELINE_DIR = join(ARTIFACTS_DIR, 'baselines');
 
 let baselines = [];
 let saveTimer = null;
+let pendingWrite = false;
 
 function load() {
 	try {
 		if (existsSync(STORE_FILE)) {
 			baselines = JSON.parse(readFileSync(STORE_FILE, 'utf-8'));
 		}
-	} catch {
+	} catch (err) {
+		// M1-P4.4 Phase 5 — preserve damaged store for forensics, start empty.
+		try {
+			renameSync(STORE_FILE, `${STORE_FILE}.corrupt-${Date.now()}`);
+			console.error(`[baselines] STORE CORRUPT: ${err.message}. File preserved — starting EMPTY.`);
+		} catch {
+			console.error(`[baselines] STORE CORRUPT: ${err.message} — starting EMPTY.`);
+		}
 		baselines = [];
 	}
 }
 
 function persistSoon() {
+	pendingWrite = true;
 	if (saveTimer) return;
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
 		try {
 			atomicWrite(STORE_FILE, JSON.stringify(baselines, null, '\t'));
+			pendingWrite = false;
 		} catch (error) {
 			console.error('Failed to persist baselines:', error.message);
 		}
 	}, 250);
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent.
+ */
+export function flushBaselinesForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		atomicWrite(STORE_FILE, JSON.stringify(baselines, null, '\t'));
+		pendingWrite = false;
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 load();

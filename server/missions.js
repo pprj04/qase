@@ -13,12 +13,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { getDefaultProjectId } from './projects.js';
 import { atomicWrite } from './atomicWrite.js';
+// M1-P4.3 — centralized status-transition validation for ALL writers.
+import { attemptMissionTransition } from './stateTransitions.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -60,7 +62,16 @@ function loadMissions() {
 			for (const m of arr) store.set(m.id, m);
 		}
 	} catch (err) {
-		console.error('[missions] load failed:', err.message);
+		// M1-P4.4 Phase 5 — never silently start empty on a damaged store
+		// file: preserve it for forensics and continue from an empty store.
+		try {
+			renameSync(FILE, `${FILE}.corrupt-${Date.now()}`);
+			console.error(
+				`[missions] STORE CORRUPT: load failed (${err.message}). File preserved as missions.json.corrupt-<ts> — starting EMPTY.`
+			);
+		} catch (renameErr) {
+			console.error(`[missions] STORE CORRUPT: ${err.message} (preserve failed: ${renameErr.message}) — starting EMPTY.`);
+		}
 	}
 }
 
@@ -79,6 +90,23 @@ function scheduleSave() {
 			console.error('[missions] save failed:', err.message);
 		}
 	}, 500);
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent: only writes when the
+ * debounce still has unsaved mutations. Registered with shutdown.js in index.js.
+ */
+export function flushMissionsForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!dirty) return { dirty: false, ok: true };
+	dirty = false;
+	try {
+		mkdirSync(dirname(FILE), { recursive: true });
+		atomicWrite(FILE, JSON.stringify([...store.values()], null, 2));
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 /* ── CRUD ──────────────────────────────────────────────────────── */
@@ -188,7 +216,10 @@ export function listMissions({ projectId, status, type, source, workspaceId, cor
 	// Phase 10: workspace + correlation filtering
 	if (workspaceId) list = list.filter(m => m.workspaceId === workspaceId);
 	if (correlationId) list = list.filter(m => m.correlationId === correlationId);
-	list.sort((a, b) => b.updatedAt - a.updatedAt);
+	// M1-P4.1 — deterministic ordering: newest updatedAt first; ties broken
+	// by descending createdAt then id so updatedAt-churn (e.g. reaper rewrites)
+	// cannot reshuffle equal timestamps between requests.
+	list.sort((a, b) => (b.updatedAt - a.updatedAt) || (b.createdAt - a.createdAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
 	return list;
 }
 
@@ -211,11 +242,25 @@ export function updateMission(id, patch = {}) {
 		// Phase 10: Integration identity fields (set at creation, not mutated later)
 		'workspaceId', 'correlationId',
 		// Execution timing
-		'startedAt', 'estimatedDuration'
+		'startedAt', 'estimatedDuration',
+		// M1-P4.2: execution-governor fields
+		'queuedAt', 'failureReason', 'cancelledAt', 'cancellationReason'
 	];
 
 	for (const key of allowed) {
 		if (key in patch) mission[key] = patch[key];
+	}
+
+	// M1-P4.3 — status is transition-validated for EVERY writer (routes,
+	// governor pump/sweep, reaper, pipelines, PATCH). Illegal transitions are
+	// dropped (only the status field), other fields still apply. The original
+	// in-object write above is reverted if the transition is illegal.
+	if ('status' in patch && patch.status != null && patch.status !== mission.status) {
+		const before = mission.status;
+		const verdict = attemptMissionTransition(before, patch.status, { actor: patch.__actor ?? 'system' });
+		if (!verdict.ok) {
+			mission.status = before; // revert the field write from the loop above
+		}
 	}
 
 	mission.updatedAt = Date.now();
@@ -254,12 +299,27 @@ export function finalizeMission(id, results = {}) {
 		return mission;
 	}
 
-	mission.status = results.status || 'completed';
+	// M1-P4.3 — route finalize through the transition validator too (same
+	// rules as updateMission; finalizeMission previously allowed any status
+	// string including typos — now bounded to legal terminal targets).
+	const target = results.status || 'completed';
+	const verdict = attemptMissionTransition(mission.status, target, { actor: 'finalize' });
+	if (!verdict.ok) {
+		// Illegal finalize target (e.g. running → completed via a path the
+		// matrix rejects). Keep the mission untouched rather than fabricate
+		// a terminal state; the governor sweep will reconcile within 30s.
+		return mission;
+	}
+
+	mission.status = verdict.status;
 	mission.qualityScore = results.qualityScore ?? null;
 	mission.verdict = results.verdict || null;
 	mission.improvementPrompt = results.improvementPrompt || null;
 	mission.releaseReady = results.releaseReady ?? null;
 	mission.summary = results.summary || mission.summary;
+	// M1-P4.2: failureReason was historically dropped here — persist it so
+	// failed missions are explainable without reconstructing from sessions.
+	if (results.failureReason) mission.failureReason = String(results.failureReason).slice(0, 500);
 	mission.completedAt = Date.now();
 	mission.updatedAt = Date.now();
 
@@ -400,6 +460,59 @@ export function backfillProjectId() {
 export function loadMissionsFromDisk() {
 	loadMissions();
 	backfillProjectId();
+}
+
+/**
+ * M1-P3 P0-4: restart recovery for missions.
+ *
+ * Missions finalized via the lazy GET-poll path need their session record to
+ * compute an honest verdict. When a crash (or a restart) leaves a mission in
+ * `running` and its session was pruned before finalization, the mission can
+ * NEVER resolve — it polls as running forever and the honesty guard in
+ * index.js can never run for it. Live store (2026-08-23): 57 of 71 running
+ * missions were zombies in exactly this state.
+ *
+ * Boot sweep: any `running`/`awaiting_input` mission whose session is gone is
+ * marked `interrupted` with an explicit reason — mirroring the session-store
+ * interrupted semantics. Missions whose session still exists are left alone;
+ * the lazy finalize path settles them on first poll.
+ *
+ * @param {(sessionId: string) => object|null} getSession — session resolver (wired by index.js to avoid an import cycle)
+ * @returns {number} count of missions reaped
+ */
+export function recoverInterruptedMissions(getSession) {
+	if (typeof getSession !== 'function') return 0;
+	let reaped = 0;
+	for (const mission of store.values()) {
+		if (mission.status !== 'running' && mission.status !== 'awaiting_input') continue;
+		const session = mission.sessionId ? getSession(mission.sessionId) : null;
+		if (session) continue; // resolvable — lazy finalize will settle it
+		mission.status = 'interrupted';
+		mission.interruptedReason = 'session_lost_before_finalization';
+		// Preserve the original updatedAt: reaping is a bookkeeping repair, not
+		// a user-visible change. Re-stamping hundreds of missions at boot would
+		// drown recent activity out of recency-ordered lists (phase17 regression).
+		reaped += 1;
+	}
+	if (reaped > 0) {
+		console.warn(`[missions] restart recovery: ${reaped} running mission(s) lost their session (pruned before finalization) — marked interrupted`);
+		scheduleSave();
+	}
+	return reaped;
+}
+
+/**
+ * M1-P4.2: persisted `queued` missions after a restart.
+ *
+ * A queued mission never had a worker, so requeueing is safe and honest —
+ * no false resume of a dead execution. Returns the ids in queuedAt order
+ * (oldest first) so the governor can re-submit them FIFO.
+ */
+export function listQueuedMissionIds() {
+	return [...store.values()]
+		.filter(mission => mission.status === 'queued')
+		.sort((a, b) => (a.queuedAt ?? 0) - (b.queuedAt ?? 0))
+		.map(mission => mission.id);
 }
 
 export { bus as missionBus };

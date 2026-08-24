@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { emit } from './store.js';
 import { fileURLToPath } from 'node:url';
@@ -248,6 +248,7 @@ export function finalizeStepOutcome(session, toolCallId, toolName, result) {
 
 let workflows = [];
 let saveTimer = null;
+let pendingWrite = false;
 
 function loadWorkflows() {
 	try {
@@ -255,12 +256,20 @@ function loadWorkflows() {
 			const raw = readFileSync(WORKFLOWS_FILE, 'utf-8');
 			workflows = JSON.parse(raw);
 		}
-	} catch {
+	} catch (err) {
+		// M1-P4.4 Phase 5 â preserve damaged store for forensics, start empty.
+		try {
+			renameSync(WORKFLOWS_FILE, `${WORKFLOWS_FILE}.corrupt-${Date.now()}`);
+			console.error(`[workflows] STORE CORRUPT: ${err.message}. File preserved â starting EMPTY.`);
+		} catch {
+			console.error(`[workflows] STORE CORRUPT: ${err.message} â starting EMPTY.`);
+		}
 		workflows = [];
 	}
 }
 
 function persistWorkflowsSoon() {
+	pendingWrite = true;
 	if (saveTimer) {
 		return;
 	}
@@ -273,6 +282,7 @@ function persistWorkflowsSoon() {
 function flushWorkflows() {
 	try {
 		atomicWrite(WORKFLOWS_FILE, JSON.stringify(workflows, null, '\t'));
+		pendingWrite = false;
 	} catch (error) {
 		console.error('Failed to persist workflows:', error.message);
 	}
@@ -281,6 +291,20 @@ function flushWorkflows() {
 /** Immediately persist the in-memory workflows array to disk. */
 export function saveWorkflowsRaw() {
 	flushWorkflows();
+}
+
+/**
+ * M1-P4.4 Phase 2 â graceful shutdown flush. Idempotent.
+ */
+export function flushWorkflowsForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		flushWorkflows();
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 /**

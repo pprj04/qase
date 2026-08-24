@@ -34,6 +34,7 @@ import {
 	getAssessmentForMission, applyIssueReview, getUxMetrics, runUxAssessment,
 } from './uxAssessment.js';
 import { listMissions } from './missions.js';
+import { governorStats, queuePositionOf } from './missionGovernor.js';
 import { buildRecommendations } from './recommendationEngine.js';
 import {
 	loadValidations, getRun, getRunsForFinding, findByIdempotencyKey,
@@ -48,7 +49,7 @@ import {
 const VALID_REVIEW_STATES = ['unreviewed', 'confirmed', 'false_positive', 'duplicate', 'wont_fix', 'reopened'];
 	const VALID_UX_REVIEW_STATES = ['UNREVIEWED', 'AUTO_VERIFIED', 'REVIEW_REQUIRED', 'REJECTED'];
 
-export function phaseRouter(auth) {
+export function phaseRouter(auth, publicReadGet = []) {
 	const router = Router();
 
 	// Phase 11a: cross-session bug export — public read-only GET (same
@@ -69,7 +70,32 @@ export function phaseRouter(auth) {
 
 	// Every Phase 16/17/18 route sits behind the same token gate as the
 	// rest of the API (no-token-configured ⇒ open, matching HEAD behavior).
-	router.use((req, res, next) => (auth ? auth(req, res, next) : next()));
+	// M1-P3: UI-facing READ routes stay public (they worked anonymously via
+	// the S1 auto-cookie before it was removed): finding evidence for the
+	// Bugs hub cards, mission-for-session for the run console, and finding
+	// detail for the bug modal. Express runs this router.use BEFORE route
+	// middleware, so the exemption is pattern-matched here.
+	const PUBLIC_READ_GET = publicReadGet.length > 0 ? publicReadGet : [
+		/^\/findings\/[^/]+\/evidence$/,
+		/^\/missions\/[^/]+\/mission-for-session$/,
+		/^\/findings\/[^/]+$/,
+		/^\/missions\/[^/]+\/ux-quality$/,
+		/^\/v1\/findings\/[^/]+\/validation$/,
+		/^\/v1\/missions\/[^/]+\/loop-status$/,
+		/^\/v1\/missions\/[^/]+\/evidence-coverage$/,
+		/^\/v1\/evidence\/stats$/
+	];
+	// NOTE: /findings/grouped must NOT be public — the :id pattern above
+	// matches it, so it gets an explicit auth here by leaving the general
+	// exemption list to the caller; grouped was public pre-fix ONLY via the
+	// S1 cookie like everything else. If it needs to be public later, add an
+	// explicit pattern.
+	router.use((req, res, next) => {
+		if (auth && !(req.method === 'GET' && PUBLIC_READ_GET.some(re => re.test(req.path)))) {
+			return auth(req, res, next);
+		}
+		next();
+	});
 
 	/* ═══════════════ Phase 16 — Bug Intelligence ═══════════════ */
 
@@ -212,6 +238,11 @@ export function phaseRouter(auth) {
 		res.json({ feature: f.feature_name ?? f.feature_id ?? null, basis: f.linkage_basis ?? null });
 	});
 
+	// M1-P3 P0-5 follow-up: finding-evidence and mission-for-session are
+	// UI-facing reads (Bugs hub bug cards, run console). They worked
+	// anonymously only via the S1 auto-cookie; phaseRouter sits behind the
+	// token gate, so these two reads are exempted here. Response bodies are
+	// server-redacted. All phaseRouter MUTATIONS stay gated.
 	router.get('/findings/:id/evidence', (req, res) => {
 		const f = getFinding(req.params.id);
 		if (!f) return res.status(404).json({ error: 'Finding not found' });
@@ -497,8 +528,14 @@ export function phaseRouter(auth) {
 			targetUrl: m.targetUrl, sessionId: m.sessionId,
 			projectId: m.projectId, createdAt: m.createdAt, updatedAt: m.updatedAt,
 			iterations: (m.iterations ?? []).length,
+			// M1-P4.2: execution-governor visibility
+			queuedAt: m.queuedAt ?? null,
+			startedAt: m.startedAt ?? null,
+			completedAt: m.completedAt ?? null,
+			queuePosition: m.status === 'queued' ? queuePositionOf(m.id) : null,
+			failureReason: m.failureReason ?? null
 		}));
-		res.json({ missions });
+		res.json({ missions, queueDepth: governorStats().queueDepth, governor: governorStats() });
 	});
 
 	// UX metrics for the dashboard.

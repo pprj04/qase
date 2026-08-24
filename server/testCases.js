@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { removeTestCaseFromAllFindings } from './findings.js';
@@ -20,6 +20,7 @@ const TEST_CASES_FILE = join(__dirname, '..', '.qase', 'test-cases.json');
 
 let testCases = [];
 let saveTimer = null;
+let pendingWrite = false;
 
 function loadTestCases() {
 	try {
@@ -34,12 +35,20 @@ function loadTestCases() {
 			tc.viewports = tc.viewports ?? [];
 			}
 		}
-	} catch {
+	} catch (err) {
+		// M1-P4.4 Phase 5 — preserve damaged store for forensics, start empty.
+		try {
+			renameSync(TEST_CASES_FILE, `${TEST_CASES_FILE}.corrupt-${Date.now()}`);
+			console.error(`[test-cases] STORE CORRUPT: ${err.message}. File preserved — starting EMPTY.`);
+		} catch {
+			console.error(`[test-cases] STORE CORRUPT: ${err.message} — starting EMPTY.`);
+		}
 		testCases = [];
 	}
 }
 
 function persistSoon() {
+	pendingWrite = true;
 	if (saveTimer) {
 		return;
 	}
@@ -52,8 +61,23 @@ function persistSoon() {
 function flush() {
 	try {
 		atomicWrite(TEST_CASES_FILE, JSON.stringify(testCases, null, '\t'));
+		pendingWrite = false;
 	} catch (error) {
 		console.log('Failed to persist test cases:', error.message);
+	}
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent.
+ */
+export function flushTestCasesForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		flush();
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
 	}
 }
 

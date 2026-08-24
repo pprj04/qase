@@ -75,6 +75,8 @@ function fromEnv() {
 		apiToken: process.env.QASE_API_TOKEN,
 		concurrentRuns: process.env.QASE_PARALLEL ? Number(process.env.QASE_PARALLEL) : undefined,
 		retriesCount: process.env.QASE_RETRIES ? Number(process.env.QASE_RETRIES) : undefined,
+		maxConcurrentMissions: process.env.QASE_MAX_MISSIONS ? Number(process.env.QASE_MAX_MISSIONS) : undefined,
+		missionTimeoutMinutes: process.env.QASE_MISSION_TIMEOUT_MIN ? Number(process.env.QASE_MISSION_TIMEOUT_MIN) : undefined,
 		autoSaveWorkflow: process.env.QASE_AUTO_SAVE_WORKFLOW === undefined ? undefined : process.env.QASE_AUTO_SAVE_WORKFLOW !== 'false',
 		autoGenerateTests: process.env.QASE_AUTO_GEN_TESTS === undefined ? undefined : process.env.QASE_AUTO_GEN_TESTS !== 'false',
 		autoSmokeRun: process.env.QASE_AUTO_SMOKE_RUN === undefined ? undefined : process.env.QASE_AUTO_SMOKE_RUN === 'true',
@@ -101,6 +103,11 @@ const DEFAULTS = {
 	headless: true,
 	concurrentRuns: 3,
 	retriesCount: 1,
+	// M1-P4.2 — execution governor bounds for AGENT missions (a slot = one
+	// session + Chromium + LLM conversation). Replay suites keep their own
+	// concurrentRuns pool; these bound the mission layer only.
+	maxConcurrentMissions: 3,
+	missionTimeoutMinutes: 60,
 	autoSaveWorkflow: true,
 	autoGenerateTests: true,
 	autoSmokeRun: false,
@@ -194,6 +201,8 @@ export function getPublicConfig() {
 		headless: config.headless,
 		concurrentRuns: config.concurrentRuns,
 		retriesCount: config.retriesCount,
+		maxConcurrentMissions: config.maxConcurrentMissions,
+		missionTimeoutMinutes: config.missionTimeoutMinutes,
 		autoSaveWorkflow: config.autoSaveWorkflow,
 		autoGenerateTests: config.autoGenerateTests,
 		autoSmokeRun: config.autoSmokeRun,
@@ -270,6 +279,12 @@ export function saveConfig(patch) {
 	}
 	if (patch.retriesCount !== undefined) {
 		next.retriesCount = Math.max(0, Math.min(5, Number(patch.retriesCount) || 0));
+	}
+	if (patch.maxConcurrentMissions !== undefined) {
+		next.maxConcurrentMissions = Math.max(1, Math.min(10, Number(patch.maxConcurrentMissions) || DEFAULTS.maxConcurrentMissions));
+	}
+	if (patch.missionTimeoutMinutes !== undefined) {
+		next.missionTimeoutMinutes = Math.max(5, Math.min(720, Number(patch.missionTimeoutMinutes) || DEFAULTS.missionTimeoutMinutes));
 	}
 	if (patch.browserstackBrowsers !== undefined) {
 		next.browserstackBrowsers = String(patch.browserstackBrowsers).trim();

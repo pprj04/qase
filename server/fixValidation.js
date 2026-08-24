@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { atomicWrite } from './atomicWrite.js';
 import {
 	FIX_STATUSES,
 	VALIDATION_RUN_STATUSES,
@@ -33,8 +34,30 @@ export function loadValidations() {
 		const raw = fs.readFileSync(STORE_PATH, 'utf8');
 		const parsed = JSON.parse(raw);
 		runs = Array.isArray(parsed) ? parsed : [];
-	} catch {
+	} catch (err) {
+		// M1-P3 P0-2: audit store corruption must be loud, never silent-empty.
+		console.error('[phase18] FAILED to load fix-validations store:', err?.message || err,
+			'— validation history starts EMPTY. Corrupt file preserved at', STORE_PATH + '.corrupt');
+		try {
+			fs.renameSync(STORE_PATH, STORE_PATH + '.corrupt');
+		} catch { /* nothing to preserve */ }
 		runs = [];
+	}
+	// M1-P3 P0-7: reap non-terminal runs orphaned by a crash/restart —
+	// matches the session 'interrupted' semantics. Without this, a single
+	// crash mid-validation permanently 409-blocks revalidation for the
+	// affected findings (active-run check in phaseRouter).
+	const INTERRUPTED = { status: 'FAILED', failureReason: 'interrupted_by_restart', interruptedAt: new Date().toISOString() };
+	let reaped = 0;
+	for (const run of runs) {
+		if (run.status === 'QUEUED' || run.status === 'RUNNING' || run.status === 'REQUESTED') {
+			Object.assign(run, INTERRUPTED);
+			reaped += 1;
+		}
+	}
+	if (reaped > 0) {
+		console.warn(`[phase18] reaped ${reaped} non-terminal validation run(s) orphaned by restart`);
+		persistNow();
 	}
 	return runs.length;
 }
@@ -43,16 +66,36 @@ function persistNow() {
 	try {
 		fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
 		const keep = runs.slice(0, MAX_RUNS);
-		fs.writeFileSync(STORE_PATH, JSON.stringify(keep, null, 1));
+		// M1-P3 P0-2: atomic tmp+rename (was plain writeFileSync — a crash
+		// mid-write truncated the deterministic fix-validation audit store).
+		atomicWrite(STORE_PATH, JSON.stringify(keep, null, 1));
 	} catch (err) {
 		console.error('[phase18] persist failed:', err.message);
 	}
 }
 
+let pendingWrite = false;
+
 function persistSoon() {
+	pendingWrite = true;
 	if (writeTimer) clearTimeout(writeTimer);
 	writeTimer = setTimeout(persistNow, 250);
 	writeTimer.unref?.();
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent.
+ */
+export function flushFixValidationForShutdown() {
+	if (writeTimer) { clearTimeout(writeTimer); writeTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		persistNow();
+		pendingWrite = false;
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 export function saveRun(run) {

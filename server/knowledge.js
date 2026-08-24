@@ -109,6 +109,19 @@ export function _flushSync() {
 	if (dirty) flushSave();
 }
 
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent (reuses _flushSync).
+ */
+export function flushKnowledgeForShutdown() {
+	if (!dirty) return { dirty: false, ok: true };
+	try {
+		_flushSync();
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
+}
+
 /* ── Sanitization ──────────────────────────────────────────────── */
 
 /**

@@ -34,6 +34,7 @@ const VALID_REPRODUCIBILITIES = [...REPRODUCIBILITIES, 'confirmed', 'unconfirmed
 
 let findings = [];
 let saveTimer = null;
+let pendingWrite = false;
 
 function load() {
 	try {
@@ -60,6 +61,7 @@ function load() {
 }
 
 function persistSoon() {
+	pendingWrite = true;
 	if (saveTimer) return;
 	saveTimer = setTimeout(() => {
 		saveTimer = null;
@@ -70,14 +72,32 @@ function persistSoon() {
 function flush() {
 	try {
 		atomicWrite(FINDINGS_FILE, JSON.stringify(findings, null, '\t'));
+		pendingWrite = false;
 	} catch (error) {
 		console.error('[findings] Failed to persist:', error.message);
+		throw error; // report failure to shutdown registry
 	}
 }
 
 /** Phase 16: schedule an immediate debounced save (used by API handlers). */
 export function persistFindingsSoon() {
 	persistSoon();
+}
+
+/**
+ * M1-P4.4 Phase 2 — graceful shutdown flush. Idempotent: only writes when a
+ * debounced save is still pending. Returns dirty/ok so shutdown.js can log
+ * per-store results. Registered in index.js.
+ */
+export function flushFindingsForShutdown() {
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	if (!pendingWrite) return { dirty: false, ok: true };
+	try {
+		flush();
+		return { dirty: true, ok: true };
+	} catch (err) {
+		return { dirty: true, ok: false, error: err.message };
+	}
 }
 
 load();
