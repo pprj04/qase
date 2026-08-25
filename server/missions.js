@@ -140,6 +140,7 @@ export function createMission(data = {}) {
 		createdByUserId: data.createdByUserId || null,
 		correlationId: data.correlationId || null,
 		idempotencyKey: data.idempotencyKey || null,
+		idempotencyFingerprint: data.idempotencyFingerprint || null,
 		name: data.name || `Mission ${new Date(now).toLocaleString()}`,
 		type: MISSION_TYPES.includes(data.type) ? data.type : 'full_audit',
 		targetUrl: data.targetUrl || null,

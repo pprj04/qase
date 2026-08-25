@@ -184,6 +184,14 @@ console.log('\n[6] LIVE — strict BrowserStack: failure is loud, never local');
 			body: JSON.stringify({ browserstackEnabled: origEnabled, browserstackStrict: origStrict, browserstackUser: origUser, browserstackKey: origKey })
 		}).catch(() => {});
 	};
+	// B1 W8 — signal-safe restore: finally does not run when the runner is
+	// SIGTERM/SIGKILLed mid-test, so register the same restore for signals.
+	const configMod = await import('../server/config.js');
+	const { armConfigRestoreMarker, disarmConfigRestoreMarker } = await import('../server/testRestore.js');
+	const marker = armConfigRestoreMarker({ browserstackEnabled: origEnabled, browserstackStrict: origStrict, browserstackUser: origUser, browserstackKey: origKey }, 'B1 provenance BS mutation');
+	const onSignal = () => { try { configMod.saveConfig({ browserstackEnabled: origEnabled, browserstackStrict: origStrict, browserstackUser: origUser, browserstackKey: origKey }); } catch { /* best effort */ } process.exit(143); };
+	process.once('SIGTERM', onSignal);
+	process.once('SIGINT', onSignal);
 
 	try {
 		// Enable BS with invalid credentials + strict
@@ -212,6 +220,9 @@ console.log('\n[6] LIVE — strict BrowserStack: failure is loud, never local');
 		ok(env?.device === null, 'no device invented');
 	} finally {
 		await restore();
+		disarmConfigRestoreMarker(marker);
+		process.removeListener('SIGTERM', onSignal);
+		process.removeListener('SIGINT', onSignal);
 		const after = await fetch(`${BASE}/api/config`, { headers: { authorization: `Bearer ${token}` } }).then(r => r.json());
 		ok(after.browserstackEnabled === origEnabled, `config restored (enabled=${after.browserstackEnabled})`);
 	}

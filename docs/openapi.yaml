@@ -1,0 +1,292 @@
+openapi: 3.1.0
+info:
+  title: QASE Integration API
+  version: 1.0.0
+  description: |
+    External integration surface for QASE, the autonomous software quality
+    engineer. This contract describes the LIVE API implemented by B1 — every
+    path below is served by server/index.js and exercised end-to-end by
+    examples/reference-client/golden-flow.mjs.
+
+    ## Authentication (B1 W1)
+    Every /api/v1/integration/* request carries an HMAC-SHA256 signature:
+
+        Authorization: QASE-HMAC-SHA256 keyId:timestamp:nonce:signature
+
+    where signature = hex(HMAC-SHA256(secret,
+      "METHOD\nPATH\ntimestamp\nnonce\nbodyDigest")) and
+    bodyDigest = hex(HMAC-SHA256("", rawBody)) (empty string key).
+    PATH is the URL pathname WITHOUT query string. timestamp is unix
+    milliseconds; signatures older than 5 minutes are rejected and each
+    nonce is single-use per key.
+
+    The shared secret is QASE_INTEGRATION_SECRET (env-only on the server).
+    Principals live in .qase/integrations.json: principal admin
+    (workspaceId "*", all scopes) and principal integration (one
+    workspaceId, fixed scope set).
+
+    ## Workspaces (B1 W2)
+    Missions belong to a workspace via mission.workspaceId (falling back to
+    the owning project's workspaceId; legacy null = readable only by admin
+    or the workspace that created it when stamped). Cross-workspace reads
+    return 403 workspace_forbidden. Missing resources return 404 for all
+    callers (no existence leak).
+
+    ## Correlation & idempotency (B1 W4)
+    X-Correlation-Id (1-128 URL-safe chars) is echoed on every response,
+    stamped onto created missions, and propagated to webhook deliveries.
+    The server generates cid_<uuid> when absent. POST
+    /api/v1/integration/missions accepts an Idempotency-Key header
+    (workspace-scoped, restart-safe via missions.json). Same key + same
+    request fingerprint (SHA-256 of semantic fields) → 200 with the original
+    mission and idempotentReplay=true. Same key + different fingerprint →
+    409 idempotency_key_reused. Webhook deliveries are signed envelopes
+    (X-Qase-Event-Id is the dedupe key; retry schedule 1s/4s/16s/64s/256s,
+    5 attempts) — see docs/integration-guide.md §4a.
+servers:
+  - url: '{baseUrl}'
+    variables:
+      baseUrl:
+        default: http://localhost:5173
+security:
+  - hmacSignature: []
+components:
+  securitySchemes:
+    hmacSignature:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'QASE-HMAC-SHA256 keyId:timestampMs:nonce:signature'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                code:
+                  type: string
+                  enum: [unknown_key, bad_signature, stale_signature,
+                         replayed_nonce, invalid_auth_header, not_configured,
+                         admin_required, scope_forbidden, workspace_forbidden,
+                         mission_not_found, finding_not_found, invalid_max_turns,
+                         invalid_url, url_required, no_runs, validation_in_progress]
+                message:
+                  type: string
+    MissionSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [created, queued, running, completed, failed, aborted, cancelled] }
+        type: { type: string }
+        targetUrl: { type: string }
+        qualityScore: { type: [number, 'null'] }
+        verdict: { type: [string, 'null'] }
+        findingsCount: { type: integer }
+        sessionId: { type: [string, 'null'] }
+        turnCount: { type: [integer, 'null'], description: 'Actual assistant turns executed (from assistant_turn_start stream events).' }
+        maxTurns: { type: [integer, 'null'], description: 'Mission-scoped turn budget as created.' }
+        correlationId: { type: [string, 'null'] }
+        createdAt: { type: integer }
+        completedAt: { type: [integer, 'null'] }
+        failureReason: { type: [string, 'null'] }
+paths:
+  /api/v1/integration/whoami:
+    get:
+      summary: Verify integration identity
+      responses:
+        '200':
+          description: Identity of the signing key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keyId: { type: string }
+                  principal: { type: string, enum: [admin, integration] }
+                  workspaceId: { type: string }
+                  label: { type: string }
+                  scopes: { type: array, items: { type: string } }
+        '401': { description: Invalid/missing/replayed signature, $ref: '#/components/schemas/Error' }
+  /api/v1/integration/keys:
+    post:
+      summary: Register an integration key (admin only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [keyId, workspaceId]
+              properties:
+                keyId: { type: string, pattern: '^[A-Za-z0-9_-]{4,64}$' }
+                workspaceId: { type: string, maxLength: 100 }
+                label: { type: string }
+      responses:
+        '201': { description: Registered }
+        '403': { description: admin_required }
+        '400': { description: invalid_key_id / invalid_workspace }
+    get:
+      summary: List integration keys (admin only)
+      responses:
+        '200': { description: Key list }
+        '403': { description: admin_required }
+  /api/v1/integration/missions:
+    post:
+      summary: Create a mission (idempotent, auto-starts unless autoStart=false)
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, maxLength: 200 }
+          description: Workspace-scoped; replay returns the original mission with idempotentReplay=true.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetUrl]
+              properties:
+                name: { type: string }
+                type: { type: string, example: smoke }
+                targetUrl: { type: string, format: uri }
+                context:
+                  type: object
+                  properties:
+                    maxTurns:
+                      type: integer
+                      minimum: 1
+                      maximum: 500
+                      description: Mission-scoped turn budget. Reaches the agent execution layer (agent.js effectiveMaxTurns) and an independent hard-abort. Non-integer, <1 or >500 → 400 invalid_max_turns.
+                testCredentials:
+                  type: object
+                  properties:
+                    username: { type: string }
+                    password: { type: string }
+                autoStart: { type: boolean, default: true }
+                workspaceId: { type: string, description: Admin ('*') only }
+      responses:
+        '202': { description: Created and started (or queued) }
+        '201': { description: Created, not started (autoStart=false) — POST /:id/start to begin }
+        '200': { description: Idempotent replay }
+        '400': { description: invalid_max_turns / target rejected by SSRF guard }
+        '403': { description: scope_forbidden }
+  /api/v1/integration/missions/{id}:
+    get:
+      summary: Mission status (poll this)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: MissionSummary }
+        '403': { description: workspace_forbidden }
+        '404': { description: mission_not_found }
+  /api/v1/integration/missions/{id}/start:
+    post:
+      summary: Start a created (autoStart=false) mission
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '202': { description: Started or queued }
+        '403': { description: workspace_forbidden / scope_forbidden }
+        '409': { description: Already running/queued/terminal }
+        '400': { description: Target rejected at execution time }
+  /api/v1/integration/missions/{id}/stop:
+    post:
+      summary: Abort a running mission
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Aborted }
+        '403': { description: workspace_forbidden / scope_forbidden }
+  /api/v1/integration/missions/{id}/report:
+    get:
+      summary: Full report (JSON or markdown)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: format, schema: { type: string, enum: [json, md, markdown] } }
+      responses:
+        '200': { description: Report }
+        '403': { description: workspace_forbidden }
+  /api/v1/integration/missions/{id}/findings:
+    get:
+      summary: Mission findings (paginated)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, maximum: 200, default: 100 } }
+        - { in: query, name: offset, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Findings page }
+        '403': { description: workspace_forbidden }
+  /api/v1/integration/missions/{id}/evidence:
+    get:
+      summary: Mission evidence items (paginated)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: limit, schema: { type: integer, maximum: 500, default: 100 } }
+        - { in: query, name: offset, schema: { type: integer, default: 0 } }
+      responses:
+        '200': { description: Evidence page }
+        '403': { description: workspace_forbidden }
+  /api/v1/integration/missions/{id}/revalidate:
+    post:
+      summary: Trigger a revalidation iteration (validation loop)
+      description: |
+        Re-runs the agent against the mission's stored targetUrl with
+        knowledge of previous findings. Guards: already-running → 409,
+        iteration limit reached → 409, convergence (NO_IMPROVEMENT) → 409.
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '202': { description: Iteration started/queued }
+        '409': { description: Running / MAX_ITERATIONS / NO_IMPROVEMENT }
+        '403': { description: workspace_forbidden / scope_forbidden }
+  /api/v1/integration/findings/{id}/revalidate:
+    post:
+      summary: Trigger a Phase 18 fix-validation run for one finding
+      description: |
+        Deterministic fix validation (the LLM never selects the fix status).
+        Idempotency-Key supported. Active run → 409 with validationId.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: header, name: Idempotency-Key, schema: { type: string, maxLength: 200 } }
+      responses:
+        '202': { description: Run queued, body includes validationId + pollUrl }
+        '200': { description: Idempotent duplicate }
+        '409': { description: validation_in_progress }
+        '403': { description: workspace_forbidden / scope_forbidden }
+  /api/v1/integration/findings/{id}/validation:
+    get:
+      summary: Fix-validation history for a finding
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: latest run + history + metrics }
+        '404': { description: finding_not_found / no_runs }
+  /api/v1/integration/webhooks:
+    post:
+      summary: Register a signed webhook subscription
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri, description: Validated by the SSRF targetGuard on registration AND before every delivery attempt. }
+                events:
+                  type: array
+                  items: { type: string, enum: [mission.completed, mission.failed, finding.revalidated] }
+                label: { type: string }
+      responses:
+        '201': { description: Registered (webhookId) }
+        '400': { description: invalid_url (SSRF policy) }
+webhooks:
+  mission.completed:
+    post:
+      summary: Mission finished with verdict/quality
+      description: |
+        Delivered with headers X-Qase-Event, X-Qase-Timestamp (unix seconds),
+        X-Qase-Signature: v1=hex(HMAC-SHA256(QASE_INTEGRATION_SECRET, "<ts>.<body>")),
+        X-Correlation-Id (when the mission has one). Retried up to 5 attempts
+        with 1s/4s/16s/64s/256s backoff; delivery state survives restarts.
+  mission.failed:
+    post:
+      summary: Mission ended failed (all failure paths)
+  finding.revalidated:
+    post:
+      summary: Phase 18 fix-validation run completed (fixStatus VERIFIED_FIXED / NOT_FIXED / …)

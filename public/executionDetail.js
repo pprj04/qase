@@ -10,7 +10,7 @@
  * values are rendered as "not recorded" or the row is hidden entirely.
  */
 
-import { api, escapeHtml, state } from './shared.js';
+import { api, apiRaw, escapeHtml, state } from './shared.js';
 import { openBugDetail } from './bugs.js';
 
 /* ── Execution header meta ─────────────────────────────────────────── */
@@ -303,10 +303,8 @@ async function loadSessionEvidence(sessionId, { force = false } = {}) {
 	evState.loading = true;
 	evState.error = null;
 	try {
-		let token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
-		const res = await fetch(`/api/v1/sessions/${sessionId}/evidence?limit=200`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {}
-		});
+		// B1 W3 — authed read via the raw helper (token from Settings).
+		const res = await apiRaw(`/v1/sessions/${sessionId}/evidence?limit=200`);
 		if (!res.ok) throw new Error(`evidence API ${res.status}`);
 		const data = await res.json();
 		let items = data.evidence ?? [];
@@ -341,9 +339,8 @@ async function loadSessionEvidence(sessionId, { force = false } = {}) {
  */
 async function deriveEvidenceFromSteps(sessionId, token) {
 	try {
-		const res = await fetch(`/api/sessions/${sessionId}/detail?field=capturedSteps`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {}
-		});
+		// B1 W3 — authed read via the raw helper.
+		const res = await apiRaw(`/sessions/${sessionId}/detail?field=capturedSteps`);
 		if (!res.ok) return [];
 		const steps = await res.json();
 		if (!Array.isArray(steps)) return [];
@@ -396,10 +393,8 @@ const SEV_CLASS = { critical: 'sev-critical', high: 'sev-high', medium: 'sev-med
 
 async function evidenceCountFor(findingId) {
 	try {
-		let token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
-		const res = await fetch(`/api/findings/${findingId}/evidence`, {
-			headers: token ? { Authorization: `Bearer ${token}` } : {}
-		});
+		// B1 W3 — authed read via the raw helper.
+		const res = await apiRaw(`/findings/${findingId}/evidence`);
 		if (!res.ok) return 0;
 		const arr = await res.json();
 		return Array.isArray(arr) ? arr.length : 0;

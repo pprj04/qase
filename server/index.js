@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import * as path from 'node:path';
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { closeBrowser, ensureRuntime, runTurn } from './agent.js';
+import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
 import { mountDemoSite } from './demoSite.js';
@@ -60,12 +60,26 @@ import {
 	createMission, getMission, listMissions, updateMission, deleteMission,
 	finalizeMission, loadMissionsFromDisk, recoverInterruptedMissions, missionBus, recordIteration,
 	getComparisonIterations, isTerminalStatus, listQueuedMissionIds,
-	flushMissionsForShutdown
+	flushMissionsForShutdown, findByIdempotencyKey
 } from './missions.js';
+// B1 W1/W2 — integration auth boundary + workspace ownership.
+import {
+	requireIntegrationAuth, workspaceMatches, hasScope, listIntegrations,
+	getIntegration, upsertIntegration, flushIntegrations
+} from './integrationAuth.js';
 // M1-P4.4 Phase 2 — graceful-shutdown flush registry (SIGINT/SIGTERM).
 import { registerStoreFlush, flushAllStores } from './shutdown.js';
 import { flushEvidenceGraphForShutdown, pruneUnlinked } from './evidenceGraph.js';
-import { flushFixValidationForShutdown } from './fixValidation.js';
+import { flushFixValidationForShutdown, validationBus } from './fixValidation.js';
+// B1 W7 — Phase 18 fix-validation primitives shared with the integration surface.
+import {
+	findByIdempotencyKey as findValidationByIdempotencyKey,
+	getRunsForFinding as getValidationRunsForFinding,
+	createRun as createValidationRun,
+	transitionRun as transitionValidationRun,
+	getFixValidationMetrics as getValidationMetrics
+} from './fixValidation.js';
+import { executeValidation } from './validationExecutorCore.js';
 import { flushReplayRunsForShutdown, pruneRunsByIds } from './replayStore.js';
 import { flushUxAssessmentsForShutdown, pruneAssessmentsByIds } from './uxAssessment.js';
 import { flushRegressionRunsForShutdown } from './regressionStore.js';
@@ -109,13 +123,21 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+// B1 W1 — capture the raw body BEFORE json parsing so HMAC signature
+// verification signs the exact bytes that were sent (not a re-serialization).
+app.use(express.json({
+	limit: '1mb',
+	verify: (request, _response, buf) => {
+		request.rawIntegrationBody = buf?.toString('utf8') ?? '';
+	}
+}));
 app.use(setAuthCookie);
+app.use(correlationIdMiddleware); // B1 W4 — every response carries X-Correlation-Id
 app.use(express.static(path.join(here, '..', 'public')));
 
 // Serve persisted run artifacts (screenshots, traces) from .qase/artifacts/
 const artifactsRoot = path.join(here, '..', '.qase', 'artifacts');
-app.get('/api/artifacts/:runId/:filename', (request, response) => {
+app.get('/api/artifacts/:runId/:filename', requireApiToken, (request, response) => {
 	const { runId, filename } = request.params;
 	// Prevent path traversal — only allow alphanumeric, dash, underscore, dot.
 	if (!/^[\w.\-]+$/.test(runId) || !/^[\w.\-]+$/.test(filename)) {
@@ -227,6 +249,29 @@ function safeEqual(a, b) {
  *
  * Usage: apply to specific routes via `app.post('/path', requireApiToken, handler)`.
  */
+/* ── B1 W4 — Correlation IDs ─────────────────────────────────────── */
+
+/**
+ * X-Correlation-Id: request → response → mission → logs → webhook.
+ * Callers may supply one (validated: 1–128 chars, URL/header-safe subset);
+ * otherwise one is generated. Attached to every response and stamped onto
+ * every console log line for this request via a bound logger.
+ */
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+function correlationIdMiddleware(request, response, next) {
+	const incoming = request.headers['x-correlation-id'];
+	let cid;
+	if (typeof incoming === 'string' && CORRELATION_ID_PATTERN.test(incoming)) {
+		cid = incoming;
+	} else {
+		cid = `cid_${randomUUID()}`;
+	}
+	request.correlationId = cid;
+	response.setHeader('X-Correlation-Id', cid);
+	request.log = (...args) => console.log(`[${cid}]`, ...args);
+	next();
+}
 function requireApiToken(request, response, next) {
 	const token = getConfig().apiToken;
 	if (!token) {
@@ -243,6 +288,16 @@ function requireApiToken(request, response, next) {
 	// Method 2: Cookie (same-origin browser UI).
 	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
 	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
+		return next();
+	}
+
+	// Method 3 (B1 W3): ?token= query parameter — EventSource cannot set
+	// headers, so the UI's live event stream authenticates via query string.
+	// Same timing-safe comparison; the token never appears in server logs
+	// (Express does not log query strings by default) and the SPA strips it
+	// from the visible URL.
+	const queryToken = request.query?.token;
+	if (typeof queryToken === 'string' && queryToken && safeEqual(queryToken, token)) {
 		return next();
 	}
 
@@ -332,10 +387,17 @@ import {
  * session, links it, stamps running+startedAt, and kicks startTurn.
  */
 function startMissionExecution(mission, begin) {
-	return submitMission(mission.id, () => begin());
+	return submitMission(mission.id, () => {
+		// B1 W2 — stamp the session with its mission so session-born findings
+		// can be linked to (and authorized through) the mission. Stamp BEFORE
+		// begin() so the very first session-store write already carries it.
+		const seeded = begin();
+		seeded && (seeded.missionId = mission.id);
+		return seeded;
+	});
 }
 
-app.get('/api/config', (_request, response) => {
+app.get('/api/config', requireApiToken, (_request, response) => {
 	response.json(getPublicConfig());
 });
 
@@ -409,7 +471,7 @@ app.post('/api/config/test-browserstack', requireApiToken, async (request, respo
 	}
 });
 
-app.get('/api/sessions', (request, response) => {
+app.get('/api/sessions', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	// Ordered newest-first (lastActivity) so pages are stable.
 	const list = listSessions({ projectId: request.query.projectId })
@@ -431,7 +493,7 @@ app.post('/api/sessions', requireApiToken, (request, response) => {
 	response.status(201).json(createSession('New test run', projectId, deviceCheck?.deviceName ? { deviceRequest: deviceCheck.deviceName } : {}));
 });
 
-app.get('/api/sessions/:id', (request, response) => {
+app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -614,7 +676,7 @@ app.post('/api/sessions/:id/stop', requireApiToken, (request, response) => {
 });
 
 /** Lazy-load heavy session arrays (messages, steps, findings) for large sessions. */
-app.get('/api/sessions/:id/detail', (request, response) => {
+app.get('/api/sessions/:id/detail', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const field = request.query.field; // 'messages' | 'capturedSteps' | 'findings'
@@ -628,7 +690,7 @@ app.get('/api/sessions/:id/detail', (request, response) => {
 	});
 });
 
-app.get('/api/sessions/:id/report.md', (request, response) => {
+app.get('/api/sessions/:id/report.md', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -648,7 +710,7 @@ app.post('/api/sessions/:id/run-pipeline', requireApiToken, (request, response) 
 	response.json({ ok: true, message: 'Pipeline triggered' });
 });
 
-app.get('/api/sessions/:id/pipeline-status', (request, response) => {
+app.get('/api/sessions/:id/pipeline-status', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -677,14 +739,14 @@ app.post('/api/sessions/:id/analyze-dev', requireApiToken, async (request, respo
 });
 
 /** Fetch persisted dev intelligence for a session. */
-app.get('/api/sessions/:id/dev-intelligence', (request, response) => {
+app.get('/api/sessions/:id/dev-intelligence', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	response.json(session.devIntelligence ?? null);
 });
 
 /** Application Understanding model for a session (Phase 2). */
-app.get('/api/sessions/:id/app-understanding', (request, response) => {
+app.get('/api/sessions/:id/app-understanding', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const appModel = session.appModel || null;
@@ -693,7 +755,7 @@ app.get('/api/sessions/:id/app-understanding', (request, response) => {
 });
 
 /** Application Understanding summary for a session (Phase 2). */
-app.get('/api/sessions/:id/app-understanding-summary', (request, response) => {
+app.get('/api/sessions/:id/app-understanding-summary', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const summary = session.pipeline?.summary?.appUnderstanding ?? null;
@@ -711,7 +773,7 @@ app.get('/api/sessions/:id/app-understanding-summary', (request, response) => {
 });
 
 /** Feature gap analysis for the Application Understanding card. */
-app.get('/api/sessions/:id/feature-gaps', (request, response) => {
+app.get('/api/sessions/:id/feature-gaps', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const summary = session.pipeline?.summary;
@@ -720,7 +782,7 @@ app.get('/api/sessions/:id/feature-gaps', (request, response) => {
 });
 
 /** Per-finding intelligence: structured fix suggestion. */
-app.get('/api/findings/:id/dev-analysis', async (request, response) => {
+app.get('/api/findings/:id/dev-analysis', requireApiToken, async (request, response) => {
 	const finding = getFinding(request.params.id);
 	if (!finding) return response.status(404).json({ error: 'Finding not found' });
 	if (!finding.devIntelligence || request.query.force === '1') {
@@ -735,7 +797,7 @@ app.get('/api/findings/:id/dev-analysis', async (request, response) => {
 });
 
 /** Per-finding AI-ready fix prompt. */
-app.get('/api/findings/:id/fix-prompt', (request, response) => {
+app.get('/api/findings/:id/fix-prompt', requireApiToken, (request, response) => {
 	const finding = getFinding(request.params.id);
 	if (!finding) return response.status(404).json({ error: 'Finding not found' });
 	const prompt = buildFixPrompt(finding, finding.devIntelligence ?? finding.intelligence ?? null);
@@ -743,7 +805,7 @@ app.get('/api/findings/:id/fix-prompt', (request, response) => {
 });
 
 /** App-level AI-ready improvement prompt (all findings in a session). */
-app.get('/api/sessions/:id/app-improvement-prompt', (request, response) => {
+app.get('/api/sessions/:id/app-improvement-prompt', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const prompt = buildAppImprovementPromptText(session.findings ?? [], session.devIntelligence?.appReport ?? null);
@@ -751,7 +813,7 @@ app.get('/api/sessions/:id/app-improvement-prompt', (request, response) => {
 });
 
 /** Full developer intelligence markdown report. */
-app.get('/api/sessions/:id/dev-report', (request, response) => {
+app.get('/api/sessions/:id/dev-report', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	if (!session.devIntelligence) return response.status(404).json({ error: 'No dev intelligence for this session yet. Trigger analysis first.' });
@@ -769,27 +831,27 @@ app.get('/api/sessions/:id/dev-report', (request, response) => {
 /* ── Knowledge routes (Phase 3) ─────────────────────────────────── */
 
 /** Get all knowledge patterns with stats. */
-app.get('/api/knowledge', (request, response) => {
+app.get('/api/knowledge', requireApiToken, (request, response) => {
 	const stats = getKnowledgeStats();
 	const allPatterns = getAllPatterns().map(p => summarizeKnowledgeItem(p));
 	response.json({ patterns: allPatterns, stats });
 });
 
 /** Get a specific knowledge pattern with full provenance. */
-app.get('/api/knowledge/:id', (request, response) => {
+app.get('/api/knowledge/:id', requireApiToken, (request, response) => {
 	const provenance = getPatternProvenance(request.params.id);
 	if (!provenance) return response.status(404).json({ error: 'Knowledge pattern not found' });
 	response.json(provenance);
 });
 
 /** Get knowledge patterns associated with a mission. */
-app.get('/api/missions/:id/knowledge', (request, response) => {
+app.get('/api/missions/:id/knowledge', requireApiToken, (request, response) => {
 	const patterns = getPatternsForMission(request.params.id);
 	response.json({ patterns });
 });
 
 /** Get knowledge relevant to a session (hints that were injected). */
-app.get('/api/sessions/:id/knowledge', (request, response) => {
+app.get('/api/sessions/:id/knowledge', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const hints = session.knowledgeHints || [];
@@ -800,7 +862,7 @@ app.get('/api/sessions/:id/knowledge', (request, response) => {
 });
 
 /** Get knowledge statistics. */
-app.get('/api/knowledge-stats', (request, response) => {
+app.get('/api/knowledge-stats', requireApiToken, (request, response) => {
 	response.json(getKnowledgeStats());
 });
 
@@ -823,7 +885,7 @@ app.post('/api/knowledge/decay', requireApiToken, (request, response) => {
  * Get the current/latest decision for a session.
  * Read-only — returns the most recent decision from history.
  */
-app.get('/api/sessions/:id/decision', (request, response) => {
+app.get('/api/sessions/:id/decision', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const history = session.decisionHistory ?? [];
@@ -839,7 +901,7 @@ app.get('/api/sessions/:id/decision', (request, response) => {
 /**
  * Get all decisions for a session (full history).
  */
-app.get('/api/sessions/:id/decisions', (request, response) => {
+app.get('/api/sessions/:id/decisions', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 	const history = session.decisionHistory ?? [];
@@ -852,7 +914,7 @@ app.get('/api/sessions/:id/decisions', (request, response) => {
 /**
  * Get decisions for a mission — looks up the linked session(s).
  */
-app.get('/api/missions/:id/decisions', (request, response) => {
+app.get('/api/missions/:id/decisions', requireApiToken, (request, response) => {
 	const mission = getMission(request.params.id);
 	if (!mission) return response.status(404).json({ error: 'Mission not found' });
 
@@ -887,7 +949,7 @@ app.get('/api/missions/:id/decisions', (request, response) => {
 
 /* ── Workflow routes ────────────────────────────────────────────── */
 
-app.get('/api/sessions/:id/workflow', (request, response) => {
+app.get('/api/sessions/:id/workflow', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -912,13 +974,13 @@ app.post('/api/sessions/:id/workflow', requireApiToken, (request, response) => {
 	}
 });
 
-app.get('/api/workflows', (request, response) => {
+app.get('/api/workflows', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	const { body } = paginateList(listWorkflows({ projectId: request.query.projectId, targetUrl: request.query.targetUrl }), request.query);
 	response.json(body);
 });
 
-app.get('/api/workflows/:id', (request, response) => {
+app.get('/api/workflows/:id', requireApiToken, (request, response) => {
 	const wf = getWorkflow(request.params.id);
 	if (!wf) {
 		return response.status(404).json({ error: 'Workflow not found' });
@@ -962,7 +1024,7 @@ app.post('/api/workflows/:id/generate-tests', requireApiToken, async (request, r
 	}
 });
 
-app.get('/api/test-cases', (request, response) => {
+app.get('/api/test-cases', requireApiToken, (request, response) => {
 	const cases = listTestCases({
 		projectId: request.query.projectId,
 		targetUrl: request.query.targetUrl,
@@ -980,7 +1042,7 @@ app.get('/api/test-cases', (request, response) => {
 	response.json(body);
 });
 
-app.get('/api/test-cases/export', (request, response) => {
+app.get('/api/test-cases/export', requireApiToken, (request, response) => {
 	const format = request.query.format ?? 'json';
 	const testCases = listTestCases({ projectId: request.query.projectId });
 
@@ -1039,11 +1101,11 @@ app.post('/api/test-cases/:id/clone', requireApiToken, (request, response) => {
 	response.status(201).json(clone);
 });
 
-app.get('/api/test-cases/tags', (request, response) => {
+app.get('/api/test-cases/tags', requireApiToken, (request, response) => {
 	response.json(listTags({ projectId: request.query.projectId }));
 });
 
-app.get('/api/test-cases/:id', (request, response) => {
+app.get('/api/test-cases/:id', requireApiToken, (request, response) => {
 	const tc = getTestCase(request.params.id);
 	if (!tc) {
 		return response.status(404).json({ error: 'Test case not found' });
@@ -1076,7 +1138,7 @@ app.delete('/api/test-cases/:id', requireApiToken, (request, response) => {
 
 /* ── Suite routes ──────────────────────────────────────────────── */
 
-app.get('/api/suites', (request, response) => {
+app.get('/api/suites', requireApiToken, (request, response) => {
 	response.json(listSuites({ projectId: request.query.projectId }));
 });
 
@@ -1138,6 +1200,52 @@ app.post('/api/test-cases/:id/run', requireApiToken, async (request, response) =
 });
 
 app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
+
+// ── B1 W2 test support (token-gated, test-only) ─────────────────────────
+// Injects a synthetic SESSION-BORN finding (sessionId set, missionId absent)
+// linked to a mission via its sessionId, so the integration linkage contract
+// can be regression-tested without a full agent run. Token auth required;
+// never exposed on the integration surface.
+app.post('/api/test-support/session-born-finding', requireApiToken, (request, response) => {
+	const { missionId, title, severity } = request.body ?? {};
+	const mission = missionId && getMission(missionId);
+	if (!mission) {
+		return response.status(404).json({ error: { code: 'mission_not_found', message: 'Mission not found.' } });
+	}
+	// The mission must have a sessionId for the linkage to be exercised; if
+	// it hasn't started, synthesize one without starting the agent.
+	let sessionId = mission.sessionId;
+	if (!sessionId) {
+		const session = createSession(`${mission.name || 'fixture'} (synthetic session)`, mission.projectId, {});
+		session.targetUrl = mission.targetUrl;
+		updateMission(mission.id, { sessionId: session.id });
+		sessionId = session.id;
+	}
+	const finding = addFinding({
+		id: `sfnd_${randomUUID().slice(0, 8)}`,
+		ts: Date.now(),
+		sessionId,
+		projectId: mission.projectId,
+		title: title || 'Synthetic session-born finding',
+		severity: severity || 'low',
+		category: 'functional',
+		url: mission.targetUrl,
+		steps: [], expected: 'fixture', actual: 'fixture',
+		evidence: []
+	});
+	response.json({ findingId: finding.id, sessionId });
+});
+
+app.post('/api/test-support/session-born-finding/cleanup', requireApiToken, (request, response) => {
+	const { findingId, missionId } = request.body ?? {};
+	let removed = 0;
+	if (findingId) { try { deleteFinding(findingId); removed++; } catch { /* gone */ } }
+	if (missionId) { try { deleteMission(missionId); removed++; } catch { /* gone */ } }
+	response.json({ removed });
+});
+// ── end test support ────────────────────────────────────────────────────
+
+
 	const { testCaseIds, credentials, browsers, device } = request.body ?? {};
 	// B0.3 — suite-level device override, same validation as single-run.
 	const deviceCheck = device != null ? validateDeviceRequest(device) : null;
@@ -1177,13 +1285,13 @@ app.post('/api/test-cases/run', requireApiToken, async (request, response) => {
 	}
 });
 
-app.get('/api/test-cases/:id/runs', (request, response) => {
+app.get('/api/test-cases/:id/runs', requireApiToken, (request, response) => {
 	response.json(listRuns(request.params.id));
 });
 
 /* ── Visual regression baseline routes ──────────────────────────── */
 
-app.get('/api/test-cases/:id/baselines', (request, response) => {
+app.get('/api/test-cases/:id/baselines', requireApiToken, (request, response) => {
 	response.json(getBaselines(request.params.id));
 });
 
@@ -1229,7 +1337,7 @@ app.delete('/api/test-cases/:id/baselines', requireApiToken, (request, response)
 
 /* ── Schedule routes ────────────────────────────────────────────── */
 
-app.get('/api/schedules', (request, response) => {
+app.get('/api/schedules', requireApiToken, (request, response) => {
 	response.json(listSchedules({ projectId: request.query.projectId }));
 });
 
@@ -1274,13 +1382,13 @@ app.post('/api/schedules/:id/run', requireApiToken, async (request, response) =>
 	}
 });
 
-app.get('/api/schedules/:id/runs', (request, response) => {
+app.get('/api/schedules/:id/runs', requireApiToken, (request, response) => {
 	response.json(listRegressionRuns({ scheduleId: request.params.id }));
 });
 
 /* ── Regression trends ──────────────────────────────────────────── */
 
-app.get('/api/regression/trend', (request, response) => {
+app.get('/api/regression/trend', requireApiToken, (request, response) => {
 	response.json(getTrend({
 		projectId: request.query.projectId,
 		scheduleId: request.query.scheduleId,
@@ -1289,7 +1397,7 @@ app.get('/api/regression/trend', (request, response) => {
 	}));
 });
 
-app.get('/api/regression/runs', (request, response) => {
+app.get('/api/regression/runs', requireApiToken, (request, response) => {
 	response.json(listRegressionRuns({
 		projectId: request.query.projectId,
 		scheduleId: request.query.scheduleId,
@@ -1299,7 +1407,7 @@ app.get('/api/regression/runs', (request, response) => {
 });
 
 // Get a single regression run, optionally as JUnit XML.
-app.get('/api/regression/runs/:id', (request, response) => {
+app.get('/api/regression/runs/:id', requireApiToken, (request, response) => {
 	const run = getRegressionRun(request.params.id);
 	if (!run) {
 		return response.status(404).json({ error: 'Regression run not found' });
@@ -1319,7 +1427,7 @@ app.post('/api/validate-cron', requireApiToken, (request, response) => {
 });
 
 /** Server-sent events: one stream per session, carrying state and browser frames. */
-app.get('/api/sessions/:id/events', (request, response) => {
+app.get('/api/sessions/:id/events', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) {
 		return;
@@ -1353,7 +1461,7 @@ app.get('/api/sessions/:id/events', (request, response) => {
 
 /* ── Metrics dashboard ──────────────────────────────────────────── */
 
-app.get('/api/metrics/dashboard', (request, response) => {
+app.get('/api/metrics/dashboard', requireApiToken, (request, response) => {
 	response.json(getDashboardMetrics({ projectId: request.query.projectId }));
 });
 
@@ -1363,11 +1471,11 @@ app.get('/api/metrics/dashboard', (request, response) => {
  * authorized the SPA's boot fetches; registered BEFORE the phaseRouter mount
  * (whose router.use(auth) gates everything under /api) so they stay public.
  * All mutations on these resources remain token-gated. */
-app.get('/api/projects', (_request, response) => {
+app.get('/api/projects', requireApiToken, (_request, response) => {
 	response.json(listProjects());
 });
 
-app.get('/api/findings', (request, response) => {
+app.get('/api/findings', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	const { body } = paginateList(listFindings({
 		projectId: request.query.projectId,
@@ -1381,7 +1489,7 @@ app.get('/api/findings', (request, response) => {
 	response.json(body);
 });
 
-app.get('/api/missions', (request, response) => {
+app.get('/api/missions', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	const { body } = paginateList(listMissions({
 		projectId: request.query.projectId,
@@ -1407,28 +1515,447 @@ import { isLegalMissionTransition } from './stateTransitions.js';
 import { checkStateIntegrity } from './stateIntegrity.js';
 // M1-P4.3 — backward-compatible pagination for large collections.
 import { paginateList } from './pagination.js';
-const PUBLIC_READ_GET = [
-	/^\/findings\/[^/]+\/evidence$/,
-	/^\/missions\/[^/]+\/mission-for-session$/,
-	/^\/findings\/[^/]+$/,
-	/^\/missions\/[^/]+\/ux-quality$/,
-	/^\/v1\/findings\/[^/]+\/validation$/,
-	/^\/v1\/missions\/[^/]+\/loop-status$/,
-	/^\/v1\/missions\/[^/]+\/evidence-coverage$/,
-	/^\/v1\/evidence\/stats$/
-];
+// B1 W3 — anonymous read surface closed. The M1-P3 public-read exemptions
+// are removed: every phaseRouter route now requires the bearer/cookie token
+// (the SPA attaches it from localStorage), EXCEPT the HMAC-signed
+// /api/v1/integration/* surface which authenticates itself.
+const PUBLIC_READ_GET = [];
 app.use('/api', phaseRouter(requireApiToken, PUBLIC_READ_GET));
+
+/* ═══════════════ B1 — Integration API (HMAC-signed) ═══════════════ */
+
+/**
+ * B1 W1/W2/W4 — the external integration surface. Requests authenticate
+ * with QASE-HMAC-SHA256 signatures (QASE_INTEGRATION_SECRET), identify as
+ * admin or integration principals bound to a workspace, and carry
+ * workspace-scoped idempotency + correlation semantics. The legacy UI
+ * bearer-token surface is untouched.
+ */
+
+// Bootstrap: seed the admin principal once (idempotent) so a fresh server
+// has an operator identity. keyId is logged at boot ONLY in the form of a
+// hint — the operator derives the same keyId from their own records.
+function bootstrapIntegrationPrincipals() {
+	const adminKeyId = process.env.QASE_ADMIN_KEY_ID?.trim() || 'qase-admin';
+	if (!getIntegration(adminKeyId)) {
+		upsertIntegration({ keyId: adminKeyId, principal: 'admin', workspaceId: '*', label: 'operator admin' });
+		console.log(`[integrations] bootstrapped admin principal (keyId: ${adminKeyId.slice(0, 6)}…)`);
+	}
+}
+bootstrapIntegrationPrincipals();
+
+/* ── Integration: who am I (auth check) ── */
+app.get('/api/v1/integration/whoami', requireIntegrationAuth, (request, response) => {
+	response.json({
+		keyId: request.integration.keyId,
+		principal: request.integration.principal,
+		workspaceId: request.integration.workspaceId,
+		label: request.integration.label,
+		scopes: request.integration.principal === 'admin'
+			? ['*']
+			: ['mission:create', 'mission:read', 'mission:stop', 'findings:read', 'evidence:read', 'revalidate']
+	});
+});
+
+/* ── Integration: register an integration principal (ADMIN only) ── */
+app.post('/api/v1/integration/keys', requireIntegrationAuth, (request, response) => {
+	if (request.integration.principal !== 'admin') {
+		return response.status(403).json({ error: { code: 'admin_required', message: 'Only the admin principal may register integrations.' } });
+	}
+	const { keyId, workspaceId, label } = request.body ?? {};
+	if (!keyId || typeof keyId !== 'string' || !/^[A-Za-z0-9_-]{4,64}$/.test(keyId)) {
+		return response.status(400).json({ error: { code: 'invalid_key_id', message: 'keyId: 4–64 chars [A-Za-z0-9_-].' } });
+	}
+	if (!workspaceId || typeof workspaceId !== 'string' || workspaceId.length > 100) {
+		return response.status(400).json({ error: { code: 'invalid_workspace', message: 'workspaceId required (≤100 chars).' } });
+	}
+	const record = upsertIntegration({ keyId, principal: 'integration', workspaceId, label });
+	response.status(201).json({ keyId: record.keyId, principal: record.principal, workspaceId: record.workspaceId, label: record.label });
+});
+
+/* ── Integration: list principals (ADMIN only; no secrets — there are none) ── */
+app.get('/api/v1/integration/keys', requireIntegrationAuth, (_request, response) => {
+	if (_request.integration.principal !== 'admin') {
+		return response.status(403).json({ error: { code: 'admin_required', message: 'Admin only.' } });
+	}
+	response.json({ integrations: listIntegrations() });
+});
+
+/* ── Integration: workspace-scoped mission create ── */
+app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request, response) => {
+	const body = request.body ?? {};
+	if (!hasScope(request.integration, 'mission:create')) {
+		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks mission:create.' } });
+	}
+	if (!body.targetUrl) {
+		return response.status(400).json({ error: { code: 'target_required', message: 'targetUrl is required.' } });
+	}
+	const targetCheck = await validateTargetUrl(body.targetUrl);
+	if (!targetCheck.ok) {
+		return response.status(400).json({ error: { code: targetCheck.code, message: targetCheck.message } });
+	}
+	// maxTurns contract — same validation as the UI route.
+	const rawMaxTurns = body.context?.maxTurns ?? body.maxTurns ?? null;
+	let missionMaxTurns = null;
+	if (rawMaxTurns !== null) {
+		const n = Number(rawMaxTurns);
+		if (!Number.isInteger(n) || n < 1 || n > 500) {
+			return response.status(400).json({ error: { code: 'invalid_max_turns', message: 'context.maxTurns must be an integer 1–500.' } });
+		}
+		missionMaxTurns = n;
+	}
+	// Device constraint validation — same as UI route.
+	const missionDeviceInput = body.constraints?.device ?? body.deviceRequest ?? null;
+	const missionDeviceCheck = missionDeviceInput != null ? validateDeviceRequest(missionDeviceInput) : null;
+	if (missionDeviceCheck && !missionDeviceCheck.ok) {
+		return response.status(400).json({ error: { code: 'invalid_device', message: missionDeviceCheck.error } });
+	}
+	const missionDevice = missionDeviceCheck ? missionDeviceCheck.deviceName : null;
+
+	// Idempotency (workspace-scoped, restart-safe via missions.json).
+	const idemHeader = typeof request.headers['idempotency-key'] === 'string'
+		? request.headers['idempotency-key'].trim().slice(0, 200) : null;
+	const compositeKey = idemHeader ? `${request.integration.workspaceId}:${idemHeader}` : null;
+	// B1 review — request fingerprint for idempotency conflict detection.
+	// Semantically-relevant request fields only (name/type/target/context/
+	// constraints/autoStart), NOT volatile fields like correlationId or the
+	// Idempotency-Key itself. Credentials are excluded from the fingerprint
+	// (they live in the vault), but a credential-vs-no-credential difference
+	// IS part of the shape.
+	const fingerprintSource = {
+		name: body.name ?? null,
+		type: body.type ?? null,
+		targetUrl: body.targetUrl ?? null,
+		objectives: body.objectives ?? null,
+		capabilities: body.capabilities ?? null,
+		constraints: body.constraints ?? null,
+		successCriteria: body.successCriteria ?? null,
+		context: body.context ?? null,
+		autoStart: body.autoStart !== false
+	};
+	if (body.testCredentials) {
+		fingerprintSource.testCredentialsShape = Object.keys(body.testCredentials).sort().join(',');
+	}
+	const requestFingerprint = compositeKey
+		? createHash('sha256').update(JSON.stringify(fingerprintSource)).digest('hex')
+		: null;
+	if (compositeKey) {
+		const existing = findByIdempotencyKey(compositeKey);
+		if (existing) {
+			// Same key + DIFFERENT request body → the caller is misusing the
+			// key (a retry must replay the SAME request). 409, never silently
+			// return the original mission. (B1 review MUST-FIX #3.)
+			if (existing.idempotencyFingerprint && existing.idempotencyFingerprint !== requestFingerprint) {
+				return response.status(409).json({
+					error: {
+						code: 'idempotency_key_reused',
+						message: 'Idempotency-Key was already used with a different request body.',
+						missionId: existing.id
+					},
+					correlationId: request.correlationId
+				});
+			}
+			return response.status(200).json({
+				missionId: existing.id, status: existing.status,
+				idempotentReplay: true, createdAt: existing.createdAt,
+				correlationId: request.correlationId
+			});
+		}
+	}
+
+	let contextForMission = {
+		buildPrompt: body.buildPrompt || undefined,
+		requirements: body.requirements || undefined,
+		businessGoals: body.businessGoals || undefined,
+		...(missionMaxTurns !== null ? { maxTurns: missionMaxTurns } : {})
+	};
+	if (body.testCredentials && typeof body.testCredentials === 'object') {
+		const credEntries = {};
+		if (body.testCredentials.username) credEntries.QA_USERNAME = body.testCredentials.username;
+		if (body.testCredentials.password) credEntries.QA_PASSWORD = body.testCredentials.password;
+		if (Object.keys(credEntries).length > 0) {
+			storeSecrets(`mission-temp`, credEntries);
+			contextForMission.testCredentials = { vaultKey: 'mission-temp', placeholders: Object.keys(credEntries).map(k => `{{${k}}}`) };
+		}
+	}
+
+	const mission = createMission({
+		projectId: body.projectId,
+		type: body.type,
+		name: body.name,
+		targetUrl: body.targetUrl,
+		objectives: body.objectives,
+		capabilities: body.capabilities,
+		source: body.source || 'integration',
+		generationId: body.generationId,
+		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}) },
+		successCriteria: body.successCriteria,
+		context: contextForMission,
+		workspaceId: request.integration.workspaceId === '*' ? (body.workspaceId || undefined) : request.integration.workspaceId,
+		correlationId: request.correlationId,
+		idempotencyKey: compositeKey || undefined,
+		idempotencyFingerprint: requestFingerprint || undefined
+	});
+
+	if (body.autoStart !== false) {
+		const outcome = startMissionExecution(mission, () => {
+			const session = createSession(mission.name || 'Integration Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
+			session.targetUrl = mission.targetUrl;
+			const missionTurns = Number(mission.context?.maxTurns);
+			if (Number.isInteger(missionTurns) && missionTurns >= 1) {
+				session.maxTurns = Math.min(missionTurns, 500);
+			}
+			if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
+				const tempVault = vaultFor('mission-temp');
+				if (tempVault.size > 0) {
+					storeSecrets(session.id, Object.fromEntries(tempVault));
+					clearSecrets('mission-temp');
+					session.secretNames = [...tempVault.keys()];
+				}
+			}
+			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+			const taskPrompt = buildMissionPrompt(mission);
+			ensureRuntime(session).then(() => {
+				startTurn(session, { task: taskPrompt });
+			}).catch(startError => {
+				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
+				setStatus(session, 'error', startError.message);
+				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
+			});
+		});
+		if (outcome === 'queued') {
+			updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
+		}
+		return response.status(202).json({
+			missionId: mission.id,
+			status: outcome === 'queued' ? 'queued' : 'running',
+			queuePosition: outcome === 'queued' ? queuePositionOf(mission.id) : undefined,
+			correlationId: request.correlationId
+		});
+	}
+	response.status(201).json({
+		missionId: mission.id,
+		status: 'created',
+		correlationId: request.correlationId,
+		message: 'Mission created but not started. POST /api/v1/integration/missions/:id/start to begin.'
+	});
+});
+
+/* ── Integration: start / revalidate — see handlers further down.
+ * (Registered after the shared handler definitions; keep route table tidy.) ── */
+
+/* ── Integration: mission status ── */
+app.get('/api/v1/integration/missions/:id', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	const session = mission.sessionId ? getSession(mission.sessionId) : null;
+	response.json({
+		id: mission.id,
+		status: mission.status,
+		type: mission.type,
+		targetUrl: mission.targetUrl,
+		qualityScore: mission.qualityScore,
+		verdict: mission.verdict,
+		releaseReady: mission.releaseReady,
+		findingsCount: (mission.findings ?? []).length,
+		sessionId: mission.sessionId,
+		turnCount: session?.turnCount ?? null,
+		maxTurns: mission.context?.maxTurns ?? null,
+		correlationId: mission.correlationId,
+		createdAt: mission.createdAt,
+		completedAt: mission.completedAt,
+		failureReason: mission.failureReason ?? null
+	});
+});
+
+/* ── Integration: mission report (json | markdown) ── */
+app.get('/api/v1/integration/missions/:id/report', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	const findings = mission.findings ?? [];
+	const quality = calculateMissionQuality(findings);
+	const report = buildImprovementPrompt(mission, findings, quality);
+	if (request.query.format === 'markdown' || request.query.format === 'md') {
+		response.type('text/markdown').send(buildMissionReportMarkdown(mission, report));
+		return;
+	}
+	response.json({ missionId: mission.id, missionType: mission.type, targetUrl: mission.targetUrl, ...report });
+});
+
+/* ── Integration: findings (mission-scoped, paginated) ── */
+app.get('/api/v1/integration/missions/:id/findings', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	const limit = Math.min(parseInt(request.query.limit) || 50, 200);
+	const offset = parseInt(request.query.offset) || 0;
+	// B1 W2 — merge three sources: mission-inline findings, findings indexed
+	// by missionId, and (critically) findings persisted by the autonomous
+	// run's sessionId — the agent reports findings keyed to its session, and
+	// only the session→mission stamp links them. Deduped by finding id.
+	const all = [
+		...(mission.findings ?? []),
+		...(mission.id ? listFindings({ missionId: mission.id }) : []),
+		...(mission.sessionId ? listFindings({ sessionId: mission.sessionId }) : [])
+	];
+	const dedup = new Map();
+	for (const f of all) dedup.set(f.id, f);
+	const items = [...dedup.values()].slice(offset, offset + limit);
+	response.json({ missionId: mission.id, findings: items, total: dedup.size, limit, offset });
+});
+
+/* ── Integration: evidence (mission-scoped, paginated) ── */
+app.get('/api/v1/integration/missions/:id/evidence', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
+	const offset = parseInt(request.query.offset) || 0;
+	const { items: evidence, total } = getMissionEvidencePage(mission.id, { limit, offset });
+	response.json({ missionId: mission.id, evidence, total, limit, offset });
+});
+
+/* ── Integration: stop a mission ── */
+app.post('/api/v1/integration/missions/:id/stop', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	if (!hasScope(request.integration, 'mission:stop')) {
+		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks mission:stop.' } });
+	}
+	if (mission.sessionId) {
+		const record = liveFor(mission.sessionId);
+		record?.controller?.abort();
+		void closeBrowser(mission.sessionId);
+	}
+	updateMission(mission.id, { status: 'aborted', completedAt: Date.now(), stopReason: 'integration_stop' });
+	releaseMission(mission.id);
+	response.json({ missionId: mission.id, status: 'aborted', stopReason: 'integration_stop' });
+});
+
+/* ── Integration: start a previously-created (autoStart:false) mission ──
+ * Wraps the same logic as POST /api/v1/missions/:id/start but under the
+ * integration identity (scope + ownership checked via the mission lookup).
+ * Re-issues the request against the token-gated handler with the server's
+ * own bearer token context is NOT acceptable — instead the handler body is
+ * shared by calling the internal start path directly. */
+app.post('/api/v1/integration/missions/:id/start', requireIntegrationAuth, async (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	if (!hasScope(request.integration, 'mission:create')) {
+		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks mission:create.' } });
+	}
+	// Delegate to the shared start implementation (same guards: terminal
+	// status, already running/queued, target re-validation, governor slots).
+	await startMissionByIdHandler(request, response, mission);
+});
+
+/* ── Integration: register a webhook for this workspace's missions ── */
+app.post('/api/v1/integration/webhooks', requireIntegrationAuth, async (request, response) => {
+	const { url, events } = request.body ?? {};
+	if (!url || typeof url !== 'string') {
+		return response.status(400).json({ error: { code: 'url_required', message: 'url is required.' } });
+	}
+	const check = await validateWebhookUrl(url);
+	if (!check.ok) {
+		return response.status(400).json({ error: { code: check.code ?? 'invalid_url', message: check.message } });
+	}
+	const hook = registerWebhookSubscription({
+		url,
+		events: Array.isArray(events) && events.length ? events : ['mission.completed', 'mission.failed'],
+		workspaceId: request.integration.workspaceId === '*' ? null : request.integration.workspaceId,
+		label: request.body?.label || request.integration.label
+	});
+	response.status(201).json({ webhookId: hook.id, url: hook.url, events: hook.events });
+});
+
+/* ── Integration: mission revalidation (new validation-loop iteration) ──
+ * Wraps the Phase 5 revalidation loop under the integration identity.
+ * Ownership via requireMissionForIntegration; scope revalidate. */
+app.post('/api/v1/integration/missions/:id/revalidate', requireIntegrationAuth, async (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	if (!hasScope(request.integration, 'revalidate')) {
+		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks revalidate.' } });
+	}
+	await revalidateMissionByIdHandler(request, response, mission);
+});
+
+/* ── Integration: finding revalidation (Phase 18 fix-validation run) ──
+ * Ownership: the finding's mission workspace must match the principal. */
+app.post('/api/v1/integration/findings/:id/revalidate', requireIntegrationAuth, (request, response) => {
+	if (!hasScope(request.integration, 'revalidate')) {
+		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks revalidate.' } });
+	}
+	// B1 W2 — ownership is resolved through the finding's mission, directly
+	// (finding.missionId) or via its session (finding.sessionId → mission),
+	// because autonomous-run findings are persisted by sessionId only.
+	const finding = getFinding(request.params.id);
+	if (!finding) {
+		return response.status(404).json({ error: { code: 'finding_not_found', message: 'Finding not found.' } });
+	}
+	let owningMission = finding.missionId ? getMission(finding.missionId) : null;
+	if (!owningMission && finding.sessionId) {
+		// Session-born findings never carried missionId; resolve the mission
+		// by sessionId instead. Missions store sessionId on start.
+		owningMission = listMissions({}).find(m => m.sessionId === finding.sessionId) ?? null;
+	}
+	if (request.integration && !workspaceMatches(request.integration, owningMission ? workspaceOfMission(owningMission) || null : null)) {
+		return response.status(403).json({ error: { code: 'workspace_forbidden', message: 'Finding belongs to another workspace.' } });
+	}
+	// Same contract as the token-gated /v1/findings/:id/revalidate — but the
+	// idempotency key is WORKSPACE-SCOPED (same scheme as mission create) so
+	// one tenant's key can never suppress another tenant's validation run.
+	const idemKey = typeof request.headers['idempotency-key'] === 'string'
+		? request.headers['idempotency-key'].trim().slice(0, 200) : null;
+	const compositeKey = idemKey ? `${request.integration.workspaceId}:${idemKey}` : null;
+	if (compositeKey) {
+		const existing = findValidationByIdempotencyKey(compositeKey);
+		if (existing) {
+			return response.status(200).json({ duplicate: true, validationId: existing.id, status: existing.status });
+		}
+	}
+	const active = getValidationRunsForFinding(finding.id).find(r => ['REQUESTED', 'QUEUED', 'RUNNING'].includes(r.status));
+	if (active) {
+		return response.status(409).json({ error: { code: 'validation_in_progress', validationId: active.id } });
+	}
+	const run = createValidationRun({ finding, requestedBy: `integration:${request.integration.keyId}`, idempotencyKey: compositeKey, trigger: 'integration' });
+	transitionValidationRun(run.id, { status: 'QUEUED' }, 'queued by integration');
+	executeValidation(run.id, { getFinding }).catch(err => {
+		console.error(`[fix-validation] run ${run.id} crashed:`, err?.message || err);
+		transitionValidationRun(run.id, { status: 'FAILED', error: String(err?.message || err) }, 'crashed');
+	});
+	response.status(202).json({ validationId: run.id, status: run.status, pollUrl: `/api/v1/integration/findings/${finding.id}/validation`, correlationId: request.correlationId });
+});
+
+/* ── Integration: finding validation status (Phase 18 run history) ── */
+app.get('/api/v1/integration/findings/:id/validation', requireIntegrationAuth, (request, response) => {
+	const finding = getFinding(request.params.id);
+	if (!finding) {
+		return response.status(404).json({ error: { code: 'finding_not_found', message: 'Finding not found.' } });
+	}
+	let owningMission = finding.missionId ? getMission(finding.missionId) : null;
+	if (!owningMission && finding.sessionId) {
+		// B1 W2 — session-born findings: resolve ownership via sessionId.
+		owningMission = listMissions({}).find(m => m.sessionId === finding.sessionId) ?? null;
+	}
+	if (request.integration && !workspaceMatches(request.integration, owningMission ? workspaceOfMission(owningMission) || null : null)) {
+		return response.status(403).json({ error: { code: 'workspace_forbidden', message: 'Finding belongs to another workspace.' } });
+	}
+	const runs = getValidationRunsForFinding(finding.id);
+	if (!runs.length) {
+		return response.status(404).json({ error: { code: 'no_runs', message: 'No validation runs.' } });
+	}
+	response.json({ latest: runs[0], history: runs.slice(1, 21), metrics: getValidationMetrics(), correlationId: request.correlationId });
+});
 
 // NOTE: GET /api/findings is registered ABOVE the phaseRouter mount (M1-P3
 // public-read fix) — this duplicate registration is unreachable; left as a
 // pointer to the legacy findings block (detail/mutation routes below).
 
-app.get('/api/findings/stats', (request, response) => {
+app.get('/api/findings/stats', requireApiToken, (request, response) => {
 	response.json(getFindingStats({ projectId: request.query.projectId }));
 });
 
 /* Cross-session findings export — MUST be before /:id routes to avoid shadowing. */
-app.get('/api/findings/export', (request, response) => {
+app.get('/api/findings/export', requireApiToken, (request, response) => {
 	const format = request.query.format ?? 'markdown';
 	const matched = listFindings({
 		projectId: request.query.projectId,
@@ -1485,7 +2012,7 @@ app.post('/api/findings', requireApiToken, (request, response) => {
 	response.status(201).json(finding);
 });
 
-app.get('/api/findings/:id', (request, response) => {
+app.get('/api/findings/:id', requireApiToken, (request, response) => {
 	const finding = getFinding(request.params.id);
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -1561,7 +2088,7 @@ app.delete('/api/findings/:id/link/:testCaseId', requireApiToken, (request, resp
 
 /* ── Export routes ──────────────────────────────────────────────── */
 
-app.get('/api/sessions/:id/export/findings', (request, response) => {
+app.get('/api/sessions/:id/export/findings', requireApiToken, (request, response) => {
 	const session = requireSession(request, response);
 	if (!session) return;
 
@@ -1636,7 +2163,7 @@ app.post('/api/missions', requireApiToken, async (request, response) => {
 	response.status(201).json(mission);
 });
 
-app.get('/api/missions/:id', (request, response) => {
+app.get('/api/missions/:id', requireApiToken, (request, response) => {
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -1735,8 +2262,75 @@ app.post('/api/missions/:id/link-session', requireApiToken, async (request, resp
  * Pattern: submit mission → poll status → get report (or webhook).
  */
 
+/* ── B1 W2 — workspace ownership resolution ─────────────────────── */
+
+/**
+ * Resolves the owning workspace of a mission: mission.workspaceId if set,
+ * else the mission's project's workspaceId (projects carry the workspace
+ * from first integration), else null (pre-B1 legacy data → admin-only read
+ * for integration principals; UI bearer token still sees everything).
+ */
+function workspaceOfMission(mission) {
+	if (!mission) return undefined;
+	if (mission.workspaceId) return mission.workspaceId;
+	const project = getProject(mission.projectId);
+	return project?.workspaceId ?? null;
+}
+
+/** 404 for missing, 403 for wrong workspace — never leak existence. */
+function requireMissionForIntegration(request, response) {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		response.status(404).json({ error: { code: 'mission_not_found', message: 'Mission not found.' } });
+		return undefined;
+	}
+	const identity = request.integration;
+	if (identity && !workspaceMatches(identity, workspaceOfMission(mission))) {
+		response.status(403).json({ error: { code: 'workspace_forbidden', message: 'Mission belongs to another workspace.' } });
+		return undefined;
+	}
+	return mission;
+}
+
 app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 	const body = request.body ?? {};
+
+	// B1 W4 — idempotent mission creation. Same (workspace, key) → same
+	// mission, 200 with existing record; keys are workspace-scoped so two
+	// workspaces may use the same key independently. Survives restart because
+	// the key is stored on the mission itself (missions.json).
+	const idempotencyKey = typeof request.headers['idempotency-key'] === 'string'
+		? request.headers['idempotency-key'].trim().slice(0, 200)
+		: null;
+	if (idempotencyKey) {
+		const callerWorkspace = request.integration?.workspaceId ?? '__ui__';
+		const compositeKey = `${callerWorkspace}:${idempotencyKey}`;
+		const existing = findByIdempotencyKey(compositeKey);
+		if (existing) {
+			response.setHeader('X-Correlation-Id', request.correlationId);
+			return response.status(200).json({
+				missionId: existing.id,
+				status: existing.status,
+				idempotentReplay: true,
+				createdAt: existing.createdAt
+			});
+		}
+	}
+
+	// B1 W4 — maxTurns contract: mission context wins, clamped to the hard
+	// ceiling of 500; the stored-config default applies when not supplied.
+	// Anything > 500 or < 1 is a 400 — the API must not lie about budget.
+	const rawMaxTurns = body.context?.maxTurns ?? body.maxTurns ?? null;
+	let missionMaxTurns = null;
+	if (rawMaxTurns !== null) {
+		const n = Number(rawMaxTurns);
+		if (!Number.isInteger(n) || n < 1 || n > 500) {
+			return response.status(400).json({
+				error: { code: 'invalid_max_turns', message: 'context.maxTurns must be an integer 1–500.' }
+			});
+		}
+		missionMaxTurns = n;
+	}
 
 	// Validate required fields
 	if (!body.targetUrl) {
@@ -1756,7 +2350,9 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 	let contextForMission = {
 		buildPrompt: body.buildPrompt || undefined,
 		requirements: body.requirements || undefined,
-		businessGoals: body.businessGoals || undefined
+		businessGoals: body.businessGoals || undefined,
+		// B1 W6 — mission-scoped turn budget reaches execution (see startMissionExecution)
+		...(missionMaxTurns !== null ? { maxTurns: missionMaxTurns } : {})
 	};
 
 	if (body.testCredentials && typeof body.testCredentials === 'object') {
@@ -1792,7 +2388,15 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		generationId: body.generationId,
 		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}) },
 		successCriteria: body.successCriteria,
-		context: contextForMission
+		context: contextForMission,
+		// B1 W2/W4 — identity traceability: workspace + correlation + idempotency
+		workspaceId: request.integration?.workspaceId && request.integration.workspaceId !== '*'
+			? request.integration.workspaceId
+			: (body.workspaceId || undefined),
+		correlationId: request.correlationId,
+		idempotencyKey: idempotencyKey
+			? `${request.integration?.workspaceId ?? '__ui__'}:${idempotencyKey}`
+			: (body.idempotencyKey || undefined)
 	});
 
 	// Optionally auto-start: create a session and kick off the agent
@@ -1803,6 +2407,15 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		const outcome = startMissionExecution(mission, () => {
 			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
 			session.targetUrl = mission.targetUrl;
+
+			// B1 W6 — the mission's turn budget reaches the agent runtime.
+			// Precedence (operator decision): mission context > stored config
+			// default (120). The create-route already rejected >500, and the
+			// agent enforces both the SDK limit AND an independent hard abort.
+			const missionTurns = Number(mission.context?.maxTurns);
+			if (Number.isInteger(missionTurns) && missionTurns >= 1) {
+				session.maxTurns = Math.min(missionTurns, 500);
+			}
 
 			// Migrate temp vault credentials to session scope
 			if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
@@ -1875,12 +2488,10 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 
 /**
  * Starts a previously-created mission.
+ * B1: the body lives in startMissionByIdHandler so the integration surface
+ * (POST /api/v1/integration/missions/:id/start) shares the exact guards.
  */
-app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
-	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
-	}
+async function startMissionByIdHandler(request, response, mission) {
 	// Phase 1: prevent restarting a terminal mission
 	if (isTerminalStatus(mission.status)) {
 		return response.status(409).json({ error: `Mission is already ${mission.status}. Create a new mission or iterate.` });
@@ -1909,6 +2520,15 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 			}
 			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
 			session.targetUrl = mission.targetUrl;
+
+			// B1 W6 — the mission's turn budget follows it onto EVERY execution
+			// path (create+autoStart stamps this in the create route; start and
+			// revalidate go through this handler). Values >500 are impossible
+			// (validated at create), but clamp defensively anyway.
+			const missionTurnBudget = Number(mission.context?.maxTurns);
+			if (Number.isInteger(missionTurnBudget) && missionTurnBudget >= 1) {
+				session.maxTurns = Math.min(missionTurnBudget, 500);
+			}
 
 			// Migrate temp vault credentials to session scope (for missions created with autoStart: false)
 			if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
@@ -1951,7 +2571,7 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 	if (outcome === 'queued') {
 		updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
 	}
-	const current = getMission(request.params.id);
+	const current = getMission(mission.id);
 	response.status(202).json({
 		missionId: mission.id,
 		status: outcome === 'queued' ? 'queued' : (current?.status ?? 'running'),
@@ -1959,12 +2579,20 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
 		queuePosition: outcome === 'queued' ? queuePositionOf(mission.id) : undefined,
 		governor: governorStats()
 	});
+}
+
+app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	await startMissionByIdHandler(request, response, mission);
 });
 
 /**
  * Gets mission status + results. External consumers poll this.
  */
-app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
+app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -1982,8 +2610,11 @@ app.get('/api/v1/missions/:id', requireApiToken, (request, response) => {
 				// Update mission with live session findings
 				updateMission(mission.id, { findings: session.findings ?? [] });
 			} else if (isComplete && mission.status === 'running') {
-				// Session finished — finalize the mission
-				finalizeMissionFromSession(mission, session);
+				// Session finished — finalize the mission. B1 W6: a session that
+				// settled because of the turn budget first gets its one-shot
+				// honest wrap-up turn, then finalizes when THAT settles.
+				const continued = await finalizeTurnLimitedRun(session).catch(() => false);
+				if (!continued) finalizeMissionFromSession(mission, session);
 			}
 		}
 	}
@@ -2167,12 +2798,11 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
  * The endpoint is idempotent: repeated identical requests while an
  * iteration is already running return the existing session.
  */
-app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
-	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
-	}
-
+/**
+ * Shared revalidation body (B1): the token-gated route and the integration
+ * route run the exact same guards + governor path.
+ */
+async function revalidateMissionByIdHandler(request, response, mission) {
 	// Guard: mission is already running — return existing session (idempotency)
 	if (mission.status === 'running') {
 		return response.status(409).json({
@@ -2234,6 +2864,13 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 			);
 			session.targetUrl = mission.targetUrl;
 
+			// B1 W6 — revalidation runs under the mission's turn budget too
+			// (same clamp as the create/start paths).
+			const revalTurnBudget = Number(mission.context?.maxTurns);
+			if (Number.isInteger(revalTurnBudget) && revalTurnBudget >= 1) {
+				session.maxTurns = Math.min(revalTurnBudget, 500);
+			}
+
 			// Update mission to running
 			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
 
@@ -2281,7 +2918,7 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 	if (outcome === 'queued') {
 		updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
 	}
-	const current = getMission(request.params.id);
+	const current = getMission(mission.id);
 	const queuedNow = current?.status === 'queued';
 	response.status(202).json({
 		missionId: mission.id,
@@ -2292,6 +2929,14 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
 		message: `Revalidation iteration ${(mission.currentIteration || 0) + 1} ${queuedNow ? 'queued (execution slots full — starts automatically when one frees)' : 'started'}. Poll GET /api/v1/missions/:id for results, then GET /api/v1/missions/:id/loop-status for validation loop status.`,
 		governor: governorStats()
 	});
+}
+
+app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	await revalidateMissionByIdHandler(request, response, mission);
 });
 
 /**
@@ -2300,7 +2945,7 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
  * Returns the complete iteration history, convergence analysis,
  * comparison, latest decision, and stop reason.
  */
-app.get('/api/v1/missions/:id/loop-status', (request, response) => { // M1-P3 public read (pipeline validation loop panel)
+app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response) => { // M1-P3 public read (pipeline validation loop panel)
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -2473,7 +3118,7 @@ app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiTok
  * Phase 6: Get evidence coverage for a mission.
  * Returns the percentage of findings backed by evidence.
  */
-app.get('/api/v1/missions/:id/evidence-coverage', (request, response) => { // M1-P3 public read (pipeline evidence panel)
+app.get('/api/v1/missions/:id/evidence-coverage', requireApiToken, (request, response) => { // M1-P3 public read (pipeline evidence panel)
 	const mission = getMission(request.params.id);
 	if (!mission) {
 		return response.status(404).json({ error: 'Mission not found' });
@@ -2506,7 +3151,7 @@ app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, re
 /**
  * Phase 6: Get evidence graph stats.
  */
-app.get('/api/v1/evidence/stats', (request, response) => { // M1-P3 public read (pipeline evidence panel)
+app.get('/api/v1/evidence/stats', requireApiToken, (request, response) => { // M1-P3 public read (pipeline evidence panel)
 	response.json(getGraphStats());
 });
 
@@ -2689,9 +3334,15 @@ app.post('/api/v1/evidence/validate', requireApiToken, (request, response) => {
  * Webhook registration — register a callback URL to receive mission
  * results when complete. Simple in-memory store (sufficient for now).
  */
-const webhooks = new Map(); // missionId -> [{ url, events }]
+// B1 W5 — webhooks are persisted, signed, retried deliveries now
+// (server/webhookDelivery.js). The legacy in-memory per-mission map is gone.
+import {
+	registerWebhookSubscription, listWebhookSubscriptions, removeWebhookSubscription,
+	enqueueDelivery, deliveryLedger, getDelivery, signWebhookPayload,
+	WEBHOOK_EVENTS
+} from './webhookDelivery.js';
 
-app.post('/api/v1/webhooks', requireApiToken, (request, response) => {
+app.post('/api/v1/webhooks', requireApiToken, async (request, response) => {
 	const { missionId, url, events } = request.body ?? {};
 	if (!url) {
 		return response.status(400).json({ error: 'url is required' });
@@ -2699,11 +3350,16 @@ app.post('/api/v1/webhooks', requireApiToken, (request, response) => {
 	if (!missionId) {
 		return response.status(400).json({ error: 'missionId is required' });
 	}
-
-	const entry = { url, events: events || ['mission.completed'], id: randomUUID() };
-	if (!webhooks.has(missionId)) webhooks.set(missionId, []);
-	webhooks.get(missionId).push(entry);
-
+	const check = await validateWebhookUrl(url);
+	if (!check.ok) {
+		return response.status(400).json({ error: check.message, code: check.code ?? 'invalid_url' });
+	}
+	const entry = registerWebhookSubscription({
+		url,
+		events: events?.includes('*') ? WEBHOOK_EVENTS : (events || ['mission.completed']),
+		missionId,
+		label: 'legacy per-mission registration'
+	});
 	response.status(201).json({ webhookId: entry.id, missionId, url, events: entry.events });
 });
 
@@ -2884,26 +3540,28 @@ function finalizeMissionFromSession(mission, session) {
 }
 
 /**
- * Fires registered webhooks for a completed mission.
- * Blocks internal/loopback IPs to prevent SSRF.
+ * B1 W5 — enqueues signed webhook deliveries for a mission event.
+ * The delivery engine (webhookDelivery.js) owns retries, persistence and
+ * per-attempt SSRF re-validation through the existing targetGuard.
  */
-async function fireMissionWebhooks(missionId, report) {
-	const hooks = webhooks.get(missionId);
-	if (!hooks?.length) return;
-
-	for (const hook of hooks) {
-		// M1-P4.1 — webhook URLs go through the same SSRF boundary as mission
-		// targets (replaces the bypassable substring blocklist; see
-		// targetGuard.js). Validation is async; delivery stays fire-and-forget.
-		const check = await validateWebhookUrl(hook.url).catch(() => null);
-		if (!check?.ok) continue;
-
-		fetch(hook.url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ missionId, ...report })
-		}).catch(() => { /* non-fatal */ });
-	}
+function fireMissionWebhooks(missionId, report, event = 'mission.completed') {
+	const mission = getMission(missionId);
+	if (!mission) return;
+	enqueueDelivery(event, {
+		missionId,
+		name: mission.name,
+		type: mission.type,
+		targetUrl: mission.targetUrl,
+		status: event === 'mission.failed' ? 'failed' : 'completed',
+		verdict: report?.verdict ?? mission.verdict ?? null,
+		qualityScore: report?.qualityScore ?? mission.qualityScore ?? null,
+		findingsCount: (report?.findings ?? mission.findings ?? []).length,
+		completedAt: Date.now()
+	}, {
+		workspaceId: workspaceOfMission(mission),
+		missionId,
+		correlationId: mission.correlationId
+	});
 }
 
 /**
@@ -2997,6 +3655,10 @@ registerStoreFlush('workflows', flushWorkflowsForShutdown);
 registerStoreFlush('knowledge', flushKnowledgeForShutdown);
 registerStoreFlush('baselines', flushBaselinesForShutdown);
 registerStoreFlush('schedules', flushSchedulesForShutdown);
+// B1 W1 — integrations registry (persists via its own load/boot block; the
+// flush registration mirrors the others). webhookDelivery.js registers its
+// own 'webhook-subscriptions' + 'webhook-deliveries' flushes at module load.
+registerStoreFlush('integrations', () => { flushIntegrations(); return { dirty: false, ok: true }; });
 for (const signal of ['SIGINT', 'SIGTERM']) {
 	process.on(signal, async () => {
 		if (shuttingDown) {
@@ -3150,7 +3812,17 @@ startGovernorWatchdog({
 		if (!mission || mission.status !== 'running' || !mission.sessionId) return;
 		const session = getSession(mission.sessionId);
 		if (!session) return;
-		finalizeMissionFromSession(mission, session);
+		// B1 W6 — if the session settled BECAUSE the turn budget was hit, the
+		// agent gets exactly one budget-exhausted continuation so it can file
+		// its honest report; the mission finalizes from THAT turn's result.
+		finalizeTurnLimitedRun(session).then((continued) => {
+			// The continuation is async (runTurn); when it started, the session
+			// is live again and the mission finalizes when it settles next.
+			if (continued) return;
+			finalizeMissionFromSession(mission, session);
+		}).catch(() => {
+			finalizeMissionFromSession(mission, session);
+		});
 	},
 	onTimeout: (missionId) => {
 		const mission = getMission(missionId);
@@ -3179,6 +3851,41 @@ missionBus.on('finalized', ({ missionId, report }) => {
 	if (missionId) {
 		fireMissionWebhooks(missionId, report);
 	}
+});
+
+// B1 W5 — mission.failed webhooks: one listener catches every failure path
+// (runtime start, governor catch, blocked target) because they all funnel
+// through updateMission → mission:updated.
+const failedWebhookSent = new Set(); // missionId — once per process per mission
+missionBus.on('updated', (mission) => {
+	if (mission?.status === 'failed' && !failedWebhookSent.has(mission.id)) {
+		failedWebhookSent.add(mission.id);
+		fireMissionWebhooks(mission.id, {
+			verdict: 'fail',
+			qualityScore: null,
+			findings: [],
+			failureReason: mission.failureReason ?? null
+		}, 'mission.failed');
+	}
+});
+
+// B1 W5 — finding.revalidated webhooks: fired when a Phase 18 fix-validation
+// run completes (VERIFIED_FIXED / NOT_FIXED / REGRESSED / PARTIAL_FIX …).
+validationBus.on('run:completed', ({ runId, findingId, fixStatus, validationConfidence }) => {
+	const finding = findingId ? getFinding(findingId) : null;
+	const mission = finding?.missionId ? getMission(finding.missionId) : null;
+	enqueueDelivery('finding.revalidated', {
+		runId,
+		findingId,
+		findingTitle: finding?.title ?? null,
+		fixStatus,
+		validationConfidence,
+		completedAt: Date.now()
+	}, {
+		workspaceId: mission ? workspaceOfMission(mission) : null,
+		missionId: finding?.missionId ?? null,
+		correlationId: mission?.correlationId ?? null
+	});
 });
 
 const port = Number(process.env.PORT ?? 5173);

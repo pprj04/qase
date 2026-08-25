@@ -11,7 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const BASE = process.env.QASE_TEST_BASE_URL || 'http://localhost:5173';
-const TOKEN = process.env.QASE_TEST_TOKEN || '';
+const TOKEN = process.env.QASE_API_TOKEN || process.env.QASE_TEST_TOKEN || '';
 
 async function liveConfig() {
 	const res = await fetch(`${BASE}/api/config`, {

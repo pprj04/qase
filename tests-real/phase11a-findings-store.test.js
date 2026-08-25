@@ -239,8 +239,10 @@ describe('Phase 11A — Global Findings Store', () => {
 	});
 
 	describe('Export (cross-session)', () => {
+		// B1 W3 closed the anonymous read surface — export routes require the token.
+		const exportHeaders = { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` };
 		it('should export as markdown', async () => {
-			const res = await fetch(`${BASE}/api/findings/export?format=markdown`);
+			const res = await fetch(`${BASE}/api/findings/export?format=markdown`, { headers: exportHeaders });
 			const text = await res.text();
 			assert.ok(res.ok);
 			assert.ok(text.includes('# Bug Report'));
@@ -248,7 +250,7 @@ describe('Phase 11A — Global Findings Store', () => {
 		});
 
 		it('should export as GitHub format', async () => {
-			const res = await fetch(`${BASE}/api/findings/export?format=github`);
+			const res = await fetch(`${BASE}/api/findings/export?format=github`, { headers: exportHeaders });
 			const data = await res.json();
 			assert.ok(res.ok);
 			assert.ok(data.length >= 1);
@@ -258,7 +260,7 @@ describe('Phase 11A — Global Findings Store', () => {
 		});
 
 		it('should export as JIRA format', async () => {
-			const res = await fetch(`${BASE}/api/findings/export?format=jira`);
+			const res = await fetch(`${BASE}/api/findings/export?format=jira`, { headers: exportHeaders });
 			const data = await res.json();
 			assert.ok(res.ok);
 			assert.ok(data[0].fields.summary);
@@ -266,7 +268,7 @@ describe('Phase 11A — Global Findings Store', () => {
 		});
 
 		it('should export as Linear format', async () => {
-			const res = await fetch(`${BASE}/api/findings/export?format=linear`);
+			const res = await fetch(`${BASE}/api/findings/export?format=linear`, { headers: exportHeaders });
 			const data = await res.json();
 			assert.ok(res.ok);
 			assert.ok(data[0].title);

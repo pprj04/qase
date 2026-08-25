@@ -30,7 +30,8 @@ async function post(path, body) {
 }
 
 async function get(path) {
-	const response = await fetch(`${BASE}${path}`);
+	// B1 W3: anonymous GETs are 401 — read routes require the token.
+	const response = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	return { status: response.status, data: await response.json() };
 }
 

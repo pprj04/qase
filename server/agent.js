@@ -147,6 +147,37 @@ export async function ensureRuntime(session) {
 		throw new Error(`${problem} Open Settings and add the endpoint details.`);
 	}
 
+	// B1 W6 — mission-scoped turn budget. Mission context.maxTurns wins over
+	// the stored-config default; both are bounded by the hard ceiling of 500
+	// at the API layer. The SDK enforces its configured maxTurns internally;
+	// runTurn() adds an independent abort on the SAME limit using the
+	// assistant_turn_start stream events, so the enforcement does not depend
+	// on the SDK alone.
+	//
+	// TURN METRIC (W6 contract definition): one "turn" = one
+	// `assistant_turn_start` event emitted by the agent SDK stream, i.e. one
+	// full agent-loop iteration (model invocation + its tool executions +
+	// intermediate reasoning), NOT a single model invocation, tool call, or
+	// streamed token. When the SDK internally performs sub-iterations within
+	// one `assistant_turn_start` window (observed as several model ops per
+	// turn), those count as ONE turn under this metric. session.turnCount is
+	// incremented only on this event — never fabricated, never derived from
+	// operation counts.
+	//
+	// Enforcement layering: the SDK enforces `maxTurns` first (observed to
+	// stop exactly at the limit in every B1 run: 8→8, 3→3, 2→2). The
+	// independent backstop below aborts when turnCount EXCEEDS the limit —
+	// i.e. if the SDK ever let a (limit+1)-th turn start, the backstop fires
+	// on that event and the recorded turnCount is limit+1 (truthful). The
+	// agent is then granted ONE budget-exhausted wrap-up turn to produce a
+	// report rather than dying silently; that wrap-up is recorded as part of
+	// the same aborted run and the mission status names the budget reached.
+	// Externally visible invariant: requested N → execution stops at N (SDK)
+	// or N+1 with an honest abort record (backstop).
+	const effectiveMaxTurns = Number.isInteger(session.maxTurns) && session.maxTurns >= 1
+		? Math.min(session.maxTurns, 500)
+		: Number(settings.maxTurns);
+
 	// The agent has no filesystem tools, but the runtime still wants a root. A
 	// per-session scratch directory means even a slipped write stays contained.
 	const rootPath = path.join(process.cwd(), '.qase', 'workspaces', session.id);
@@ -158,7 +189,7 @@ export async function ensureRuntime(session) {
 		apiKey: settings.apiKey,
 		baseUrl: settings.baseUrl || undefined,
 		reasoningLevel: settings.reasoning,
-		maxTurns: Number(settings.maxTurns),
+		maxTurns: effectiveMaxTurns,
 		// Azure keeps its endpoint and deployment in their own fields. The one
 		// URL box in Settings feeds both, and the SDK recognises an /openai/v1
 		// endpoint and talks to it over the OpenAI-compatible path.
@@ -366,6 +397,17 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 	let thinking;
 	let retryAfterTimeout = false;
 
+	// B1 W6 — independent turn enforcement. The SDK owns its own maxTurns,
+	// but the contract must not depend on SDK behavior alone: count
+	// assistant_turn_start events and hard-abort (with truthful recording)
+	// once the limit is exceeded. This also gives the UI/API an honest
+	// session.turnCount instead of a fabricated number.
+	const turnLimit = Number.isInteger(session.maxTurns) && session.maxTurns >= 1
+		? Math.min(session.maxTurns, 500)
+		: null; // global default is enforced by the SDK only
+	let turnCount = 0;
+	let limitAborted = false;
+
 	const appendText = (content, kind) => {
 		if (!content) {
 			return;
@@ -495,6 +537,14 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					emit(session, 'turn', { turnId: part.turnId, index: part.turnIndex });
 					// Reset idle watchdog — a new model turn started
 					idleTimer.refresh();
+					// B1 W6 — count and enforce the mission turn budget.
+					turnCount += 1;
+					session.turnCount = turnCount;
+					if (turnLimit && turnCount > turnLimit) {
+						limitAborted = true;
+						console.log(`[agent] turn limit (${turnLimit}) exceeded — aborting mission turn budget`);
+						controller.abort();
+					}
 					break;
 
 				case 'context_usage':
@@ -574,7 +624,22 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			setStatus(session, 'idle');
 		}
 	} catch (error) {
-		if (idleAborted) {
+		if (limitAborted) {
+			// B1 W6 — the mission turn budget was consumed. This is NOT an
+			// error and NOT retryable: the agent is told the budget is spent
+			// once so it can write its report with whatever it has; the
+			// session records the true turn count.
+			session.turnCount = turnCount;
+			session._turnLimitReached = true;
+			setStatus(session, 'idle', `Turn budget reached (${turnLimit}).`);
+			addMessage(session, {
+				role: 'system',
+				text: `Turn budget of ${turnLimit} was reached. The agent was stopped after ${turnCount} turns.`,
+				kind: 'error'
+			});
+			void closeBrowser(session.id);
+			record?.dispose?.();
+		} else if (idleAborted) {
 			// Idle timeout — treat as retryable model timeout
 			if (retryAttempt < MODEL_TIMEOUT_RETRIES) {
 				retryAfterTimeout = true;
@@ -633,6 +698,21 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			retryAttempt: retryAttempt + 1
 		});
 	}
+}
+
+/**
+ * B1 W6 — truthful turn-budget continuation. When a mission's turn budget
+ * is exhausted mid-exploration, the agent gets exactly ONE budget-exhausted
+ * continuation so it can close out with a report instead of dying silently.
+ * Without this, a turn-limited mission ends 'idle' with no report at all.
+ */
+export async function finalizeTurnLimitedRun(session) {
+	if (session.status !== 'idle' || !session._turnLimitReached) return false;
+	session._turnLimitReached = false;
+	await runTurn(session, {
+		task: 'Your turn budget for this mission is now exhausted. Do NOT perform any further browser actions or exploration. Using only what you have already observed, immediately call finish_qa_report with your best honest report: findings you can support with the evidence already collected, coverage summary, and an explicit note that the run was stopped at the turn budget.'
+	});
+	return true;
 }
 
 function summariseResult(toolName, result) {

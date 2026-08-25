@@ -94,6 +94,19 @@
             <span class="ai-cursor-blink">_</span>
           </div>
           <h2>Autonomous Software Quality Engineer</h2>
+          <!-- B1 W3 — anonymous API reads are closed. Until a token is set,
+               the UI shows this one-field gate instead of failing silently. -->
+          <div id="auth-gate" hidden>
+            <p><strong>API token required.</strong><br>
+               The QASE API requires authentication. Paste the API token from Settings → API Token.</p>
+            <div style="display:flex;gap:8px;justify-content:center;max-width:420px;margin:12px auto;">
+              <input id="auth-gate-token" type="password" placeholder="Paste API token" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <button id="auth-gate-save" class="btn" style="padding:8px 14px;">Continue</button>
+            </div>
+            <p class="subtle" style="font-size:12px;opacity:.7;">Stored locally in your browser only.</p>
+            <p id="auth-gate-error" role="alert" style="color:#f66;font-size:13px;min-height:1em;"></p>
+          </div>
+          <div id="auth-gate-rest">
           <p>Validate any web application. Understand its purpose.<br>
              Discover bugs, missing features and UX issues.<br>
              Generate improvements automatically.</p>
@@ -103,6 +116,7 @@
             <button class="prompt-chip" data-prompt="Review checkout flow">Review Checkout</button>
             <button class="prompt-chip" data-prompt="Find UX issues">Find UX Issues</button>
             <button class="prompt-chip" data-prompt="Validate mobile experience">Check Mobile UX</button>
+          </div>
           </div>
         </div>
       </div>

@@ -153,12 +153,25 @@ async function api(path, options) {
 	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
 	const headers = { 'Content-Type': 'application/json', ...(options?.headers ?? {}) };
 	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
-const response = await fetch(`/api${path}`, { headers, ...options });
+	const response = await fetch(`/api${path}`, { headers, ...options });
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
 		throw new Error(body.error ?? `Request failed (${response.status})`);
 	}
 	return response.status === 204 ? undefined : response.json();
+}
+
+/**
+ * B1 W3 — authed raw fetch for endpoints that return text/blobs (report.md,
+ * fix-prompt, exports) instead of JSON. Same token attachment as api().
+ */
+async function apiRaw(path, options) {
+	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+	const headers = { ...(options?.headers ?? {}) };
+	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
+	const response = await fetch(`/api${path}`, { headers, ...options });
+	if (!response.ok) throw new Error(`Request failed (${response.status})`);
+	return response;
 }
 
 function toast(message, kind = '') {
@@ -319,4 +332,4 @@ function clearPageState(container) {
 	if (error) error.remove();
 }
 
-export { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle, showPageLoading, showPageError, clearPageState };
+export { $, el, state, api, apiRaw, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle, showPageLoading, showPageError, clearPageState };

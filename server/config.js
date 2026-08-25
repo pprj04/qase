@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { atomicWrite } from './atomicWrite.js';
+import { restorePendingTestMarkers } from './testRestore.js';
 
 /**
  * Model settings, resolved from the settings file first and the environment
@@ -11,7 +12,9 @@ import { atomicWrite } from './atomicWrite.js';
  * needs are a key, a base URL and a model name.
  */
 
-const CONFIG_DIR = path.join(process.cwd(), '.qase');
+// QASE_DATA_DIR lets tests redirect the whole .qase tree to a temp dir;
+// unset in production → identical behavior (cwd/.qase).
+const CONFIG_DIR = path.join(process.env.QASE_DATA_DIR ?? path.join(process.cwd(), '.qase'));
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export const PROVIDERS = [
@@ -58,6 +61,9 @@ function readStored() {
 	} catch {
 		stored = {};
 	}
+	// B1 W8: crash-recovery for test config mutations (BrowserStack snapshot→mutate→restore).
+	// A test SIGKILLed mid-mutation leaves the mutation live; the marker restores it at boot.
+	restorePendingTestMarkers({ saveConfig: (c) => { fs.writeFileSync(CONFIG_FILE, JSON.stringify(c, null, 2)); stored = c; } });
 	return stored;
 }
 

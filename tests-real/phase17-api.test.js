@@ -60,7 +60,7 @@ describe('Phase 17 API', () => {
 		let last = null;
 		for (let attempt = 0; attempt < 4; attempt += 1) {
 			try {
-				const { status, json } = await req('GET', '/api/v1/missions?limit=10');
+				const { status, json } = await req('GET', '/api/v1/missions?limit=100');
 				if (status === 200) {
 					const candidates = (json.missions ?? []).filter((m) => m.status === 'completed' && m.sessionId);
 					assert.ok(candidates.length > 0, 'need at least one completed mission with a session');
@@ -225,11 +225,10 @@ describe('Phase 17 API', () => {
 		assert.equal(res.status, 200);
 		const j = await res.json();
 		assert.ok(j.quality && j.ux);
-		// M1-P3: ux-quality is now a PUBLIC read (UI panel worked via the S1
-		// auto-cookie before it was removed — anonymous access is the restored,
-		// intended posture for this derived read).
+		// B1 W3 — the anonymous read posture is CLOSED. ux-quality is a
+		// derived read but it exposes mission-scoped data, so it must 401.
 		const res2 = await fetch(`${BASE}/api/missions/${missionId}/ux-quality`);
-		assert.equal(res2.status, 200);
+		assert.equal(res2.status, 401);
 	});
 
 	test('redaction: secrets scrubbed from ux payloads', async () => {

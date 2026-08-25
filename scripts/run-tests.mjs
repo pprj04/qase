@@ -133,6 +133,11 @@ function envCheck() {
 	if (!process.env.QASE_API_TOKEN && process.env.QASE_SKIP_ENV_CHECK !== '1') {
 		problems.push('QASE_API_TOKEN not set — load .env (cp .env.example .env) or export it');
 	}
+	// QASE_BASE_URL is the LLM PROVIDER url — never point the test server at it.
+	// Tests read QASE_TEST_BASE_URL (or QASE_URL for the runner) for the server.
+	if (/llm\.|openai|anthropic/i.test(String(process.env.QASE_BASE_URL))) {
+		problems.push(`QASE_BASE_URL looks like an LLM provider URL — tests expect the QASE server URL in QASE_TEST_BASE_URL, not QASE_BASE_URL`);
+	}
 	return problems;
 }
 

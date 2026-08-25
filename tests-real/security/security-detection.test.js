@@ -138,9 +138,11 @@ describe('SECURITY [S6] — path traversal (must stay BLOCKED)', () => {
 });
 
 describe('SECURITY [S7] — single-tenant model honesty', () => {
-	it('anonymous page visitor can read open GET data endpoints (documented single-tenant posture)', async () => {
-		// sessions list is open today (cookie-equivalent). Document:
+	it('FIXED (B1 W3): anonymous visitor can NOT read data endpoints — reads are token-gated', async () => {
+		// B1 W3 closed the anonymous read surface. This test now guards the
+		// NEW posture: the sessions list (and every other data read) must
+		// reject anonymous requests with 401.
 		const r = await fetch(`${BASE}/api/sessions`);
-		assert.equal(r.status, 200, 'sessions GET no longer open — auth model changed, update cred.json docs');
+		assert.equal(r.status, 401, 'sessions GET is open again — REGRESSION: anonymous read surface reopened');
 	});
 });

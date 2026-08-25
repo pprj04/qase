@@ -38,7 +38,13 @@ function knownFail(name, detail = '') {
 }
 
 const browser = await chromium.launch({ headless: true });
-const page = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const page = await context.newPage();
+// B1 W3: the app gates anonymous reads with a token prompt (localStorage.qase_token).
+// Seed the token before any navigation so the journey behaves like an authenticated user.
+if (process.env.QASE_API_TOKEN) {
+	await page.addInitScript(t => { try { localStorage.setItem('qase_token', t); } catch { /* noop */ } }, process.env.QASE_API_TOKEN);
+}
 const consoleErrors = [];
 page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
 
@@ -91,7 +97,8 @@ page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text())
 
 // ── Existing session deep link works ──
 {
-	const res = await fetch(`${BASE}/api/sessions`);
+	// B1 W3: /api/sessions requires the token now.
+	const res = await fetch(`${BASE}/api/sessions`, { headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	const sessions = await res.json();
 	const good = Array.isArray(sessions) && sessions.find(s => s.status === 'done') || sessions?.[0];
 	if (good?.id) {

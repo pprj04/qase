@@ -230,7 +230,8 @@ describe('Governor LIVE — bounded queue through the real API', () => {
 	});
 
 	it('config exposes the new knobs', { skip: !hasServer }, async () => {
-		const { status, json } = await fetch(`${BASE}/api/config`).then(async r => ({ status: r.status, json: await r.json() }));
+		// B1 W3 — /api/config requires auth now; reuse the authed helper.
+		const { status, json } = await api('GET', '/api/config');
 		assert.equal(status, 200);
 		assert.equal(typeof json.maxConcurrentMissions, 'number');
 		assert.equal(typeof json.missionTimeoutMinutes, 'number');

@@ -20,6 +20,7 @@ process.env.QASE_FIX_VALIDATION_DIR = process.env.QASE_STATE_DIR;
 const { resolveDeviceContext, validateDeviceRequest, isBrowserstackRealDevice, BROWSERSTACK_REAL_DEVICES, DEFAULT_DEVICE_BY_CLASS } = await import('../server/deviceContext.js');
 const { buildExecutionEnvironment, isRealDevice, executionModeFor } = await import('../server/executionEnvironment.js');
 const { resolveLaunchPlan, runTestCase } = await import('../server/replay.js');
+const { armConfigRestoreMarker, disarmConfigRestoreMarker } = await import('../server/testRestore.js');
 const store = await import('../server/store.js');
 
 async function api(path, opts = {}) {
@@ -156,6 +157,9 @@ test('D5 BS disabled + device → local emulated plan', () => {
 test('E1 BS device failure with garbage creds → error, provider browserstack, device, failed, no local run', async () => {
 	const config = (await import('../server/config.js'));
 	const saved = JSON.stringify(config.getConfig());
+	// B1 W8 — crash-durable restore: if this process is SIGKILLed mid-mutation,
+	// the marker survives and the SERVER restores the snapshot at next boot.
+	const marker = armConfigRestoreMarker(JSON.parse(saved), 'B1 E1 BS creds mutation');
 	try {
 		await config.saveConfig({
 			browserstackEnabled: true,
@@ -179,12 +183,18 @@ test('E1 BS device failure with garbage creds → error, provider browserstack, 
 		assert.notEqual(result.executionEnvironment.provider, 'local');
 	} finally {
 		await config.saveConfig(JSON.parse(saved));
+		disarmConfigRestoreMarker(marker);
 	}
 });
 
 test('E2 unsupported device through the LIVE launcher → deterministic error', async () => {
 	const config = (await import('../server/config.js'));
 	const saved = JSON.stringify(config.getConfig());
+	// B1 W8 — restore even on SIGTERM/SIGINT (finally does not run for signals).
+	const onSignal = () => { try { config.saveConfig(JSON.parse(saved)); } catch { /* best effort */ } process.exit(143); };
+	process.once('SIGTERM', onSignal);
+	process.once('SIGINT', onSignal);
+	const marker = armConfigRestoreMarker(JSON.parse(saved), 'B1 E2 unsupported-device mutation');
 	try {
 		await config.saveConfig({
 			browserstackEnabled: true,
@@ -206,6 +216,9 @@ test('E2 unsupported device through the LIVE launcher → deterministic error', 
 		assert.equal(result.stepResults.length, 0);
 	} finally {
 		await config.saveConfig(JSON.parse(saved));
+		disarmConfigRestoreMarker(marker);
+		process.removeListener('SIGTERM', onSignal);
+		process.removeListener('SIGINT', onSignal);
 	}
 });
 

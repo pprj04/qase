@@ -225,7 +225,9 @@ console.log('\n[3] POST /api/config/test-browserstack — auth + shape');
 		// the assertion holds wherever the server runs. No weakening: the
 		// persisted browserstackLastVerified must still exist with a real ts
 		// and contain no credential material.
-		const serverCfg = await fetch(`${BASE}/api/config`).then(r => r.json()).catch(() => null);
+		// B1 W3: anonymous /api/config reads are closed — authenticate.
+		const TOKEN = process.env.QASE_API_TOKEN || '';
+		const serverCfg = await fetch(`${BASE}/api/config`, { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} }).then(r => r.json()).catch(() => null);
 		const persisted = serverCfg?.browserstackLastVerified ?? null;
 		ok(persisted && typeof persisted.ts === 'number', 'last-verified outcome persisted to config');
 		ok(!JSON.stringify(persisted ?? {}).includes('tRuEje,27,&') && !/key["']?\s*:\s*"/i.test(JSON.stringify(persisted ?? {})), 'persisted record contains no credential material');

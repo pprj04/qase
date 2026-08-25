@@ -52,10 +52,10 @@ const VALID_REVIEW_STATES = ['unreviewed', 'confirmed', 'false_positive', 'dupli
 export function phaseRouter(auth, publicReadGet = []) {
 	const router = Router();
 
-	// Phase 11a: cross-session bug export — public read-only GET (same
-	// pre-existing contract as the legacy findings list: GET /api/findings is
-	// public, mutations are gated). Exports are redacted server-side.
-	router.get('/findings/export', (req, res) => {
+	// Phase 11a: cross-session bug export — B1 W3: token-gated like every
+	// other read (redacted content, but no longer anonymous). Mutations were
+	// always gated.
+	router.get('/findings/export', auth || ((req, res, next) => next()), (req, res) => {
 		const { format = 'markdown' } = req.query;
 		const all = getAllFindings().filter(f => !f.isDuplicate);
 		if (format === 'markdown') {
@@ -75,22 +75,19 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// Bugs hub cards, mission-for-session for the run console, and finding
 	// detail for the bug modal. Express runs this router.use BEFORE route
 	// middleware, so the exemption is pattern-matched here.
-	const PUBLIC_READ_GET = publicReadGet.length > 0 ? publicReadGet : [
-		/^\/findings\/[^/]+\/evidence$/,
-		/^\/missions\/[^/]+\/mission-for-session$/,
-		/^\/findings\/[^/]+$/,
-		/^\/missions\/[^/]+\/ux-quality$/,
-		/^\/v1\/findings\/[^/]+\/validation$/,
-		/^\/v1\/missions\/[^/]+\/loop-status$/,
-		/^\/v1\/missions\/[^/]+\/evidence-coverage$/,
-		/^\/v1\/evidence\/stats$/
-	];
+	// B1 W3 — no public reads by default. The caller may still pass explicit
+	// exemptions (kept for tests), but the shipped index.js passes none.
+	const PUBLIC_READ_GET = publicReadGet ?? [];
 	// NOTE: /findings/grouped must NOT be public — the :id pattern above
 	// matches it, so it gets an explicit auth here by leaving the general
 	// exemption list to the caller; grouped was public pre-fix ONLY via the
 	// S1 cookie like everything else. If it needs to be public later, add an
 	// explicit pattern.
 	router.use((req, res, next) => {
+		// B1 — the HMAC-signed integration surface authenticates itself via
+		// requireIntegrationAuth on its own routes; the legacy bearer gate
+		// must not intercept it (its Authorization header is not a Bearer).
+		if (req.path.startsWith('/v1/integration/')) return next();
 		if (auth && !(req.method === 'GET' && PUBLIC_READ_GET.some(re => re.test(req.path)))) {
 			return auth(req, res, next);
 		}

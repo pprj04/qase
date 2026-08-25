@@ -7,7 +7,7 @@
  * APPLICATION_ANALYSIS renders into its own tab in the right panel.
  */
 
-import { $, el, state, api, toast, fail, escapeHtml } from './shared.js';
+import { $, el, state, api, apiRaw, toast, fail, escapeHtml } from './shared.js';
 
 const pipelineState = {
 	stages: null,
@@ -932,7 +932,8 @@ devIntelElements.refresh?.addEventListener('click', async () => {
 devIntelElements.download?.addEventListener('click', async () => {
 	if (!state.sessionId) return;
 	try {
-		const res = await fetch(`/api/sessions/${state.sessionId}/dev-report`);
+		// B1 W3 — authed download via the raw helper.
+		const res = await apiRaw(`/sessions/${state.sessionId}/dev-report`);
 		if (!res.ok) throw new Error('Report not available.');
 		const blob = await res.blob();
 		const url = URL.createObjectURL(blob);
@@ -949,8 +950,8 @@ devIntelElements.download?.addEventListener('click', async () => {
 devIntelElements.copyPrompt?.addEventListener('click', async () => {
 	if (!state.sessionId) return;
 	try {
-		const res = await fetch(`/api/sessions/${state.sessionId}/app-improvement-prompt`);
-		const text = await res.text();
+		// B1 W3 — authed read via the raw helper.
+		const text = await apiRaw(`/sessions/${state.sessionId}/app-improvement-prompt`).then(r => r.text());
 		await navigator.clipboard.writeText(text);
 		toast('AI improvement prompt copied to clipboard');
 	} catch {
@@ -965,8 +966,8 @@ document.addEventListener('click', async (e) => {
 	e.stopPropagation();
 	const findingId = target.dataset.findingId;
 	try {
-		const res = await fetch(`/api/findings/${findingId}/fix-prompt`);
-		const text = await res.text();
+		// B1 W3 — authed read via the raw helper.
+		const text = await apiRaw(`/findings/${findingId}/fix-prompt`).then(r => r.text());
 		await navigator.clipboard.writeText(text);
 		toast('Fix prompt copied to clipboard');
 	} catch {

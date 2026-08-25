@@ -1,4 +1,4 @@
-import { el, state, api, toast, fail, escapeHtml, markdown, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
+import { el, state, api, apiRaw, toast, fail, escapeHtml, markdown, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
 
 const bugState = {
 	findings: [],
@@ -164,7 +164,8 @@ async function loadBugDevIntel(bug, container, force = false) {
 	if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
 	try {
 		if (force) {
-			await fetch(`/api/findings/${bug.id}/dev-analysis?force=1`);
+			// B1 W3 — authed force-refresh (GET ?force=1) via the shared helper.
+			await api(`/findings/${bug.id}/dev-analysis?force=1`).catch(() => null);
 		}
 		const intel = await api(`/findings/${bug.id}/dev-analysis`);
 		if (intel) {
@@ -329,8 +330,8 @@ function renderBugDetail(bug) {
 		copyBtn.textContent = '📋 Copy fix prompt';
 		copyBtn.addEventListener('click', async () => {
 			try {
-				const res = await fetch(`/api/findings/${bug.id}/fix-prompt`);
-				const text = await res.text();
+				// B1 W3 — authed read via the raw helper (text body).
+				const text = await apiRaw(`/findings/${bug.id}/fix-prompt`).then(r => r.text());
 				await navigator.clipboard.writeText(text);
 				toast('Fix prompt copied');
 			} catch {
@@ -531,8 +532,8 @@ function initBugsWiring() {
 			const projectId = state.projectId;
 			if (projectId) params.set('projectId', projectId);
 			try {
-				const res = await fetch(`/api/findings/export?format=${format}&${params}`);
-				if (!res.ok) throw new Error('Export failed');
+				// B1 W3 — authed export via the raw helper (blob body).
+				const res = await apiRaw(`/findings/export?format=${format}&${params}`);
 				const blob = await res.blob();
 				const disposition = res.headers.get('Content-Disposition') || '';
 				const match = disposition.match(/filename="?([^"]+)"?/);

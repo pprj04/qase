@@ -962,12 +962,8 @@ async function renderReport() {
 		// "published when the run finishes" placeholder that never resolves.
 		el.reportView.innerHTML = '<div class="feed-empty">Loading report…</div>';
 		try {
-			const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
-			const res = await fetch(`/api/sessions/${state.sessionId}/report.md`, {
-				headers: token ? { Authorization: `Bearer ${token}` } : {}
-			});
-			if (!res.ok) throw new Error(`report API ${res.status}`);
-			const markdownText = await res.text();
+			// B1 W3 — authed read through the shared raw helper (text body).
+			const markdownText = await apiRaw(`/sessions/${state.sessionId}/report.md`).then(r => r.text());
 			if (state.session.report) return; // agent published meanwhile
 			renderGeneratedReport(markdownText);
 		} catch (err) {
@@ -1025,7 +1021,8 @@ async function renderReport() {
 	copy.type = 'button';
 	copy.textContent = 'Copy report';
 	copy.onclick = async () => {
-		const markdownText = await fetch(`/api/sessions/${state.sessionId}/report.md`).then(response => response.text());
+		// B1 W3 — authed read via the raw helper (markdown text).
+		const markdownText = await apiRaw(`/sessions/${state.sessionId}/report.md`).then(r => r.text()).catch(() => '');
 		await navigator.clipboard.writeText(markdownText);
 		toast('Report copied to the clipboard.', 'good');
 	};
@@ -1461,7 +1458,11 @@ function list(items) {
 function connect(id) {
 	state.stream?.close();
 	clearTimeout(state._reconnectTimer);
-	const stream = new EventSource(`/api/sessions/${id}/events`);
+	// B1 W3 — EventSource cannot send headers; authenticate the stream via
+	// the server-supported ?token= query method (cookie also accepted).
+	const streamToken = localStorage.getItem('qase_token');
+	const streamUrl = `/api/sessions/${id}/events${streamToken ? `?token=${encodeURIComponent(streamToken)}` : ''}`;
+	const stream = new EventSource(streamUrl);
 	state.stream = stream;
 
 	stream.onopen = () => {
@@ -2152,9 +2153,9 @@ async function loadMetrics() {
 async function loadSessionMission(sessionId) {
 	state.missionId = null;
 	try {
-		const res = await fetch(`/api/missions/${sessionId}/mission-for-session`);
-		if (!res.ok) return;
-		const mission = await res.json();
+		// B1 W3 — the API requires auth; use the shared helper so the token
+		// from Settings (localStorage) is attached.
+		const mission = await api(`/missions/${sessionId}/mission-for-session`).catch(() => null);
 		if (mission && mission.missionId) {
 			state.missionId = mission.missionId;
 			// Findings already rendered — re-render with mission context.
@@ -2471,7 +2472,8 @@ async function handleExport(type) {
 	}
 
 	try {
-		const res = await fetch(url);
+		// B1 W3 — authed export via the raw helper (token from Settings).
+		const res = await apiRaw(url.startsWith('/api') ? url.slice(4) : url);
 		if (!res.ok) throw new Error(`Export failed: ${res.status}`);
 		const blob = await res.blob();
 
@@ -2551,6 +2553,58 @@ document.addEventListener('click', event => {
 		api('/config').catch(err => { console.error('[boot] config fetch failed:', err.message); return undefined; }),
 		api('/projects').catch(err => { console.error('[boot] projects fetch failed:', err.message); return []; })
 	]);
+
+	// B1 W3 — the API is token-gated now. If the very first boot request was
+	// rejected as unauthenticated, show the one-field token gate instead of
+	// booting into a silently broken dashboard. This triggers both when no
+	// token exists AND when a stored token is stale/wrong (config===undefined).
+	if (config === undefined) {
+		const gate = document.getElementById('auth-gate');
+		const rest = document.getElementById('auth-gate-rest');
+		if (gate && rest) {
+			gate.hidden = false;
+			rest.hidden = true;
+			const save = document.getElementById('auth-gate-save');
+			const input = document.getElementById('auth-gate-token');
+			// If a stale token exists, clear it so the next attempt starts clean.
+			localStorage.removeItem('qase_token');
+			// Show the existing token value in the input for convenience.
+			const existing = document.cookie.match(/qase_token=([^;]+)/);
+			if (existing && input) input.value = existing[1];
+			const submitToken = async () => {
+				const value = (input?.value || '').trim();
+				if (!value) return;
+				// B1 reviewer round-2: VALIDATE before storing. A wrong token
+				// must not be persisted and must not drop the user into a
+				// silently broken app.
+				save.disabled = true; save.textContent = 'Checking…';
+				try {
+					const probe = await fetch('/api/health', { headers: { authorization: `Bearer ${value}` } });
+					if (probe.status === 200 || probe.status === 401) {
+						// /api/health is public — but /api/config will 401 if wrong.
+						// Use the actual config endpoint as the validity gate:
+						const cfgProbe = await fetch('/api/config', { headers: { authorization: `Bearer ${value}` } });
+						if (cfgProbe.status === 200) {
+							localStorage.setItem('qase_token', value);
+							location.reload();
+							return;
+						}
+					}
+					// Validation failed — show error, keep the gate open.
+					save.disabled = false; save.textContent = 'Continue';
+					const errEl = document.getElementById('auth-gate-error');
+					if (errEl) errEl.textContent = 'Token rejected — check the value in Settings → API Token.';
+					else alert('Token rejected — check the value in Settings → API Token.');
+				} catch (e) {
+					save.disabled = false; save.textContent = 'Continue';
+					alert('Network error — try again.');
+				}
+			};
+			save?.addEventListener('click', submitToken);
+			input?.addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
+			return; // skip the rest of boot — the page is a gate until auth exists
+		}
+	}
 
 	if (config) {
 		paintConfig(config);
@@ -2678,22 +2732,19 @@ async function loadUxQualityPanel() {
 	let missionId = uxQualityState.missionId;
 	if (!missionId && state.session?.id) {
 		try {
-			const res = await fetch(`/api/missions/${state.session.id}/mission-for-session`);
-			if (res.ok) {
-				const j = await res.json();
-				// missionId null = session-only run with no mission — hide panel
-				if (j.missionId) {
-					missionId = j.missionId;
-					uxQualityState.missionId = missionId;
-				}
+			// B1 W3 — authed read via the shared helper.
+			const j = await api(`/missions/${state.session.id}/mission-for-session`).catch(() => null);
+			if (j && j.missionId) {
+				missionId = j.missionId;
+				uxQualityState.missionId = missionId;
 			}
 		} catch { /* offline / transient — panel stays hidden */ }
 	}
 	if (!missionId) { panel.hidden = true; return; }
 	try {
-		const res = await fetch(`/api/missions/${missionId}/ux-quality`);
-		if (!res.ok) { panel.hidden = true; return; }
-		const data = await res.json();
+		// B1 W3 — authed read via the shared helper (token from Settings).
+		const data = await api(`/missions/${missionId}/ux-quality`).catch(() => null);
+		if (!data) { panel.hidden = true; return; }
 		uxQualityState.data = data;
 		panel.hidden = false;
 		renderUxQualityPanel();
@@ -2875,13 +2926,12 @@ async function reviewUxIssue(issue, reviewState, btn) {
 	if (!missionId) return;
 	btn.disabled = true;
 	try {
-		const res = await fetch(`/api/v1/missions/${missionId}/ux/issues/${encodeURIComponent(issue.id)}/review`, {
+		// B1 W3 — mutation through the shared authed helper.
+		const j = await api(`/v1/missions/${missionId}/ux/issues/${encodeURIComponent(issue.id)}/review`, {
 			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ reviewState, reason: 'reviewed in dashboard', by: 'dashboard' }),
-		});
-		if (!res.ok) throw new Error(`HTTP ${res.status}`);
-		const j = await res.json();
+		}).catch(() => null);
+		if (!j) throw new Error('HTTP error');
 		issue.reviewState = j.issue.reviewState;
 		issue.reviewedBy = j.issue.reviewedBy;
 		issue.reviewedAt = j.issue.reviewedAt;

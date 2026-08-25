@@ -9,6 +9,13 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
+import { EventEmitter } from 'node:events';
+
+/**
+ * B1 W5 — validation events for webhook fan-out. Phase 18 engines stay
+ * decision-pure; index.js subscribes and performs delivery side effects.
+ */
+export const validationBus = new EventEmitter();
 import {
 	FIX_STATUSES,
 	VALIDATION_RUN_STATUSES,
@@ -275,6 +282,10 @@ export function completeRun(id, { fixStatus, fixStatusReason, validationConfiden
 		}
 	}
 	saveRun(run);
+	// B1 W5 — notify webhook subscribers of the revalidation result.
+	try {
+		validationBus.emit('run:completed', { runId: run.id, findingId: run.findingId, fixStatus, validationConfidence: validationConfidence ?? null });
+	} catch { /* fan-out is best-effort */ }
 	return run;
 }
 

@@ -38,7 +38,8 @@ async function post(path, body) {
 }
 
 async function get(path) {
-	const response = await fetch(`${BASE}${path}`);
+	// B1 W3: anonymous GETs are 401 — read routes (incl. artifacts) require the token.
+	const response = await fetch(`${BASE}${path}`, { headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	return { status: response.status, data: await response.json() };
 }
 
@@ -67,7 +68,9 @@ describe('Phase 9C — Artifact Route', () => {
 	it('GET /api/artifacts/:runId/:filename serves an existing file', async () => {
 		setupDummyArtifacts();
 		try {
-			const response = await fetch(`${BASE}/api/artifacts/${DUMMY_RUN_ID}/step-0.jpeg`);
+			// B1 W3: artifacts require auth (anonymous screenshots were an open read surface).
+			const response = await fetch(`${BASE}/api/artifacts/${DUMMY_RUN_ID}/step-0.jpeg`,
+				{ headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 			assert.equal(response.status, 200);
 			const body = await response.text();
 			assert.ok(body.length > 0, 'file has content');
@@ -77,7 +80,8 @@ describe('Phase 9C — Artifact Route', () => {
 	});
 
 	it('GET /api/artifacts/:runId/:filename returns 404 for missing file', async () => {
-		const response = await fetch(`${BASE}/api/artifacts/nonexistent-run/step-0.jpeg`);
+		const response = await fetch(`${BASE}/api/artifacts/nonexistent-run/step-0.jpeg`,
+			{ headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 		assert.equal(response.status, 404);
 	});
 

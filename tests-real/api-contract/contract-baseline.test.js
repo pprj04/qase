@@ -144,9 +144,13 @@ describe('API contract — findings (bugs hub)', () => {
 		}
 		await DELETE(`/api/findings/${c.json.id}`);
 	});
-	it('GET /api/findings/export?format=markdown (open, redacted) → text/markdown', async () => {
-		const r = await anonGet('/api/findings/export?format=markdown');
-		assert.ok([200, 302].includes(r.status));
+	it('GET /api/findings/export?format=markdown → token-gated (B1 W3: anonymous reads closed)', async () => {
+		// B1 W3 contract change: this route is no longer anonymous. Anonymous
+		// must get 401; the tokenized call returns the markdown export.
+		const anon = await anonGet('/api/findings/export?format=markdown');
+		assert.equal(anon.status, 401, 'export must not be anonymously readable anymore');
+		const r = await GET('/api/findings/export?format=markdown');
+		assert.equal(r.status, 200);
 	});
 });
 

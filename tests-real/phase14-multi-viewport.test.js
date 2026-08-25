@@ -154,9 +154,12 @@ console.log('\n── Phase 14: Multi-Viewport / Responsive Testing ──\n');
 	ok('testCases clone includes viewport', src.includes('viewport: original.viewport'));
 }
 
-// ── Test 10: API — public config has viewportPresets ─────────────
+// ── Test 10: API — config has viewportPresets (B1 W3: token-gated) ─
 {
-	const res = await fetch(`${BASE}/api/config`);
+	// B1 closed the anonymous read surface — /api/config requires the token.
+	const anon = await fetch(`${BASE}/api/config`);
+	ok('GET /api/config anonymous → 401 (B1 W3 closed surface)', anon.status === 401);
+	const res = await fetch(`${BASE}/api/config`, { headers: { Authorization: `Bearer ${process.env.QASE_API_TOKEN}` } });
 	const config = await res.json();
 	ok('GET /api/config returns viewportPresets', Array.isArray(config.viewportPresets));
 	ok('config has exploreViewports', 'exploreViewports' in config);

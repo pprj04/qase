@@ -16,7 +16,8 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
-const BASE = process.env.QASE_BASE_URL || 'http://localhost:5173';
+// QASE_TEST_BASE_URL — QASE_BASE_URL is the LLM provider URL (reviewer WARN 1).
+const BASE = process.env.QASE_TEST_BASE_URL || process.env.QASE_URL || 'http://localhost:5173';
 const TOKEN = process.env.QASE_API_TOKEN || '';
 const TARGET = process.env.PHASE17_E2E_TARGET || 'http://localhost:9901';
 // Generous budget: mission duration is LLM-bound and varies with concurrent
