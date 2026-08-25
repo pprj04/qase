@@ -671,12 +671,13 @@ async function runSingleTest(tc, card, runBtn) {
 		spinner.textContent = 'Running test…';
 		resultContainer.append(spinner);
 
-		const credentials = state.session?.secretNames?.length
-			? undefined
-			: undefined;
+		// B0: credentials intentionally omitted for single-run — the vault
+		// scope is per-session and there is no UI to select stored secret
+		// names yet. (Documented as a B1 finding: single-test authenticated
+		// replay needs a secret picker.)
 		const data = await api(`/test-cases/${tc.id}/run`, {
 			method: 'POST',
-			body: JSON.stringify({ credentials })
+			body: JSON.stringify({})
 		});
 
 		renderRunResult(resultContainer, data.result);
@@ -723,12 +724,13 @@ async function runAllTests() {
 
 	try {
 		const ids = state.testCases.map(tc => tc.id);
+		// B0 fix: stop bypassing server configuration with hardcoded
+		// concurrency/retries. Omit both fields — the server applies
+		// the operator's Settings (concurrentRuns / retriesCount) server-side.
 		const summary = await api('/test-cases/run', {
 			method: 'POST',
 			body: JSON.stringify({
-				testCaseIds: ids,
-				concurrency: 3,
-				retries: 0
+				testCaseIds: ids
 			})
 		});
 

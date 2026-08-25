@@ -2443,27 +2443,27 @@ async function handleExport(type) {
 
 	switch (type) {
 		case 'findings-markdown':
-			url = `/sessions/${state.sessionId}/export/findings?format=markdown`;
+			url = `/api/sessions/${state.sessionId}/export/findings?format=markdown`;
 			filename = `findings-${state.sessionId}.md`;
 			break;
 		case 'findings-github':
-			url = `/sessions/${state.sessionId}/export/findings?format=github`;
+			url = `/api/sessions/${state.sessionId}/export/findings?format=github`;
 			filename = `findings-github.json`;
 			break;
 		case 'findings-jira':
-			url = `/sessions/${state.sessionId}/export/findings?format=jira`;
+			url = `/api/sessions/${state.sessionId}/export/findings?format=jira`;
 			filename = `findings-jira.json`;
 			break;
 		case 'findings-linear':
-			url = `/sessions/${state.sessionId}/export/findings?format=linear`;
+			url = `/api/sessions/${state.sessionId}/export/findings?format=linear`;
 			filename = `findings-linear.json`;
 			break;
 		case 'testcases-json':
-			url = `/test-cases/export?format=json`;
+			url = `/api/test-cases/export?format=json`;
 			filename = 'test-cases.json';
 			break;
 		case 'testcases-csv':
-			url = `/test-cases/export?format=csv`;
+			url = `/api/test-cases/export?format=csv`;
 			filename = 'test-cases.csv';
 			break;
 		default:
