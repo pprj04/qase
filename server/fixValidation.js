@@ -129,10 +129,14 @@ export function findByIdempotencyKey(key) {
 	return runs.find(r => r.idempotencyKey === key && key) || null;
 }
 
-export function listValidations({ status, fixStatus, limit = 50 } = {}) {
+export function listValidations({ status, fixStatus, projectId, limit = 50 } = {}) {
 	let out = runs;
 	if (status) out = out.filter(r => r.status === status);
 	if (fixStatus) out = out.filter(r => r.fixStatus === fixStatus);
+	// C1 review fix (Finding A) — projectId is stored on every run record but
+	// was silently dropped here, so per-project summaries leaked the global
+	// fix-validation count into every project's window. Filter when asked.
+	if (projectId) out = out.filter(r => r.projectId === projectId);
 	return out.slice(0, limit);
 }
 

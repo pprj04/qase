@@ -22,7 +22,8 @@
     "test:responsive": "node scripts/run-tests.mjs responsive",
     "test:performance": "node scripts/run-tests.mjs performance",
     "test:security": "node scripts/run-tests.mjs security",
-    "test:truthfulness": "node scripts/run-tests.mjs truthfulness"
+    "test:truthfulness": "node scripts/run-tests.mjs truthfulness",
+    "test:openapi": "node scripts/validate-openapi.mjs"
   },
   "engines": {
     "node": ">=20"

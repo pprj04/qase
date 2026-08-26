@@ -88,6 +88,10 @@ export function phaseRouter(auth, publicReadGet = []) {
 		// requireIntegrationAuth on its own routes; the legacy bearer gate
 		// must not intercept it (its Authorization header is not a Bearer).
 		if (req.path.startsWith('/v1/integration/')) return next();
+		// C1 — the /api/v2 Pulse read surface mounts its own router (with the
+		// same requireApiToken) at app level; phaseRouter must not pre-gate
+		// its routes — including the deliberately-public /api/v2/health.
+		if (req.path.startsWith('/v2/')) return next();
 		if (auth && !(req.method === 'GET' && PUBLIC_READ_GET.some(re => re.test(req.path)))) {
 			return auth(req, res, next);
 		}

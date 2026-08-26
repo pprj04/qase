@@ -1521,6 +1521,7 @@ app.get('/api/missions', requireApiToken, (request, response) => {
 import { phaseRouter } from './phaseRouter.js';
 import { pulseV2Router } from './pulseV2Router.js';
 import { buildOpenApiDocument } from './openapiDocument.js';
+import { initApiUsageTracker, apiUsageCounter } from './apiUsage.js';
 import { getAssessmentForMission, loadAssessments } from './uxAssessment.js';
 // M1-P4.1 — target URL security boundary (SSRF).
 import { validateTargetUrl, classifyUrlFast, validateWebhookUrl } from './targetGuard.js';
@@ -1542,7 +1543,10 @@ app.use('/api', phaseRouter(requireApiToken, PUBLIC_READ_GET));
 // Versioned read façade for external analytics agents (Drytis Pulse): JSON
 // document + /api/v2 GET endpoints shaped exactly as the document declares.
 // Legacy routes above are untouched.
-app.use('/api/v2', pulseV2Router(requireApiToken));
+// C1 G3 — init the bounded request-usage tracker; mount the counter AFTER
+// requireApiToken inside the router so only authenticated v2 reads are counted.
+initApiUsageTracker();
+app.use('/api/v2', pulseV2Router(requireApiToken, apiUsageCounter()));
 
 app.get('/openapi.json', (_request, response) => {
 	const serverUrl = (process.env.QASE_PUBLIC_URL || '').trim() || `${_request.protocol}://${_request.get('host')}`;
