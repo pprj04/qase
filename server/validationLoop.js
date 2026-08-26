@@ -302,12 +302,25 @@ export function hasNoImprovement(mission) {
 /**
  * Checks if the mission has reached its iteration limit.
  *
+ * B2 fix — currentIteration only advances when recordIteration runs at
+ * FINALIZE time. An autonomy-chained mission defers finalization for every
+ * dispatched revalidation, so currentIteration stays 0 while real
+ * iterations run (observed: 3 chained dispatches, currentIteration 0 —
+ * the iteration guard was inert and only the turn pool bounded the chain).
+ * iterationMetadata is appended at DISPATCH time and is therefore the
+ * truthful dispatch count; take the max of both so the guard can never be
+ * bypassed by deferral, and never under-count an already-finalized chain.
+ *
  * @param {object} mission
  * @returns {boolean}
  */
 export function hasReachedIterationLimit(mission) {
   const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-  return (mission.currentIteration ?? 0) >= limit;
+  const recorded = mission.currentIteration ?? 0;
+  const dispatched = Array.isArray(mission.iterationMetadata)
+    ? mission.iterationMetadata.length
+    : 0;
+  return Math.max(recorded, dispatched) >= limit;
 }
 
 /**

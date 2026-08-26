@@ -120,6 +120,12 @@ import {
 	getEvidenceCount, getObservationCount, getEdgeCount,
 	EVIDENCE_TYPES, EVIDENCE_STATUS
 } from './evidenceGraph.js';
+// B2 — Autonomous Control Loop
+import { buildTestContext } from './autonomyContext.js';
+import { runAutonomyDecision, autonomyEnabled, missionAutonomyEnabled, registerAutonomyHooks } from './autonomyController.js';
+import { registerCapabilitiesAutonomyGate } from './autonomyBridge.js';
+import { getDecisionTraces, recordDecisionTrace } from './decisionTraces.js';
+import * as decisionEngineNs from './decisionEngine.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -391,8 +397,15 @@ function startMissionExecution(mission, begin) {
 		// B1 W2 — stamp the session with its mission so session-born findings
 		// can be linked to (and authorized through) the mission. Stamp BEFORE
 		// begin() so the very first session-store write already carries it.
+		//
+		// B2 fix — several begin() call-sites return a summary object (not the
+		// session), so stamping the return value silently linked NOTHING on
+		// those paths: sessions.json had no missionId, the turn pool saw 0
+		// spent after a restart, and capabilities' listMissions filter by
+		// sessionId still worked but session-side lookups did not. The stamp
+		// now lives on the session itself via a creation hook, which also
+		// persists to disk (createSession snapshot).
 		const seeded = begin();
-		seeded && (seeded.missionId = mission.id);
 		return seeded;
 	});
 }
@@ -1506,6 +1519,8 @@ app.get('/api/missions', requireApiToken, (request, response) => {
 // routes so specific paths (e.g. /api/findings/grouped) win over the
 // generic /api/findings/:id parameter route below.
 import { phaseRouter } from './phaseRouter.js';
+import { pulseV2Router } from './pulseV2Router.js';
+import { buildOpenApiDocument } from './openapiDocument.js';
 import { getAssessmentForMission, loadAssessments } from './uxAssessment.js';
 // M1-P4.1 — target URL security boundary (SSRF).
 import { validateTargetUrl, classifyUrlFast, validateWebhookUrl } from './targetGuard.js';
@@ -1521,6 +1536,20 @@ import { paginateList } from './pagination.js';
 // /api/v1/integration/* surface which authenticates itself.
 const PUBLIC_READ_GET = [];
 app.use('/api', phaseRouter(requireApiToken, PUBLIC_READ_GET));
+
+/* ═══════════════ Pulse read surface (OpenAPI v2) ═══════════════ */
+
+// Versioned read façade for external analytics agents (Drytis Pulse): JSON
+// document + /api/v2 GET endpoints shaped exactly as the document declares.
+// Legacy routes above are untouched.
+app.use('/api/v2', pulseV2Router(requireApiToken));
+
+app.get('/openapi.json', (_request, response) => {
+	const serverUrl = (process.env.QASE_PUBLIC_URL || '').trim() || `${_request.protocol}://${_request.get('host')}`;
+	response.setHeader('Cache-Control', 'no-store');
+	response.type('application/json');
+	response.json(buildOpenApiDocument({ serverUrl }));
+});
 
 /* ═══════════════ B1 — Integration API (HMAC-signed) ═══════════════ */
 
@@ -1699,7 +1728,12 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 
 	if (body.autoStart !== false) {
 		const outcome = startMissionExecution(mission, () => {
-			const session = createSession(mission.name || 'Integration Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
+			// B2 — missionId is passed at creation so it PERSISTS on the
+			// session record (turn pool + finding linkage survive restarts).
+			const session = createSession(mission.name || 'Integration Mission', mission.projectId, {
+				...(missionDevice ? { deviceRequest: missionDevice } : {}),
+				missionId: mission.id
+			});
 			session.targetUrl = mission.targetUrl;
 			const missionTurns = Number(mission.context?.maxTurns);
 			if (Number.isInteger(missionTurns) && missionTurns >= 1) {
@@ -1714,6 +1748,7 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 				}
 			}
 			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
+			buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
 			const taskPrompt = buildMissionPrompt(mission);
 			ensureRuntime(session).then(() => {
 				startTurn(session, { task: taskPrompt });
@@ -1780,6 +1815,14 @@ app.get('/api/v1/integration/missions/:id/report', requireIntegrationAuth, (requ
 		return;
 	}
 	response.json({ missionId: mission.id, missionType: mission.type, targetUrl: mission.targetUrl, ...report });
+});
+
+/* ── Integration: B2 autonomy decision trace (13-field schema, sanitized) ── */
+app.get('/api/v1/integration/missions/:id/decision-trace', requireIntegrationAuth, (request, response) => {
+	const mission = requireMissionForIntegration(request, response);
+	if (!mission) return;
+	const traces = getDecisionTraces(mission.id);
+	response.json({ missionId: mission.id, autonomyEnabled: autonomyEnabled(), count: traces.length, decisions: traces });
 });
 
 /* ── Integration: findings (mission-scoped, paginated) ── */
@@ -2352,7 +2395,10 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		requirements: body.requirements || undefined,
 		businessGoals: body.businessGoals || undefined,
 		// B1 W6 — mission-scoped turn budget reaches execution (see startMissionExecution)
-		...(missionMaxTurns !== null ? { maxTurns: missionMaxTurns } : {})
+		...(missionMaxTurns !== null ? { maxTurns: missionMaxTurns } : {}),
+		// B2 W4 — per-mission autonomy switch (context.autonomy=false disables
+		// the decision engine for THIS mission only; default on).
+		...(body.context?.autonomy === false ? { autonomy: false } : {})
 	};
 
 	if (body.testCredentials && typeof body.testCredentials === 'object') {
@@ -2405,7 +2451,10 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		// (session + Chromium + LLM) only begins when a slot is granted;
 		// otherwise the mission waits in `queued`.
 		const outcome = startMissionExecution(mission, () => {
-			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDevice ? { deviceRequest: missionDevice } : {});
+			const session = createSession(mission.name || 'API Mission', mission.projectId, {
+				...(missionDevice ? { deviceRequest: missionDevice } : {}),
+				missionId: mission.id
+			});
 			session.targetUrl = mission.targetUrl;
 
 			// B1 W6 — the mission's turn budget reaches the agent runtime.
@@ -2442,17 +2491,21 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 				console.log(`[knowledge] detectAppMetadata for ${mission.targetUrl}:`, JSON.stringify(appMeta));
 				const knowledgeResult = queryKnowledge(appMeta);
 				console.log(`[knowledge] queryKnowledge returned ${knowledgeResult.patterns?.length || 0} patterns, ${knowledgeResult.hints?.length || 0} hints, summary: ${knowledgeResult.summary}`);
-				relevantPatterns = knowledgeResult.patterns || [];
-				knowledgeHints = generateExplorationHints(relevantPatterns);
-				// Store for post-mission validation
-				session.knowledgeHints = knowledgeResult.hints || [];
-				session.knowledgePatternsUsed = relevantPatterns.map(p => p.id);
-				if (knowledgeHints) {
-					console.log(`[knowledge] Injected ${relevantPatterns.length} historical pattern(s) as exploration hints for session ${session.id}`);
-				}
-			} catch (err) {
-				console.warn('[knowledge] Pre-exploration query failed:', err.message);
+			relevantPatterns = knowledgeResult.patterns || [];
+			knowledgeHints = generateExplorationHints(relevantPatterns);
+			// Store for post-mission validation
+			session.knowledgeHints = knowledgeResult.hints || [];
+			session.knowledgePatternsUsed = relevantPatterns.map(p => p.id);
+			if (knowledgeHints) {
+				console.log(`[knowledge] Injected ${relevantPatterns.length} historical pattern(s) as exploration hints for session ${session.id}`);
 			}
+		} catch (err) {
+			console.warn('[knowledge] Pre-exploration query failed:', err.message);
+		}
+
+		// B2 W1 — build the risk/priority context the per-turn prompt renders
+		// (was the dead consumer: prompt.js read testContext nobody assigned).
+		buildTestContext(session, mission);
 
 			// Build the agent task from mission type + objectives + knowledge hints
 			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
@@ -2518,7 +2571,10 @@ async function startMissionByIdHandler(request, response, mission) {
 			if (!missionDeviceCheck.ok) {
 				throw new Error(missionDeviceCheck.error);
 			}
-			const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
+			const session = createSession(mission.name || 'API Mission', mission.projectId, {
+				...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+				missionId: mission.id
+			});
 			session.targetUrl = mission.targetUrl;
 
 			// B1 W6 — the mission's turn budget follows it onto EVERY execution
@@ -2553,6 +2609,8 @@ async function startMissionByIdHandler(request, response, mission) {
 			} catch (err) {
 				console.warn('[knowledge] Pre-exploration query failed:', err.message);
 			}
+
+			buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
 
 			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 			ensureRuntime(session).then(() => {
@@ -2610,11 +2668,12 @@ app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
 				// Update mission with live session findings
 				updateMission(mission.id, { findings: session.findings ?? [] });
 			} else if (isComplete && mission.status === 'running') {
-				// Session finished — finalize the mission. B1 W6: a session that
-				// settled because of the turn budget first gets its one-shot
-				// honest wrap-up turn, then finalizes when THAT settles.
-				const continued = await finalizeTurnLimitedRun(session).catch(() => false);
-				if (!continued) finalizeMissionFromSession(mission, session);
+				// Session finished — finalize the mission. B2: a turn-budget
+				// exhausted session is closed out DETERMINISTICALLY (zero
+				// model turns) before finalization, so the budget can never
+				// be exceeded by the close-out itself.
+				finalizeTurnLimitedRun(session);
+				await finalizeMissionFromSession(mission, session);
 			}
 		}
 	}
@@ -2746,7 +2805,10 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 			const session = createSession(
 				`${mission.name} — Iteration ${mission.currentIteration + 1}`,
 				mission.projectId,
-				missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
+				{
+					...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+					missionId: mission.id
+				}
 			);
 			session.targetUrl = mission.targetUrl;
 
@@ -2803,8 +2865,42 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
  * route run the exact same guards + governor path.
  */
 async function revalidateMissionByIdHandler(request, response, mission) {
-	// Guard: mission is already running — return existing session (idempotency)
-	if (mission.status === 'running') {
+	// B2 — begin()-closure throws with an attached statusCode (e.g. pool
+	// exhausted → 409 budget_exhausted) are CONTRACT answers, not server
+	// errors. Catch here (closest frame to the router) so Express's default
+	// 500 handler never sees them.
+	let guarded;
+	try {
+		guarded = await revalidateMissionByIdHandlerInner(request, response, mission);
+		return guarded;
+	} catch (error) {
+		if (error?.statusCode && !response.headersSent) {
+			return response.status(error.statusCode).json({
+				error: error.message,
+				code: error.code ?? 'revalidation_refused',
+				missionId: mission.id
+			});
+		}
+		throw error;
+	}
+}
+
+async function revalidateMissionByIdHandlerInner(request, response, mission) {
+	// BUILD B2 — internal autonomy dispatch marker. The autonomy gate fires
+	// BEFORE the terminal write, so mission.status is still 'running' even
+	// though its session is settled. Only the internal caller may pass the
+	// marker; an EXTERNAL request carrying it is rejected outright (it is not
+	// a header/param — it is a module-private object field the router never
+	// populates from the wire).
+	if (request.__qaseInternalAutonomy === true) {
+		const session = mission.sessionId ? getSession(mission.sessionId) : null;
+		const settled = session && ['done', 'idle', 'error', 'interrupted'].includes(session.status)
+			&& !liveFor(session.id)?.running;
+		if (!settled) {
+			return response.status(409).json({ error: 'Internal autonomy dispatch refused: session not settled.' });
+		}
+	} else if (mission.status === 'running') {
+		// Guard: mission is already running — return existing session (idempotency)
 		return response.status(409).json({
 			error: 'Mission is already running. Wait for the current iteration to complete.',
 			missionId: mission.id,
@@ -2850,6 +2946,23 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 	// M1-P4.2 — through the governor.
 	const outcome = startMissionExecution(mission, () => {
 		try {
+			// B2 — pool exhaustion is a CONTRACT state, not a server error:
+			// the mission spent its whole authorized budget and a caller
+			// asked for another iteration. Surface as 409 budget_exhausted
+			// (the same envelope the other guards use), not a thrown 500.
+			const revalBudgetCheck = Number(mission.context?.maxTurns);
+			if (Number.isInteger(revalBudgetCheck) && revalBudgetCheck >= 1) {
+				const spentNow = listSessions()
+					.map(s => getSession(s.id))
+					.filter(s => s && s.missionId === mission.id)
+					.reduce((sum, s) => sum + (Number(s?.turnCount) || 0), 0);
+				if (spentNow >= Math.min(revalBudgetCheck, 500)) {
+					const exhausted = new Error(`Mission turn pool exhausted (${spentNow}/${revalBudgetCheck}) — no budget for another iteration.`);
+					exhausted.statusCode = 409;
+					exhausted.code = 'budget_exhausted';
+					throw exhausted;
+				}
+			}
 			// Create session for the new iteration
 			// B0.3 — preserve the mission device constraint across revalidations.
 			const missionDeviceCheck = validateDeviceRequest(mission.constraints?.device ?? null);
@@ -2860,7 +2973,12 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			const session = createSession(
 				`${mission.name} — Revalidation ${iterationNumber}`,
 				mission.projectId,
-				missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}
+				{
+					...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+					// B2 — persist the mission link so the turn-pool debit
+					// survives restarts.
+					missionId: mission.id
+				}
 			);
 			session.targetUrl = mission.targetUrl;
 
@@ -2868,7 +2986,25 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			// (same clamp as the create/start paths).
 			const revalTurnBudget = Number(mission.context?.maxTurns);
 			if (Number.isInteger(revalTurnBudget) && revalTurnBudget >= 1) {
-				session.maxTurns = Math.min(revalTurnBudget, 500);
+				// B2 budget-asymmetry — the mission's turn budget is a POOL
+				// shared across iterations, not a fresh grant each time. Debit
+				// from the mission's LINKED SESSIONS (ground truth at dispatch
+				// time) — NOT from mission.iterations, which only fills at
+				// finalize and is empty while the autonomy gate defers it.
+				// A mission authorized for 3 turns can never spend more than
+				// 3 in TOTAL across all its revalidation iterations.
+				const spent = listSessions()
+					.map(s => getSession(s.id))
+					.filter(s => s && s.missionId === mission.id)
+					.reduce((sum, s) => sum + (Number(s?.turnCount) || 0), 0);
+				const remainingPool = Math.max(0, Math.min(revalTurnBudget, 500) - spent);
+				if (remainingPool < 1) {
+					const exhausted = new Error(`Mission turn pool exhausted (${spent}/${revalTurnBudget}) — no budget for another iteration.`);
+					exhausted.statusCode = 409;
+					exhausted.code = 'budget_exhausted';
+					throw exhausted;
+				}
+				session.maxTurns = remainingPool;
 			}
 
 			// Update mission to running
@@ -2880,10 +3016,29 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			session.knowledgePatternsUsed = knowledgeData.patternIds;
 
 			// Get previous iteration data for revalidation prompt
+			// B2 fix — a deferred (autonomy-chained) mission has not recorded
+			// iterations yet, so the prompt used to explore from scratch and
+			// never revalidated the findings it had already produced. Fall
+			// back to the findings STORE for this mission (session-born
+			// findings are linked via missionId) so chained revalidations
+			// verify prior findings even before the first finalize records
+			// an iteration.
 			const previousIterations = mission.iterations ?? [];
-			const lastIteration = previousIterations.length > 0
+			let lastIteration = previousIterations.length > 0
 				? previousIterations[previousIterations.length - 1]
 				: null;
+			if (!lastIteration || !Array.isArray(lastIteration.findings) || lastIteration.findings.length === 0) {
+				const storedFindings = listFindings({ missionId: mission.id });
+				if (storedFindings.length > 0) {
+					lastIteration = {
+						...(lastIteration ?? {}),
+						number: lastIteration?.number ?? (mission.currentIteration || 0),
+						findings: storedFindings.slice(0, 15),
+						qualityScore: lastIteration?.qualityScore ?? mission.qualityScore ?? null,
+						verdict: lastIteration?.verdict ?? mission.verdict ?? null
+					};
+				}
+			}
 
 			// Build revalidation prompt with awareness of previous findings
 			const taskPrompt = lastIteration
@@ -2895,7 +3050,18 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			iterMeta.status = ITERATION_STATUS.RUNNING;
 			const meta = mission.iterationMetadata ? [...mission.iterationMetadata] : [];
 			meta.push(iterMeta);
-			updateMission(mission.id, { iterationMetadata: meta });
+			updateMission(mission.id, {
+				iterationMetadata: meta,
+				// B2 fix — currentIteration now advances at DISPATCH time, not
+				// only at finalize (recordIteration). A deferred (autonomy-
+				// chained) mission used to keep currentIteration 0 while real
+				// iterations ran, which (a) made hasReachedIterationLimit inert
+				// on chains and (b) mislabeled every revalidation "iteration 1".
+				// recordIteration still guards against double-counting by
+				// session id; its `number` stays aligned because it uses
+				// currentIteration+1 at record time.
+				currentIteration: (mission.currentIteration || 0) + 1
+			});
 
 			// Start the agent
 			const injectedPatterns = knowledgeData.patternIds.length;
@@ -2910,6 +3076,22 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			});
 			return { injectedPatterns, previousFindings };
 		} catch (error) {
+			// B2 — a CONTRACT refusal (budget exhausted) must not corrupt the
+			// mission state: the mission already holds its terminal verdict
+			// from the settled iteration; only the EXTRA iteration request
+			// was refused. Restore the prior status and rethrow with the
+			// attached status code so the router answers 409, not 500.
+			if (error?.statusCode === 409) {
+				const fresh = getMission(mission.id);
+				if (fresh && fresh.status === 'failed') {
+					const priorStatus = (fresh.iterations ?? []).length > 0 || fresh.verdict ? 'completed' : 'failed';
+					updateMission(mission.id, {
+						status: priorStatus,
+						failureReason: priorStatus === 'completed' ? null : fresh.failureReason
+					});
+				}
+				throw error;
+			}
 			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
 			throw error;
 		}
@@ -2945,6 +3127,24 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
  * Returns the complete iteration history, convergence analysis,
  * comparison, latest decision, and stop reason.
  */
+/**
+ * BUILD B2 — the autonomy decision trace for a mission.
+ * Structured metadata only (13-field schema): no prompts, no CoT, no secrets.
+ */
+app.get('/api/v1/missions/:id/decision-trace', requireApiToken, (request, response) => {
+	const mission = getMission(request.params.id);
+	if (!mission) {
+		return response.status(404).json({ error: 'Mission not found' });
+	}
+	const traces = getDecisionTraces(mission.id);
+	response.json({
+		missionId: mission.id,
+		autonomyEnabled: autonomyEnabled(),
+		count: traces.length,
+		decisions: traces
+	});
+});
+
 app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response) => { // M1-P3 public read (pipeline validation loop panel)
 	const mission = getMission(request.params.id);
 	if (!mission) {
@@ -3416,10 +3616,104 @@ function buildMissionPrompt(mission) {
  * guards, but we add one here too so the expensive quality scoring and
  * webhook firing only happen once.
  */
-function finalizeMissionFromSession(mission, session) {
-	// Idempotency: if the mission is already terminal, skip
+/**
+ * BUILD B2 — guarded autonomy dispatch used by finalizeMissionFromSession.
+ *
+ * The decision engine evaluates the settled session and may:
+ *   - STOP early (pins stopReason; never fabricates a pass), or
+ *   - REVALIDATE → dispatched through the EXACT same revalidateMissionByIdHandler
+ *     the human/API path uses (all guards enforced: iteration limit,
+ *     no-improvement, target re-validation, budget). Budget asymmetry: the
+ *     controller never grants turns; the new iteration runs under the
+ *     mission's EXISTING maxTurns authorization (B1 W6).
+ *   - CONTINUE / engine off / failure → falls through to the original
+ *     finalization unchanged (fail-open).
+ *
+ * @returns {'proceed'|'deferred'} 'deferred' when a new iteration took over.
+ */
+async function attemptAutonomyBeforeFinalize(mission, session) {
+	try {
+		const outcome = await runAutonomyDecision({ mission, session });
+		if (!outcome) return 'proceed';
+		const { action, decision } = outcome;
+		if (action.shouldRevalidate) {
+			// Dispatch happened inside runAutonomyDecision (guarded handler
+			// accepted) — finalization is deferred to the new iteration's own
+			// settle path.
+			console.log(`[autonomy] mission ${mission.id}: decision ${decision.decision} -> revalidation iteration dispatched (guarded handler accepted)`);
+			return 'deferred';
+		}
+		if (action.shouldStop && action.stopReason) {
+			const isFail = action.stopReason === STOP_REASONS.FAILED
+				|| action.stopReason === STOP_REASONS.ESCALATED
+				|| action.stopReason === STOP_REASONS.BLOCKED;
+			// The iteration record + quality scoring still happen below in the
+			// normal path; the STOP only pins the stopReason (never fabricates
+			// a pass — failed/blocked routes to status 'failed').
+			session._autonomyStop = { stopReason: action.stopReason, reason: action.reason };
+			if (!isFail) {
+				// Budget/coverage/approved stops finalize through the NORMAL
+				// path below (findings + quality scoring preserved, verdict
+				// computed from the real evidence).
+				return 'proceed';
+			}
+			// Route through the honesty guard semantics: a failed/blocked
+			// decision finalizes as failed — but the CONFIRMED FINDINGS that
+			// justified the stop are preserved (they are the evidence for the
+			// verdict; discarding them would hide the very issues the
+			// decision engine acted on).
+			const preservedFindings = session.findings ?? [];
+			finalizeMission(mission.id, {
+				status: 'failed',
+				failureReason: action.reason ?? `Autonomy decision: ${action.stopReason}`,
+				findings: preservedFindings,
+				summary: null
+			});
+			session._autonomyFinalized = true;
+			return 'deferred';
+		}
+		return 'proceed';
+	} catch (error) {
+		console.error(`[autonomy] pre-finalize decision failed: ${error?.message ?? error} — proceeding with normal finalization`);
+		return 'proceed';
+	}
+}
+
+async function finalizeMissionFromSession(mission, session) {
 	if (isTerminalStatus(mission.status)) {
 		return getMission(mission.id);
+	}
+
+	// B2 — a session that settled without a report (turn budget exhausted,
+	// honest abort) gets its DETERMINISTIC close-out compiled here, once,
+	// before any decision/finalization runs. Zero model turns by design.
+	if (['done', 'idle'].includes(session.status) && !session.report) {
+		finalizeTurnLimitedRun(session);
+	}
+	// The close-out (if any) kicked off a CURATED capability pipeline
+	// (application understanding → feature gaps → findings → mission
+	// finalize). Racing it would finalize the mission BEFORE the pipeline
+	// writes its findings — observed live as 'pass/100 with 0 findings'
+	// while the pipeline later surfaced 20 gap findings. Wait (bounded) for
+	// the close-out pipeline to finish; finalization below then sees the
+	// REAL finding set.
+	if (session._closeOutPipeline) {
+		for (let i = 0; i < 36 && session._closeOutPipeline && session._pipelineRunning; i++) {
+			await new Promise(resolve => setTimeout(resolve, 5_000));
+		}
+	}
+
+	// BUILD B2 — the autonomy decision point. Before the terminal write, the
+	// decision engine evaluates the REAL settled session and may:
+	//   - STOP early (saves turns, records stopReason), or
+	//   - REVALIDATE (guarded dispatch — same handler/guards as the human path),
+	// in which case finalization is deferred to the new iteration's own
+	// settle path and we return here. Any internal failure or QASE_AUTONOMY=off
+	// falls through to the original finalization unchanged (fail-open).
+	if (missionAutonomyEnabled(mission) && !session._autonomyFinalized) {
+		const outcome = await attemptAutonomyBeforeFinalize(mission, session);
+		if (outcome === 'deferred') return getMission(mission.id);
+		session._autonomyFinalized = true;
 	}
 
 	// BUILD 1 honesty guard: a session that ended in error/interrupted never ran
@@ -3454,15 +3748,46 @@ function finalizeMissionFromSession(mission, session) {
 	const quality = calculateMissionQuality(findings);
 	const report = buildImprovementPrompt(mission, findings, quality);
 
-	// Record this run as a new iteration (enables the validation loop)
-	recordIteration(mission.id, {
-		sessionId: session.id,
-		findings,
-		qualityScore: quality.score,
-		verdict: quality.verdict,
-		releaseReady: quality.releaseReady,
-		improvementPrompt: report.improvementPrompt
-	});
+	// Record this run as a new iteration (enables the validation loop).
+	// B2 fix — currentIteration now also advances at DISPATCH time (see the
+	// revalidate handler), so recordIteration must not blindly push another
+	// number: if the dispatch-time bookkeeping already counted this session's
+	// iteration, update THAT record instead of appending a duplicate.
+	const alreadyDispatched = (mission.iterationMetadata ?? [])
+		.some(m => m.sessionId === session.id);
+	if (alreadyDispatched) {
+		// The iteration slot exists from dispatch; fill in the results.
+		updateIterationMetadata(mission, (getMission(mission.id)?.iterationMetadata ?? [])
+			.find(m => m.sessionId === session.id)?.number, {
+			status: ITERATION_STATUS.COMPLETED,
+			completedAt: Date.now(),
+			qualityScore: quality.score,
+			verdict: quality.verdict,
+			turnCount: session.turnCount ?? null
+		});
+		// Keep the canonical iterations array in sync for convergence checks.
+		recordIteration(mission.id, {
+			sessionId: session.id,
+			findings,
+			qualityScore: quality.score,
+			verdict: quality.verdict,
+			releaseReady: quality.releaseReady,
+			improvementPrompt: report.improvementPrompt,
+			// B2 — debit the mission's turn pool with what this iteration spent.
+			turnCount: session.turnCount ?? null
+		});
+	} else {
+		recordIteration(mission.id, {
+			sessionId: session.id,
+			findings,
+			qualityScore: quality.score,
+			verdict: quality.verdict,
+			releaseReady: quality.releaseReady,
+			improvementPrompt: report.improvementPrompt,
+			// B2 — debit the mission's turn pool with what this iteration spent.
+			turnCount: session.turnCount ?? null
+		});
+	}
 
 	// Also update mission top-level fields
 	finalizeMission(mission.id, {
@@ -3478,7 +3803,8 @@ function finalizeMissionFromSession(mission, session) {
 	// Phase 5: Update iteration metadata with decision + quality + completion
 	const latestMeta = getLatestIteration(getMission(mission.id));
 	if (latestMeta) {
-		const decision = session.pipeline?.summary?.decision
+		const decision = session._autonomyDecision?.decision
+			?? session.pipeline?.summary?.decision
 			?? session.decisionHistory?.[session.decisionHistory.length - 1]
 			?? null;
 		updateIterationMetadata(getMission(mission.id), latestMeta.number, {
@@ -3491,12 +3817,15 @@ function finalizeMissionFromSession(mission, session) {
 		});
 	}
 
-	// Phase 5: Record stop reason if the validation loop should terminate
+	// Phase 5: Record stop reason if the validation loop should terminate.
+	// B2: an autonomy STOP decision pins its own stop reason FIRST — the
+	// deterministic loop check still runs and wins only if it also fires.
 	const updatedMission = getMission(mission.id);
-	const stopReason = getStopReason(updatedMission);
+	const autonomyStop = session._autonomyStop?.stopReason;
+	const stopReason = getStopReason(updatedMission) ?? autonomyStop;
 	if (stopReason) {
 		updateMission(mission.id, { stopReason });
-		console.log(`[validation-loop] Mission ${mission.id} stop reason: ${stopReason}`);
+		console.log(`[validation-loop] Mission ${mission.id} stop reason: ${stopReason}${autonomyStop && !getStopReason(updatedMission) ? ' (autonomy decision)' : ''}`);
 	}
 
 	// Phase 6: Collect evidence from session into the evidence graph
@@ -3639,6 +3968,30 @@ function buildMissionReportMarkdown(mission, report) {
 // Chromium is a child process; without this it outlives the server that
 // started it and the user is left closing browsers by hand.
 let shuttingDown = false;
+
+// B2 fix — abort-originating SDK exceptions must never kill the server.
+// The agent's turn-budget backstop aborts in-flight model requests; the
+// SDK's SSE emitter then surfaces "Request was aborted." from an event
+// handler on the process tick, which the for-await catch in runTurn can
+// never see — an unhandled throw there crashed the whole process (observed
+// live: wrap-up continuation aborted at limit+2 → server exit). Abort
+// errors are EXPECTED budget enforcement; log and continue serving.
+process.on('uncaughtException', error => {
+	if (/abort/i.test(String(error?.message ?? ''))) {
+		console.warn(`[agent] expected abort surfaced outside the stream (${error?.message}) — contained, server continues`);
+		return;
+	}
+	// B2 — budget-exhausted errors from the autonomy dispatch are CONTRACT
+	// answers, not crashes. The governor's begin() closure throws them; they
+	// should be caught by the caller, but if one escapes to here, contain it.
+	if (error?.statusCode === 409 || /turn pool exhausted/i.test(String(error?.message ?? ''))) {
+		console.warn(`[agent] budget-exhausted error contained at process level: ${error?.message}`);
+		return;
+	}
+	console.error('[agent] uncaught exception — flushing stores and exiting', error);
+	try { flushAllStores(); } catch { /* best effort */ }
+	process.exit(1);
+});
 // M1-P4.4 Phase 2 — register every debounced store with the shutdown
 // registry so SIGINT/SIGTERM flushes pending writes BEFORE exit. Each
 // flusher is idempotent and reports { dirty, ok } for per-store logging.
@@ -3683,6 +4036,14 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 	});
 }
 
+process.on('unhandledRejection', reason => {
+	if (/abort/i.test(String(reason?.message ?? reason))) {
+		console.warn(`[agent] expected abort rejection contained (${reason?.message ?? reason}) — server continues`);
+		return;
+	}
+	console.error('[agent] unhandled rejection — contained, server continues', reason);
+});
+
 // Ensure Default project exists on boot.
 ensureDefaultProject();
 
@@ -3703,6 +4064,36 @@ loadMissionsFromDisk();
 // M1-P3 P0-4: reap missions stranded in running/awaiting_input whose session
 // was pruned or lost before lazy finalization could settle them.
 recoverInterruptedMissions(getSession);
+// B2 fix — a server crash mid-run can leave a mission 'running' with its
+// session STILL resolvable from disk (recoverInterruptedMissions only
+// reaps missions whose session is gone). loadSessions() already flips a
+// mid-run session to 'interrupted' at boot, but nothing re-adopts the
+// mission itself: the governor never resubmits a 'running' mission, and
+// the watchdog only watches missions it submitted — the mission hangs
+// 'running' forever (observed live after the abort-crash). Re-adopt every
+// persisted 'running' mission whose linked session is settled and not
+// live, routing it through the honesty finalizer so it settles honestly
+// (interrupted/error sessions → 'failed', never a fabricated pass).
+{
+	const adopted = [];
+	for (const mission of listMissions({ status: 'running' })) {
+		const session = mission.sessionId ? getSession(mission.sessionId) : null;
+		if (!session) continue; // recoverInterruptedMissions handled these
+		if (liveFor(session.id).running) continue; // actually executing
+		const settled = ['idle', 'done', 'error', 'interrupted'].includes(session.status);
+		if (!settled) continue; // awaiting_input on a live pause — leave alone
+		// Defer to the next tick: finalizeMissionFromSession runs the autonomy
+		// gate + honesty guard and is idempotent on terminal missions.
+		adopted.push(mission.id);
+		setImmediate(() => {
+			finalizeMissionFromSession(mission, session).catch(err =>
+				console.error(`[missions] restart recovery: adopt finalize failed for ${mission.id}:`, err?.message ?? err));
+		});
+	}
+	if (adopted.length > 0) {
+		console.log(`[missions] restart recovery: re-adopted ${adopted.length} running mission(s) with settled sessions for honest finalization`);
+	}
+}
 
 /* ── M1-P4.2: execution governor wiring ──────────────────────────── */
 
@@ -3713,6 +4104,12 @@ missionBus.on('mission:updated', (mission) => {
 		releaseMission(mission.id);
 	}
 });
+// B2 fix — updateMission(...) on a settled revalidation session re-emits
+// mission:updated with status 'running', and that used to release the
+// governor slot EARLY (mid-flight). The watchdog sweep then saw a released
+// mission with a fresh session and re-released; in some interleavings the
+// mission ended up untracked while the agent was still running. Only the
+// explicit TERMINAL writes above may release a slot — running writes never do.
 missionBus.on('mission:finalized', (mission) => {
 	releaseMission(mission.id);
 });
@@ -3755,7 +4152,10 @@ async function startQueuedMission(mission) {
 			updateMission(mission.id, { status: 'failed', failureReason: missionDeviceCheck.error });
 			return;
 		}
-		const session = createSession(mission.name || 'API Mission', mission.projectId, missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {});
+		const session = createSession(mission.name || 'API Mission', mission.projectId, {
+			...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+			missionId: mission.id
+		});
 		session.targetUrl = mission.targetUrl;
 
 		if (mission.context?.testCredentials?.vaultKey === 'mission-temp') {
@@ -3778,6 +4178,8 @@ async function startQueuedMission(mission) {
 			session.knowledgePatternsUsed = (knowledgeResult.patterns || []).map(p => p.id);
 		} catch { /* knowledge is best-effort */ }
 
+		buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
+
 		const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 		await ensureRuntime(session);
 		startTurn(session, { task: taskPrompt });
@@ -3786,6 +4188,87 @@ async function startQueuedMission(mission) {
 		updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
 	}
 }
+
+// BUILD B2 — capabilities pipeline gate registration. The happy path
+// (finish_qa_report → mission_finalize) finalizes missions through this gate
+// instead of bypassing the autonomy decision.
+registerCapabilitiesAutonomyGate({
+	gate: async (mission, session) => attemptAutonomyBeforeFinalize(mission, session),
+	getSession: (id) => getSession(id)
+});
+
+// BUILD B2 — autonomy controller integration seams. The dispatch hook runs
+// the SHARED revalidateMissionByIdHandler with an internal marker; the
+// handler skips ONLY its first guard (mission already running) because the
+// autonomy gate fires BEFORE the terminal write, while status is still
+// 'running'. Every other guard (iteration limit, no-improvement, target
+// re-validation, budget) still applies identically. A spoofed external
+// request carrying the marker is rejected (403) below.
+registerAutonomyHooks({
+	dispatchRevalidation: async (missionId) => {
+		const mission = getMission(missionId);
+		if (!mission) return false;
+		const session = mission.sessionId ? getSession(mission.sessionId) : null;
+		if (!session) return false;
+		// The gate may only fire for a genuinely settled, non-running session.
+		const settled = ['done', 'idle', 'error', 'interrupted'].includes(session.status)
+			&& !liveFor(session.id)?.running;
+		if (!settled) return false;
+		// The governor still holds the mission's slot from the settled
+		// iteration (slots release on the terminal mission:updated event,
+		// which happens AFTER this gate). Release it first so the new
+		// iteration actually starts instead of submitMission returning
+		// 'already-tracked' (a silent no-op dispatch).
+		releaseMission(missionId);
+		const verdict = { statusCode: null, sessionBefore: mission.sessionId ?? null };
+		const mockResponse = {
+			status(code) { verdict.statusCode = code; return this; },
+			json() { return this; },
+			setHeader() { return this; }
+		};
+		const mockRequest = { params: { id: missionId }, body: {}, __qaseInternalAutonomy: true };
+		try {
+			await revalidateMissionByIdHandler(mockRequest, mockResponse, getMission(missionId));
+		} catch (dispatchError) {
+			// B2 — a 409 budget_exhausted from the guarded dispatch is an
+			// expected CONTRACT refusal (the mission spent its pool). The
+			// mock response captured the status code; return false so the
+			// autonomy controller falls through to the stop/finalize path.
+			if (dispatchError?.statusCode === 409 || verdict.statusCode === 409) {
+				console.log(`[autonomy] dispatch refused with 409 (budget exhausted) for ${missionId} — falling through to stop`);
+				return false;
+			}
+			// Unexpected error — log and return false (fail-open to finalize).
+			console.error(`[autonomy] dispatch threw for ${missionId}:`, dispatchError?.message ?? dispatchError);
+			return false;
+		}
+		// 202 alone is not enough — submitMission may have returned
+		// 'already-tracked' (a no-op), and createSession inside the begin()
+		// closure can complete slightly after the 202 (the governor pump may
+		// defer it). Poll briefly (≤5s) for the reliable synchronous signals
+		// of a REAL new iteration: a fresh sessionId, or the mission being
+		// live/queued again after the release.
+		let iterationStarted = false;
+		for (let probe = 0; probe < 10 && !iterationStarted; probe++) {
+			const fresh = getMission(missionId);
+			iterationStarted = verdict.statusCode === 202
+				&& fresh != null
+				&& ((fresh.sessionId ?? null) !== verdict.sessionBefore || ['running', 'queued'].includes(fresh.status))
+				&& fresh.status !== 'failed';
+			if (!iterationStarted) await new Promise(r => setTimeout(r, 500));
+		}
+		if (process.env.QASE_DEBUG_AUTONOMY) {
+			const fresh = getMission(missionId);
+			console.log(`[autonomy:debug] dispatch verdict=${verdict.statusCode} sessionBefore=${verdict.sessionBefore?.slice(0, 8) ?? null} fresh=${fresh ? `${fresh.sessionId?.slice(0, 8) ?? null}/${fresh.status}` : 'gone'} → ${iterationStarted}`);
+		}
+		return iterationStarted;
+	},
+	finalizeFallback: (mission, session) => {
+		// Handler refused the internal dispatch — authority spoke; finalize
+		// normally on the settle path (idempotent: terminal check inside).
+		Promise.resolve(finalizeMissionFromSession(mission, session)).catch(() => {});
+	}
+});
 
 startGovernorWatchdog({
 	getMissionStatus: (id) => getMission(id)?.status,
@@ -3812,17 +4295,9 @@ startGovernorWatchdog({
 		if (!mission || mission.status !== 'running' || !mission.sessionId) return;
 		const session = getSession(mission.sessionId);
 		if (!session) return;
-		// B1 W6 — if the session settled BECAUSE the turn budget was hit, the
-		// agent gets exactly one budget-exhausted continuation so it can file
-		// its honest report; the mission finalizes from THAT turn's result.
-		finalizeTurnLimitedRun(session).then((continued) => {
-			// The continuation is async (runTurn); when it started, the session
-			// is live again and the mission finalizes when it settles next.
-			if (continued) return;
-			finalizeMissionFromSession(mission, session);
-		}).catch(() => {
-			finalizeMissionFromSession(mission, session);
-		});
+		// B2 — deterministic close-out (zero model turns), then finalize.
+		finalizeTurnLimitedRun(session);
+		Promise.resolve(finalizeMissionFromSession(mission, session)).catch(() => {});
 	},
 	onTimeout: (missionId) => {
 		const mission = getMission(missionId);
@@ -3858,6 +4333,21 @@ missionBus.on('finalized', ({ missionId, report }) => {
 // through updateMission → mission:updated.
 const failedWebhookSent = new Set(); // missionId — once per process per mission
 missionBus.on('updated', (mission) => {
+	if (mission?.status === 'failed' && !failedWebhookSent.has(mission.id)) {
+		failedWebhookSent.add(mission.id);
+		fireMissionWebhooks(mission.id, {
+			verdict: 'fail',
+			qualityScore: null,
+			findings: [],
+			failureReason: mission.failureReason ?? null
+		}, 'mission.failed');
+	}
+});
+
+// B2 — the autonomy STOP_FAIL path finalizes through finalizeMission() which
+// emits 'mission:finalized' (not 'mission:updated'), so it needs its own
+// failure listener or B2-introduced failures would fire NO webhook.
+missionBus.on('mission:finalized', (mission) => {
 	if (mission?.status === 'failed' && !failedWebhookSent.has(mission.id)) {
 		failedWebhookSent.add(mission.id);
 		fireMissionWebhooks(mission.id, {

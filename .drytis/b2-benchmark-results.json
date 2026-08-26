@@ -1,0 +1,146 @@
+{
+  "generatedAt": "2026-08-26T09:39:34.939Z",
+  "base": "http://localhost:5173",
+  "turnsBudget": 6,
+  "baseline": "pre-B2 (docs/B2-BASELINE-SNAPSHOT.md): resolveAction 0 callers, no testContext, no traces — the loop was predetermined",
+  "runs": [
+    {
+      "target": "http://localhost:9901 (app1-crm (SalesFlow CRM))",
+      "mode": "A-off",
+      "missionId": "fe9af36a-6faf-4556-b85f-a1c583133e9c",
+      "terminalStatus": "completed",
+      "verdict": "pass",
+      "qualityScore": 95,
+      "findingsCount": 9,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "REVALIDATE",
+          "selected": "stop",
+          "reason": "Budget authority DENIED revalidation (turn budget exhausted) — stopping within authorized budget.",
+          "budget_before": 0,
+          "budget_requested": 1,
+          "budget_granted": 0,
+          "result": "denied_and_stopped"
+        }
+      ],
+      "wallSeconds": 216
+    },
+    {
+      "target": "http://localhost:9901 (app1-crm (SalesFlow CRM))",
+      "mode": "B-autonomy",
+      "missionId": "bf87c9dc-0fc3-41a1-95f4-ba310db079e9",
+      "terminalStatus": "failed",
+      "verdict": "fail",
+      "qualityScore": 15,
+      "findingsCount": 14,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "STOP_FAIL",
+          "selected": "stop",
+          "reason": "Decision Engine returned STOP_FAIL",
+          "budget_before": 0,
+          "budget_requested": 0,
+          "budget_granted": 0,
+          "result": "selected"
+        }
+      ],
+      "wallSeconds": 199
+    },
+    {
+      "target": "http://localhost:9902 (app2-taskboard (TaskBoard))",
+      "mode": "A-off",
+      "missionId": "7367200b-80c8-48d0-a15d-da11a33b4fe2",
+      "terminalStatus": "failed",
+      "verdict": "fail",
+      "qualityScore": 15,
+      "findingsCount": 19,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "STOP_FAIL",
+          "selected": "stop",
+          "reason": "Decision Engine returned STOP_FAIL",
+          "budget_before": 0,
+          "budget_requested": 0,
+          "budget_granted": 0,
+          "result": "selected"
+        }
+      ],
+      "wallSeconds": 180
+    },
+    {
+      "target": "http://localhost:9902 (app2-taskboard (TaskBoard))",
+      "mode": "B-autonomy",
+      "missionId": "09ab56a2-a550-45ba-ae55-e3e320f4c797",
+      "terminalStatus": "failed",
+      "verdict": "fail",
+      "qualityScore": 15,
+      "findingsCount": 15,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "STOP_FAIL",
+          "selected": "stop",
+          "reason": "Decision Engine returned STOP_FAIL",
+          "budget_before": 0,
+          "budget_requested": 0,
+          "budget_granted": 0,
+          "result": "selected"
+        }
+      ],
+      "wallSeconds": 186
+    },
+    {
+      "target": "http://localhost:9903 (app3-shop (ShopHub e-commerce))",
+      "mode": "A-off",
+      "missionId": "a571b1f8-55b9-4011-a87d-8defa7d24a85",
+      "terminalStatus": "failed",
+      "verdict": null,
+      "qualityScore": null,
+      "findingsCount": 0,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "STOP_FAIL",
+          "selected": "stop",
+          "reason": "Decision Engine returned STOP_FAIL",
+          "budget_before": 1,
+          "budget_requested": 0,
+          "budget_granted": 0,
+          "result": "selected"
+        }
+      ],
+      "wallSeconds": 186
+    },
+    {
+      "target": "http://localhost:9903 (app3-shop (ShopHub e-commerce))",
+      "mode": "B-autonomy",
+      "missionId": "bea601b1-dda4-4110-bd56-be10036b2876",
+      "terminalStatus": "completed",
+      "verdict": "pass",
+      "qualityScore": 97,
+      "findingsCount": 11,
+      "decisionCount": 1,
+      "decisions": [
+        {
+          "state": "session:done",
+          "candidate": "REVALIDATE",
+          "selected": "stop",
+          "reason": "Budget authority DENIED revalidation (turn budget exhausted) — stopping within authorized budget.",
+          "budget_before": 0,
+          "budget_requested": 1,
+          "budget_granted": 0,
+          "result": "denied_and_stopped"
+        }
+      ],
+      "wallSeconds": 204
+    }
+  ]
+}

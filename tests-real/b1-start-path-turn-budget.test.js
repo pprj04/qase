@@ -76,7 +76,17 @@ describe('B1 W6 — turn budget on /start and /revalidate paths', { skip: !SECRE
 		assert.equal(started.status, 202, `start status ${started.status}`);
 
 		const mission = await waitForTerminal(id);
-		assert.equal(mission.status, 'completed', `status=${mission.status} reason=${mission.failureReason ?? ''}`);
+		// B2: with the autonomy gate wired, a settled session with confirmed
+		// CRITICAL findings legitimately terminates as 'failed'
+		// (decision-engine STOP_FAIL) instead of 'completed'. That is honest
+		// behavior, not a regression — the budget invariants below are what
+		// this suite actually protects.
+		assert.ok(['completed', 'failed'].includes(mission.status),
+			`status=${mission.status} reason=${mission.failureReason ?? ''}`);
+		if (mission.status === 'failed') {
+			assert.ok(mission.failureReason && /Decision Engine|budget|target/i.test(mission.failureReason),
+				`failed without an honest explanation: ${mission.failureReason ?? 'none'}`);
+		}
 		assert.equal(mission.maxTurns, 3);
 		assert.ok(mission.turnCount == null || mission.turnCount <= 3,
 			`START path exceeded budget: turnCount=${mission.turnCount}`);

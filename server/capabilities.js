@@ -28,6 +28,7 @@ import { createSchedule } from './scheduler.js';
 import { runTestSuite } from './replay.js';
 import { analyzeSessionFindings, scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt } from './devIntelligence.js';
 import { listMissions, finalizeMission, recordIteration } from './missions.js';
+import { autonomyGateForCapabilities } from './autonomyBridge.js';
 import { missionBus } from './missions.js';
 import { analyzeFeatureGaps, enhanceGapsWithLLM, gapsToFindings } from './featureGap.js';
 import { syncSessionFinding } from './findings.js';
@@ -146,13 +147,19 @@ class Orchestrator {
 	 * one retry; non-retryable failures skip the capability and mark
 	 * downstream deps as failed.
 	 */
-	async execute(session, config) {
+	async execute(session, config, options = {}) {
 		const allCaps = this.registry.list();
 		const evidence = {};
+
+		// B2 — curated runs (e.g. the deterministic turn-budget close-out) can
+		// exclude expensive auxiliary stages while keeping the analysis chain
+		// that derives findings from already-collected evidence.
+		const filter = typeof options.capabilityFilter === 'function' ? options.capabilityFilter : null;
 
 		// Determine which capabilities are enabled
 		const enabledIds = allCaps
 			.filter(cap => cap.enabled(config, evidence))
+			.filter(cap => !filter || filter(cap.id))
 			.map(cap => cap.id);
 
 		// Plan execution order
@@ -439,7 +446,11 @@ function createDefaultRegistry() {
 			const gapAnalysis = analyzeFeatureGaps(session, missionContext);
 
 			let gaps = gapAnalysis.gaps;
-			if (config.model && config.baseUrl) {
+			// B2 — deterministic close-out skips LLM enhancement (it can hang
+			// for minutes on empty gateway responses). Heuristic gaps still
+			// produce findings; the full pipeline (non-close-out path) gets
+			// the LLM-enhanced gap set.
+			if (config.model && config.baseUrl && !session._deterministicCloseOut) {
 				gaps = await enhanceGapsWithLLM(session, gaps);
 			}
 
@@ -488,6 +499,17 @@ function createDefaultRegistry() {
 			if (linkedMissions.length === 0) {
 				emitProgress(session, 'mission_finalize', 'skipped', 'No mission linked to this session');
 				return { missionResult: null };
+			}
+
+			// BUILD B2 — the autonomy gate. Before the terminal write, the
+			// settled session gets one autonomy decision: STOP (pins
+			// stopReason) or REVALIDATE (deferred to the new iteration's own
+			// settle path — we do NOT finalize here). Fail-open on error.
+			const gate = await autonomyGateForCapabilities(session);
+			if (gate === 'deferred') {
+				emitProgress(session, 'mission_finalize', 'deferred',
+					'Autonomy chose revalidation — finalization deferred to the next iteration');
+				return { missionResult: null, deferred: true };
 			}
 
 			const findings = session.findings ?? [];
@@ -691,7 +713,7 @@ export async function runAutonomyPipeline(session, options = {}) {
 
 	try {
 		const config = getConfig();
-		const { results, evidence } = await defaultOrchestrator.execute(session, config);
+		const { results, evidence } = await defaultOrchestrator.execute(session, config, options);
 
 		// Extract structured data for UI mission summary bar
 		const appUnderstandingResult = results.application_understanding?.result ?? null;
@@ -763,6 +785,13 @@ export async function runAutonomyPipeline(session, options = {}) {
 		throw wrapped;
 	} finally {
 		session._pipelineRunning = false;
+		// B2 — the deterministic close-out flag is cleared on ANY pipeline
+		// exit (success, per-stage failures, or throw) so bounded waiters in
+		// finalizeMissionFromSession don't hold a mission hostage behind a
+		// dead flag.
+		if (session._closeOutPipeline) {
+			session._closeOutPipeline = false;
+		}
 	}
 }
 

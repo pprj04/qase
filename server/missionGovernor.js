@@ -136,6 +136,12 @@ export function releaseMission(missionId) {
 	const wasActive = active.delete(missionId);
 	const wasQueued = dequeue(missionId);
 	starts.delete(missionId);
+	// B2 — clear `known` too. Without this, a released mission can never be
+	// re-submitted (submitMission returns 'already-tracked' forever), which
+	// silently no-ops the autonomy revalidation dispatch AND the human/API
+	// revalidate path after a release. The governor tracks *executions*, not
+	// mission identity — a released execution is done tracking.
+	known.delete(missionId);
 	if (wasActive || wasQueued) {
 		log(`[governor] mission ${missionId} released (was ${wasActive ? 'active' : 'queued'})`);
 	}

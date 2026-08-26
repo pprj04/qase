@@ -98,6 +98,12 @@ export function createSession(title = 'New test run', projectId = undefined, opt
 		updatedAt: Date.now(),
 		status: 'idle',
 		targetUrl: undefined,
+		// B2 — the mission this session executes (set at creation by every
+		// mission start path via options.missionId). PERSISTED so the B2
+		// revalidation turn pool survives a restart: the debit reads linked
+		// sessions from disk. Previously the stamp was in-memory only and
+		// only applied on some paths, so the pool saw 0 spent after reboot.
+		missionId: options.missionId ?? undefined,
 		messages: [],
 		activities: [],
 		findings: [],
@@ -198,6 +204,7 @@ export function listSessions({ projectId } = {}) {
 			projectId: session.projectId,
 			status: session.status,
 			targetUrl: session.targetUrl,
+			missionId: session.missionId ?? null,
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			findingCount: session.findings.length,

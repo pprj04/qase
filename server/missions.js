@@ -30,7 +30,7 @@ export const MISSION_TYPES = [
 	'full_audit', 'security', 'ux', 'regression', 'feature_gap', 'accessibility'
 ];
 export const MISSION_STATUS = [
-	'created', 'queued', 'running', 'completed', 'failed', 'aborted', 'cancelled', 'timeout'
+	'created', 'queued', 'running', 'completed', 'failed', 'aborted', 'cancelled', 'timeout', 'interrupted'
 ];
 
 /**
@@ -396,6 +396,11 @@ export function recordIteration(id, iterationData = {}) {
 		verdict: iterationData.verdict || null,
 		releaseReady: iterationData.releaseReady ?? null,
 		improvementPrompt: iterationData.improvementPrompt || null,
+		// B2 budget accounting — turns consumed by THIS iteration, so the
+		// mission's turn pool can be debited across revalidations.
+		turnCount: Number.isFinite(Number(iterationData.turnCount))
+			? Math.max(0, Math.trunc(Number(iterationData.turnCount)))
+			: null,
 		ranAt: Date.now(),
 		status: 'completed'
 	};

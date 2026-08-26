@@ -10,6 +10,8 @@ import { getModelTier, getPublicConfig } from './config.js';
 import { addActivity, addMessage, emit, liveFor, listSessions, setStatus, updateActivity } from './store.js';
 import { redact, secretNames } from './secrets.js';
 import { createQaTools } from './qaTools.js';
+import { notifyReport } from './webhooks.js';
+import { runAutonomyPipeline } from './pipeline.js';
 import { captureStep, finalizeStepOutcome } from './workflows.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
@@ -402,11 +404,43 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 	// assistant_turn_start events and hard-abort (with truthful recording)
 	// once the limit is exceeded. This also gives the UI/API an honest
 	// session.turnCount instead of a fabricated number.
+	//
+	// B2 fix — turnCount is now CUMULATIVE across every runTurn call in the
+	// session's life (resumes, timeout retries, wrap-up continuations). Two
+	// bugs this closes:
+	//   1. The SDK builds a FRESH CleanSlateExecutionBudget per runTurn call
+	//      (cleanSlateNodeAgentRuntime.js runMessages → new
+	//      CleanSlateExecutionBudget(...)), so a "one wrap-up turn"
+	//      continuation used to receive a brand-new full budget — the agent
+	//      could silently spend another N turns on top of an exhausted
+	//      budget (observed live: turnCount 6 → wrap-up call ran ~6 more
+	//      SDK turns, while the recorded count showed 2).
+	//   2. `let turnCount = 0` here OVERWROTE session.turnCount with the
+	//      per-call count, hiding that spend from the API, the turn pool,
+	//      and the decision engine.
+	// A session is one mission iteration; only its FIRST runTurn call
+	// starts from zero. The count still only moves on
+	// assistant_turn_start — never fabricated, never derived from
+	// operation counts.
 	const turnLimit = Number.isInteger(session.maxTurns) && session.maxTurns >= 1
 		? Math.min(session.maxTurns, 500)
 		: null; // global default is enforced by the SDK only
 	let turnCount = 0;
+	if (session._turnsStarted) {
+		turnCount = Number(session.turnCount) || 0; // continuation — cumulative
+	} else {
+		session._turnsStarted = true;
+	}
 	let limitAborted = false;
+	// B2 HARD INVARIANT — turnCount can NEVER exceed the authorized limit:
+	//   turnCount > limit is only reachable when the SDK itself disobeys its
+	//   own budget, and in that case the (limit+1)-th turn is ABORTED the
+	//   instant it starts — recorded truthfully as an overspend event, never
+	//   allowed to complete. The earlier B1 "one wrap-up model turn"
+	//   concession (abort at limit+2) is REMOVED: a budget-exhausted session
+	//   is closed out deterministically by finalizeTurnLimitedRun() at ZERO
+	//   model cost. A budget of N can now spend at most N turns, full stop.
+	const abortThreshold = turnLimit;
 
 	const appendText = (content, kind) => {
 		if (!content) {
@@ -540,9 +574,16 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					// B1 W6 — count and enforce the mission turn budget.
 					turnCount += 1;
 					session.turnCount = turnCount;
-					if (turnLimit && turnCount > turnLimit) {
+					if (abortThreshold != null && turnCount > abortThreshold) {
 						limitAborted = true;
-						console.log(`[agent] turn limit (${turnLimit}) exceeded — aborting mission turn budget`);
+						console.log(`[agent] turn limit (${turnLimit ?? 'wrap-up'}) exceeded (cumulative ${turnCount}) — aborting mission turn budget`);
+						// B2 fix — the SDK's SSE emitter can surface the abort as
+						// an exception thrown OUTSIDE this iterator (event
+						// handler → process tick), escaping the catch below. The
+						// abort is still required (it stops model spend); the
+						// process-level guards in index.js convert the resulting
+						// "Request was aborted" exception into a logged budget
+						// stop instead of a server crash.
 						controller.abort();
 					}
 					break;
@@ -621,17 +662,25 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			void closeBrowser(session.id);
 			record.dispose?.();
 		} else {
-			setStatus(session, 'idle');
+			// B2 HARD INVARIANT — the SDK stopped at the turn limit with no
+			// report (or the backstop aborted an overspending (N+1)-th turn).
+			// There is NO budget left for another model turn, so the session
+			// is settled 'done' immediately and finalizeTurnLimitedRun()
+			// compiles the honest report DETERMINISTICALLY from the evidence
+			// already collected (zero model turns). Budget N ⇒ ≤ N turns.
+			setStatus(session, 'done');
+			void closeBrowser(session.id);
+			record.dispose?.();
 		}
-	} catch (error) {
+		} catch (error) {
 		if (limitAborted) {
-			// B1 W6 — the mission turn budget was consumed. This is NOT an
-			// error and NOT retryable: the agent is told the budget is spent
-			// once so it can write its report with whatever it has; the
-			// session records the true turn count.
+			// B1 W6 / B2 — the mission turn budget was consumed or overspent.
+			// This is NOT an error and NOT retryable: the session records the
+			// TRUE turn count (which may read limit+1 when the SDK disobeyed
+			// — recorded honestly, never allowed to complete work) and is
+			// closed out deterministically by finalizeTurnLimitedRun().
 			session.turnCount = turnCount;
-			session._turnLimitReached = true;
-			setStatus(session, 'idle', `Turn budget reached (${turnLimit}).`);
+			setStatus(session, 'done');
 			addMessage(session, {
 				role: 'system',
 				text: `Turn budget of ${turnLimit} was reached. The agent was stopped after ${turnCount} turns.`,
@@ -701,16 +750,84 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 }
 
 /**
- * B1 W6 — truthful turn-budget continuation. When a mission's turn budget
- * is exhausted mid-exploration, the agent gets exactly ONE budget-exhausted
- * continuation so it can close out with a report instead of dying silently.
- * Without this, a turn-limited mission ends 'idle' with no report at all.
+ * B2 — DETERMINISTIC turn-budget close-out. ZERO model turns.
+ *
+ * When a turn-limited mission exhausts its budget without the agent calling
+ * finish_qa_report, this compiles an honest report from the evidence ALREADY
+ * collected (findings, coverage, visited pages/steps). It runs synchronously,
+ * writes the same session.report shape the agent's own tool produces, and
+ * explicitly marks the run as stopped at the budget.
+ *
+ * This replaces the B1 "one wrap-up model turn" design, whose fresh SDK
+ * budget could spend up to 2 extra turns (observed live: authorized 6,
+ * spent 8). Under B2's invariant, budget N ⇒ at most N model turns; the
+ * close-out costs none.
  */
-export async function finalizeTurnLimitedRun(session) {
-	if (session.status !== 'idle' || !session._turnLimitReached) return false;
-	session._turnLimitReached = false;
-	await runTurn(session, {
-		task: 'Your turn budget for this mission is now exhausted. Do NOT perform any further browser actions or exploration. Using only what you have already observed, immediately call finish_qa_report with your best honest report: findings you can support with the evidence already collected, coverage summary, and an explicit note that the run was stopped at the turn budget.'
+export function finalizeTurnLimitedRun(session) {
+	if (!['done', 'idle'].includes(session.status)) return false;
+	if (session.report) return false; // the agent filed its own report — nothing to do
+
+	const findings = session.findings ?? [];
+	const covered = (session.capturedSteps ?? [])
+		.map(step => step?.title || step?.url || step?.label)
+		.filter(Boolean);
+	const uniqueCovered = [...new Set(covered)];
+	const turnLimit = Number.isInteger(session.maxTurns) ? session.maxTurns : null;
+
+	session.report = {
+		ts: Date.now(),
+		verdict: findings.some(f => f.severity === 'critical')
+			? 'fail'
+			: findings.length > 0
+				? 'pass_with_issues'
+				: 'inconclusive',
+		summary: `Run stopped at the authorized turn budget${turnLimit != null ? ` (${turnLimit} turns)` : ''}. ` +
+			`This report was compiled deterministically from the evidence already collected (${findings.length} finding(s), ${uniqueCovered.length} covered area(s)); no additional testing was performed after the budget was reached.`,
+		covered: uniqueCovered,
+		notCovered: [],
+		recommendations: [
+			'Rerun with a higher authorized turn budget for deeper coverage of areas not yet explored.',
+			...findings.slice(0, 5).map(f => `${f.severity?.toUpperCase() ?? 'ISSUE'}: ${f.title ?? 'finding'} — ${f.recommendation ?? f.description ?? ''}`.trim())
+		],
+		targetUrl: session.targetUrl ?? null,
+		findings,
+		bySeverity: findings.reduce((acc, f) => {
+			const key = f.severity ?? 'unknown';
+			acc[key] = (acc[key] ?? 0) + 1;
+			return acc;
+		}, {}),
+		// Truthfulness marker: this close-out is deterministic, not model-authored.
+		deterministicCloseOut: true
+	};
+	addMessage(session, {
+		role: 'system',
+		text: session.report.summary,
+		kind: 'info'
+	});
+	// Deterministic post-hoc analysis — a CURATED subset of the capability
+	// pipeline the agent's own finish_qa_report triggers (application
+	// understanding, feature gaps → findings, mission finalize, decision
+	// engine, knowledge write). These stages derive findings from evidence
+	// ALREADY collected; none of them spend model turns. The expensive
+	// auxiliary stages (test generation, browser smoke runs, schedules,
+	// per-finding dev-intelligence LLM analysis) are skipped — a close-out
+	// must settle in seconds-to-a-minute, not the 20+ minutes the full
+	// pipeline can take. The flag lets finalizeMissionFromSession WAIT for
+	// these findings before it writes the mission's terminal state (racing
+	// it produced 'pass/100 with 0 findings' while 20 gap findings arrived
+	// 20 minutes later).
+	session._closeOutPipeline = true;
+	session._deterministicCloseOut = true; // feature_gap skips enhanceGapsWithLLM
+	emit(session, 'report', { report: session.report });
+	notifyReport(session); // fire-and-forget webhook
+	runAutonomyPipeline(session, {
+		capabilityFilter: id => !['test_generation', 'smoke_run', 'schedule_create', 'dev_intelligence'].includes(id)
+	}).catch(err => {
+		// runAutonomyPipeline's own finally clears _closeOutPipeline; this
+		// catch only logs — the mission still finalizes from the
+		// deterministic report (possibly 0 findings, verdict 'inconclusive'),
+		// never a fabricated pass.
+		console.error(`[agent] deterministic close-out pipeline failed for ${session.id}:`, err?.message ?? err);
 	});
 	return true;
 }

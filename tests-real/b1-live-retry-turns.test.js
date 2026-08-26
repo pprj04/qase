@@ -68,7 +68,10 @@ describe('B1 W5 live — webhook retry with backoff', { skip: !SECRET }, () => {
 
 		try {
 			const url = `http://127.0.0.1:${RECEIVER_PORT}/retry-test`;
-			const { status } = await icall('POST', '/api/v1/integration/webhooks', { url, events: ['mission.completed'] });
+			// B2: a mission may honestly terminate 'failed' (decision-engine
+			// STOP_FAIL) — subscribe to BOTH terminal events so the delivery
+			// fires regardless of which terminal state the mission reaches.
+			const { status } = await icall('POST', '/api/v1/integration/webhooks', { url, events: ['mission.completed', 'mission.failed'] });
 			assert.equal(status, 201);
 
 			// Trigger a delivery: tiny real mission (2-turn budget → fast).
@@ -108,7 +111,15 @@ describe('B1 W6 live — turn budget truth', { skip: !SECRET }, () => {
 			await new Promise(r => setTimeout(r, 5000));
 		}
 		assert.ok(mission, 'no mission');
-		assert.equal(mission.status, 'completed', `status ${mission.status} (${mission.failureReason ?? ''})`);
+		// B2: honest STOP_FAIL (confirmed critical findings) is a legal
+		// terminal state now that the decision engine gates finalization.
+		// The budget invariants below are this suite's real contract.
+		assert.ok(['completed', 'failed'].includes(mission.status),
+			`status ${mission.status} (${mission.failureReason ?? ''})`);
+		if (mission.status === 'failed') {
+			assert.ok(mission.failureReason && /Decision Engine|budget|target/i.test(mission.failureReason),
+				`failed without an honest explanation: ${mission.failureReason ?? 'none'}`);
+		}
 		assert.equal(mission.maxTurns, 2);
 		assert.ok(mission.turnCount == null || mission.turnCount <= 2,
 			`turnCount ${mission.turnCount} exceeded the 2-turn budget`);
