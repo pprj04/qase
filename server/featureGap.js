@@ -694,6 +694,27 @@ export function generateExpectedFeatures(inventory, purpose = null, session = nu
 	const { auth, capabilities } = inventory;
 	const expConf = inventory.explorationConfidence || 0.5;
 
+	// C3 (build order Phase 2) — target-type/input-quality gate.
+	//
+	// An inferred PURPOSE is a hypothesis about what the application is. The
+	// purpose-catalog expectations ("a CRM must have contact management")
+	// treat that hypothesis as truth. When classification is uncertain the
+	// hypothesis must NOT mint critical/high severity expectations — that is
+	// exactly how a shallow scan of a marketing site produced 0.06-confidence
+	// "Missing feature: Contact/company management" criticals in the C2
+	// benchmark.
+	//
+	// Deterministic rule (no LLM): catalog-derived purpose expectations are
+	// generated only when purpose.confidence ≥ PURPOSE_CONFIDENCE_FLOOR.
+	// Everything else in this function (auth expectations from OBSERVED login
+	// structure, generic form-validation, pending agent todos) is grounded in
+	// what was actually observed, not in the classification — those stay.
+	// The gate outcome is recorded in structured data so downstream audits can
+	// see exactly what was excluded and why.
+	const PURPOSE_CONFIDENCE_FLOOR = 0.5;
+	const gated = purpose.confidence < PURPOSE_CONFIDENCE_FLOOR;
+	const excludedPurposeFeatures = gated ? purpose.expectedFeatures.length : 0;
+
 	// Helper: scale confidence by both purpose confidence and exploration depth
 	const conf = (base) => Math.round(base * purpose.confidence * expConf * 100) / 100;
 
@@ -737,7 +758,10 @@ export function generateExpectedFeatures(inventory, purpose = null, session = nu
 	}
 
 	// ── Purpose-specific expectations ──
-	for (const pf of purpose.expectedFeatures) {
+	// C3: gated on classification confidence — an uncertain classification
+	// must not mass-produce decision-grade expectations (see gate above).
+	const catalogFeatures = gated ? [] : purpose.expectedFeatures;
+	for (const pf of catalogFeatures) {
 		// Skip if this capability already exists
 		const featureLower = pf.feature.toLowerCase();
 		const alreadyExists = inventory.capabilities[featureLower] ||
@@ -794,7 +818,16 @@ export function generateExpectedFeatures(inventory, purpose = null, session = nu
 		});
 	}
 
-	return { expected, purpose };
+	return {
+		expected,
+		purpose,
+		// C3 gate metadata (always present — auditable structured data)
+		gated,
+		purposeConfidence: purpose.confidence,
+		explorationConfidence: expConf,
+		purposeConfidenceFloor: PURPOSE_CONFIDENCE_FLOOR,
+		excludedByUncertainty: excludedPurposeFeatures
+	};
 }
 
 /* ── Phase 3: Gap Detection ──────────────────────────────────── */
@@ -1150,7 +1183,8 @@ export function reconcileFeatures(contextFeatures = [], heuristicFeatures = []) 
  */
 export function analyzeFeatureGaps(session, missionContext = null) {
 	const inventory = extractAppInventory(session);
-	const { expected: heuristicExpected, purpose } = generateExpectedFeatures(inventory, null, session);
+	const featureGapMeta = generateExpectedFeatures(inventory, null, session);
+	const { expected: heuristicExpected, purpose } = featureGapMeta;
 
 	// If mission context is provided, derive ground-truth expectations and reconcile
 	let contextFeatures = [];
@@ -1189,7 +1223,17 @@ export function analyzeFeatureGaps(session, missionContext = null) {
 		? `No significant feature gaps detected. App purpose: ${purpose.name} (${Math.round(purpose.confidence * 100)}% confidence).${ctxCount ? ` ${ctxCount} expected feature${ctxCount === 1 ? '' : 's'} from context.` : ''}`
 		: `${allGaps.length} gap${allGaps.length === 1 ? '' : 's'} detected for ${purpose.name} (${wfCount} workflow gap${wfCount === 1 ? '' : 's'}). ${allGaps.filter(g => g.severity === 'high').length} high priority. Exploration confidence: ${Math.round(inventory.explorationConfidence * 100)}%.${ctxCount ? ` ${ctxCount} expected feature${ctxCount === 1 ? '' : 's'} from context.` : ''}`;
 
-	const result = { gaps: allGaps, inventory, purpose, journey, summary };
+	const result = {
+		gaps: allGaps, inventory, purpose, journey, summary,
+		// C3 — classification-confidence gate metadata (structured, auditable)
+		gated: Boolean(featureGapMeta?.gated),
+		purposeConfidence: purpose.confidence,
+		explorationConfidence: inventory.explorationConfidence,
+		excludedByUncertainty: featureGapMeta?.excludedByUncertainty ?? 0
+	};
+	if (featureGapMeta?.gated) {
+		result.gateReason = `purpose confidence ${(purpose.confidence ?? 0).toFixed(2)} below floor ${featureGapMeta.purposeConfidenceFloor} — catalog expectations suppressed`;
+	}
 	if (contextFeatures.length > 0) result.contextFeatures = contextFeatures;
 	if (discrepancies.length > 0) result.discrepancies = discrepancies;
 	return result;

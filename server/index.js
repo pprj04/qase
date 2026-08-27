@@ -42,9 +42,10 @@ import {
 import {
 	addFinding, listFindings, getFinding, updateFinding, deleteFinding,
 	changeStatus, addComment, linkTestCase, unlinkTestCase,
-	migrateFromSessions, getFindingStats
+	migrateFromSessions, getFindingStats, backfillMissionLinkage
 } from './findings.js';
 import { flushFindingsForShutdown } from './findings.js';
+import { shouldProbeAtTurn, runMidSessionProbe } from './midSessionProbe.js';
 import {
 	exportFindingsBulkGitHub, exportFindingsBulkJira, exportFindingsBulkLinear,
 	exportFindingsBulkMarkdown
@@ -366,9 +367,28 @@ function requireSession(request, response) {
 	return session;
 }
 
-/** Runs a turn detached: the HTTP call returns at once, progress arrives by SSE. */
+/**
+ * Runs a turn detached: the HTTP call returns at once, progress arrives by SSE.
+ *
+ * C3 (Phase 5) — mission-linked turns get the mid-session autonomy probe hook:
+ * at every K-th turn boundary the decision engine evaluates the live session
+ * read-only (trace + settle-gate hint; early-stop REQUEST only for
+ * decision-grade fail evidence, applied through the existing abort seam).
+ * Non-mission turns pass no hooks — zero behavior change.
+ */
 function startTurn(session, options) {
-	runTurn(session, options).catch(error => {
+	const hooks = session?.missionId
+		? {
+			onTurnBoundary: (sess, turnCount) => {
+				if (!shouldProbeAtTurn(sess, turnCount)) return null;
+				// Resolve the mission lazily — the probe is best-effort.
+				const mission = getMission(sess.missionId);
+				if (!mission) return null;
+				return runMidSessionProbe(sess, mission, turnCount);
+			}
+		}
+		: null;
+	runTurn(session, hooks ? { ...options, hooks } : options).catch(error => {
 		const message = error instanceof Error ? error.message : String(error);
 		addMessage(session, { role: 'system', text: message, kind: 'error' });
 		setStatus(session, 'error', message);
@@ -4094,6 +4114,18 @@ try {
 
 // Load missions from disk + backfill project IDs
 loadMissionsFromDisk();
+// C3 (build order Phase 4) — guarded mission-linkage backfill for store
+// findings: sessionId → missionId where resolvable; never fabricates. This
+// closes the C2-discovered gap where /api/v2/findings?mission_id= returned 0
+// for mission-run findings. Runs once per boot; idempotent.
+try {
+	const missionsForLinkage = listMissions({}).map(m => ({ id: m.id, sessionId: m.sessionId, createdAt: m.createdAt }))
+		.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+	const linkage = backfillMissionLinkage(missionsForLinkage);
+	if (linkage.linked > 0) console.log(`[findings] C3 mission-linkage backfill: ${linkage.linked} finding(s) linked`);
+} catch (err) {
+	console.error('[findings] C3 mission-linkage backfill error:', err?.message ?? err);
+}
 // M1-P3 P0-4: reap missions stranded in running/awaiting_input whose session
 // was pruned or lost before lazy finalization could settle them.
 recoverInterruptedMissions(getSession);

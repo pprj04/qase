@@ -101,8 +101,9 @@ async function runOne(label, targetUrl, autonomy, maxTurns) {
 }
 
 const TARGETS = [
-	{ name: 'local-9901 (task board)', url: 'http://localhost:9901' },
-	{ name: 'local-9903 (analytics)', url: 'http://localhost:9903' },
+	{ name: 'local-9901 (crm)', url: 'http://localhost:9901' },
+	{ name: 'local-9902 (taskboard)', url: 'http://localhost:9902' },
+	{ name: 'local-9903 (shop)', url: 'http://localhost:9903' },
 	{ name: 'new.drytis.com', url: 'https://new.drytis.com' }
 ];
 

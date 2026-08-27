@@ -517,8 +517,37 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
 
   // Finding stats
   const uniqueFindings = findings.filter(f => f.isDuplicate !== true);
-  const criticalCount = findings.filter(f => f.severity === 'critical' && !f.isDuplicate).length;
-  const highCount = findings.filter(f => f.severity === 'high' && !f.isDuplicate).length;
+  // C3 (build order Phase 3) — decision-grade evidence policy.
+  //
+  // A severity label alone is not proof. Feature-gap machinery stamps
+  // catalog severities (critical/high) on absence claims derived from a
+  // CLASSIFICATION hypothesis; when that hypothesis is weak the finding
+  // carries near-zero confidence (0.05-0.06 in the C2 benchmark) yet used to
+  // count fully toward criticalCount → STOP_FAIL. That manufactured verdicts.
+  //
+  // Decision-grade (for DECISION purposes only — records are never altered):
+  //   severity critical/high AND confidence that is either
+  //     • a number ≥ DECISION_GRADE_CONFIDENCE (0.7, same floor as the
+  //       existing RULE-5 ESCALATE gate), or
+  //     • null/undefined — legacy / agent-filed findings that were never
+  //       scored keep their legacy weight (default-0.5 semantics, matching
+  //       the findingConfidence default below). We do not silently downgrade
+  //       real confirmed bugs just because nobody stamped a number on them.
+  // Low-confidence criticals remain fully visible (rawCriticalCount,
+  // lowConfidenceCriticalCount signals) and still drive INVESTIGATE — they
+  // just can no longer independently manufacture a STOP_FAIL.
+  const DECISION_GRADE_CONFIDENCE = 0.7;
+  const isDecisionGrade = f =>
+    !f.isDuplicate && (f.severity === 'critical' || f.severity === 'high') &&
+    (typeof f.confidence !== 'number' || f.confidence >= DECISION_GRADE_CONFIDENCE);
+  const decisionGradeFindings = findings.filter(isDecisionGrade);
+  const rawCriticalCount = findings.filter(f => f.severity === 'critical' && !f.isDuplicate).length;
+  const rawHighCount = findings.filter(f => f.severity === 'high' && !f.isDuplicate).length;
+  const lowConfidenceCriticalCount = findings.filter(
+    f => f.severity === 'critical' && !f.isDuplicate && typeof f.confidence === 'number' && f.confidence < DECISION_GRADE_CONFIDENCE
+  ).length;
+  const criticalCount = decisionGradeFindings.filter(f => f.severity === 'critical').length;
+  const highCount = decisionGradeFindings.filter(f => f.severity === 'high').length;
   const mediumCount = findings.filter(f => f.severity === 'medium' && !f.isDuplicate).length;
   const lowCount = findings.filter(f => f.severity === 'low' && !f.isDuplicate).length;
   const duplicateCount = findings.filter(f => f.isDuplicate === true).length;
@@ -638,6 +667,11 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
     highCount,
     mediumCount,
     lowCount,
+    // C3 — raw + low-confidence signals (visibility without verdict power)
+    rawCriticalCount,
+    rawHighCount,
+    lowConfidenceCriticalCount,
+    decisionGradeCount: decisionGradeFindings.length,
     findingConfidence,
     evidenceCompleteness,
     pagesExplored: effectivePagesExplored,

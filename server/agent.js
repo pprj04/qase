@@ -364,7 +364,7 @@ function getDeviceDescriptor(deviceContext) {
  * Returns when the model stops — either because the task is done or because it
  * asked a blocking question.
  */
-export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 }) {
+export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, hooks = null }) {
 	const record = await ensureRuntime(session);
 	const { runtime, bridge } = record;
 	if (record.running) {
@@ -432,6 +432,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 		session._turnsStarted = true;
 	}
 	let limitAborted = false;
+	// C3 (Phase 5) — set when the mid-session autonomy probe requested an
+	// early settle through the abort seam (distinct from a budget abort).
+	let earlyStopRequested = false;
 	// B2 HARD INVARIANT — turnCount can NEVER exceed the authorized limit:
 	//   turnCount > limit is only reachable when the SDK itself disobeys its
 	//   own budget, and in that case the (limit+1)-th turn is ABORTED the
@@ -574,6 +577,21 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 					// B1 W6 — count and enforce the mission turn budget.
 					turnCount += 1;
 					session.turnCount = turnCount;
+					// C3 (Phase 5) — mid-session decision probe at a deterministic
+					// boundary (every K turns, mission-linked sessions only). The
+					// probe is read-only, never blocks the stream, and can only
+					// REQUEST an early settle through the SAME abort seam the
+					// budget uses. Fire-and-forget by design.
+					if (typeof hooks?.onTurnBoundary === 'function') {
+						try {
+							const probe = hooks.onTurnBoundary(session, turnCount);
+							if (probe && typeof probe.earlyStopRequested === 'boolean' && probe.earlyStopRequested) {
+								limitAborted = false; // not a budget abort — an autonomy early-stop request
+								controller.abort();
+								earlyStopRequested = true;
+							}
+						} catch { /* probe is best-effort — never break the turn */ }
+					}
 					if (abortThreshold != null && turnCount > abortThreshold) {
 						limitAborted = true;
 						console.log(`[agent] turn limit (${turnLimit ?? 'wrap-up'}) exceeded (cumulative ${turnCount}) — aborting mission turn budget`);
@@ -688,6 +706,22 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 			});
 			void closeBrowser(session.id);
 			record?.dispose?.();
+		} else if (earlyStopRequested) {
+			// C3 (Phase 5) — the mid-session autonomy probe saw decision-grade
+			// fail evidence (confirmed criticals / escalation-worthy state) and
+			// REQUESTED an early settle. This is not an error: the session is
+			// marked done and the NORMAL finalize path runs the authoritative
+			// settle-gate decision (which may confirm STOP_FAIL with full
+			// evidence — or disagree and continue). The probe never fabricates
+			// a verdict; it only stops spending on a confirmed-bad target.
+			session.turnCount = turnCount;
+			setStatus(session, 'done');
+			addMessage(session, {
+				role: 'system',
+				text: `Autonomy probe requested early settle after ${turnCount} turns (decision-grade evidence seen). Final verdict is computed by the settle gate.`,
+			});
+			void closeBrowser(session.id);
+			record?.dispose?.();
 		} else if (idleAborted) {
 			// Idle timeout — treat as retryable model timeout
 			if (retryAttempt < MODEL_TIMEOUT_RETRIES) {
@@ -744,7 +778,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0 })
 		}
 		return runTurn(session, {
 			task: 'Continue from the latest transcript and browser state. The previous model request timed out after the last successful step. Inspect the current state before acting, do not repeat completed or irreversible actions, and finish the remaining test plan.',
-			retryAttempt: retryAttempt + 1
+			retryAttempt: retryAttempt + 1,
+			hooks
 		});
 	}
 }

@@ -164,6 +164,50 @@ export function reassignProjectId(fromProjectId, toProjectId) {
 	return count;
 }
 
+/* ── Mission linkage (C3, build order Phase 4) ──────────────────── */
+
+/**
+ * One-time-per-boot guarded backfill: stamp missionId on store findings that
+ * have a sessionId but no mission linkage, by resolving the session against
+ * the mission list. This uses the SAME resolution the codebase already
+ * trusts for ownership (index.js: "Session-born findings never carried
+ * missionId; resolve the mission by sessionId instead").
+ *
+ * Safety rules:
+ *  - Never fabricate: a finding whose sessionId matches NO mission stays
+ *    untouched (historical records, ad-hoc session findings).
+ *  - Never overwrite: only null/undefined missionId is filled.
+ *  - Ambiguity safe: missions are matched by m.sessionId === f.sessionId;
+ *    if several missions somehow share a session, the first registered wins
+ *    deterministically.
+ *  - Idempotent: linked findings are skipped on subsequent runs.
+ *
+ * @param {object[]} missions - mission documents (id, sessionId)
+ * @returns {{ linked: number, considered: number }}
+ */
+export function backfillMissionLinkage(missions) {
+	if (!Array.isArray(missions) || missions.length === 0) return { linked: 0, considered: 0 };
+	const sessionToMission = new Map();
+	for (const m of missions) {
+		if (m?.sessionId && !sessionToMission.has(m.sessionId)) {
+			sessionToMission.set(m.sessionId, m.id);
+		}
+	}
+	let linked = 0;
+	let considered = 0;
+	for (const f of findings) {
+		if (f.missionId != null) continue;
+		if (!f.sessionId) continue; // no provenance — never fabricate
+		const missionId = sessionToMission.get(f.sessionId);
+		if (!missionId) continue; // unresolvable — leave untouched forever
+		considered++;
+		f.missionId = missionId;
+		linked++;
+	}
+	if (linked > 0) flush();
+	return { linked, considered };
+}
+
 /* ── Migration from session-embedded findings ───────────────────── */
 
 /**
@@ -658,8 +702,9 @@ export function syncSessionFinding(session, finding) {
 		...(finding.isDuplicate != null && { isDuplicate: finding.isDuplicate }),
 		...(finding.duplicateOf != null && { duplicateOf: finding.duplicateOf }),
 		...(finding.missionId != null && { missionId: finding.missionId }),
-		// B0.2 provenance sync — guarded: never overwrite an existing correct
-		// value with null/undefined.
+		// C3: update branch — if the stored record still lacks mission linkage
+		// but the finding/session now carries one, adopt it (never overwrite).
+		...(existing.missionId == null && finding.missionId == null && session?.missionId != null && { missionId: session.missionId }),
 		...(finding.device != null && { device: finding.device }),
 		...(finding.environment != null && { environment: finding.environment })
 	});
@@ -672,6 +717,13 @@ export function syncSessionFinding(session, finding) {
 		ts: finding.ts,
 		sessionId: session.id,
 		projectId: session.projectId,
+		// C3 (build order Phase 4) — write-time mission linkage. Session-born
+		// findings never carried missionId (C2 discovery: /api/v2/findings?
+		// mission_id= returned 0 for mission runs). The session is stamped with
+		// its mission at creation (store.js createSession), so stamp the finding
+		// from the session whenever the finding itself doesn't already carry a
+		// linkage. Explicit missionId on the finding always wins.
+		missionId: finding.missionId ?? session.missionId ?? undefined,
 		title: finding.title,
 		severity: finding.severity,
 		category: finding.category,

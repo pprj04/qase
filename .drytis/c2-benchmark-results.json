@@ -4,13 +4,31 @@
   "targetUrl": "http://localhost:9901",
   "autonomy": false,
   "authorizedTurns": 12,
-  "missionId": "cf06db8e-5e46-4640-a2fa-efb422ecbed3",
+  "missionId": "e92df175-c405-40a7-a26d-2bd7b1ca5e12",
   "status": "completed",
   "turnsUsed": 12,
   "stopReason": null,
   "failureReason": null,
-  "decisionCount": 1,
+  "decisionCount": 4,
   "decisions": [
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
    {
     "cand": "STOP_BUDGET",
     "sel": "stop",
@@ -18,24 +36,41 @@
     "budget": "0/0"
    }
   ],
-  "findingCount": 0,
+  "findingCount": 10,
   "criticalFindings": 0,
-  "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "highFindings": 2,
+  "timedOut": false
  },
  {
   "label": "local-9901-B-auto",
   "targetUrl": "http://localhost:9901",
   "autonomy": true,
   "authorizedTurns": 12,
-  "missionId": "837470ed-29ac-4980-bbc8-5a1d2ce60310",
+  "missionId": "b721ae5d-aa8f-4d20-be5f-7084bdd9911e",
   "status": "completed",
   "turnsUsed": 12,
   "stopReason": null,
   "failureReason": null,
-  "decisionCount": 1,
+  "decisionCount": 4,
   "decisions": [
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
    {
     "cand": "STOP_BUDGET",
     "sel": "stop",
@@ -43,110 +78,207 @@
     "budget": "0/0"
    }
   ],
-  "findingCount": 0,
+  "findingCount": 9,
   "criticalFindings": 0,
+  "highFindings": 1,
+  "timedOut": false
+ },
+ {
+  "label": "local-9902-A-off",
+  "targetUrl": "http://localhost:9902",
+  "autonomy": false,
+  "authorizedTurns": 12,
+  "missionId": "bb6a305c-04a6-47b6-b6ba-c35a9aacfdce",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 4,
+  "decisions": [
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 15,
+  "criticalFindings": 2,
   "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "timedOut": false
+ },
+ {
+  "label": "local-9902-B-auto",
+  "targetUrl": "http://localhost:9902",
+  "autonomy": true,
+  "authorizedTurns": 12,
+  "missionId": "f26ce6dc-80af-4192-b869-901ab213fe94",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 4,
+  "decisions": [
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 12,
+  "criticalFindings": 2,
+  "highFindings": 0,
+  "timedOut": false
  },
  {
   "label": "local-9903-A-off",
   "targetUrl": "http://localhost:9903",
   "autonomy": false,
   "authorizedTurns": 12,
-  "missionId": "e409d066-62e2-494f-a130-76a842a1fce4",
-  "status": "failed",
+  "missionId": "9e1c1915-e5fb-454c-af9c-4f60d47f1fb7",
+  "status": "completed",
   "turnsUsed": 12,
   "stopReason": null,
-  "failureReason": "Decision Engine returned STOP_FAIL",
-  "decisionCount": 1,
+  "failureReason": null,
+  "decisionCount": 4,
   "decisions": [
    {
-    "cand": "STOP_FAIL",
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "STOP_BUDGET",
     "sel": "stop",
     "res": "selected",
     "budget": "0/0"
    }
   ],
-  "findingCount": 0,
-  "criticalFindings": 0,
-  "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "findingCount": 10,
+  "criticalFindings": 1,
+  "highFindings": 1,
+  "timedOut": false
  },
  {
   "label": "local-9903-B-auto",
   "targetUrl": "http://localhost:9903",
   "autonomy": true,
   "authorizedTurns": 12,
-  "missionId": "4422369b-37ec-415c-b989-ea8e92a7fdd2",
-  "status": "failed",
+  "missionId": "69e7f698-8fd3-44ef-ba23-e1de498551ed",
+  "status": "completed",
   "turnsUsed": 12,
   "stopReason": null,
-  "failureReason": "Decision Engine returned STOP_FAIL",
-  "decisionCount": 1,
+  "failureReason": null,
+  "decisionCount": 4,
   "decisions": [
    {
-    "cand": "STOP_FAIL",
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "CONTINUE",
+    "sel": "hint",
+    "res": "recorded",
+    "budget": "0/0"
+   },
+   {
+    "cand": "STOP_BUDGET",
     "sel": "stop",
     "res": "selected",
     "budget": "0/0"
    }
   ],
-  "findingCount": 0,
-  "criticalFindings": 0,
-  "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "findingCount": 13,
+  "criticalFindings": 1,
+  "highFindings": 1,
+  "timedOut": false
  },
  {
   "label": "new.drytis.com-A-off",
   "targetUrl": "https://new.drytis.com",
   "autonomy": false,
-  "authorizedTurns": 12,
-  "missionId": "319c62d2-b723-46c6-a248-8187fd913f17",
-  "status": "completed",
-  "turnsUsed": 12,
-  "stopReason": null,
-  "failureReason": null,
-  "decisionCount": 1,
-  "decisions": [
-   {
-    "cand": "STOP_BUDGET",
-    "sel": "stop",
-    "res": "selected",
-    "budget": "0/0"
-   }
-  ],
-  "findingCount": 0,
-  "criticalFindings": 0,
-  "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "error": "fetch failed"
  },
  {
   "label": "new.drytis.com-B-auto",
   "targetUrl": "https://new.drytis.com",
   "autonomy": true,
-  "authorizedTurns": 12,
-  "missionId": "15c04fa3-c45d-4c8a-8b8c-bb7d10622da8",
+  "error": "fetch failed"
+ },
+ {
+  "label": "new.drytis.com-A-off(smoke)",
+  "missionId": "cc184f1e-dfcb-4c2d-9892-5256019a0609",
+  "targetUrl": "https://new.drytis.com",
   "status": "completed",
-  "turnsUsed": 12,
-  "stopReason": null,
-  "failureReason": null,
-  "decisionCount": 1,
-  "decisions": [
-   {
-    "cand": "STOP_BUDGET",
-    "sel": "stop",
-    "res": "selected",
-    "budget": "0/0"
-   }
-  ],
-  "findingCount": 0,
+  "findingCount": 11,
+  "criticalFindings": 1,
+  "note": "C3 gate: critical conf 0.1 suppressed from STOP_FAIL; catalog noise gated (purposeConfidence 0.067)"
+ },
+ {
+  "label": "new.drytis.com-B-auto(smoke)",
+  "missionId": "f46cdbbd-b410-40ca-a49d-b57941b18355",
+  "targetUrl": "https://new.drytis.com",
+  "status": "completed",
+  "findingCount": 11,
   "criticalFindings": 0,
-  "highFindings": 0,
-  "timedOut": false,
-  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+  "note": "C3: 0 criticals \u2014 catalog expectations suppressed below floor"
  }
 ]

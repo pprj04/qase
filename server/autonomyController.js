@@ -101,9 +101,16 @@ export async function runAutonomyDecision({ mission, session, evidence = {} }) {
 
 	try {
 		// 1. The decision engine consumes the REAL session state (read-only).
+		//    C3: a mid-session probe hint REPLAN focus payload is adopted when
+		//    the settle decision is REPLAN and the settle decision itself
+		//    carries no payload (the probe saw the live state at turn K; the
+		//    payload is only a hint — every guard still applies below).
 		const decision = makeDecisionSafe(session, evidence, mission);
 		if (!decision || !Object.values(DECISION_TYPES).includes(decision.decision)) {
 			return null; // unknown type — fail-open to old path
+		}
+		if (decision.decision === DECISION_TYPES.REPLAN && !decision.focusPayload && session._probeHint?.focusPayload) {
+			decision.focusPayload = session._probeHint.focusPayload;
 		}
 
 		// 2. resolveAction turns the decision into a concrete action with its
