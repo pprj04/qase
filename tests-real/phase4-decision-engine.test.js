@@ -158,8 +158,12 @@ describe('Decision Contract — createDecision()', () => {
 /* ── 2. Decision Types ──────────────────────────────────────────── */
 
 describe('Decision Types', () => {
-  it('has exactly 7 decision types', () => {
-    assert.equal(Object.keys(DECISION_TYPES).length, 7);
+  it('has exactly 9 decision types', () => {
+    // C2: INVESTIGATE + REPLAN added to the vocabulary (non-terminal,
+    // iteration-continuing verbs with different focus).
+    assert.equal(Object.keys(DECISION_TYPES).length, 9);
+    assert.ok(DECISION_TYPES.INVESTIGATE);
+    assert.ok(DECISION_TYPES.REPLAN);
   });
 
   it('terminal decisions are STOP_*', () => {
@@ -648,8 +652,11 @@ describe('Policy Evaluation — Decision Scenarios', () => {
     const input = collectDecisionInput(session, evidence, mission);
 
     const decision = evaluatePolicy(input, session);
-    // Evidence completeness is ~3%, below 50% → REVALIDATE
-    assert.equal(decision.decision, DECISION_TYPES.REVALIDATE);
+    // Evidence completeness is ~3%, below 50%. C2 vocabulary: with no
+    // findings, barely any steps, and budget remaining this is CONTINUE
+    // (same approach, keep going) — REVALIDATE is reserved for conflicting
+    // evidence; the old blanket 'revalidate on low coverage' became CONTINUE.
+    assert.equal(decision.decision, DECISION_TYPES.CONTINUE);
   });
 
   // Scenario 11: Completed session, score < 60, no criticals → STOP_FAIL

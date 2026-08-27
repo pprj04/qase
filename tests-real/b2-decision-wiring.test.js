@@ -116,7 +116,7 @@ test('INVARIANT: autonomyEnabled defaults ON, off via QASE_AUTONOMY=off', () => 
 
 test('resolveAction maps engine decisions to guarded actions (regression of B2 wiring surface)', () => {
 	const mission = { currentIteration: 0, constraints: {}, iterations: [] };
-	assert.equal(resolveAction('CONTINUE', mission).action, 'wait');
+	assert.equal(resolveAction('CONTINUE', mission).action, 'continue'); // C2: settled-session CONTINUE dispatches another iteration
 	assert.equal(resolveAction('REVALIDATE', mission).shouldRevalidate, true);
 	assert.equal(resolveAction('STOP_PASS', mission).shouldStop, true);
 	assert.equal(resolveAction('ESCALATE', mission).stopReason, 'escalated');

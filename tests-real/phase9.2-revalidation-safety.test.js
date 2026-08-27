@@ -651,11 +651,15 @@ describe('Phase 9.2 — Revalidation Safety: Unknown Decision Handling', () => {
     assert.equal(result.shouldRevalidate, false);
   });
 
-  it('U2: CONTINUE is handled (not terminal, not revalidate)', () => {
+  it('U2: CONTINUE is handled (C2: settled sessions dispatch a same-approach iteration)', () => {
     const mission = makeMission({ constraints: { maxIterations: 5 } });
     const result = resolveAction(DECISION_TYPES.CONTINUE, mission);
-    assert.equal(result.shouldRevalidate, false);
+    assert.equal(result.action, 'continue');
     assert.equal(result.shouldStop, false);
-    assert.equal(result.action, 'wait');
+    assert.equal(result.focusMode, 'continue'); // no findings-verify framing
+    // Guards still apply — iteration-capped CONTINUE stops:
+    const capped = makeMission({ constraints: { maxIterations: 1 }, currentIteration: 1 });
+    const cappedResult = resolveAction(DECISION_TYPES.CONTINUE, capped);
+    assert.equal(cappedResult.action, 'stop');
   });
 });

@@ -110,6 +110,12 @@ export async function runAutonomyDecision({ mission, session, evidence = {} }) {
 		//    own guard rails (iteration limit, no-improvement).
 		const candidate = decision.decision;
 		const action = resolveAction(candidate, mission);
+		// C2: the engine's REPLAN decision carries the focus payload built
+		// from the session's own coverage state — prefer it over the generic
+		// derivation (resolveAction only sees the mission envelope).
+		if (candidate === DECISION_TYPES.REPLAN && decision.focusPayload) {
+			action.focusPayload = decision.focusPayload;
+		}
 
 		// 3. Budget authority. The engine may REQUEST more execution; only the
 		//    externally-authorized budget answers. A request beyond what the
@@ -132,7 +138,14 @@ export async function runAutonomyDecision({ mission, session, evidence = {} }) {
 				// new iteration runs under the mission's existing maxTurns.
 				let accepted = false;
 				try {
-					accepted = await hooks.dispatchRevalidation(mission.id, { internal: true });
+					accepted = await hooks.dispatchRevalidation(mission.id, {
+						internal: true,
+						// C2: focus mode/payload steer the new iteration's
+						// prompt (investigate = verify findings; replan =
+						// redirect coverage). Execution mechanics unchanged.
+						focusMode: action.focusMode ?? null,
+						focusPayload: action.focusPayload ?? null
+					});
 				} catch {
 					accepted = false;
 				}
@@ -157,8 +170,16 @@ export async function runAutonomyDecision({ mission, session, evidence = {} }) {
 			budgetBefore,
 			budgetRequested: requested,
 			budgetGranted: granted,
-			result: granted ? 'revalidation_dispatched' : 'selected',
-			nextDecision: granted ? 'next_iteration' : 'final'
+			result: granted
+				? (action.focusMode === 'replan' ? 'replan_dispatched'
+					: action.focusMode === 'investigate' ? 'investigate_dispatched'
+					: 'revalidation_dispatched')
+				: 'selected',
+			nextDecision: granted
+				? (action.focusMode === 'replan' ? 'next_iteration_replan'
+					: action.focusMode === 'investigate' ? 'next_iteration_investigate'
+					: 'next_iteration')
+				: 'final'
 		});
 
 		return { action, decision, trace };

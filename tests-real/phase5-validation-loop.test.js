@@ -374,11 +374,11 @@ describe('Action Contract — resolveAction()', () => {
     assert.equal(result.stopReason, STOP_REASONS.ESCALATED);
   });
 
-  it('CONTINUE → action=wait', () => {
+  it('CONTINUE → action=continue (C2: settled sessions dispatch another iteration)', () => {
     const mission = mockMission({ iterations: [] });
     const result = resolveAction(DECISION_TYPES.CONTINUE, mission);
-    assert.equal(result.action, 'wait');
-    assert.ok(!result.shouldRevalidate);
+    assert.equal(result.action, 'continue');
+    assert.ok(result.shouldRevalidate); // continuation dispatches a real iteration
     assert.ok(!result.shouldStop);
   });
 

@@ -1,0 +1,152 @@
+[
+ {
+  "label": "local-9901-A-off",
+  "targetUrl": "http://localhost:9901",
+  "autonomy": false,
+  "authorizedTurns": 12,
+  "missionId": "cf06db8e-5e46-4640-a2fa-efb422ecbed3",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ },
+ {
+  "label": "local-9901-B-auto",
+  "targetUrl": "http://localhost:9901",
+  "autonomy": true,
+  "authorizedTurns": 12,
+  "missionId": "837470ed-29ac-4980-bbc8-5a1d2ce60310",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ },
+ {
+  "label": "local-9903-A-off",
+  "targetUrl": "http://localhost:9903",
+  "autonomy": false,
+  "authorizedTurns": 12,
+  "missionId": "e409d066-62e2-494f-a130-76a842a1fce4",
+  "status": "failed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": "Decision Engine returned STOP_FAIL",
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_FAIL",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ },
+ {
+  "label": "local-9903-B-auto",
+  "targetUrl": "http://localhost:9903",
+  "autonomy": true,
+  "authorizedTurns": 12,
+  "missionId": "4422369b-37ec-415c-b989-ea8e92a7fdd2",
+  "status": "failed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": "Decision Engine returned STOP_FAIL",
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_FAIL",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ },
+ {
+  "label": "new.drytis.com-A-off",
+  "targetUrl": "https://new.drytis.com",
+  "autonomy": false,
+  "authorizedTurns": 12,
+  "missionId": "319c62d2-b723-46c6-a248-8187fd913f17",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ },
+ {
+  "label": "new.drytis.com-B-auto",
+  "targetUrl": "https://new.drytis.com",
+  "autonomy": true,
+  "authorizedTurns": 12,
+  "missionId": "15c04fa3-c45d-4c8a-8b8c-bb7d10622da8",
+  "status": "completed",
+  "turnsUsed": 12,
+  "stopReason": null,
+  "failureReason": null,
+  "decisionCount": 1,
+  "decisions": [
+   {
+    "cand": "STOP_BUDGET",
+    "sel": "stop",
+    "res": "selected",
+    "budget": "0/0"
+   }
+  ],
+  "findingCount": 0,
+  "criticalFindings": 0,
+  "highFindings": 0,
+  "timedOut": false,
+  "findingCountMeasuredBug": "v2 mission_id filter could not see iteration findings (no missionId field); real counts below"
+ }
+]

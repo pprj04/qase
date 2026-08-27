@@ -386,6 +386,78 @@ export function resolveAction(decisionType, mission) {
     };
   }
 
+  // C2: INVESTIGATE → start a verification iteration (same mechanics as
+  // REVALIDATE, different prompt intent: the iteration prompt lists the
+  // findings to verify). Falls through to the shared revalidation guards.
+  if (decisionType === DECISION_TYPES.INVESTIGATE) {
+    if (hasReachedIterationLimit(mission)) {
+      const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+      return {
+        action: 'stop',
+        reason: `INVESTIGATE requested but max iterations (${limit}) reached`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.MAX_ITERATIONS
+      };
+    }
+    if (hasNoImprovement(mission)) {
+      return {
+        action: 'stop',
+        reason: `INVESTIGATE requested but convergence shows no improvement across iterations`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.NO_IMPROVEMENT
+      };
+    }
+    return {
+      action: 'revalidate',
+      reason: `Decision Engine returned INVESTIGATE — starting a verification iteration of reported findings`,
+      shouldRevalidate: true,
+      shouldStop: false,
+      focusMode: 'investigate'
+    };
+  }
+
+  // C2: REPLAN → start a new iteration with a CHANGED approach. The focus
+  // payload (from the engine decision) redirects exploration toward
+  // uncovered/risky areas instead of re-verifying findings.
+  if (decisionType === DECISION_TYPES.REPLAN) {
+    if (hasReachedIterationLimit(mission)) {
+      const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+      return {
+        action: 'stop',
+        reason: `REPLAN requested but max iterations (${limit}) reached`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.MAX_ITERATIONS
+      };
+    }
+    if (hasNoImprovement(mission)) {
+      return {
+        action: 'stop',
+        reason: `REPLAN requested but convergence shows no improvement across iterations`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.NO_IMPROVEMENT
+      };
+    }
+    // The engine's decision record carries the focus payload; when the raw
+    // decision type is passed (unit tests), derive from mission/session data.
+    const focus = buildReplanFocus({
+      appModel: mission?.context?.appModel ?? null,
+      testContext: mission?.context?.testContext ?? null,
+      gapReport: mission?.context?.phase8?.gapReport ?? mission?.context?.gapReport ?? null
+    });
+    return {
+      action: 'replan',
+      reason: `Decision Engine returned REPLAN — starting a new iteration with redirected focus`,
+      shouldRevalidate: true,
+      shouldStop: false,
+      focusMode: 'replan',
+      focusPayload: focus
+    };
+  }
+
   // REVALIDATE → start a new iteration.
   // Checked BEFORE getStopReason because the mission is already finalized as
   // 'completed' with a verdict at this point — getStopReason would return
@@ -450,13 +522,76 @@ export function resolveAction(decisionType, mission) {
     };
   }
 
-  // CONTINUE → the session is still running, no action needed yet
-  // (This shouldn't normally be called for completed sessions)
+  // C2: CONTINUE arrived for a SETTLED session (the engine's C2 rule fires on
+  // settled sessions that barely started). 'wait' would strand the mission —
+  // a settled session never resumes by itself. Dispatch another iteration
+  // with the same approach (mission prompt, no focus redirect), under the
+  // same guards as every other continuation.
+  if (decisionType === DECISION_TYPES.CONTINUE) {
+    if (hasReachedIterationLimit(mission)) {
+      const limit = mission.constraints?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+      return {
+        action: 'stop',
+        reason: `CONTINUE requested but max iterations (${limit}) reached`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.MAX_ITERATIONS
+      };
+    }
+    if (hasNoImprovement(mission)) {
+      return {
+        action: 'stop',
+        reason: `CONTINUE requested but convergence shows no improvement across iterations`,
+        shouldRevalidate: false,
+        shouldStop: true,
+        stopReason: STOP_REASONS.NO_IMPROVEMENT
+      };
+    }
+    return {
+      action: 'continue',
+      reason: `Decision Engine returned CONTINUE — starting another iteration with the same approach`,
+      shouldRevalidate: true,
+      shouldStop: false,
+      focusMode: 'continue'
+    };
+  }
+}
+
+/**
+ * C2 — build a deterministic REPLAN focus from app understanding + risk +
+ * gap report. Pure extraction, no LLM. Shared by the engine (via its own
+ * input-based twin) and by any caller holding the raw session objects.
+ */
+export function buildReplanFocus({ appModel = null, testContext = null, gapReport = null, capturedSteps = null } = {}) {
+  const pages = Array.isArray(appModel?.pages) ? appModel.pages : [];
+  const exploredUrls = new Set((capturedSteps ?? []).map(s => s?.url).filter(Boolean));
+  const untestedPages = pages
+    .map(p => p?.path ?? p?.url ?? null)
+    .filter(Boolean)
+    .filter(p => ![...exploredUrls].some(u => String(u).includes(p)))
+    .slice(0, 8);
+  const riskAreas = (testContext?.riskAssessment?.risks ?? [])
+    .map(r => r?.area)
+    .filter(Boolean)
+    .slice(0, 6);
+  const incompleteWorkflows = [];
+  for (const wf of (gapReport?.incompleteWorkflows ?? []).slice(0, 8)) {
+    if (!wf?.name) continue;
+    const steps = Array.isArray(wf.untestedSteps) ? wf.untestedSteps.filter(Boolean).slice(0, 4) : [];
+    incompleteWorkflows.push(steps.length > 0 ? `${wf.name} (untested: ${steps.join(', ')})` : wf.name);
+  }
+  const focusAreas = [
+    ...untestedPages.map(p => `untested page: ${p}`),
+    ...riskAreas.map(r => `risk area: ${r}`),
+    ...incompleteWorkflows.map(w => `incomplete workflow: ${w}`)
+  ].slice(0, 12);
   return {
-    action: 'wait',
-    reason: `Decision Engine returned CONTINUE — session still in progress`,
-    shouldRevalidate: false,
-    shouldStop: false
+    focusAreas,
+    riskAreas,
+    incompleteWorkflows,
+    pagesExplored: exploredUrls.size,
+    pagesDiscovered: pages.length,
+    evidenceCompleteness: null
   };
 }
 

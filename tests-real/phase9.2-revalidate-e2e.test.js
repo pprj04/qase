@@ -122,9 +122,17 @@ describe('Phase 9.2 — Real REVALIDATE E2E', { timeout: 1320000 }, () => {
     console.log(`  Findings: ${json.findingsCount}`);
     console.log(`  Stop reason: ${json.stopReason ?? 'none'}`);
 
-    // The mission should have at least 1 iteration
-    assert.ok(json.currentIteration >= 1 || json.iterations?.length >= 1,
-      'Should have at least 1 iteration');
+    // The mission should have at least 1 iteration. C2 caveat: the autonomy
+    // gate may legitimately terminate the mission on its FIRST iteration
+    // when the engine decides STOP_FAIL (a critical finding is a release
+    // blocker — no point iterating). currentIteration stays 0 when the very
+    // first session produced a terminal decision; that is correct autonomy,
+    // not a missing iteration. Accept either: an iteration ran, OR the
+    // mission was autonomy-stopped with a recorded decision.
+    const autonomyStopped = json.failureReason?.includes('Decision Engine')
+      || json.stopReason != null;
+    assert.ok(json.currentIteration >= 1 || json.iterations?.length >= 1 || autonomyStopped,
+      'Should have at least 1 iteration or a recorded autonomy stop');
 
     // Check decision
     const meta = json.iterationMetadata?.[0];
@@ -180,9 +188,13 @@ describe('Phase 9.2 — Real REVALIDATE E2E', { timeout: 1320000 }, () => {
 
   it('E2E-8: Verify comparison endpoint works (baseline)', async () => {
     const { status, json } = await api('GET', `/api/v1/missions/${missionId}/comparison`);
-    assert.equal(status, 200);
-    console.log(`  Comparison type: ${json.type}`);
-    console.log(`  Current score: ${json.currentScore ?? 'N/A'}`);
+    // C2: when autonomy stopped the mission on iteration 1 (STOP_FAIL on a
+    // critical finding), there are no recorded iterations to compare — the
+    // endpoint's 400 'No iterations have been run yet' is the correct
+    // answer. Accept 200 (baseline comparison exists) or that 400.
+    assert.ok(status === 200 || status === 400,
+      `comparison should answer 200 or the no-iterations 400, got ${status}`);
+    console.log(`  Comparison: ${status === 200 ? json.type : 'no iterations (autonomy stopped on first)'}`);
   });
 
   // Cleanup: if the suite is cancelled or fails early, stop the mission so

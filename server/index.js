@@ -3044,10 +3044,39 @@ async function revalidateMissionByIdHandlerInner(request, response, mission) {
 				}
 			}
 
-			// Build revalidation prompt with awareness of previous findings
-			const taskPrompt = lastIteration
-				? buildRevalidationPrompt(mission, lastIteration, knowledgeData.hints)
-				: buildMissionPrompt(mission) + knowledgeData.hints;
+			// Build revalidation prompt with awareness of previous findings.
+			// C2: an autonomy dispatch carries a focus mode —
+			//   'investigate' → verify previous findings (default behavior,
+			//                  same prompt as a human-triggered revalidation)
+			//   'replan'      → redirect exploration toward uncovered areas;
+			//                  the focus payload replaces the findings-verify
+			//                  framing with a coverage-focused briefing.
+			let taskPrompt;
+			if (request.__qaseFocusMode === 'replan' && request.__qaseFocusPayload) {
+				const focusLines = (request.__qaseFocusPayload.focusAreas ?? [])
+					.slice(0, 12)
+					.map(a => `- ${a}`);
+				taskPrompt = buildMissionPrompt(mission)
+					+ (knowledgeData.hints || '')
+					+ `\n\n── RE-PLAN FOCUS (iteration ${mission.currentIteration + 1}) ──\n`
+					+ `Previous exploration was too narrow. Redirect testing toward:\n`
+					+ (focusLines.length > 0 ? focusLines.join('\n') : '- broaden coverage to untested sections')
+					+ `\nDo not re-verify previously reported findings this iteration; extend coverage first.`;
+			} else if (request.__qaseFocusMode === 'continue') {
+				// C2 CONTINUE: same approach — the plain mission prompt, no
+				// findings-verify framing (nothing to verify yet).
+				taskPrompt = buildMissionPrompt(mission) + knowledgeData.hints;
+			} else if (lastIteration) {
+				taskPrompt = buildRevalidationPrompt(mission, lastIteration, knowledgeData.hints);
+			} else {
+				taskPrompt = buildMissionPrompt(mission) + knowledgeData.hints;
+			}
+			// Record which focus the iteration ran under (provenance).
+			session.autonomyFocus = {
+				mode: request.__qaseFocusMode ?? 'investigate',
+				focusAreas: (request.__qaseFocusPayload?.focusAreas ?? []).slice(0, 12),
+				at: new Date().toISOString()
+			};
 
 			// Store iteration metadata
 			const iterMeta = createIterationMetadata(mission, session);
@@ -4209,7 +4238,7 @@ registerCapabilitiesAutonomyGate({
 // re-validation, budget) still applies identically. A spoofed external
 // request carrying the marker is rejected (403) below.
 registerAutonomyHooks({
-	dispatchRevalidation: async (missionId) => {
+	dispatchRevalidation: async (missionId, options = {}) => {
 		const mission = getMission(missionId);
 		if (!mission) return false;
 		const session = mission.sessionId ? getSession(mission.sessionId) : null;
@@ -4230,7 +4259,16 @@ registerAutonomyHooks({
 			json() { return this; },
 			setHeader() { return this; }
 		};
-		const mockRequest = { params: { id: missionId }, body: {}, __qaseInternalAutonomy: true };
+		const mockRequest = {
+			params: { id: missionId },
+			body: {},
+			__qaseInternalAutonomy: true,
+			// C2: the autonomy decision's focus mode + payload ride along.
+			// Module-private — the wire router never populates these fields,
+			// so an external caller cannot inject a focus.
+			__qaseFocusMode: options?.focusMode ?? null,
+			__qaseFocusPayload: options?.focusPayload ?? null
+		};
 		try {
 			await revalidateMissionByIdHandler(mockRequest, mockResponse, getMission(missionId));
 		} catch (dispatchError) {

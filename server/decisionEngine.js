@@ -37,6 +37,8 @@
 export const DECISION_TYPES = {
   CONTINUE: 'CONTINUE',
   REVALIDATE: 'REVALIDATE',
+  INVESTIGATE: 'INVESTIGATE',
+  REPLAN: 'REPLAN',
   ESCALATE: 'ESCALATE',
   STOP_PASS: 'STOP_PASS',
   STOP_FAIL: 'STOP_FAIL',
@@ -105,7 +107,8 @@ export function createDecision(opts) {
     knowledgeRefs = [],
     recommendedAction = null,
     missionId = null,
-    sessionId = null
+    sessionId = null,
+    focusPayload = null
   } = opts;
 
   // Validate decision type against allowlist
@@ -138,7 +141,39 @@ export function createDecision(opts) {
     timestamp: new Date().toISOString(),
     policyVersion: POLICY_VERSION,
     missionId,
-    sessionId
+    sessionId,
+    // C2: REPLAN carries a deterministic focus payload (focus areas + rationale
+    // keys). Sanitized to strings-only so no session/mission object leaks into
+    // a decision record. Only set for REPLAN decisions.
+    focusPayload: decision === DECISION_TYPES.REPLAN && focusPayload
+      ? sanitizeFocusPayload(focusPayload)
+      : null
+  };
+}
+
+/**
+ * C2 — deterministic focus payload sanitizer. Keeps shape fixed, caps lists,
+ * strings only, no nested objects from untrusted session/mission state.
+ */
+function sanitizeFocusPayload(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const str = v => (typeof v === 'string' ? v.slice(0, 120) : null);
+  const areas = Array.isArray(payload.focusAreas)
+    ? payload.focusAreas.map(str).filter(Boolean).slice(0, 12)
+    : [];
+  const risks = Array.isArray(payload.riskAreas)
+    ? payload.riskAreas.map(str).filter(Boolean).slice(0, 6)
+    : [];
+  const workflows = Array.isArray(payload.incompleteWorkflows)
+    ? payload.incompleteWorkflows.map(str).filter(Boolean).slice(0, 8)
+    : [];
+  return {
+    focusAreas: areas,
+    riskAreas: risks,
+    incompleteWorkflows: workflows,
+    pagesExplored: typeof payload.pagesExplored === 'number' ? payload.pagesExplored : null,
+    pagesDiscovered: typeof payload.pagesDiscovered === 'number' ? payload.pagesDiscovered : null,
+    evidenceCompleteness: typeof payload.evidenceCompleteness === 'number' ? payload.evidenceCompleteness : null
   };
 }
 
@@ -497,15 +532,27 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
   // A session with 0 steps hasn't explored at all; 20+ steps is thorough.
   const stepCount = session.capturedSteps?.length ?? 0;
   const activityCount = session.activities?.length ?? 0;
+  // Distinct pages explored: from captured step URLs, falling back to the
+  // app model's coverage record (steps may not be captured in every mode).
   const pagesExplored = new Set(
     (session.capturedSteps ?? []).map(s => s.url).filter(Boolean)
   ).size;
+  const effectivePagesExplored = pagesExplored > 0
+    ? pagesExplored
+    : (appModel?.metadata?.coverage?.pagesExplored ?? 0);
   let evidenceCompleteness = null;
   if (stepCount === 0 && activityCount === 0) {
     evidenceCompleteness = 0;
   } else {
-    // Coverage heuristic: diminishing returns after 30 steps
-    evidenceCompleteness = Math.min(1, stepCount / 30);
+    // C2: completeness is BREADTH-aware, not just volume. The old
+    // stepCount/30 heuristic rated 40 steps on ONE page as "complete"
+    // — perfect completeness for a deeply-narrow exploration.
+    // completeness = min(volume, breadth); breadth = distinct pages / 5,
+    // floored at 0.2 once any page is explored (so volume still counts a
+    // little). One page can never exceed 0.2 no matter the step count.
+    const volumeScore = Math.min(1, stepCount / 30);
+    const breadthScore = Math.min(1, pagesExplored / 5);
+    evidenceCompleteness = Math.min(volumeScore, Math.max(breadthScore, pagesExplored > 0 ? 0.2 : 0));
   }
 
   // Understanding confidence from app model
@@ -540,8 +587,45 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
   const coverage = appModel?.metadata?.coverage
     ?? (pagesExplored > 0 ? { pagesExplored } : null);
 
+  // C2: TURN-based budget remaining. The legacy activity-based budget
+  // (trackBudget) estimates from activities/capturedSteps against generic
+  // limits — it can report "budget left" when the TURN pool is actually
+  // spent, which produced wrong CONTINUE decisions on fully-spent sessions.
+  // The authoritative budget is the mission turn pool: maxTurns vs turnCount
+  // (the same arithmetic the controller's turnsRemaining uses).
+  const authorizedTurns = Math.min(
+    500,
+    Number.isInteger(mission?.context?.maxTurns) && mission.context.maxTurns >= 1
+      ? mission.context.maxTurns
+      : (Number.isInteger(session.maxTurns) && session.maxTurns >= 1 ? session.maxTurns : 500)
+  );
+  const spentTurns = Number.isInteger(session.turnCount) && session.turnCount >= 0
+    ? Math.min(session.turnCount, authorizedTurns)
+    : 0;
+  const turnBudgetRemaining = authorizedTurns > 0
+    ? Math.max(0, (authorizedTurns - spentTurns) / authorizedTurns)
+    : 0;
+  const turnBudgetSpent = spentTurns >= authorizedTurns;
+
   // Mission objective
   const missionObjective = mission?.type ?? mission?.objectives?.[0] ?? null;
+
+  // ── C2: risk + focus signals (previously prompt-only, now part of the
+  // decision information selection). Deterministic extraction — never an
+  // LLM judgment. All fields degrade to null/0 when absent.
+  const riskAssessment = session.testContext?.riskAssessment ?? null;
+  const riskLevel = riskAssessment?.level ?? null;
+  const topRiskAreas = riskAssessment?.risks
+    ? riskAssessment.risks.slice(0, 5).map(r => r.area).filter(Boolean)
+    : [];
+  const hasAdaptiveGuidance = Boolean(session.testContext?.adaptiveGuidance);
+  const appModelPages = Array.isArray(appModel?.pages) ? appModel.pages : [];
+  const pagesDiscovered = appModelPages.length;
+  // Untested pages counted against the EFFECTIVE explored count (steps or
+  // app-model coverage record — whichever is available).
+  const untestedPageCount = pagesDiscovered > 0
+    ? Math.max(0, pagesDiscovered - effectivePagesExplored)
+    : 0;
 
   return {
     qualityScore: quality?.score ?? null,
@@ -556,7 +640,7 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
     lowCount,
     findingConfidence,
     evidenceCompleteness,
-    pagesExplored,
+    pagesExplored: effectivePagesExplored,
     stepCount,
     activityCount,
     understandingConfidence,
@@ -573,7 +657,71 @@ export function collectDecisionInput(session, evidence = {}, mission = null) {
     coverage,
     missionObjective,
     mission,
-    risk: quality?.risk ?? null
+    risk: quality?.risk ?? null,
+    // C2 signal surface
+    riskLevel,
+    topRiskAreas,
+    hasAdaptiveGuidance,
+    pagesDiscovered,
+    untestedPageCount,
+    // C2: authoritative turn-pool budget (fraction remaining + boolean spent)
+    turnBudgetRemaining,
+    turnBudgetSpent,
+    authorizedTurns,
+    spentTurns
+  };
+}
+
+/**
+ * C2 — deterministic REPLAN focus derivation from decision input.
+ * Mirrors buildReplanFocus (validationLoop.js) but works from already-
+ * collected input. Never calls the LLM; pure extraction.
+ */
+function buildReplanFocusFromInput(input, session) {
+  const appModel = session?.appModel ?? null;
+  const pages = Array.isArray(appModel?.pages) ? appModel.pages : [];
+  const exploredUrls = new Set((session?.capturedSteps ?? []).map(s => s.url).filter(Boolean));
+  const untestedPages = pages
+    .map(p => p?.path ?? p?.url ?? null)
+    .filter(Boolean)
+    .filter(p => ![...exploredUrls].some(u => String(u).includes(p)))
+    .slice(0, 8);
+  const riskAreas = (input.topRiskAreas ?? []).slice(0, 6);
+  const incompleteWorkflows = (session?.pipeline?.summary?.gapReport?.incompleteWorkflows ?? [])
+    .map(wf => wf?.name)
+    .filter(Boolean)
+    .slice(0, 8);
+  const focusAreas = [
+    ...untestedPages.map(p => `untested page: ${p}`),
+    ...riskAreas.map(r => `risk area: ${r}`),
+    ...incompleteWorkflows.map(w => `incomplete workflow: ${w}`)
+  ];
+  // C2: without an app model, breadth is still derivable from the session
+  // itself — the explored-URL set tells us how narrow the approach was, and
+  // standard QA areas (auth, forms, navigation) are the canonical next
+  // focus when coverage is thin. Deterministic, no LLM.
+  if (focusAreas.length === 0) {
+    const explored = [...exploredUrls];
+    const breadth = explored.length;
+    if (breadth > 0 && breadth < 5) {
+      focusAreas.push(`exploration stayed on ${breadth} page(s) — broaden to distinct sections of the application`);
+    }
+    focusAreas.push(
+      'risk area: authentication and session flows',
+      'risk area: forms and input validation',
+      'risk area: navigation between sections'
+    );
+    if ((input.stepCount ?? 0) >= 20) {
+      focusAreas.push(`high step volume (${input.stepCount} steps) with narrow coverage — vary entry points and links followed`);
+    }
+  }
+  return {
+    focusAreas: focusAreas.slice(0, 12),
+    riskAreas,
+    incompleteWorkflows,
+    pagesExplored: input.pagesExplored ?? null,
+    pagesDiscovered: input.pagesDiscovered ?? null,
+    evidenceCompleteness: input.evidenceCompleteness ?? null
   };
 }
 
@@ -657,8 +805,10 @@ export function evaluatePolicy(input, session) {
       });
     }
 
-    // Budget exhausted during exploration
-    if (budgetRemaining.overall <= BUDGET_CRITICAL_THRESHOLD) {
+  // C2: TURN-based budget exhausted check — the authoritative pool (mission
+  // maxTurns vs turnCount). Legacy activity budget remains as a secondary
+  // dimension but cannot mask a spent turn pool.
+    if (budgetRemaining.overall <= BUDGET_CRITICAL_THRESHOLD || input.turnBudgetSpent === true) {
       // Budget exhausted but session completed — we have SOME evidence
       if (criticalCount > 0) {
         return createDecision({
@@ -682,24 +832,17 @@ export function evaluatePolicy(input, session) {
       });
     }
 
-    // Knowledge conflicts suggest current evidence contradicts history
-    // → current evidence wins, but we may want revalidation
-    if (conflictCount > 0) {
-      // Check if conflicts are significant
-      const hasCriticalConflicts = input.knowledgeContradicted > 0;
-      if (hasCriticalConflicts) {
-        // Conflicts mean we should revalidate to be sure
-        return createDecision({
-          decision: DECISION_TYPES.REVALIDATE,
-          reason: `${conflictCount} knowledge conflict(s) detected — current evidence contradicts historical patterns. Current evidence takes precedence, but revalidation is recommended to confirm.`,
-          confidence: conf.value,
-          factors: { knowledgeConflicts: conflictCount, knowledgeContradicted: input.knowledgeContradicted, inputSignature, confidenceBasis: conf.basis },
-          recommendedAction: 'Re-run the mission or specific test cases to confirm the conflicting findings are stable.',
-          missionId,
-          sessionId
-        });
-      }
-    }
+    // ── C2 RULES: budget remains — choose among CONTINUE / INVESTIGATE /
+    // REPLAN (and legacy REVALIDATE) from the actual evidence state. These
+    // sit BELOW budget-exhaustion and error handling (safe states dominate)
+    // and BELOW the critical/knowledge-conflict legacy semantics, and ABOVE
+    // sufficiency short-circuits. Order matters:
+    //   criticals → STOP_FAIL (release blocker — legacy semantics preserved)
+    //   knowledge contradictions → REVALIDATE (evidence precedence — legacy)
+    //   non-critical findings → INVESTIGATE (C2)
+    //   thin coverage, no findings → REPLAN (C2)
+    //   barely started → CONTINUE (C2)
+    // ──
 
     // Critical findings confirmed → STOP_FAIL (with safety consideration for escalation)
     if (criticalCount > 0) {
@@ -717,6 +860,95 @@ export function evaluatePolicy(input, session) {
         sessionId
       });
     }
+
+    // Knowledge conflicts suggest current evidence contradicts history
+    // → current evidence wins, but revalidation is prudent (legacy).
+    if (conflictCount > 0 && input.knowledgeContradicted > 0) {
+      return createDecision({
+        decision: DECISION_TYPES.REVALIDATE,
+        reason: `${conflictCount} knowledge conflict(s) detected — current evidence contradicts historical patterns. Current evidence takes precedence, but revalidation is recommended to confirm.`,
+        confidence: conf.value,
+        factors: { knowledgeConflicts: conflictCount, knowledgeContradicted: input.knowledgeContradicted, inputSignature, confidenceBasis: conf.basis },
+        recommendedAction: 'Re-run the mission or specific test cases to confirm the conflicting findings are stable.',
+        missionId,
+        sessionId
+      });
+    }
+
+    // C2 RULE I: non-critical findings exist, coverage still thin, budget
+    // remains → verify what we found while extending coverage. When coverage
+    // is already sufficient the legacy verdict/sufficiency rules below decide
+    // (pass_with_issues → STOP_PASS, fail verdict → STOP_FAIL).
+    if (findingCount > 0 && evidenceCompleteness !== null && evidenceCompleteness < 0.50) {
+      const verifyFindings = (session.findings ?? [])
+        .filter(f => !f.isDuplicate)
+        .sort((a, b) => (['critical', 'high', 'medium', 'low', 'info'].indexOf(a.severity ?? 'info'))
+          - (['critical', 'high', 'medium', 'low', 'info'].indexOf(b.severity ?? 'info')))
+        .slice(0, 10);
+      const conflictNote = conflictCount > 0 && input.knowledgeContradicted > 0
+        ? ` ${conflictCount} knowledge conflict(s) — current evidence takes precedence over history.`
+        : '';
+      return createDecision({
+        decision: DECISION_TYPES.INVESTIGATE,
+        reason: `${input.uniqueFindingCount ?? 0} unverified finding(s) (incl. ${criticalCount} critical, ${highCount} high) need confirmation before the mission concludes.${conflictNote} Budget remains (${(budgetRemaining.overall * 100).toFixed(0)}%).`,
+        confidence: conf.value,
+        factors: {
+          uniqueFindingCount: input.uniqueFindingCount,
+          criticalCount,
+          highCount,
+          knowledgeConflicts: conflictCount,
+          budgetRemaining: budgetRemaining.overall,
+          inputSignature,
+          confidenceBasis: conf.basis
+        },
+        evidenceRefs: verifyFindings.map(f => f.id).filter(Boolean),
+        recommendedAction: 'Verify the reported findings still reproduce, then broaden coverage if confirmed.',
+        missionId,
+        sessionId
+      });
+    }
+
+    // C2 RULE R: no findings, effort spent, coverage stayed narrow → the
+    // current approach is producing poor results. Change focus, not budget.
+    if (findingCount === 0 && (input.stepCount ?? 0) >= 10 && evidenceCompleteness !== null && evidenceCompleteness < 0.50) {
+      const focus = buildReplanFocusFromInput(input, session);
+      return createDecision({
+        decision: DECISION_TYPES.REPLAN,
+        reason: `No findings after ${input.stepCount} steps across only ${pagesExplored ?? 0} page(s) (${(evidenceCompleteness * 100).toFixed(0)}% coverage). The current exploration approach is too narrow — re-plan focus toward uncovered areas. Budget remains (${(budgetRemaining.overall * 100).toFixed(0)}%).`,
+        confidence: conf.value,
+        factors: {
+          stepCount: input.stepCount,
+          pagesExplored,
+          evidenceCompleteness,
+          untestedPageCount: input.untestedPageCount ?? 0,
+          budgetRemaining: budgetRemaining.overall,
+          inputSignature,
+          confidenceBasis: conf.basis
+        },
+        focusPayload: focus,
+        recommendedAction: 'Re-run with focus on untested areas: ' + (focus?.focusAreas ?? []).slice(0, 4).join(', '),
+        missionId,
+        sessionId
+      });
+    }
+
+    // C2 RULE C: barely started — near-zero evidence, no findings, most of
+    // the budget untouched → keep going with the same approach.
+    if ((input.stepCount ?? 0) < 10 && (input.stepCount ?? 0) + input.activityCount < 15) {
+      return createDecision({
+        decision: DECISION_TYPES.CONTINUE,
+        reason: `Evidence collection has barely started (${input.stepCount ?? 0} steps, ${pagesExplored ?? 0} page(s)) and no findings yet. No reason to change approach — continue the mission as planned. Budget remains (${(budgetRemaining.overall * 100).toFixed(0)}%).`,
+        confidence: conf.value,
+        factors: { stepCount: input.stepCount, activityCount: input.activityCount, pagesExplored, budgetRemaining: budgetRemaining.overall, inputSignature, confidenceBasis: conf.basis },
+        recommendedAction: 'Continue exploring the application per the original mission prompt.',
+        missionId,
+        sessionId
+      });
+    }
+
+    // (C2: the critical → STOP_FAIL and knowledge-conflict → REVALIDATE
+    // rules now live EARLIER in the cascade, before the INVESTIGATE/REPLAN/
+    // CONTINUE C2 rules. The former duplicates here were dead code.)
 
     // Session completed with NO critical findings → assess sufficiency
     // Check if evidence is sufficient for a pass
