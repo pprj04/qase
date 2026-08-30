@@ -6,6 +6,11 @@ import express from 'express';
 import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
+import {
+	SESSION_COOKIE, listCodes, mintCode, revokeCode, restoreCode,
+	loginWithCode, resolveSession, destroySession, sessionFromCookieHeader,
+	loginRateLimited, recordLoginFailure, recordLoginSuccess, resetLoginLimiter
+} from './uiAccess.js';
 import { mountDemoSite } from './demoSite.js';
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
@@ -289,12 +294,14 @@ function requireApiToken(request, response, next) {
 	const auth = request.headers.authorization ?? '';
 	const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
 	if (bearer && safeEqual(bearer, token)) {
+		request.auth = { kind: 'master' };
 		return next();
 	}
 
 	// Method 2: Cookie (same-origin browser UI).
 	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
 	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
+		request.auth = { kind: 'master' };
 		return next();
 	}
 
@@ -305,10 +312,68 @@ function requireApiToken(request, response, next) {
 	// from the visible URL.
 	const queryToken = request.query?.token;
 	if (typeof queryToken === 'string' && queryToken && safeEqual(queryToken, token)) {
+		request.auth = { kind: 'master' };
 		return next();
 	}
 
+	// Method 4 (D0.5): qase_session cookie from a scoped UI access code
+	// (viewer = read-only, operator = read + missions). Sessions are held
+	// server-side; the cookie carries only the random session id. ADDITIVE —
+	// the three master-token paths above are untouched, and every session
+	// request is still subject to the role gate in enforceRole below.
+	const sessionId = sessionFromCookieHeader(request.headers.cookie);
+	if (sessionId) {
+		const session = resolveSession(sessionId);
+		if (session) {
+			request.auth = { kind: 'session', role: session.role, label: session.label, sessionId: session.id };
+			return enforceRole(request, response, next);
+		}
+	}
+
 	response.status(401).json({ error: 'Invalid or missing API token. Set Authorization: Bearer <token> header.' });
+}
+
+/* ═════════════ D0.5 — scoped team access (roles) ═══════════════════
+ *
+ * Session-authenticated requests (qase_session cookie) carry a role:
+ *   viewer   — read-only
+ *   operator — read + mission/test execution operations
+ * Anything NOT in these two grants — credential-bearing config, LLM config,
+ * BrowserStack config, the API token itself, admin team-access management,
+ * webhooks, destructive diagnostics — requires the MASTER token. Master
+ * requests bypass this gate entirely (request.auth.kind === 'master').
+ *
+ * The check happens at this single choke point, before any route handler,
+ * on method + path prefix — so a session role cannot bypass it by picking a
+ * different URL or verb for the same operation.
+ */
+
+/** Credential/security-bearing surfaces that NEVER open up to UI sessions. */
+const MASTER_ONLY_PREFIXES = [
+	'/api/config',
+	'/api/auth/admin',
+	'/api/v1/webhooks',
+	'/api/v1/diagnostics'
+];
+
+function enforceRole(request, response, next) {
+	const { kind, role } = request.auth ?? {};
+	if (kind !== 'session') return next(); // master / open access — unchanged
+
+	if (request.method === 'GET' || request.method === 'HEAD') {
+		// VIEWER and OPERATOR both read. Master-only READs (config, admin)
+		// are handled below via prefix, before this early return.
+		if (!MASTER_ONLY_PREFIXES.some((prefix) => request.path.startsWith(prefix))) {
+			return next();
+		}
+	}
+
+	if (MASTER_ONLY_PREFIXES.some((prefix) => request.path.startsWith(prefix))) {
+		return response.status(403).json({ error: 'This operation requires the admin API token.' });
+	}
+
+	if (role === 'operator') return next(); // missions/tests/workflows/etc.
+	return response.status(403).json({ error: 'Viewer access is read-only.' });
 }
 
 /**
@@ -430,7 +495,159 @@ function startMissionExecution(mission, begin) {
 	});
 }
 
-app.get('/api/config', requireApiToken, (_request, response) => {
+/* ═════════════ D0.5 — auth/session routes ═══════════════════════════
+ *
+ * POST   /api/auth/session  { accessCode } → qase_session cookie (generic
+ *                             success/failure only — never echoes the code)
+ * DELETE /api/auth/session  invalidate the CURRENT session
+ * GET    /api/auth/session  whoami for the UI (role, label, kind)
+ *
+ * These three are deliberately OUTSIDE requireApiToken: the session
+ * exchange IS the authentication act for team members. Rate limit applies.
+ */
+app.post('/api/auth/session', (request, response) => {
+	const ip = request.socket.remoteAddress ?? 'unknown';
+	if (loginRateLimited(ip)) {
+		return response.status(429).json({ error: 'Too many attempts. Try again later.' });
+	}
+	const accessCode = request.body?.accessCode;
+	const result = loginWithCode(accessCode);
+	if (!result.ok) {
+		recordLoginFailure(ip);
+		// Generic message — do not reveal whether the code exists.
+		return response.status(401).json({ error: 'Invalid access code.' });
+	}
+	recordLoginSuccess(ip);
+	const s = result.session;
+	const secure = request.headers['x-forwarded-proto'] === 'https' || request.secure ? '; Secure' : '';
+	response.setHeader('Set-Cookie', `${SESSION_COOKIE}=${s.id}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${Math.floor((s.expiresAt - Date.now()) / 1000)}`);
+	response.json({ ok: true, role: s.role, label: s.label });
+});
+
+app.delete('/api/auth/session', (request, response) => {
+	const sessionId = sessionFromCookieHeader(request.headers.cookie);
+	if (sessionId) destroySession(sessionId);
+	response.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+	response.json({ ok: true });
+});
+
+app.get('/api/auth/session', (request, response) => {
+	// Works with either auth kind; used by the SPA to adapt its UI.
+	if (getConfig().apiToken) {
+		const auth = request.headers.authorization ?? '';
+		const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+		if (bearer && safeEqual(bearer, getConfig().apiToken)) {
+			return response.json({ kind: 'master' });
+		}
+		const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
+		if (cookieMatch && safeEqual(cookieMatch[1], getConfig().apiToken)) {
+			return response.json({ kind: 'master' });
+		}
+	}
+	const sessionId = sessionFromCookieHeader(request.headers.cookie);
+	const session = sessionId ? resolveSession(sessionId) : null;
+	if (!session) return response.status(401).json({ error: 'Not authenticated.' });
+	response.json({ kind: 'session', role: session.role, label: session.label });
+});
+
+/** D0.5 — session roles get a SANITIZED /api/config so the SPA boots
+ *  normally (no 403 on first fetch) without seeing provider/model/token
+ *  hints, BrowserStack state, or any credential-adjacent field. */
+/* ═════════════ D0.5 — admin: access-code management (master only) ════
+ *
+ * POST   /api/auth/admin/codes        { label, role } → metadata + the
+ *                                      ONE-TIME plaintext code (shown once
+ *                                      by the UI, never stored again)
+ * GET    /api/auth/admin/codes         list metadata (no hashes, no codes)
+ * DELETE /api/auth/admin/codes/:id     revoke a code (kills its sessions
+ *                                      on their very next request)
+ * POST   /api/auth/admin/codes/:id/restore  re-activate
+ */
+app.post('/api/auth/admin/codes', requireApiToken, (request, response) => {
+	if (request.auth?.kind !== 'master') {
+		return response.status(403).json({ error: 'Admin API token required.' });
+	}
+	const { label, role } = request.body ?? {};
+	let minted;
+	try {
+		minted = mintCode({ label, role });
+	} catch (err) {
+		return response.status(400).json({ error: err.message });
+	}
+	response.json({
+		id: minted.id,
+		label: minted.label,
+		role: minted.role,
+		createdAt: minted.createdAt,
+		// Shown exactly once. The server keeps only the scrypt hash.
+		code: minted.code
+	});
+});
+
+app.get('/api/auth/admin/codes', requireApiToken, (request, response) => {
+	if (request.auth?.kind !== 'master') {
+		return response.status(403).json({ error: 'Admin API token required.' });
+	}
+	response.json({ codes: listCodes() });
+});
+
+/** Ops hook — clear the failed-login limiter (locked-out teammate unlock). */
+app.post('/api/auth/admin/codes/limiter-reset', requireApiToken, (request, response) => {
+	if (request.auth?.kind !== 'master') {
+		return response.status(403).json({ error: 'Admin API token required.' });
+	}
+	resetLoginLimiter();
+	response.json({ ok: true });
+});
+
+app.delete('/api/auth/admin/codes/:id', requireApiToken, (request, response) => {
+	if (request.auth?.kind !== 'master') {
+		return response.status(403).json({ error: 'Admin API token required.' });
+	}
+	const revoked = revokeCode(request.params.id);
+	if (!revoked) return response.status(404).json({ error: 'Unknown code id.' });
+	response.json({ ok: true, ...revoked });
+});
+
+app.post('/api/auth/admin/codes/:id/restore', requireApiToken, (request, response) => {
+	if (request.auth?.kind !== 'master') {
+		return response.status(403).json({ error: 'Admin API token required.' });
+	}
+	const restored = restoreCode(request.params.id);
+	if (!restored) return response.status(404).json({ error: 'Unknown code id.' });
+	response.json({ ok: true, ...restored });
+});
+
+app.get('/api/config', requireApiToken, (request, response) => {
+	if (request.auth?.kind === 'session') {
+		const c = getPublicConfig();
+		delete c.provider;
+		delete c.baseUrl;
+		delete c.model;
+		delete c.discoveryModel;
+		delete c.executionModel;
+		delete c.reasoning;
+		delete c.apiKeyHint;
+		delete c.apiKeyFromEnv;
+		delete c.apiTokenHint;
+		delete c.apiTokenFromEnv;
+		delete c.hasApiToken;
+		delete c.browserstackEnabled;
+		delete c.browserstackBrowsers;
+		delete c.browserstackUser;
+		delete c.browserstackKeyFromEnv;
+		delete c.browserstackLastVerified;
+		delete c.browserstackCredentialSource;
+		delete c.browserstackKeyEncrypted;
+		delete c.browserstackNeedsReentry;
+		delete c.browserstackKeyLength;
+		delete c.hasBrowserstackKey;
+		delete c.browserstackStrict;
+		delete c.problem;
+		delete c.ready;
+		response.json(c);
+		return;
+	}
 	response.json(getPublicConfig());
 });
 

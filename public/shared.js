@@ -120,6 +120,10 @@ const state = {
 	sessionId: undefined,
 	session: undefined,
 	config: undefined,
+	// D0.5 — who the browser is authenticated as: { kind: 'master' } or
+	// { kind: 'session', role: 'viewer'|'operator', label }. undefined while
+	// booting. Drives role-aware UI (hide Settings/config for team roles).
+	auth: undefined,
 	stream: undefined,
 	bubbles: new Map(),
 	viewport: { width: 1440, height: 900 },

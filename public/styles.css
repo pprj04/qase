@@ -7623,3 +7623,13 @@ dialog.modal {
 	border-bottom: 1px dashed var(--hair, #2a2f3a);
 	margin-bottom: 8px;
 }
+
+/* ── D0.5 — Team Access (settings) ──────────────────────────────── */
+.cfg-team-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.cfg-team-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+  background: var(--glass-2); border: 1px solid var(--hair); border-radius: 10px; font-size: 13px; }
+.cfg-team-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfg-team-role { text-transform: capitalize; color: var(--text-dim); }
+.cfg-team-status { font-size: 12px; }
+.cfg-team-status.ok { color: #a6ecbb; }
+.cfg-team-status.revoked { color: #ffb3ad; text-decoration: line-through; }

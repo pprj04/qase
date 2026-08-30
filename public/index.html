@@ -95,15 +95,17 @@
           </div>
           <h2>Autonomous Software Quality Engineer</h2>
           <!-- B1 W3 — anonymous API reads are closed. Until a token is set,
-               the UI shows this one-field gate instead of failing silently. -->
+               the UI shows this gate instead of failing silently.
+               D0.5 — accepts EITHER the admin API token OR a team access
+               code (viewer/operator) minted in Settings → Team Access. -->
           <div id="auth-gate" hidden>
-            <p><strong>API token required.</strong><br>
-               The QASE API requires authentication. Paste the API token from Settings → API Token.</p>
-            <div style="display:flex;gap:8px;justify-content:center;max-width:420px;margin:12px auto;">
-              <input id="auth-gate-token" type="password" placeholder="Paste API token" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+            <p><strong>Sign in to QASE.</strong><br>
+               Enter your team access code — or the API token if you're the admin.</p>
+            <div style="display:flex;gap:8px;justify-content:center;max-width:440px;margin:12px auto;">
+              <input id="auth-gate-token" type="password" placeholder="Team access code or API token" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
               <button id="auth-gate-save" class="btn" style="padding:8px 14px;">Continue</button>
             </div>
-            <p class="subtle" style="font-size:12px;opacity:.7;">Stored locally in your browser only.</p>
+            <p class="subtle" style="font-size:12px;opacity:.7;">Team codes never see the admin token. Session stored in a cookie only.</p>
             <p id="auth-gate-error" role="alert" style="color:#f66;font-size:13px;min-height:1em;"></p>
           </div>
           <div id="auth-gate-rest">
@@ -759,6 +761,27 @@
         <small id="cfg-api-token-note">Protects test-run/schedule-trigger endpoints. Leave empty when running locally.</small>
       </label>
 
+      <hr class="cfg-divider">
+      <div class="cfg-section-title">👥 Team Access (D0.5)</div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <span>Label (who is this for?)</span>
+          <input id="cfg-team-label" type="text" placeholder="e.g. Alice — QA review" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Role</span>
+          <select id="cfg-team-role">
+            <option value="viewer">Viewer — read-only</option>
+            <option value="operator">Operator — run missions &amp; tests</option>
+          </select>
+        </label>
+      </div>
+      <div class="cfg-bs-test-row">
+        <button class="btn btn-ghost btn-sm" type="button" id="cfg-team-mint">Create access code</button>
+        <div class="test-result" id="cfg-team-result" hidden></div>
+      </div>
+      <div id="cfg-team-list" class="cfg-team-list"></div>
+      <small>Codes are shown <strong>once</strong> at creation — the server stores only a hash. Revoking kills active sessions on their next request.</small>
 
       <div class="test-result" id="cfg-test"></div>
     </div>
