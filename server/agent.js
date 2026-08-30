@@ -6,7 +6,7 @@
  * report_finding, and finishes with finish_qa_report.
  */
 
-import { getModelTier, getPublicConfig } from './config.js';
+import { getModelTier, getPublicConfig, getConfig } from './config.js';
 import { addActivity, addMessage, emit, liveFor, listSessions, setStatus, updateActivity } from './store.js';
 import { redact, secretNames } from './secrets.js';
 import { createQaTools } from './qaTools.js';
@@ -15,6 +15,7 @@ import { runAutonomyPipeline } from './pipeline.js';
 import { captureStep, finalizeStepOutcome } from './workflows.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
+import { planSessionExecution, attachBrowserstackRuntime, BrowserStackMissionError } from './browserstackAgentRuntime.js';
 import { resolveDeviceContext } from './deviceContext.js';
 import { validateTargetUrl, classifyUrlFast, installPageBoundary } from './targetGuard.js';
 import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration } from '@cleanslate/sdk';
@@ -270,13 +271,39 @@ export async function ensureRuntime(session) {
 		originalRegisterPageBase(page);
 	};
 
+	// C4 — BrowserStack attachment for explicitly-requesting sessions.
+	// Ordering contract (spec §2.4): targetGuard wrap FIRST, then this attach,
+	// then the local device wrap — and the device wrap is SKIPPED for
+	// BrowserStack sessions (device semantics come from the caps; a BS
+	// real-device page IS the device). Attach failure throws
+	// BrowserStackMissionError — the mission fails truthfully; the runtime is
+	// disposed below via the catch-all so no local Chromium is ever launched
+	// as a substitute.
+	const executionPlan = planSessionExecution(session, { config: getConfig() });
+	if (executionPlan.mode === 'error') {
+		try { runtime.dispose(); } catch { /* not started */ }
+		throw new BrowserStackMissionError(executionPlan.error, { code: executionPlan.code });
+	}
+	if (executionPlan.mode === 'browserstack') {
+		try {
+			await attachBrowserstackRuntime(service, session, { config: getConfig() });
+		} catch (attachError) {
+			try { runtime.dispose(); } catch { /* not started */ }
+			throw attachError;
+		}
+	}
+
 	// ── Mobile/tablet device context (real emulation, not a CSS resize) ──
 	// The SDK creates the browser context lazily with a fixed desktop
 	// viewport. When a mission selected a device, the first page registration
 	// recreates the context with the REAL Playwright device descriptor
 	// (UA, viewport, DPR, isMobile, hasTouch). Desktop missions never take
 	// this path — their context is created exactly as before.
-	const deviceContext = resolveDeviceContext(session.deviceRequest ?? null);
+	// C4: BrowserStack sessions skip this — their context was created with
+	// real-device options at attach time.
+	const deviceContext = executionPlan.mode === 'browserstack'
+		? null
+		: resolveDeviceContext(session.deviceRequest ?? null);
 	if (deviceContext) {
 		const originalRegisterPage = service.registerPage.bind(service);
 		service.registerPage = page => {

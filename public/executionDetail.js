@@ -31,6 +31,11 @@ function classifyExecutionMode(session) {
 	// is only ever true when the provider was BrowserStack with a device —
 	// agent sessions today can't claim it, so we don't.
 	const device = session.device ?? null;
+	// C4 — an explicitly-requested BrowserStack session that FAILED to attach
+	// (missing/invalid credentials, CDP error) has execution:null and no
+	// device. It must still label itself truthfully as a BrowserStack session
+	// that never launched — never as a local Chromium run.
+	if (!device && session.executionProvider === 'browserstack') return 'BROWSERSTACK_FAILED';
 	if (!device) return 'DESKTOP';
 	if (device.provider === 'browserstack') return 'REAL_DEVICE';
 	return 'EMULATED_DEVICE';
@@ -51,7 +56,11 @@ export function renderExecMeta(session) {
 		?? (typeof session.deviceRequest === 'string'
 			? session.deviceRequest
 			: session.deviceRequest?.device ?? null);
-	const provider = device?.provider ?? 'local';
+	// C4 — the provider label prefers the session's EXPLICIT provider
+	// constraint (set at creation, survives failed launches) over the
+	// resolved device context, so a failed BrowserStack session is never
+	// mislabeled as a local Chromium run.
+	const provider = session.executionProvider ?? device?.provider ?? 'local';
 	parts.push(`☁ provider: ${provider === 'local' ? 'local (in-container Chromium)' : provider}`);
 	parts.push(`🌐 browser: ${device?.browser ?? 'Chromium (bundled)'}`);
 	parts.push(`💻 OS: ${device?.os ?? 'container Linux'}`);
@@ -69,7 +78,8 @@ export function renderExecMeta(session) {
 	modeEl.dataset.mode = mode.toLowerCase();
 	modeEl.hidden = false;
 	modeEl.title = `Execution environment: ${provider === 'local' ? 'LOCAL' : provider.toUpperCase()}`
-		+ (mode === 'EMULATED_DEVICE' ? ' — device profile emulated on in-container Chromium' : '');
+		+ (mode === 'EMULATED_DEVICE' ? ' — device profile emulated on in-container Chromium' : '')
+		+ (mode === 'BROWSERSTACK_FAILED' ? ' — BrowserStack requested; launch failed, nothing executed' : '');
 }
 
 /* ── EVIDENCE tab ──────────────────────────────────────────────────── */

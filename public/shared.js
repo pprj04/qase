@@ -153,7 +153,12 @@ async function api(path, options) {
 	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
 	const headers = { 'Content-Type': 'application/json', ...(options?.headers ?? {}) };
 	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
-	const response = await fetch(`/api${path}`, { headers, ...options });
+	// Spread everything EXCEPT headers — callers pass their own headers key,
+	// which would otherwise clobber the token-attached headers object above
+	// (observed live: "New run" 401'd for an authenticated user because the
+	// built headers never reached fetch).
+	const { headers: _callerHeaders, ...rest } = options ?? {};
+	const response = await fetch(`/api${path}`, { ...rest, headers });
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
 		throw new Error(body.error ?? `Request failed (${response.status})`);
@@ -169,7 +174,8 @@ async function apiRaw(path, options) {
 	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
 	const headers = { ...(options?.headers ?? {}) };
 	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
-	const response = await fetch(`/api${path}`, { headers, ...options });
+	const { headers: _callerHeaders, ...rest } = options ?? {};
+	const response = await fetch(`/api${path}`, { ...rest, headers });
 	if (!response.ok) throw new Error(`Request failed (${response.status})`);
 	return response;
 }

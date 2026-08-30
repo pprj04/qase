@@ -20,11 +20,24 @@ function ok(cond, label) {
 	else { fail += 1; console.log(`  FAIL — ${label}`); }
 }
 
-/** Stub WebSocket-ish object: stubWs('open') | stubWs('error') | stubWs('close') */
+/** Stub WebSocket-ish object: stubWs('open') | stubWs('error') | stubWs('close')
+ *  C4.1: 'open' = genuinely healthy endpoint — the handshake upgrades AND
+ *  BrowserStack sends its first application-level frame. A bare 101 upgrade
+ *  alone proves NOTHING about credentials (the C4.1 false-positive root cause);
+ *  use stubWs('open_silent') for that shape. */
 function stubWs(outcome) {
 	const bus = new EventEmitter();
 	bus.close = () => {};
-	setTimeout(() => bus.emit(outcome, new Error('stub error')), 0).unref?.();
+	setTimeout(() => {
+		if (outcome === 'open') {
+			bus.emit('open');
+			bus.emit('message', JSON.stringify({ method: 'Target.getBrowserContexts' }));
+		} else if (outcome === 'open_silent') {
+			bus.emit('open');
+		} else {
+			bus.emit(outcome, new Error('stub error'));
+		}
+	}, 0).unref?.();
 	return bus;
 }
 
@@ -130,6 +143,45 @@ console.log('\n[1] browserstackTest — real probe semantics');
 		ok(typeof result.latencyMs === 'number' && result.latencyMs >= 0, 'latencyMs reported');
 		ok(typeof result.lastVerifiedTs === 'number', 'lastVerifiedTs present');
 	}
+
+	// 1h. C4.1 REGRESSION: bare 101 upgrade with NO app-level frame must NEVER
+	// report connected. BrowserStack upgrades the WS for garbage credentials and
+	// only then closes 1001 — the old probe returned ok:true on the handshake
+	// alone (false "connected" verdicts for wrong pastes).
+	{
+		const result = await mod.testBrowserstackConnection({
+			user: 'valid_user',
+			key: 'valid_key_xyz',
+			fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({}) }),
+			wsFactory: () => stubWs('open_silent')
+		});
+		ok(result.ok === false, 'C4.1: handshake-only is NOT a connection (ok:false)');
+		ok(result.code !== 'connected', 'C4.1: handshake-only never reports code "connected"');
+	}
+
+	// 1i. C4.1 REGRESSION: post-open close "Invalid username or password"
+	// (the real BrowserStack 1001 shape) classifies as invalid_credentials and
+	// outranks a successful REST auth stage.
+	{
+		const result = await mod.testBrowserstackConnection({
+			user: 'valid_user',
+			key: 'valid_key_xyz',
+			fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({}) }),
+			wsFactory: () => {
+				const bus = new EventEmitter();
+				bus.close = () => {};
+				setTimeout(() => {
+					bus.emit('open');
+					bus.emit('close', 1001, 'Invalid username or password');
+				}, 0).unref?.();
+				return bus;
+			}
+		});
+		ok(result.ok === false, 'C4.1: post-open auth close → ok:false');
+		ok(result.code === 'invalid_credentials', `C4.1: 1001 close → invalid_credentials (${result.code})`);
+		ok(result.auth?.ok === true, 'C4.1: REST stage still reported authenticated (divergence visible)');
+		ok(!JSON.stringify(result).includes('valid_key_xyz'), 'C4.1: key never echoed');
+	}
 }
 
 // ── 2. config.js — authority & persistence semantics (isolated child process) ──
@@ -226,7 +278,7 @@ console.log('\n[3] POST /api/config/test-browserstack — auth + shape');
 		// persisted browserstackLastVerified must still exist with a real ts
 		// and contain no credential material.
 		// B1 W3: anonymous /api/config reads are closed — authenticate.
-		const TOKEN = process.env.QASE_API_TOKEN || '';
+		const TOKEN = process.env.QASE_API_TOKEN || token;
 		const serverCfg = await fetch(`${BASE}/api/config`, { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} }).then(r => r.json()).catch(() => null);
 		const persisted = serverCfg?.browserstackLastVerified ?? null;
 		ok(persisted && typeof persisted.ts === 'number', 'last-verified outcome persisted to config');

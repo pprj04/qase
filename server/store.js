@@ -117,6 +117,14 @@ export function createSession(title = 'New test run', projectId = undefined, opt
 		capturedSteps: [],
 		/** Optional device request ('iPhone 15 Pro', { device: 'Pixel 8' }, …) for mobile/tablet emulation. Null = desktop. */
 		deviceRequest: options.deviceRequest ?? undefined,
+		/**
+		 * C4 — explicit execution provider requested by mission configuration
+		 * ('browserstack' | 'local'). Undefined/null = local (default). Set at
+		 * creation only — the LLM has no tool that changes it mid-mission.
+		 */
+		executionProvider: options.executionProvider ?? undefined,
+		/** C4 — truthful execution provenance once the runtime has launched (agent path). */
+		execution: undefined,
 		/** Resolved device context (set by the agent runtime once applied). */
 		device: undefined
 	};

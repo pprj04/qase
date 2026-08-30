@@ -518,12 +518,22 @@ app.post('/api/sessions', requireApiToken, (request, response) => {
 	const projectId = request.body?.projectId ?? getDefaultProjectId();
 	// B0.3 — optional deviceRequest ('iPhone 15 Pro', { device: 'Pixel 8' },
 	// class 'mobile'/'tablet'). Unsupported names → 400 (never silent desktop).
+	// C4 — optional explicit execution provider; unknown values 400 too.
 	const deviceInput = request.body?.deviceRequest ?? null;
 	const deviceCheck = deviceInput != null ? validateDeviceRequest(deviceInput) : null;
 	if (deviceCheck && !deviceCheck.ok) {
 		return response.status(400).json({ error: deviceCheck.error });
 	}
-	response.status(201).json(createSession('New test run', projectId, deviceCheck?.deviceName ? { deviceRequest: deviceCheck.deviceName } : {}));
+	const providerInput = typeof request.body?.executionProvider === 'string'
+		? request.body.executionProvider.trim().toLowerCase()
+		: null;
+	if (providerInput && providerInput !== 'browserstack' && providerInput !== 'local') {
+		return response.status(400).json({ error: `Unsupported execution provider: ${providerInput.slice(0, 40)}. Supported providers: browserstack, local.` });
+	}
+	response.status(201).json(createSession('New test run', projectId, {
+		...(deviceCheck?.deviceName ? { deviceRequest: deviceCheck.deviceName } : {}),
+		...(providerInput ? { executionProvider: providerInput } : {})
+	}));
 });
 
 app.get('/api/sessions/:id', requireApiToken, (request, response) => {
@@ -554,6 +564,9 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 		// session header can show DESKTOP vs EMULATED_DEVICE vs REAL_DEVICE.
 		device: session.device ?? null,
 		deviceRequest: session.deviceRequest ?? null,
+		// C4 — explicit execution provider + truthful provenance once launched.
+		executionProvider: session.executionProvider ?? null,
+		execution: session.execution ?? null,
 		viewportsExplored: session.viewportsExplored ?? [],
 		secretNames: secretNames(session.id),
 		running: Boolean(record.running),
@@ -1664,6 +1677,12 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 		return response.status(400).json({ error: { code: 'invalid_device', message: missionDeviceCheck.error } });
 	}
 	const missionDevice = missionDeviceCheck ? missionDeviceCheck.deviceName : null;
+	// C4 — explicit execution provider constraint ('browserstack' | 'local').
+	const missionProviderRaw = body.constraints?.provider ?? body.executionProvider ?? null;
+	const missionProviderInput = typeof missionProviderRaw === 'string' ? missionProviderRaw.trim().toLowerCase() : null;
+	if (missionProviderInput && missionProviderInput !== 'browserstack' && missionProviderInput !== 'local') {
+		return response.status(400).json({ error: { code: 'invalid_provider', message: `Unsupported execution provider: ${missionProviderInput.slice(0, 40)}. Supported providers: browserstack, local.` } });
+	}
 
 	// Idempotency (workspace-scoped, restart-safe via missions.json).
 	const idemHeader = typeof request.headers['idempotency-key'] === 'string'
@@ -1741,7 +1760,7 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 		capabilities: body.capabilities,
 		source: body.source || 'integration',
 		generationId: body.generationId,
-		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}) },
+		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}), ...(missionProviderInput ? { provider: missionProviderInput } : {}) },
 		successCriteria: body.successCriteria,
 		context: contextForMission,
 		workspaceId: request.integration.workspaceId === '*' ? (body.workspaceId || undefined) : request.integration.workspaceId,
@@ -1756,6 +1775,7 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 			// session record (turn pool + finding linkage survive restarts).
 			const session = createSession(mission.name || 'Integration Mission', mission.projectId, {
 				...(missionDevice ? { deviceRequest: missionDevice } : {}),
+				...(missionProviderInput ? { executionProvider: missionProviderInput } : {}),
 				missionId: mission.id
 			});
 			session.targetUrl = mission.targetUrl;
@@ -2445,6 +2465,12 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		return response.status(400).json({ error: missionDeviceCheck.error });
 	}
 	const missionDevice = missionDeviceCheck ? missionDeviceCheck.deviceName : null;
+	// C4 — explicit execution provider constraint ('browserstack' | 'local').
+	const missionProviderRaw = body.constraints?.provider ?? body.executionProvider ?? null;
+	const missionProviderInput = typeof missionProviderRaw === 'string' ? missionProviderRaw.trim().toLowerCase() : null;
+	if (missionProviderInput && missionProviderInput !== 'browserstack' && missionProviderInput !== 'local') {
+		return response.status(400).json({ error: `Unsupported execution provider: ${missionProviderInput.slice(0, 40)}. Supported providers: browserstack, local.` });
+	}
 
 	// Create the mission
 	const mission = createMission({
@@ -2456,7 +2482,7 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		capabilities: body.capabilities,
 		source: body.source || 'api',
 		generationId: body.generationId,
-		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}) },
+		constraints: { ...(body.constraints || {}), ...(missionDevice ? { device: missionDevice } : {}), ...(missionProviderInput ? { provider: missionProviderInput } : {}) },
 		successCriteria: body.successCriteria,
 		context: contextForMission,
 		// B1 W2/W4 — identity traceability: workspace + correlation + idempotency
@@ -2477,6 +2503,7 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		const outcome = startMissionExecution(mission, () => {
 			const session = createSession(mission.name || 'API Mission', mission.projectId, {
 				...(missionDevice ? { deviceRequest: missionDevice } : {}),
+				...(missionProviderInput ? { executionProvider: missionProviderInput } : {}),
 				missionId: mission.id
 			});
 			session.targetUrl = mission.targetUrl;
@@ -2597,6 +2624,7 @@ async function startMissionByIdHandler(request, response, mission) {
 			}
 			const session = createSession(mission.name || 'API Mission', mission.projectId, {
 				...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+				...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
 				missionId: mission.id
 			});
 			session.targetUrl = mission.targetUrl;
@@ -2831,6 +2859,7 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 				mission.projectId,
 				{
 					...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+					...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
 					missionId: mission.id
 				}
 			);
@@ -2999,6 +3028,7 @@ async function revalidateMissionByIdHandlerInner(request, response, mission) {
 				mission.projectId,
 				{
 					...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+					...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
 					// B2 — persist the mission link so the turn-pool debit
 					// survives restarts.
 					missionId: mission.id
@@ -4204,6 +4234,14 @@ function requeuePersistedMissions() {
 	}
 }
 
+/** C4 — normalize a mission's execution provider constraint ('browserstack'|'local'|null). */
+function missionExecutionProvider(mission) {
+	const raw = mission?.constraints?.provider ?? mission?.executionProvider ?? null;
+	if (typeof raw !== 'string') return null;
+	const v = raw.trim().toLowerCase();
+	return (v === 'browserstack' || v === 'local') ? v : null;
+}
+
 /** Grant-path executor shared by requeue and the /start route (via closures). */
 async function startQueuedMission(mission) {
 	try {
@@ -4219,6 +4257,10 @@ async function startQueuedMission(mission) {
 		}
 		const session = createSession(mission.name || 'API Mission', mission.projectId, {
 			...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
+			// C4 — the queued/grant path carries the SAME provider constraint as
+			// every other mission-start path; an explicitly-requested BrowserStack
+			// mission must never silently degrade to local Chromium in the queue.
+			...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
 			missionId: mission.id
 		});
 		session.targetUrl = mission.targetUrl;

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { atomicWrite } from './atomicWrite.js';
 import { restorePendingTestMarkers } from './testRestore.js';
+import { hasMasterKey, encryptSecret, decryptSecret } from './secretStore.js';
 
 /**
  * Model settings, resolved from the settings file first and the environment
@@ -64,6 +65,23 @@ function readStored() {
 	// B1 W8: crash-recovery for test config mutations (BrowserStack snapshot→mutate→restore).
 	// A test SIGKILLed mid-mutation leaves the mutation live; the marker restores it at boot.
 	restorePendingTestMarkers({ saveConfig: (c) => { fs.writeFileSync(CONFIG_FILE, JSON.stringify(c, null, 2)); stored = c; } });
+	// C4 — decrypt the stored BrowserStack key envelope in memory only. The
+	// envelope stays on disk; getConfig()/saveConfig() see the plaintext key
+	// and behave exactly as before. An envelope we cannot decrypt (orphan from
+	// the lost build, wrong master key) leaves browserstackKey unset and flags
+	// needsReentry so the operator is asked to re-enter the key.
+	if (typeof stored.browserstackKeyEnc === 'string' && !stored.browserstackKey) {
+		if (hasMasterKey()) {
+			const decrypted = decryptSecret(stored.browserstackKeyEnc);
+			if (decrypted.ok) {
+				stored.browserstackKey = decrypted.value;
+			} else {
+				stored.__bsKeyNeedsReentry = true;
+			}
+		} else {
+			stored.__bsKeyNeedsReentry = true;
+		}
+	}
 	return stored;
 }
 
@@ -193,6 +211,13 @@ export function getModelTier(tier) {
 	return config;
 }
 
+/** C4.1 — masked diagnostic: length of the effective BrowserStack key.
+ *  Never returns key material itself. */
+function effectiveKeyLength() {
+	const key = getConfig().browserstackKey;
+	return key ? String(key).trim().length : 0;
+}
+
 /** The same settings with the key reduced to a hint. Safe to send to a browser. */
 export function getPublicConfig() {
 	const config = getConfig();
@@ -228,11 +253,25 @@ export function getPublicConfig() {
 		apiTokenFromEnv: Boolean(fromEnv().apiToken) && !readStored().apiToken,
 		browserstackEnabled: config.browserstackEnabled === true,
 		browserstackBrowsers: config.browserstackBrowsers || 'chrome',
-		hasBrowserstackKey: Boolean(config.browserstackKey),
 		browserstackUser: config.browserstackUser || '',
 		browserstackKeyFromEnv: Boolean(fromEnv().browserstackKey) && !readStored().browserstackKey,
 		browserstackLastVerified: readStored().browserstackLastVerified ?? null,
-		browserstackCredentialSource: readStored().browserstackKey ? 'settings' : (fromEnv().browserstackKey ? 'env' : 'none'),
+		// C4 — truthful credential state. hasBrowserstackKey means "a usable
+		// key is effective" (envelope decrypted or plaintext/env). An
+		// undecryptable envelope (orphan from the lost build / wrong master
+		// key) reports needsReentry; the env fallback stays eligible ONLY
+		// while no unusable stored envelope sits on disk, so the
+		// hasKey/source pair can never contradict itself.
+		browserstackCredentialSource: readStored().browserstackKey
+			? 'settings'
+			: (fromEnv().browserstackKey && !readStored().__bsKeyNeedsReentry ? 'env' : 'none'),
+		browserstackKeyEncrypted: Boolean(readStored().browserstackKeyEnc),
+		browserstackNeedsReentry: Boolean(readStored().__bsKeyNeedsReentry),
+		// C4.1 — diagnostic hint ONLY: length of the effective (decrypted or
+		// env) key, so an obviously-wrong paste (e.g. 11 chars) is visible in
+		// Settings without ever exposing key material. Never the key itself.
+		browserstackKeyLength: effectiveKeyLength(),
+		hasBrowserstackKey: Boolean(config.browserstackKey),
 		browserstackStrict: config.browserstackStrict !== false,
 		ready: isReady(config),
 		problem: describeProblem(config)
@@ -321,12 +360,47 @@ export function saveConfig(patch) {
 			maskedUser: String(lv.maskedUser ?? '').slice(0, 64)
 		};
 	}
+	// BUILD B0.1/C4 — explicit key clear (Settings "Clear" button sends '')
+	// also removes the encrypted envelope so a cleared credential can never
+	// resurrect; a freshly entered key clears the needs-reentry state.
+	if (typeof patch.browserstackKey === 'string' && !patch.browserstackKey.trim()) {
+		delete next.browserstackKeyEnc;
+		delete next.__bsKeyNeedsReentry;
+	}
+	if (typeof patch.browserstackKey === 'string' && patch.browserstackKey.trim()) {
+		delete next.__bsKeyNeedsReentry;
+	}
+	// C4 — persist the BrowserStack key as an encrypted envelope whenever a
+	// master key (QASE_SECRET_KEY) is configured; the plaintext never returns
+	// to disk, and legacy plaintext already on disk migrates to an envelope
+	// on the next save. Without a master key (fresh clones, offline test
+	// subprocesses) the pre-C4 plaintext flow is kept — graceful degradation,
+	// with a warning — so existing gate suites stay green in those contexts.
+	// This deployment always runs with QASE_SECRET_KEY set.
+	let toPersist = { ...next };
+	delete toPersist.__bsKeyNeedsReentry;
+	if (hasMasterKey()) {
+		if (typeof toPersist.browserstackKey === 'string' && toPersist.browserstackKey) {
+			toPersist.browserstackKeyEnc = encryptSecret(toPersist.browserstackKey);
+		}
+		delete toPersist.browserstackKey;
+	} else if (typeof toPersist.browserstackKey === 'string' && toPersist.browserstackKey) {
+		console.warn('[config] QASE_SECRET_KEY not set — BrowserStack key stored in cleartext (pre-C4 behavior). Set QASE_SECRET_KEY to enable encryption at rest.');
+	}
 	if (next.provider && !PROVIDERS.includes(next.provider)) {
 		throw new Error(`Unknown provider: ${next.provider}`);
 	}
 
+	// C4 — keep the in-memory cache consistent with what was persisted: the
+	// plaintext key stays memory-only; the envelope mirrors the disk state so
+	// getPublicConfig() reports truthful encrypted/needsReentry flags.
+	if (toPersist.browserstackKeyEnc !== undefined) {
+		next.browserstackKeyEnc = toPersist.browserstackKeyEnc;
+	} else {
+		delete next.browserstackKeyEnc;
+	}
 	stored = next;
-	atomicWrite(CONFIG_FILE, JSON.stringify(next, undefined, '\t'), { mode: 0o600 });
+	atomicWrite(CONFIG_FILE, JSON.stringify(toPersist, undefined, '\t'), { mode: 0o600 });
 	return getPublicConfig();
 }
 

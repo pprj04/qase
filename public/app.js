@@ -1746,12 +1746,30 @@ function fillSettings(config) {
 	cfg.browserstackBrowsers.value = config.browserstackBrowsers ?? 'chrome';
 	cfg.browserstackUser.value = config.browserstackUser ?? '';
 	cfg.browserstackKey.value = '';
-	cfg.browserstackKey.placeholder = config.hasBrowserstackKey ? '•••• (set — leave blank to keep)' : 'your-access-key';
+	// C4 — truthful credential state: needs-re-entry wins over "set".
+	if (config.browserstackNeedsReentry) {
+		cfg.browserstackKey.placeholder = '⚠ key needs re-entry — enter it again and Save';
+	} else if (config.browserstackKeyEncrypted) {
+		// C4.1 — masked length hint makes a wrong paste (e.g. 11 chars)
+		// diagnosable without ever exposing key material.
+		cfg.browserstackKey.placeholder = config.browserstackKeyLength
+			? `•••• (stored encrypted, ${config.browserstackKeyLength} chars — leave blank to keep)`
+			: '•••• (stored encrypted — leave blank to keep)';
+	} else {
+		cfg.browserstackKey.placeholder = config.hasBrowserstackKey
+			? (config.browserstackKeyLength
+				? `•••• (set, ${config.browserstackKeyLength} chars — leave blank to keep)`
+				: '•••• (set — leave blank to keep)')
+			: 'your-access-key';
+	}
 	if (cfg.browserstackTest) {
 		cfg.browserstackTest.className = 'test-result';
 		cfg.browserstackTest.hidden = false;
 		const last = config.browserstackLastVerified;
-		if (last) {
+		if (config.browserstackNeedsReentry) {
+			cfg.browserstackTest.className = 'test-result bad';
+			cfg.browserstackTest.textContent = '⚠ Stored key could not be decrypted (master key changed or legacy data). Re-enter the BrowserStack access key and Save.';
+		} else if (last) {
 			cfg.browserstackTest.className = `test-result ${last.ok ? 'ok' : 'bad'}`;
 			cfg.browserstackTest.textContent = last.ok
 				? `✓ Last verified ${new Date(last.ts).toLocaleString()} — connected`

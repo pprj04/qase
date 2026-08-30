@@ -67,24 +67,29 @@ const reportFinding = {
 						? input.reproducibility
 						: undefined,
 
-					// B0.2/B0.3 execution provenance (agent missions run locally on
-					// Chromium; ANY device context here is DEVICE EMULATION —
+					// B0.2/B0.3 execution provenance. C4: when the session executed
+					// on BrowserStack (agent attach), the finding carries that
+					// truthful environment verbatim (device/engineEmulated from the
+					// launch, never invented). Otherwise agent missions run locally
+					// on Chromium and ANY device context here is DEVICE EMULATION —
 					// engineEmulated is true whether or not the platform engine
-					// happens to match, because the device itself is emulated).
-					...(deviceContext ? {
-						device: `${deviceContext.deviceName}${deviceContext.os ? ` · ${deviceContext.os}` : ''}`,
-						environment: {
-							provider: 'local',
-							device: deviceContext.deviceName ?? null,
-							browser: `${deviceContext.browser ?? 'chromium'} (emulated on Chromium)`,
-							browserVersion: null,
-							os: deviceContext.os ?? null,
-							osVersion: null,
-							viewport: deviceContext.viewport ?? null,
-							engineEmulated: true,
-							executedOn: Date.now()
-						}
-					} : {})
+					// happens to match, because the device itself is emulated.
+					...(session.execution
+						? { environment: { ...session.execution } }
+						: deviceContext ? {
+							device: `${deviceContext.deviceName}${deviceContext.os ? ` · ${deviceContext.os}` : ''}`,
+							environment: {
+								provider: 'local',
+								device: deviceContext.deviceName ?? null,
+								browser: `${deviceContext.browser ?? 'chromium'} (emulated on Chromium)`,
+								browserVersion: null,
+								os: deviceContext.os ?? null,
+								osVersion: null,
+								viewport: deviceContext.viewport ?? null,
+								engineEmulated: true,
+								executedOn: Date.now()
+							}
+						} : {})
 				});
 
 			if (!finding.title) {

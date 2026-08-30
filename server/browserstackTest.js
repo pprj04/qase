@@ -92,9 +92,10 @@ function makeDefaultWsFactory() {
 		try {
 			const ws = new WS(url, opts);
 			ws.on('open', () => bus.emit('open'));
+			ws.on('message', data => bus.emit('message', data));
 			ws.on('error', err => bus.emit('error', err));
 			ws.on('unexpected-response', (_req, res) => bus.emit('unexpected-response', res?.statusCode));
-			ws.on('close', (code, reason) => bus.emit('close', { code, reason: String(reason ?? '') }));
+			ws.on('close', (code, reason) => bus.emit('close', code, reason ? String(reason ?? '') : ''));
 			bus.close = () => { try { ws.close(); } catch { /* noop */ } };
 		} catch (error) {
 			setTimeout(() => bus.emit('error', error)).unref?.();
@@ -112,30 +113,102 @@ async function probeCdp({ user, key, timeoutMs, wsFactory }) {
 		'browserstack.key': key,
 		name: 'Qase connection test'
 	}));
+	// C4.1 — the wss endpoint ALWAYS completes the TLS/101 upgrade, even for
+	// garbage credentials, and only then sends its application-level verdict
+	// (first frame, or a 1001 close carrying "Invalid username or password").
+	// 'open' alone therefore proves NOTHING about authentication. The probe
+	// now waits for the first app-level signal:
+	//   - first text frame            → the endpoint accepted the session (ok)
+	//   - close 1001/1008 w/ message  → classify (auth vs transient)
+	//   - close without message/open  → keep waiting until timeout, then report
+	//     unreachable (matches previous behavior for dead networks).
 	return new Promise(resolve => {
 		let settled = false;
 		let ws;
+		let opened = false;
+		let openTimer;
 		const done = result => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			clearTimeout(openTimer);
 			try { ws?.close?.(); } catch { /* already closed */ }
 			resolve(result);
 		};
 		let timer;
+		const CLASSIFY = {
+			// Post-open close with an explicit auth verdict from BrowserStack.
+			authReject(message) {
+				const m = String(message ?? '');
+				if (/invalid (username|user) or (password|access key)/i.test(m) || /authentication/i.test(m)) {
+					return {
+						ok: false, code: 'invalid_credentials',
+						message: 'BrowserStack rejected the credentials at the CDP execution endpoint (invalid username or password). Check the username and access key in Settings.'
+					};
+				}
+				return {
+					ok: false, code: 'cdp_rejected',
+					message: `CDP endpoint closed the session: ${redact(m || 'no reason given', key)}. Test-case execution on BrowserStack will fail — verify the account and network.`
+				};
+			}
+		};
 		try {
 			ws = wsFactory(`${CDP_HOST}?caps=${caps}`, { handshakeTimeout: timeoutMs });
 		} catch (error) {
 			return resolve({ ok: false, code: 'cdp_error', message: `CDP endpoint unreachable: ${redact(error?.message ?? 'error', key)}` });
 		}
-		timer = setTimeout(() => done({ ok: false, code: 'cdp_timeout', message: `CDP endpoint did not complete the handshake within ${Math.round(timeoutMs / 1000)}s.` }), timeoutMs);
-		const onOpen = () => done({ ok: true, code: 'cdp_reachable' });
-		const onError = err => done({ ok: false, code: 'cdp_unreachable', message: `CDP handshake failed: ${redact(err?.message ?? 'error', key)}. This is the endpoint test-case execution uses.` });
-		const onClose = () => done({ ok: false, code: 'cdp_rejected', message: 'CDP endpoint refused the connection (closed without upgrading). Test-case execution on BrowserStack will fail — verify the account and network.' });
+		timer = setTimeout(() => done({
+			ok: false, code: opened ? 'cdp_timeout' : 'cdp_unreachable',
+			message: opened
+				? `CDP endpoint accepted the connection but sent no session data within ${Math.round(timeoutMs / 1000)}s.`
+				: `CDP handshake failed: endpoint did not complete the handshake within ${Math.round(timeoutMs / 1000)}s. This is the endpoint test-case execution uses.`
+		}), timeoutMs);
+		const onOpen = () => {
+			opened = true;
+			// Handshake upgraded — wait for the app-level verdict (frame or close).
+			// If nothing arrives at all within the remaining budget, the overall
+			// timer above classifies it.
+		};
+		const onFrame = data => {
+			// First application-level frame = the endpoint accepted the session
+			// (it allocated a worker and spoke CDP/Playwright protocol).
+			const text = String(data ?? '');
+			done({ ok: true, code: 'cdp_reachable', note: text ? redact(text.slice(0, 80), key) : undefined });
+		};
+		const onError = err => {
+			if (opened) {
+				// Post-open transport error — usually accompanies the auth close.
+				done(CLASSIFY.authReject(err?.message));
+			} else {
+				done({ ok: false, code: 'cdp_unreachable', message: `CDP handshake failed: ${redact(err?.message ?? 'error', key)}. This is the endpoint test-case execution uses.` });
+			}
+		};
+		const onClose = (codeOrRes, reason) => {
+			if (!opened) {
+				// Closed without ever upgrading.
+				const status = typeof codeOrRes === 'number' ? null : codeOrRes?.statusCode;
+				done({
+					ok: false, code: 'cdp_rejected',
+					message: status
+						? `CDP endpoint rejected the connection (HTTP ${status}). Test-case execution on BrowserStack may fail.`
+						: 'CDP endpoint refused the connection (closed without upgrading). Test-case execution on BrowserStack will fail — verify the account and network.'
+				});
+				return;
+			}
+			// Post-open close: BrowserStack's application-level verdict.
+			const reasonText = typeof reason === 'object' && reason ? String(reason.reason ?? '') : String(reason ?? '');
+			const verdict = CLASSIFY.authReject(reasonText || '');
+			// Give a stray error event a tick to win with a richer message.
+			openTimer = setTimeout(() => done(verdict), 50);
+		};
+		const onUnexpected = res => {
+			done({ ok: false, code: 'cdp_rejected', message: `CDP endpoint rejected the connection (non-101 response${typeof res === 'number' ? ` HTTP ${res}` : ''}). Test-case execution on BrowserStack may fail.` });
+		};
 		ws.once?.('open', onOpen);
+		ws.once?.('message', onFrame);
 		ws.once?.('error', onError);
 		ws.once?.('close', onClose);
-		ws.once?.('unexpected-response', () => done({ ok: false, code: 'cdp_rejected', message: 'CDP endpoint rejected the connection (non-101 response). Test-case execution on BrowserStack may fail.' }));
+		ws.once?.('unexpected-response', onUnexpected);
 	});
 }
 
@@ -190,13 +263,17 @@ export async function testBrowserstackConnection(input = {}) {
 		cdp = await probeCdp({ user, key, timeoutMs, wsFactory });
 	}
 
-	// BOTH stages must pass for ok:true. Auth alone is not a green light when
-	// the execution endpoint is proven unreachable.
+	// C4.1 — if the CDP stage proves the credentials invalid (post-open auth
+	// rejection), that verdict outranks the REST auth success: the SAME
+	// credentials are rejected by the execution endpoint the agent path uses.
+	// This is the exact observed failure shape (REST 200 + CDP 1001 close).
 	if (cdp.ok === false) {
 		return {
 			ok: false,
 			code: cdp.code,
-			message: cdp.message,
+			message: cdp.code === 'invalid_credentials'
+				? `${cdp.message} (The REST API accepted the login, but the CDP execution endpoint rejected the same credentials — re-copy the username and access key from BrowserStack; do not retype them.)`
+				: cdp.message,
 			maskedUser: maskUser(user),
 			auth: { ok: true, code: 'authenticated', httpStatus: auth.httpStatus },
 			cdp: { ok: false, code: cdp.code },
