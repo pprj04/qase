@@ -29,7 +29,7 @@ Each workflow is a sequence of browser actions (navigate, click, fill, select, k
   - value: the input value (if any)
   - displayLabel: a human-readable description
 
-You must produce 1-5 test cases. Group actions that test a single user flow into one test case. Each test case must have:
+You must produce 1-3 test cases. Group actions that test a single user flow into one test case. Each test case MUST be compact: at most 8 steps, at most 5 assertions, at most 3 preconditions — the response is size-limited and truncated JSON is a hard failure. Each test case must have:
   - name: short, descriptive (e.g. "Login with valid credentials")
   - severity: "critical" | "high" | "medium" | "low" (impact if this flow breaks)
   - preconditions: array of strings (e.g. "User must be logged out")
@@ -57,11 +57,16 @@ Assertion types you can use:
   - status_code: the expected HTTP status code
 
 Rules:
-  - Convert each workflow step into a test step. Use the workflow step's action/target/value directly — do not invent new selectors.
+  - Convert each workflow step into a test step. Use the workflow step's action/target/value directly.
+  - SELECTOR GROUNDING: a step's target must be a CSS selector that Playwright locator() accepts (#id, .class, tag, [attr], a[href="..."], or a structural path with > combinators). If the workflow step's target is a human label or free text ("Save", "Lead Name", "textbox"), find the matching element's real selector from the workflow context; if you cannot determine it, OMIT that step rather than emit an unrunnable one. Never invent selectors for elements not present in the workflow.
+  - ASSERTION GROUNDING: every assertion's target must be a real selector from the workflow steps and its expected value must come from what the workflow actually observed (values filled, sections navigated to). Do NOT invent assertions for elements or values that do not appear in the workflow.
+  - ASSERTIONS RUN ONCE, AFTER ALL STEPS: expectations must describe the FINAL page state after the last step, never intermediate states. If the flow visits A then B, an assertion expecting the URL of A will fail by construction — only assert the end state.
+  - NO INVENTED PERSISTENCE: only expect data to survive a reload when the workflow OBSERVED that (e.g. a value still present after a reload step). Demo apps often reset state on reload — if not observed, assert visibility/URL only.
   - Add at least one assertion after every critical action (navigation, form submit, login).
   - Keep credential placeholders like {{QA_PASSWORD}} exactly as-is — do not replace them.
   - If findings are provided, add assertions that specifically check for the bugs that were found.
   - Be concrete and specific. "Page loads" is too vague; "URL contains /dashboard" is good.
+  - COMPACT OUTPUT: one step/assertion object per line, no unnecessary whitespace. The JSON array must be complete — pick fewer test cases rather than running out of output.
 
 Respond with ONLY a JSON array of test cases. No markdown, no explanation, just the JSON.`;
 
@@ -69,6 +74,16 @@ Respond with ONLY a JSON array of test cases. No markdown, no explanation, just 
 		const parts = [`${i + 1}. ${step.displayLabel ?? step.action}`];
 		if (step.target) parts.push(`target: ${step.target}`);
 		if (step.value) parts.push(`value: ${step.value}`);
+		if (step.url && step.url !== workflow.targetUrl) parts.push(`on: ${step.url}`);
+		// Grounding hint: outcome carries what actually happened (post-click
+		// URL, page title) so the model can derive REAL assertions instead of
+		// inventing expected values.
+		const outcome = step.outcome;
+		if (outcome && outcome.status === 'success' && (outcome.urlAfter || outcome.titleAfter)) {
+			const seen = [outcome.urlAfter ? `landed on ${outcome.urlAfter}` : null, outcome.titleAfter ? `title "${outcome.titleAfter}"` : null]
+				.filter(Boolean).join(', ');
+			if (seen) parts.push(`observed: ${seen}`);
+		}
 		return parts.join(' | ');
 	}).join('\n');
 
@@ -86,7 +101,7 @@ Workflow viewport: ${workflow.viewport ? `${workflow.viewport.label ?? JSON.stri
 Known findings from the original session:
 ${findingsSummary}
 
-Generate test cases from this workflow. Remember: respond with ONLY a JSON array.`;
+Generate test cases from this workflow. Remember: at most 3 test cases, compact JSON, complete array — respond with ONLY a JSON array.`;
 
 	return { system, user };
 }
@@ -109,6 +124,17 @@ export function isRetryableLLMError(error) {
 
 const LLM_MAX_RETRIES = 2;
 const LLM_RETRY_DELAY_MS = 3000;
+
+/**
+ * True when the error is the deterministic max_tokens truncation error.
+ * A capped response will not get longer on retry — retrying wastes 40–120s
+ * per attempt and delays the honest failure signal. The truncation-tolerant
+ * parser in the caller salvages complete objects; if none parse, the error
+ * surfaces immediately.
+ */
+function isMaxTokensTruncation(error) {
+	return error?.finishReason === 'length';
+}
 
 /**
  * Makes a direct OpenAI-compatible chat completion request using the
@@ -138,8 +164,14 @@ export async function callLLM(systemPrompt, userPrompt) {
 	const body = {
 		model: config.model,
 		messages,
-		max_tokens: 4096
+		// D1: 4096 truncated real 85-step workflows mid-JSON-array (finish_reason
+		// 'length') and parse failures surfaced as 'Could not find JSON in the
+		// LLM response.' 16384 fits observed real-workflow test-case payloads;
+		// if a response still hits the cap the finish_reason check below reports
+		// it honestly instead of silently parsing garbage.
+		max_tokens: 16_384
 	};
+	let finishReason = null;
 
 	let lastError;
 	for (let attempt = 0; attempt <= LLM_MAX_RETRIES; attempt++) {
@@ -168,14 +200,27 @@ export async function callLLM(systemPrompt, userPrompt) {
 
 			const data = await response.json();
 			const content = data?.choices?.[0]?.message?.content;
+			finishReason = data?.choices?.[0]?.finish_reason ?? null;
 
 			if (!content) {
 				throw new Error('LLM returned an empty response.');
 			}
 
+			if (finishReason === 'length') {
+				// Truncated output. Never masquerade as complete: mark the
+				// error and attach the partial content so the caller can
+				// salvage COMPLETE objects (parseTestCases' truncation-tolerant
+				// builder) or fail honestly when nothing parses.
+				const err = new Error(`LLM response hit the max_tokens limit (${body.max_tokens}) and was truncated.`);
+				err.finishReason = 'length';
+				err.partialContent = content;
+				throw err;
+			}
+
 			return content;
 		} catch (error) {
 			lastError = error;
+			if (isMaxTokensTruncation(error)) throw error;
 			if (!isRetryableLLMError(error) || attempt >= LLM_MAX_RETRIES) {
 				throw error;
 			}
@@ -187,6 +232,55 @@ export async function callLLM(systemPrompt, userPrompt) {
 
 /* ── Response parsing ───────────────────────────────────────────── */
 
+/**
+ * True when the array text has a closing bracket after the opening one.
+ */
+function hasCloseBracket(text, start, end) {
+	return end !== -1 && start !== -1 && end > start;
+}
+
+/**
+ * Builds a closed-array candidate from a truncated LLM response.
+ * Finds the last COMPLETE object boundary — a "}," separator or a "}" at the
+ * very end of the text — and closes the array there. Returns null when no
+ * complete object boundary exists. A trailing object is only "complete" when
+ * ALL its brackets and braces are balanced (a truncated nested array like
+ * "steps":[{...} is NOT complete even if the text happens to end in "}").
+ */
+function buildTruncatedCandidate(text) {
+	const start = text.indexOf('[');
+	if (start === -1) return null;
+	const inner = text.slice(start + 1);
+	const sep = inner.lastIndexOf('},');
+	if (sep !== -1 && bracketsBalanced(inner.slice(0, sep + 1))) {
+		return `[${inner.slice(0, sep + 1)}]`;
+	}
+	// Single object truncated exactly at its close? ("[{...}" with no comma)
+	const trimmed = inner.trimEnd();
+	if (trimmed.endsWith('}') && trimmed.startsWith('{') && bracketsBalanced(trimmed)) {
+		return `[${trimmed}]`;
+	}
+	return null;
+}
+
+/**
+ * True when square brackets and braces are balanced and no stray closers
+ * appear (ignoring characters inside JSON strings).
+ */
+function bracketsBalanced(fragment) {
+	let depthS = 0, depthC = 0, inString = false, escape = false;
+	for (const ch of fragment) {
+		if (escape) { escape = false; continue; }
+		if (ch === '\\') { escape = true; continue; }
+		if (ch === '"') { inString = !inString; continue; }
+		if (inString) continue;
+		if (ch === '[') depthS += 1;
+		else if (ch === ']') { depthS -= 1; if (depthS < 0) return false; }
+		else if (ch === '{') depthC += 1;
+		else if (ch === '}') { depthC -= 1; if (depthC < 0) return false; }
+	}
+	return depthS === 0 && depthC === 0 && !inString;
+}
 /**
  * Robustly extracts a JSON array from the LLM response text.
  * Handles markdown fences, leading/trailing text, and partial responses.
@@ -221,7 +315,29 @@ export function parseTestCases(raw) {
 		throw new Error('Could not find JSON in the LLM response.');
 	}
 
-	const parsed = JSON.parse(text.slice(start, end + 1));
+	let parsed;
+	try {
+		parsed = JSON.parse(hasCloseBracket(text) ? text.slice(start, end + 1) : text.slice(start));
+	} catch (error) {
+		// Truncation salvage (D1): when the model runs out of output mid-array
+		// (finish_reason "length"), the COMPLETE objects before the cut are
+		// still valid test cases. Find the last object boundary the model
+		// actually closed — a "}," separator OR a "}" at the very end of the
+		// truncated text — close the array there, and keep the complete
+		// objects. Only returns if what remains parses as a non-empty array
+		// of step-bearing objects; otherwise the original error propagates
+		// (never fabricate an empty success).
+		const candidate = buildTruncatedCandidate(text);
+		if (candidate) {
+			try {
+				const salvaged = JSON.parse(candidate);
+				if (Array.isArray(salvaged) && salvaged.length > 0 && salvaged.every(tc => tc && typeof tc === 'object' && Array.isArray(tc.steps))) {
+					return salvaged;
+				}
+			} catch { /* fall through to original error */ }
+		}
+		throw error;
+	}
 
 	if (!Array.isArray(parsed)) {
 		return [parsed];
@@ -241,8 +357,24 @@ export function parseTestCases(raw) {
  */
 export async function generateTestCasesFromWorkflow(workflow, findings = []) {
 	const { system, user } = buildTestCasePrompt(workflow, findings);
-	const raw = await callLLM(system, user);
-	const parsed = parseTestCases(raw);
+	let parsed;
+	let truncationError = null;
+	try {
+		parsed = parseTestCases(await callLLM(system, user));
+	} catch (err) {
+		if (err?.finishReason !== 'length' || !err.partialContent) throw err;
+		// Salvage COMPLETE objects from the truncated payload; rethrow the
+		// truncation error only when nothing parses.
+		truncationError = err;
+		console.error('[testgen] LLM response hit max_tokens — salvaging complete objects from truncated payload');
+		parsed = parseTestCases(err.partialContent);
+	}
+	if (parsed.length === 0) {
+		if (truncationError) throw truncationError;
+		const e = new Error('LLM test-case generation produced no parseable test cases.');
+		e.finishReason = 'empty';
+		throw e;
+	}
 
 	// Normalise each record.
 	return parsed.map(tc => {

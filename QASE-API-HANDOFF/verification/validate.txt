@@ -1,0 +1,4 @@
+
+document: http://localhost:5173/openapi.json
+operations: 32 GETs, 32 unique operationIds
+OK — no violations (0 warning(s))

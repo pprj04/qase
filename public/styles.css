@@ -7633,3 +7633,38 @@ dialog.modal {
 .cfg-team-status { font-size: 12px; }
 .cfg-team-status.ok { color: #a6ecbb; }
 .cfg-team-status.revoked { color: #ffb3ad; text-decoration: line-through; }
+
+/* D1.9 — test-case provenance (Source: Mission → Session → Workflow) */
+.tc-source-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 2px;
+}
+
+.tc-source-label {
+	font-size: 11px;
+	color: var(--text-dim, #8a8f98);
+	letter-spacing: 0.02em;
+}
+
+.tc-source-chip {
+	font-size: 11px;
+	padding: 1px 8px;
+	border-radius: 999px;
+	border: 1px solid var(--border, #2a2f3a);
+	background: var(--bg-accent, #171b24);
+	color: var(--text-dim, #8a8f98);
+	white-space: nowrap;
+}
+
+a.tc-source-link {
+	color: var(--accent, #4f8cff);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+a.tc-source-link:hover {
+	text-decoration: underline;
+}

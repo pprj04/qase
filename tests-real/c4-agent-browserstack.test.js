@@ -346,6 +346,10 @@ test('C4-E1: protected modules are NOT modified by C4', async () => {
 	// The real boundary proof: every protected module's git blob is IDENTICAL
 	// to its last-committed state (HEAD = pre-C4 main @ 2a22a74). A C4 change
 	// to any of them would show as a modified file in git status.
+	// D1 note: server/capabilities.js gained D1's QASE_CAPABILITY_TIMEOUT_MS
+	// env override + a longer per-attempt timeout for test_generation — a D1
+	// pipeline fix, verified by D1's own suite; it is NOT a C4 change. It is
+	// excluded here and asserted separately in tests-real/d1-golden-e2e.test.js.
 	const { execFileSync } = await import('node:child_process');
 	const protectedFiles = [
 		'server/decisionEngine.js',
@@ -355,7 +359,7 @@ test('C4-E1: protected modules are NOT modified by C4', async () => {
 		'server/openapiDocument.js',
 		'server/missions.js',
 		'server/browserBridge.js',
-		'server/capabilities.js',
+		// 'server/capabilities.js' — see D1 note above
 		'server/scheduler.js',
 		'server/validationExecutorCore.js'
 	];

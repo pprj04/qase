@@ -1,0 +1,31 @@
+ok - app loads
+ok - navigation visible
+ok - route runs renders a surface
+ok - route tests renders a surface
+ok - route workflows renders a surface
+ok - route schedules renders a surface
+ok - route bugs renders a surface
+ok - settings modal opens
+ok - settings shows BrowserStack section
+ok - BrowserStack state is truthful (not fake-connected)
+ok - run list shows entries
+ok - P1-1 run list exposes status/verdict tokens
+ok - P1-2 missing deep link shows useful error
+ok - valid deep link renders detail
+ok - execution detail shows activity/trace
+ok - create-run URL input visible
+ok - device selector has options (12)
+ok - device selector spans desktop+phones
+ok - tests page renders large list (31339)
+NOT OK (KNOWN-OPEN-BUG) - P1-4 duplicate test-case names not double-rendered — conc-test-0 appears 2× (known open bug)
+ok - workflows surface text present
+ok - schedules surface text present
+ok - bugs page shows count
+ok - finding modal opens
+ok - P1-3 no stacked dialogs while one modal open
+ok - finding modal shows substance
+ok - modal closes (Escape)
+ok - export affordances present (4)
+ok - bogus hash route does not crash app
+ok - app still renders on bogus route
+ok - no JS console errors on journey

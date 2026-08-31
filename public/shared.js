@@ -150,13 +150,10 @@ const state = {
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 async function api(path, options) {
-	// Same-origin convenience: mutations attach the token the user pasted in
-	// Settings (stored in localStorage). The server no longer auto-grants the
-	// qase_token cookie to anonymous visitors (M1-P3 P0-5) — an existing valid
-	// cookie from before that change still works via the cookie jar.
-	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+	// D2 — human users authenticate with the HttpOnly qase_session cookie
+	// (sent automatically by the browser, same-origin). Machine consumers use
+	// Authorization: Bearer. Nothing is kept in localStorage.
 	const headers = { 'Content-Type': 'application/json', ...(options?.headers ?? {}) };
-	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
 	// Spread everything EXCEPT headers — callers pass their own headers key,
 	// which would otherwise clobber the token-attached headers object above
 	// (observed live: "New run" 401'd for an authenticated user because the
@@ -175,9 +172,9 @@ async function api(path, options) {
  * fix-prompt, exports) instead of JSON. Same token attachment as api().
  */
 async function apiRaw(path, options) {
-	const token = document.cookie.match(/qase_token=([^;]+)/)?.[1] || localStorage.getItem('qase_token');
+	// D2 — session cookie carries auth; machine consumers pass their own
+	// Authorization header via options.headers.
 	const headers = { ...(options?.headers ?? {}) };
-	if (token && !headers.Authorization) headers.Authorization = `Bearer ${token}`;
 	const { headers: _callerHeaders, ...rest } = options ?? {};
 	const response = await fetch(`/api${path}`, { ...rest, headers });
 	if (!response.ok) throw new Error(`Request failed (${response.status})`);

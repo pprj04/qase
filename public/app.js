@@ -1458,11 +1458,10 @@ function list(items) {
 function connect(id) {
 	state.stream?.close();
 	clearTimeout(state._reconnectTimer);
-	// B1 W3 — EventSource cannot send headers; authenticate the stream via
-	// the server-supported ?token= query method (cookie also accepted).
-	const streamToken = localStorage.getItem('qase_token');
-	const streamUrl = `/api/sessions/${id}/events${streamToken ? `?token=${encodeURIComponent(streamToken)}` : ''}`;
-	const stream = new EventSource(streamUrl);
+	// The HttpOnly qase_session cookie authenticates the stream (same-origin
+	// EventSource sends cookies). The ?token= query remains supported by the
+	// server for CI/machine consumers only.
+	const stream = new EventSource(`/api/sessions/${id}/events`);
 	state.stream = stream;
 
 	stream.onopen = () => {
@@ -1681,9 +1680,6 @@ const cfg = {
 	headless: $('cfg-headless'),
 	concurrentRuns: $('cfg-concurrent-runs'),
 	retriesCount: $('cfg-retries-count'),
-	apiToken: $('cfg-api-token'),
-	apiTokenNote: $('cfg-api-token-note'),
-	apiTokenClear: $('cfg-api-token-clear'),
 	autoSaveWorkflow: $('cfg-auto-save-workflow'),
 	autoGenTests: $('cfg-auto-gen-tests'),
 	autoSmokeRun: $('cfg-auto-smoke-run'),
@@ -1783,14 +1779,12 @@ function fillSettings(config) {
 	cfg.selfHealEnabled.checked = config.selfHealEnabled !== false;
 	cfg.selfHealThreshold.value = config.selfHealThreshold ?? 0.8;
 
-	// API Token — never sent to browser; leaving the box empty keeps it.
-	cfg.apiToken.value = '';
-	cfg.apiToken.placeholder = config.hasApiToken ? `${config.apiTokenHint} — leave blank to keep` : 'Leave empty for local use';
-	cfg.apiTokenNote.textContent = config.hasApiToken
-		? (config.apiTokenFromEnv
-			? `Currently set in .env (${config.apiTokenHint}). Paste it above once to enable browser mutations; saving here overrides .env.`
-			: `Stored in .qase/config.json (${config.apiTokenHint}). Required as Authorization: Bearer for CI/CD. Paste it above once to enable browser mutations.`)
-		: 'Protects test-run/schedule-trigger endpoints. Leave empty when running locally.';
+	// API token — D2: humans sign in with accounts; the token is a server-side
+	// machine credential (env / .qase) used by CI and integration tests. The UI
+	// no longer edits it. Surface a hint so admins know it exists.
+	if (config.hasApiToken) {
+		cfg.keyNote.textContent = `Server API token is configured (${config.apiTokenHint}) for CI/machine access — not needed for signed-in users.`;
+	}
 
 	// The stored key is never sent to the browser; leaving the box empty keeps it.
 	cfg.key.value = '';
@@ -1843,29 +1837,16 @@ function readSettings() {
 	if (cfg.key.value.trim()) {
 		patch.apiKey = cfg.key.value.trim();
 	}
-	if (cfg.apiToken.value.trim()) {
-		patch.apiToken = cfg.apiToken.value.trim();
-	} else if (cfg.apiToken.dataset.cleared === '1') {
-		patch.apiToken = '';
-	}
 	if (cfg.browserstackKey.value.trim()) {
 		patch.browserstackKey = cfg.browserstackKey.value.trim();
 	} else if (cfg.browserstackKey.dataset.cleared === '1') {
 		patch.browserstackKey = '';
 	}
-	delete cfg.apiToken.dataset.cleared;
 	delete cfg.browserstackKey.dataset.cleared;
 	return patch;
 }
 
 cfg.provider.onchange = syncProviderFields;
-
-cfg.apiTokenClear.onclick = () => {
-	cfg.apiToken.value = ' ';
-	cfg.apiToken.dataset.cleared = '1';
-	cfg.apiToken.value = '';
-	cfg.apiTokenNote.textContent = 'Token will be cleared on Save.';
-};
 
 cfg.browserstackKeyClear.onclick = () => {
 	cfg.browserstackKey.value = ' ';
@@ -1878,98 +1859,58 @@ async function openSettings() {
 	try {
 		fillSettings(await api('/config'));
 		cfg.dialog.showModal();
-		// D0.5 — team access codes are admin-only; load for masters.
-		if (!state.session || state.session.kind === 'master') {
-			loadTeamCodes();
+		// D2 — user accounts are admin-only; load them for the master
+		// token AND for signed-in admin USERS (kind 'user').
+		const isAdminish = !state.session || state.session.kind === 'master'
+			|| (state.auth && state.auth.kind === 'user' && state.auth.role === 'admin');
+		if (isAdminish) {
+			loadUsers();
 		} else {
-			const teamSection = document.querySelector('.cfg-section-title')?.parentElement;
-			const list = document.getElementById('cfg-team-list');
-			if (list) list.textContent = '';
+			const users = document.getElementById('cfg-user-list');
+			if (users) users.textContent = '';
 		}
 	} catch (err) {
-		fail(err);
-	}
-}
-
-/* ═══════════ D0.5 — Team Access (admin) ════════════════════════════ */
-
-const teamMintBtn = document.getElementById('cfg-team-mint');
-const teamResult = document.getElementById('cfg-team-result');
-const teamListEl = document.getElementById('cfg-team-list');
-
-function maskCode(code) {
-	return code.length <= 10 ? `${code.slice(0, 3)}****` : `${code.slice(0, 9)}****${code.slice(-4)}`;
-}
-
-async function loadTeamCodes() {
-	if (!teamListEl) return;
-	try {
-		const { codes } = await api('/auth/admin/codes');
-		renderTeamCodes(codes ?? []);
-	} catch (err) {
-		// Non-admin (viewer/operator session) — hide the section content.
-		teamListEl.replaceChildren();
-	}
-}
-
-function renderTeamCodes(codes) {
-	if (!teamListEl) return;
-	teamListEl.replaceChildren();
-	for (const c of codes) {
-		const row = document.createElement('div');
-		row.className = 'cfg-team-row';
-		const active = c.revokedAt == null;
-		row.innerHTML = `
-			<span class="cfg-team-label"></span>
-			<span class="cfg-team-role">${c.role === 'operator' ? 'Operator' : 'Viewer'}</span>
-			<span class="cfg-team-status ${active ? 'ok' : 'revoked'}">${active ? 'Active' : 'Revoked'}</span>
-			<button class="btn btn-ghost btn-sm" data-act="${active ? 'revoke' : 'restore'}" data-id="${c.id}">${active ? 'Revoke' : 'Restore'}</button>`;
-		row.querySelector('.cfg-team-label').textContent = `${c.label} · ${new Date(c.createdAt).toLocaleDateString()}`;
-		teamListEl.appendChild(row);
-	}
-}
-
-teamListEl?.addEventListener('click', async (event) => {
-	const btn = event.target.closest('button[data-act]');
-	if (!btn) return;
-	btn.disabled = true;
-	try {
-		if (btn.dataset.act === 'revoke') {
-			await api(`/auth/admin/codes/${btn.dataset.id}`, { method: 'DELETE' });
-		} else {
-			await api(`/auth/admin/codes/${btn.dataset.id}/restore`, { method: 'POST' });
-		}
-		await loadTeamCodes();
-	} catch (err) {
-		btn.disabled = false;
 		toast(String(err?.message ?? err), 'bad');
 	}
-});
+}
 
-teamMintBtn?.addEventListener('click', async () => {
-	if (!teamMintBtn || !teamResult) return;
-	const label = document.getElementById('cfg-team-label')?.value.trim() || '';
-	const role = document.getElementById('cfg-team-role')?.value || 'viewer';
-	teamMintBtn.disabled = true;
-	teamResult.hidden = false;
-	teamResult.className = 'test-result busy';
-	teamResult.textContent = 'Creating…';
+async function loadUsers() {
 	try {
-		const minted = await api('/auth/admin/codes', { method: 'POST', body: JSON.stringify({ label, role }) });
-		// The plaintext code is available EXACTLY NOW, and never again.
-		teamResult.className = 'test-result ok';
-		teamResult.innerHTML = `Access code created — copy it now, it will not be shown again:<br>
-			<code style="user-select:all">${minted.code}</code>`;
-		// eslint-disable-next-line no-console
-		console.info('[team-access] code minted:', maskCode(minted.code));
-		const labelInput = document.getElementById('cfg-team-label');
-		if (labelInput) labelInput.value = '';
-		await loadTeamCodes();
+		const data = await api('/auth/users');
+		const list = document.getElementById('cfg-user-list');
+		if (!list) return;
+		const users = data?.users ?? [];
+		list.innerHTML = users.length === 0
+			? '<div class="subtle">No users.</div>'
+			: users.map(u => `<div class="cfg-user-row" style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border,#333);">
+				<span style="flex:1">${escapeHtml(u.email)} <span class="subtle">(${u.role})</span>${u.disabledAt ? ' <span class="subtle">[disabled]</span>' : ''}</span>
+			</div>`).join('');
+	} catch { /* admin-only — may 403 for non-admins */ }
+}
+
+const userCreateBtn = $('cfg-user-create');
+const userResult = $('cfg-user-result');
+
+userCreateBtn?.addEventListener('click', async () => {
+	const email = document.getElementById('cfg-user-email')?.value.trim() || '';
+	const name = document.getElementById('cfg-user-name')?.value.trim() || '';
+	const password = document.getElementById('cfg-user-password')?.value || '';
+	const role = document.getElementById('cfg-user-role')?.value || 'operator';
+	if (!email || !password) return toast('Email and initial password are required.', 'bad');
+	userCreateBtn.disabled = true;
+	if (userResult) { userResult.hidden = false; userResult.className = 'test-result busy'; userResult.textContent = 'Creating…'; }
+	try {
+		const created = await api('/auth/users', { method: 'POST', body: JSON.stringify({ email, name, password, role }) });
+		if (userResult) { userResult.className = 'test-result ok'; userResult.textContent = `User created: ${created.user.email} (${created.user.role})`; }
+		for (const id of ['cfg-user-email', 'cfg-user-name', 'cfg-user-password']) {
+			const node = document.getElementById(id);
+			if (node) node.value = '';
+		}
+		await loadUsers();
 	} catch (err) {
-		teamResult.className = 'test-result bad';
-		teamResult.textContent = String(err?.message ?? err);
+		if (userResult) { userResult.className = 'test-result bad'; userResult.textContent = String(err?.message ?? err); }
 	} finally {
-		teamMintBtn.disabled = false;
+		userCreateBtn.disabled = false;
 	}
 });
 
@@ -2039,11 +1980,6 @@ cfg.browserstackTestBtn.onclick = async () => {
 
 cfg.saveBtn.onclick = async () => {
 	try {
-		// If the user just typed an API token, remember it for this browser so
-		// mutations work in the UI without the (removed) auto-granted cookie.
-		if (cfg.apiToken.value.trim()) {
-			localStorage.setItem('qase_token', cfg.apiToken.value.trim());
-		}
 		const config = await api('/config', { method: 'PUT', body: JSON.stringify(readSettings()) });
 		paintConfig(config);
 		if (config.problem) {
@@ -2672,64 +2608,75 @@ document.addEventListener('click', event => {
 		if (gate && rest) {
 			gate.hidden = false;
 			rest.hidden = true;
-			const save = document.getElementById('auth-gate-save');
-			const input = document.getElementById('auth-gate-token');
-			// If a stale token exists, clear it so the next attempt starts clean.
-			localStorage.removeItem('qase_token');
-			// Show the existing token value in the input for convenience.
-			const existing = document.cookie.match(/qase_token=([^;]+)/);
-			if (existing && input) input.value = existing[1];
-			// D0.5 — the gate accepts EITHER a team access code (session) or
-			// the admin API token. Try the code path first; if it fails, try
-			// the bearer-token probe so admins still work exactly as before.
-			const submitToken = async () => {
-				const value = (input?.value || '').trim();
-				if (!value) return;
-				save.disabled = true; save.textContent = 'Checking…';
-				const showError = (msg) => {
-					save.disabled = false; save.textContent = 'Continue';
-					const errEl = document.getElementById('auth-gate-error');
-					if (errEl) errEl.textContent = msg;
-					else alert(msg);
-				};
-				// Path 1 — team access code → server-side session cookie.
+			const showError = (msg) => {
+				const errEl = document.getElementById('auth-gate-error');
+				if (errEl) errEl.textContent = msg;
+				else alert(msg);
+			};
+			const busy = (btn, on, label = 'Checking…') => {
+				if (!btn) return;
+				if (on) { btn.dataset.label = btn.textContent; btn.disabled = true; btn.textContent = label; }
+				else { btn.disabled = false; btn.textContent = btn.dataset.label || btn.textContent; }
+			};
+
+			// D2 Stage 3 — single login path: user accounts. No code/token tabs.
+			const title = document.getElementById('auth-gate-title');
+
+			// ── D2 bootstrap: zero users → offer the one-time admin claim ──
+			try {
+				const boot = await fetch('/api/auth/bootstrap').then(r => r.ok ? r.json() : null);
+				const register = document.getElementById('auth-gate-register');
+				if (boot && boot.needsAdmin && register) {
+					if (title) title.textContent = 'Set up your workspace';
+					register.style.display = 'flex';
+				}
+			} catch { /* default: login form stays visible */ }
+
+			// ── Primary: email + password login ──
+			const submitLogin = async () => {
+				const email = document.getElementById('auth-gate-email')?.value?.trim();
+				const password = document.getElementById('auth-gate-password')?.value;
+				if (!email || !password) return showError('Enter your email and password.');
+				const btn = document.getElementById('auth-gate-signin');
+				busy(btn, true);
 				try {
-					const res = await fetch('/api/auth/session', {
+					const res = await fetch('/api/auth/login', {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ accessCode: value })
+						body: JSON.stringify({ email, password })
 					});
-					if (res.ok) {
-						location.reload(); // qase_session cookie now carries auth
-						return;
-					}
-					if (res.status === 429) {
-						showError('Too many attempts — wait a few minutes and try again.');
-						return;
-					}
-				} catch { /* fall through to token path */ }
-				// Path 2 — admin API token (validate before storing, B1 round-2).
-				try {
-					const probe = await fetch('/api/health', { headers: { authorization: `Bearer ${value}` } });
-					if (probe.status === 200 || probe.status === 401) {
-						// /api/health is public — but /api/config will 401 if wrong.
-						// Use the actual config endpoint as the validity gate:
-						const cfgProbe = await fetch('/api/config', { headers: { authorization: `Bearer ${value}` } });
-						if (cfgProbe.status === 200) {
-							localStorage.setItem('qase_token', value);
-							location.reload();
-							return;
-						}
-					}
-					// Validation failed — show error, keep the gate open.
-					showError('Access code or token rejected — ask the admin for a team access code.');
-				} catch (e) {
-					save.disabled = false; save.textContent = 'Continue';
-					alert('Network error — try again.');
-				}
+					if (res.ok) { location.reload(); return; }
+					const body = await res.json().catch(() => ({}));
+					showError(body.error || (res.status === 429 ? 'Too many attempts — wait a few minutes.' : 'Invalid email or password.'));
+				} catch { showError('Network error — try again.'); }
+				busy(btn, false);
 			};
-			save?.addEventListener('click', submitToken);
-			input?.addEventListener('keydown', e => { if (e.key === 'Enter') submitToken(); });
+			document.getElementById('auth-gate-signin')?.addEventListener('click', submitLogin);
+			document.getElementById('auth-gate-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitLogin(); });
+
+			// ── One-time admin bootstrap ──
+			const submitRegister = async () => {
+				const email = document.getElementById('auth-gate-reg-email')?.value?.trim();
+				const name = document.getElementById('auth-gate-reg-name')?.value?.trim();
+				const password = document.getElementById('auth-gate-reg-password')?.value;
+				if (!email || !password) return showError('Enter your email and a password.');
+				const btn = document.getElementById('auth-gate-reg-save');
+				busy(btn, true, 'Creating…');
+				try {
+					const res = await fetch('/api/auth/register-admin', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ email, name, password })
+					});
+					if (res.ok) { location.reload(); return; }
+					const body = await res.json().catch(() => ({}));
+					showError(body.error || 'Could not create the admin account.');
+				} catch { showError('Network error — try again.'); }
+				busy(btn, false);
+			};
+			document.getElementById('auth-gate-reg-save')?.addEventListener('click', submitRegister);
+			document.getElementById('auth-gate-reg-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitRegister(); });
+
 			return; // skip the rest of boot — the page is a gate until auth exists
 		}
 	}
@@ -2741,17 +2688,33 @@ document.addEventListener('click', event => {
 		toast('Unable to load configuration. Check that the server is running.', 'bad');
 	}
 
-	// D0.5 — resolve WHO is authenticated (master vs scoped session role)
-	// and adapt the UI: team members (viewer/operator) do not see Settings.
+	// D2 — resolve WHO is authenticated (master or user account) and adapt
+	// the UI: non-admin users do not see Settings; everyone gets an identity
+	// chip with sign-out.
 	try {
-		const who = await fetch('/api/auth/session').then(r => (r.ok ? r.json() : null));
+		const who = await fetch('/api/auth/me').then(r => (r.ok ? r.json() : null));
 		state.auth = who ?? { kind: 'anonymous' };
-		if (who && who.kind === 'session') {
+		if (who && who.kind === 'user' && who.role !== 'admin') {
 			const settingsBtn = document.getElementById('open-settings');
 			if (settingsBtn) settingsBtn.style.display = 'none';
-			const badge = el?.modelBadge;
-			if (badge) badge.style.display = 'none';
-			toast(`Signed in as ${who.label || who.role} (${who.role})`, 'good');
+			const menuSettings = document.getElementById('menu-open-settings');
+			if (menuSettings) menuSettings.style.display = 'none';
+			toast(`Signed in as ${who.name || who.email} (${who.role})`, 'good');
+		} else if (who && who.kind === 'user' && who.role === 'admin') {
+			toast(`Signed in as ${who.name || who.email} (admin)`, 'good');
+		}
+		// Identity chip + sign-out for user sessions.
+		const settingsBtn = document.getElementById('open-settings');
+		if (settingsBtn && who && who.kind === 'user') {
+			settingsBtn.insertAdjacentHTML('afterend',
+				`<span id="auth-identity" title="Signed in" style="display:inline-flex;align-items:center;gap:4px;font-size:12px;opacity:.75;padding:0 6px;">👤 ${escapeHtml(who.name || who.email || '')} <span style="text-transform:capitalize;">${escapeHtml(who.role ?? '')}</span></span>
+				 <button id="auth-signout" class="btn btn-ghost btn-sm" title="Sign out" style="display:inline-flex;align-items:center;gap:4px;">⎋ Sign out</button>`);
+			document.getElementById('auth-signout')?.addEventListener('click', async () => {
+				try { await fetch('/api/auth/logout', { method: 'POST' }); } catch { /* best effort */ }
+				// Clear any pre-D2 token a browser may still hold.
+				localStorage.removeItem('qase_token');
+				location.reload();
+			});
 		}
 	} catch { /* whoami is advisory — UI still works if it fails */ }
 

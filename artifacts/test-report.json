@@ -1,0 +1,76 @@
+{
+  "startedAt": "2026-08-29T19:53:17.779Z",
+  "finishedAt": "2026-08-29T19:53:53.402Z",
+  "durationMs": 35623,
+  "mode": "e2e",
+  "environment": {
+    "node": "20.20.2",
+    "platform": "Linux 6.18.15",
+    "serverBase": "http://127.0.0.1:5173",
+    "server": true,
+    "health": {
+      "status": "ok",
+      "uptime": 4387,
+      "project": "Qase"
+    },
+    "benchmarks": [
+      {
+        "port": 9901,
+        "ok": true
+      },
+      {
+        "port": 9902,
+        "ok": true
+      },
+      {
+        "port": 9903,
+        "ok": true
+      }
+    ],
+    "envProblems": []
+  },
+  "categories": {
+    "e2e": {
+      "name": "e2e",
+      "label": "CASE UI E2E (Playwright)",
+      "files": 1,
+      "tests": 31,
+      "pass": 30,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "known": 1,
+      "knownIssues": [
+        "journey.spec.mjs: P1-4 duplicate test-case names not double-rendered — conc-test-0 appears 2× (known open bug)"
+      ],
+      "durationMs": 35565,
+      "failures": [],
+      "status": "RUN",
+      "blocking": true,
+      "log": "artifacts/test-e2e-journey.log"
+    }
+  },
+  "totals": {
+    "tests": 31,
+    "pass": 30,
+    "fail": 0,
+    "known": 1,
+    "skipped": 0,
+    "cancelled": 0
+  },
+  "criticalFailures": [],
+  "knownIssues": [
+    "e2e: journey.spec.mjs: P1-4 duplicate test-case names not double-rendered — conc-test-0 appears 2× (known open bug)"
+  ],
+  "productionGate": {
+    "pass": null,
+    "reason": "gate not evaluated in mode=e2e"
+  },
+  "artifacts": {
+    "json": "artifacts/test-report.json",
+    "html": "artifacts/test-report.html",
+    "logs": [
+      "artifacts/test-e2e-journey.log"
+    ]
+  }
+}

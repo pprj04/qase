@@ -94,18 +94,25 @@
             <span class="ai-cursor-blink">_</span>
           </div>
           <h2>Autonomous Software Quality Engineer</h2>
-          <!-- B1 W3 — anonymous API reads are closed. Until a token is set,
-               the UI shows this gate instead of failing silently.
-               D0.5 — accepts EITHER the admin API token OR a team access
-               code (viewer/operator) minted in Settings → Team Access. -->
+          <!-- B1 W3 — anonymous API reads are closed. Humans sign in with a
+               QASE account (email+password). D2 Stage 3: access codes and
+               the admin-token field are removed from the UI; the machine
+               token is a server-side env credential for CI/tests only. -->
           <div id="auth-gate" hidden>
-            <p><strong>Sign in to QASE.</strong><br>
-               Enter your team access code — or the API token if you're the admin.</p>
-            <div style="display:flex;gap:8px;justify-content:center;max-width:440px;margin:12px auto;">
-              <input id="auth-gate-token" type="password" placeholder="Team access code or API token" style="flex:1;padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <button id="auth-gate-save" class="btn" style="padding:8px 14px;">Continue</button>
+            <p><strong id="auth-gate-title">Sign in to QASE</strong></p>
+            <div id="auth-gate-login" style="display:flex;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
+              <input id="auth-gate-email" type="email" placeholder="Email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <input id="auth-gate-password" type="password" placeholder="Password" autocomplete="current-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <button id="auth-gate-signin" class="btn" style="padding:8px 14px;">Sign in</button>
             </div>
-            <p class="subtle" style="font-size:12px;opacity:.7;">Team codes never see the admin token. Session stored in a cookie only.</p>
+            <div id="auth-gate-register" style="display:none;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
+              <p class="subtle" style="font-size:13px;opacity:.8;margin:0;">No admin account exists yet — create one to take ownership of this workspace. This can be done only once.</p>
+              <input id="auth-gate-reg-email" type="email" placeholder="Your email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <input id="auth-gate-reg-name" type="text" placeholder="Your name (optional)" autocomplete="name" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <input id="auth-gate-reg-password" type="password" placeholder="Password (10+ characters)" autocomplete="new-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+              <button id="auth-gate-reg-save" class="btn" style="padding:8px 14px;">Create admin account</button>
+            </div>
+            <p class="subtle" style="font-size:12px;opacity:.7;" id="auth-gate-hint">Passwords are never shown again. Session stored in a cookie only.</p>
             <p id="auth-gate-error" role="alert" style="color:#f66;font-size:13px;min-height:1em;"></p>
           </div>
           <div id="auth-gate-rest">
@@ -752,36 +759,43 @@
 
       <hr class="cfg-divider">
 
-      <label class="field">
-        <span>API token</span>
-        <div class="cfg-token-row">
-          <input id="cfg-api-token" type="password" autocomplete="off" spellcheck="false" placeholder="Leave empty for local use">
-          <button class="btn btn-ghost btn-sm" type="button" id="cfg-api-token-clear" title="Clear token">Clear</button>
-        </div>
-        <small id="cfg-api-token-note">Protects test-run/schedule-trigger endpoints. Leave empty when running locally.</small>
-      </label>
+      <!-- D2 Stage 3: the API-token field is removed from the UI. The token
+           is a server-side env credential (QASE_API_TOKEN) for CI/tests. -->
 
       <hr class="cfg-divider">
-      <div class="cfg-section-title">👥 Team Access (D0.5)</div>
+      <div class="cfg-section-title">👤 User Accounts (D2)</div>
+      <p class="subtle" style="font-size:12px;opacity:.8;margin:0 0 8px;">Real accounts with email + password. Sessions survive server restarts.</p>
       <div class="cfg-grid-2">
         <label class="field">
-          <span>Label (who is this for?)</span>
-          <input id="cfg-team-label" type="text" placeholder="e.g. Alice — QA review" autocomplete="off">
+          <span>Email</span>
+          <input id="cfg-user-email" type="email" placeholder="teammate@example.com" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Display name (optional)</span>
+          <input id="cfg-user-name" type="text" placeholder="e.g. Alice" autocomplete="off">
+        </label>
+      </div>
+      <div class="cfg-grid-2">
+        <label class="field">
+          <span>Initial password (10+ chars)</span>
+          <input id="cfg-user-password" type="password" placeholder="They can change it later" autocomplete="new-password">
         </label>
         <label class="field">
           <span>Role</span>
-          <select id="cfg-team-role">
-            <option value="viewer">Viewer — read-only</option>
+          <select id="cfg-user-role">
             <option value="operator">Operator — run missions &amp; tests</option>
+            <option value="viewer">Viewer — read-only</option>
+            <option value="admin">Admin — manage users &amp; everything</option>
           </select>
         </label>
       </div>
       <div class="cfg-bs-test-row">
-        <button class="btn btn-ghost btn-sm" type="button" id="cfg-team-mint">Create access code</button>
-        <div class="test-result" id="cfg-team-result" hidden></div>
+        <button class="btn btn-ghost btn-sm" type="button" id="cfg-user-create">Create user</button>
+        <div class="test-result" id="cfg-user-result" hidden></div>
       </div>
-      <div id="cfg-team-list" class="cfg-team-list"></div>
-      <small>Codes are shown <strong>once</strong> at creation — the server stores only a hash. Revoking kills active sessions on their next request.</small>
+      <div id="cfg-user-list" class="cfg-team-list"></div>
+
+
 
       <div class="test-result" id="cfg-test"></div>
     </div>

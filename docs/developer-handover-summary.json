@@ -1,0 +1,202 @@
+{
+  "application": {
+    "name": "Qase — Autonomous QA Agent",
+    "description": "Self-hosted, single-tenant autonomous QA agent: LLM-driven agent drives real Chromium against an allowlisted target, files structured findings, generates test cases, replays workflows as regression suites, self-heals selectors, validates fixes.",
+    "runtime": "Node.js >= 20, ES modules, Express 5, no TypeScript, no frontend framework",
+    "sdk": "@cleanslate/sdk ^0.1.0",
+    "entry_points": {
+      "server": "server/index.js",
+      "frontend": "public/index.html (served statically by the server)",
+      "tests": "scripts/run-tests.mjs",
+      "openapi_validation": "scripts/validate-openapi.mjs"
+    }
+  },
+  "current_state": {
+    "branch": "main",
+    "head_commit": "2a22a74180df629ee1e962924aff7f28abf67f05",
+    "checkpoint": "C3",
+    "workspace_clean": true,
+    "uncommitted_docs_only": ["docs/ handover set", "QASE-API-HANDOFF/", "HANDOVER-NEW-DEVELOPER.md"],
+    "server_status": "RUNNING (qase-server-v2 under procmgr, port 5173)",
+    "verified_at": "2026-08-29"
+  },
+  "architecture": {
+    "pattern": "single process; Express app + SDK agent runtime + file-based JSON persistence via atomicWrite",
+    "middleware_order": ["express.json(raw-body capture)", "setAuthCookie(refresh-only)", "correlationId", "static SPA", "artifacts", "/demo", "/api phaseRouter", "/api/v2 pulse router", "/openapi.json"],
+    "cors": "none (single-origin)",
+    "rate_limiting": "not implemented",
+    "module_count": 86,
+    "notable_dead_code": ["server/duplicateSuppression.js (zero importers)"],
+    "doc": "docs/ARCHITECTURE.md"
+  },
+  "frontend": {
+    "framework": "none (vanilla JS SPA, hash router)",
+    "pages": ["Runs (default)", "Tests", "Bugs/Findings", "Workflows", "Schedules", "Settings"],
+    "auth_flow": "first-run token gate -> token stored in localStorage qase_token -> fetch wrapper adds Bearer",
+    "live_updates": "SSE /api/sessions/:id/events (?token= auth)",
+    "themes": "light/dark",
+    "limitations": ["no i18n", "no virtualization for very large lists", "heavy session detail gated behind full=1"]
+  },
+  "backend": {
+    "api_groups": {
+      "legacy_agent_api": "/api/* (token-gated)",
+      "mission_evidence_api": "/api/v1/* (token-gated)",
+      "integration_api": "/api/v1/integration/* (HMAC-signed, scoped)",
+      "pulse_read_api": "/api/v2/* (token-gated; /health public)",
+      "openapi": "/openapi.json (public)"
+    },
+    "public_routes": ["/api/health", "/api/v2/health", "/openapi.json", "/demo/*"],
+    "concurrency": "missionGovernor FIFO, 1 concurrent agent mission; suite runs have separate concurrency; scheduler 60s tick",
+    "persistence": "JSON files in .qase/ via atomicWrite (temp+rename); no SQL/Redis in use"
+  },
+  "api": {
+    "openapi_version": "3.1.0",
+    "generated_by": "server/openapiDocument.js (live, single source of truth)",
+    "get_operations": 32,
+    "unique_operation_ids": 32,
+    "write_operations_documented": 0,
+    "auth_scheme": "bearerAuth",
+    "envelope": "{data,total,page,page_size}; page_size clamp 500",
+    "validation": "scripts/validate-openapi.mjs -> 0 violations (2026-08-29)",
+    "doc": "docs/API-HANDOVER.md"
+  },
+  "authentication": {
+    "instance_token": "IMPLEMENTED — Bearer header / qase_token cookie (refresh-only) / ?token= query; timing-safe; gates all /api except public routes",
+    "integration_hmac": "IMPLEMENTED — QASE-HMAC-SHA256 over method+path+timestamp+nonce+sha256(body); scopes; workspace matching; principals in .qase/integrations.json",
+    "spa_gate": "IMPLEMENTED — first-run token gate; localStorage qase_token",
+    "read_only_token": "NOT IMPLEMENTED (full read/write token only; options documented)"
+  },
+  "security": {
+    "ssrf_targetguard": "IMPLEMENTED — allowlist at ingest + CDP page/redirect boundaries + webhook URL validation",
+    "secret_vault": "IMPLEMENTED — session-scoped; agent sees {{PLACEHOLDER}}s; redactor scrubs leaks",
+    "secret_storage": "config: .qase/config.json (BrowserStack key plaintext-at-rest today, masked in all API responses); LLM key in platform-managed .env",
+    "decision_traces": "IMPLEMENTED — 13 structured fields; no prompts/content",
+    "webhook_signing": "IMPLEMENTED — HMAC-SHA256 signatures, backoff retries max 5, persisted deliveries",
+    "csrf": "NOT IMPLEMENTED (mitigated: no CORS, Bearer-only auth, cookie never granted to anonymous)",
+    "rate_limiting": "NOT IMPLEMENTED"
+  },
+  "llm": {
+    "agent_transport": "@cleanslate/sdk (provider/model/baseUrl configured; SDK owns transport)",
+    "direct_calls": "testGen.js callLLM -> {baseUrl}/chat/completions (120s timeout, 2 retries): workflow->test-cases, finding root-cause, app improvement report, self-heal selector, feature-gap enhancement, app-understanding reasoning",
+    "probe": "config.js testConnection -> GET {baseUrl}/models (12s)",
+    "gateway_in_use": "platform-configured OpenAI-compatible endpoint (value in env, not in docs)",
+    "role_separation": "NOT IMPLEMENTED (single model tier; C5 roadmap)"
+  },
+  "autonomy": {
+    "decision_engine": "deterministic rule cascade (CONTINUE/REVALIDATE/REPLAN/STOP) — no LLM in decisions",
+    "mid_session_probe": "C3 — every 4 turns; authority=NONE (hint or early-stop request only)",
+    "budget": "maxTurns clamp 1-500; hard abort in agent loop; turn-pool debits; autonomy layer can never raise maxTurns (source-tested)",
+    "governor": "FIFO concurrency gate + stuck-mission watchdog",
+    "traces": "13-field records persisted to .qase/decision-traces.json",
+    "genuinely_autonomous": ["exploration", "test-plan execution", "finding capture+enrichment", "mid-session decisions within budget", "close-out", "knowledge write (validated only)"],
+    "not_autonomous": ["finding confirmation (human)", "fix application (human)", "test-case acceptance", "raising own budget"]
+  },
+  "browser_automation": {
+    "engine": "Playwright Chromium (bundled)",
+    "agent_runtime": "local bundled Chromium only",
+    "test_replay": "local or BrowserStack CDP (wss://cdp.browserstack.com/playwright)",
+    "evidence": "screenshots, traces, console, network via evidence graph",
+    "device_context": "Playwright device descriptors; viewport emulation"
+  },
+  "browserstack": {
+    "status": "PARTIAL — probe + test-case replay execution exist; agent/mission execution does NOT exist",
+    "credential_storage": ".qase/config.json fields (user/key/enabled/browsers/strict/lastVerified) + QASE_BROWSERSTACK_* env seeds",
+    "connection_test": "2-stage probe (Basic-auth plan.json + CDP WS handshake); no Automate minutes burned",
+    "strict_mode": "BrowserStackStrictError on failure; non-strict falls back to local with loud warning",
+    "c4_productionization": "NOT BUILT — working-tree implementation lost in 2026-08-27 container restart; spec at .drytis/specs/C4-browserstack-production.md"
+  },
+  "storage": {
+    "type": "file-based JSON (.qase/) with atomicWrite; artifacts under .qase/artifacts/",
+    "stores": ["sessions.json", "missions.json", "findings.json", "test-cases.json", "workflows.json", "suites.json", "projects.json", "regression-runs.json", "replay-runs.json", "schedules.json", "knowledge.json", "decision-traces.json", "fix-validations.json", "evidence-graph.json", "ux-assessments.json", "api-usage.json", "integrations.json", "webhook-subscriptions.json", "webhook-deliveries.json", "baselines.json", "config.json", "artifacts/"],
+    "sql_or_redis": "none in use (platform MySQL provisioned, stopped by design)",
+    "cleanup": "storeHygiene (dry-run/guarded); artifacts cleanup diagnostics; sessions pruned to 50"
+  },
+  "evidence": {
+    "graph": "evidenceGraph.js — exploration->evidence->findings->assessment->decision edges; integrity verify; coverage; pruning",
+    "per_finding": "GET /api/v1/missions/:id/findings/:fid/evidence-chain",
+    "artifacts": ".qase/artifacts/<runId>/ (traversal-guarded serving)",
+    "auto_deletion": "none"
+  },
+  "findings": {
+    "lifecycle": "session finding -> global sync (missionId stamped) -> deterministic enrichment (severity/category/root-cause with reasons) -> duplicate detection -> human review -> fix validation -> resolved/reopened",
+    "safeguards": ["low-confidence AI findings never auto-confirmed", "approval is a human action (approve->RESOLVED)", "feature-gap findings require explicit-expectation evidence (C3 gate)", "fix status derived only by deterministic fixStatusEngine"]
+  },
+  "regression": {
+    "replay": "runTestCase/runTestSuite with retries + concurrency",
+    "self_heal": "selector-failure detection -> DOM snapshot -> LLM selector proposal -> patch",
+    "fix_validation": "finding-derived validation case, N attempts (default 2), verdicts VERIFIED_FIXED/STILL_BROKEN/PARTIALLY_FIXED/REGRESSED",
+    "scheduling": "cron schedules -> replay suites; manual trigger; trends",
+    "manual_steps": ["reviewing findings", "approving fixes", "accepting generated test cases"]
+  },
+  "testing": {
+    "suite": "tests-real/ (71 files) via scripts/run-tests.mjs (gate/core/unit/api/contract/e2e/accessibility/responsive/performance/security/truthfulness)",
+    "benchmarks": "python3 scripts/serve-benchmarks.py serves :9901-9907 (required for device/browser tests)",
+    "env_requirements": "QASE_BASE_URL=http://localhost:5173 for tests (app .env sets it to the LLM endpoint); QASE_API_TOKEN loaded",
+    "latest_verified_2026_08_29": {
+      "gate_mode_suites_observed": "24/49 all green (b0,b1,b2,c2,c3,m1-p4.x,browserstack-trust,execution-provenance,device-context)",
+      "c1_usage_api": "20/20 (with server base URL set)",
+      "device_execution": "27/27 (with benchmark apps up)",
+      "full_test_all": "NOT VERIFIED this session"
+    }
+  },
+  "deployment": {
+    "local": "npm start (port 5173); procmgr service qase-server-v2",
+    "preview": "https://pulse-review-workspa-6grhjr.drytis.dev/ (C3; Caddy / -> 5173)",
+    "production": {
+      "url": "https://qase.drytis.com",
+      "build": "C2 (1766bec)",
+      "health": "healthy; /openapi.json 200 (verified 2026-08-29; transient 502 observed once during pod reschedule, self-healed)",
+      "known_gap": "servers[0].url advertises internal host until prod QASE_PUBLIC_URL set"
+    },
+    "deploy_flow": "verify on dev -> commit+push -> platform config push -> rolling restart -> smoke checks",
+    "warning": "container restart resets workspace to last pushed commit — uncommitted work is destroyed (incident: 2026-08-27)"
+  },
+  "configuration": {
+    "sources_precedence": "stored config (.qase/config.json via Settings) overrides env for LLM provider fields; env seeds; .env platform-managed (never hand-edit)",
+    "doc": "docs/OPERATIONS-RUNBOOK.md (full table incl. defaults/sensitivity)",
+    "secrets_in_docs": "none"
+  },
+  "build_history": {
+    "B0": {"commit": "0525ba7", "status": "shipped"},
+    "B1": {"commit": "2ae4888", "status": "shipped"},
+    "B2": {"commit": "9023a42", "status": "shipped"},
+    "C1": {"commit": "e7b0cb3", "status": "shipped"},
+    "C2": {"commit": "1766bec", "status": "shipped (production runs this)"},
+    "C3": {"commit": "2a22a74", "status": "shipped (HEAD)"},
+    "C4": {"commit": null, "status": "NOT BUILT — lost in container restart; spec exists"}
+  },
+  "known_issues": [
+    {"priority": "P1", "issue": "Production one build behind (C2 vs C3) and /openapi.json advertises internal servers url", "fix": "set prod QASE_PUBLIC_URL=https://qase.drytis.com + normal deploy"},
+    {"priority": "P1", "issue": "No read-only API token; instance token is full read/write"},
+    {"priority": "P2", "issue": "C4 BrowserStack productionization not built (agent missions local-only); rebuild spec available"},
+    {"priority": "P2", "issue": "Test env collision: QASE_BASE_URL used for both LLM endpoint (app) and server base (tests)"},
+    {"priority": "P2", "issue": "Dead code duplicateSuppression.js; duplicate route registrations between index.js and phaseRouter"},
+    {"priority": "P3", "issue": "Container gitconfig corrupted; tests/ + docs/phase-3-knowledge-audit.md report FS corruption (cosmetic)"},
+    {"priority": "P3", "issue": "Edge occasionally 502s during production pod reschedules (observed once, self-healed)"}
+  ],
+  "remaining_work": [
+    {"status": "NOT STARTED", "item": "Deploy C3 to production + set QASE_PUBLIC_URL"},
+    {"status": "NOT STARTED", "item": "Read-only Bearer token (options A/B/C in QASE-API-HANDOFF/README.md)"},
+    {"status": "NOT STARTED", "item": "C4 BrowserStack productionization (rebuild from spec)"},
+    {"status": "NOT STARTED", "item": "C5: LLM role separation / model governor / regression learning (roadmap only, no code)"},
+    {"status": "OPTIONAL", "item": "OpenAPI guide-audit patch (envelopes on /api/v2/projects + /regression/trend, name joins; spec survives)"},
+    {"status": "OPTIONAL", "item": "Rate limiting; encrypted BrowserStack secret store (folded into C4 rebuild)"}
+  ],
+  "quick_start": [
+    "clone/open the repo (main @ 2a22a74)",
+    "npm install",
+    "npm run install-browser",
+    "configure env (platform env-keys or .env; LLM provider fields + QASE_API_TOKEN)",
+    "npm start",
+    "curl http://localhost:5173/api/health -> ok",
+    "open http://localhost:5173 -> paste instance token at the gate",
+    "Settings: LLM key/baseUrl/model (+ optional BrowserStack)",
+    "python3 scripts/serve-benchmarks.py & (practice targets on :9901-9907)",
+    "create a session targeting http://127.0.0.1:9901/ (or any allowlisted URL)",
+    "watch the run live; review findings + evidence",
+    "POST /api/v1/missions/:id/revalidate for validation",
+    "query /api/v2/* with the Bearer token",
+    "open /openapi.json (or QASE-API-HANDOFF/openapi.json snapshot)",
+    "python3 scripts/serve-benchmarks.py & ; QASE_BASE_URL=http://localhost:5173 npm run test:gate"
+  ]
+}

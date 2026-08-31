@@ -758,7 +758,11 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 				}
 
 				// Capture DOM snapshot for potential self-healing.
-				if (isSelectorFailure(stepResult)) {
+				// isSelectorFailure inspects the step result's action —
+				// executeStep's return value carries only status/error/duration,
+				// so pass the action explicitly (D1: without this the heal
+				// branch was unreachable for every selector failure).
+				if (isSelectorFailure({ ...stepResult, action: step.action })) {
 					try {
 						result._domSnapshot = await capturePageDom(page);
 						result._failedStepIndex = i;

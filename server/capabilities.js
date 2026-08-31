@@ -86,8 +86,16 @@ class CapabilityRegistry {
 
 /* ── Reliability constants ──────────────────────────────────────── */
 
-/** Per-capability timeout in ms. Capabilities that exceed this are failed. */
-const CAPABILITY_TIMEOUT_MS = 180_000; // 3 minutes per capability
+/**
+ * Per-capability timeout in ms. Capabilities that exceed this are failed.
+ * Env override QASE_CAPABILITY_TIMEOUT_MS exists because test_generation is
+ * a long-horizon LLM call: real workflows with 50–100 captured steps produce
+ * prompts whose completions legitimately run past 3 minutes on slower
+ * gateways — the hard-coded 180s failed healthy generations (observed live:
+ * 'capability:test_generation timed out after 180000ms' while the same
+ * request completed in ~46–75s via the manual endpoint).
+ */
+const CAPABILITY_TIMEOUT_MS = Number(process.env.QASE_CAPABILITY_TIMEOUT_MS ?? 180_000);
 /** Max retry attempts for retryable capability failures. */
 const CAPABILITY_MAX_RETRIES = 1;
 /** Delay between capability retries. */
@@ -204,7 +212,13 @@ class Orchestrator {
 					{
 						maxRetries: CAPABILITY_MAX_RETRIES,
 						delayMs: CAPABILITY_RETRY_DELAY_MS,
-						timeoutMs: CAPABILITY_TIMEOUT_MS,
+						// test_generation holds the workflow prompt for the full
+						// LLM round-trip; apply the per-capability timeout
+						// PER ATTEMPT (a 3-minute timeout applied across a
+						// retry + 3s delay cut healthy generations short).
+						timeoutMs: cap.id === 'test_generation'
+							? Math.max(CAPABILITY_TIMEOUT_MS, 300_000)
+							: CAPABILITY_TIMEOUT_MS,
 						label: `capability:${cap.id}`
 					}
 				);
@@ -277,7 +291,14 @@ function createDefaultRegistry() {
 			emitProgress(session, 'test_generation', 'running', 'Generating test cases via LLM…');
 			const findings = session.findings ?? [];
 			const raw = await generateTestCasesFromWorkflow(wf, findings);
-			const testCases = createTestCases(raw, {
+			// D1 — provenance: generated test cases carry the origin mission
+			// and session so the UI (D1.9 Source row) and the API can trace a
+			// test case back to the run that produced its workflow.
+			const testCases = createTestCases(raw.map(rec => ({
+				...rec,
+				missionId: session.missionId ?? undefined,
+				sessionId: session.id
+			})), {
 				projectId: session.projectId,
 				workflowId: wf.id,
 				targetUrl: session.targetUrl

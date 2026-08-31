@@ -143,6 +143,11 @@ export function createTestCase(data) {
 		id: randomUUID(),
 		projectId: data.projectId ?? undefined,
 		workflowId: data.workflowId ?? null,
+		// D1 — origin provenance (mission/session that produced the workflow
+		// this test case was generated from). Manual test cases leave these
+		// null; the UI renders the Source row only when present.
+		missionId: data.missionId ?? null,
+		sessionId: data.sessionId ?? null,
 		suiteId: data.suiteId ?? null,
 		name: data.name ?? 'Untitled test case',
 		targetUrl: data.targetUrl ?? '',

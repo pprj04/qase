@@ -22,7 +22,22 @@ export function buildQaContext(session, liveUrl) {
 		? `The browser is currently on: ${liveUrl}\nIf that is not where you expected to be, you were signed out or redirected. Take a browser_snapshot and re-establish where you are before doing anything else. Never describe a page you have not just looked at.`
 		: 'No browser page is open yet.';
 
-	// Pre-exploration understanding + risk (injected if available)
+	// D1 — turn-budget awareness. An agent that does not know its budget
+	// explores until the hard SDK stop, which routes the run into the
+	// deterministic close-out (no model-authored report, no test generation —
+	// observed live at 25/60/120-turn budgets). Publishing the remaining
+	// budget on every turn lets the model plan a wrap-up: report, then
+	// finish_qa_report before the wall.
+	const turnLimit = Number.isInteger(session.maxTurns) && session.maxTurns >= 1
+		? session.maxTurns
+		: null;
+	const turnsUsed = Number(session.turnCount) || 0;
+	const budgetBlock = turnLimit != null
+		? `# Turn budget
+
+You have ${turnLimit - turnsUsed} turn(s) left of your authorized ${turnLimit}. When fewer than 8 remain, stop opening new areas: wrap up what you have, call report_finding for anything confirmed but unreported, and call finish_qa_report BEFORE the budget runs out. A run that hits the wall is closed out deterministically — no report is authored, no test cases are generated from your work. Finishing within budget is part of the job.`
+		: '';
+
 	const testContext = session.testContext || null;
 	const understandingBlock = testContext?.promptSection
 		? `\n${testContext.promptSection}\n`
@@ -47,7 +62,7 @@ read, write or execute anything on the host machine.
 ${target}
 ${credentials}
 ${location}
-${understandingBlock}${adaptiveBlock}${urgencyBlock}
+${budgetBlock}${understandingBlock}${adaptiveBlock}${urgencyBlock}
 # Tools you may use
 
 - browser_open, browser_snapshot, browser_get_url, browser_wait, browser_screenshot

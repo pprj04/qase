@@ -33,8 +33,28 @@ const MODEL_TIMEOUT_RETRY_DELAY_MS = 2000;
  * After this the turn is aborted and retried or marked as 'error'.
  * This wraps the ENTIRE runTurn call (all internal model turns).
  * Set to 20 minutes to allow a full mission of 20+ agent turns.
+ *
+ * D2.1 — configurable via QASE_SESSION_TIMEOUT_MINUTES (5–120, default 20).
+ * Deep missions (maxTurns 300 observed at ~9s/turn) need more than 20 min;
+ * the clamp keeps the runaway-protection purpose intact.
  */
-const SESSION_TURN_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+function resolveSessionTimeoutMs() {
+	const raw = process.env.QASE_SESSION_TIMEOUT_MINUTES;
+	if (raw === undefined || raw === '' || raw === null) return 20 * 60 * 1000;
+	const n = Number(raw);
+	if (!Number.isInteger(n)) {
+		console.warn(`[agent] QASE_SESSION_TIMEOUT_MINUTES="${raw}" is not an integer — using default 20 min.`);
+		return 20 * 60 * 1000;
+	}
+	if (n < 5 || n > 120) {
+		console.warn(`[agent] QASE_SESSION_TIMEOUT_MINUTES=${n} outside the 5–120 range — clamping to ${n < 5 ? 20 : 120} min.`);
+		return (n < 5 ? 20 : 120) * 60 * 1000;
+	}
+	return n * 60 * 1000;
+}
+const SESSION_TURN_TIMEOUT_MS = resolveSessionTimeoutMs();
+// D2.1 — exported for tests; production code reads SESSION_TURN_TIMEOUT_MS.
+export { resolveSessionTimeoutMs as __resolveSessionTimeoutMs };
 
 /**
  * Maximum wall-clock time to wait without any meaningful progress
@@ -243,11 +263,42 @@ export async function ensureRuntime(session) {
 	// way to know a tool has begun — and to show it as running — is to wrap the
 	// executor the loop calls.
 	const originalExecute = headless.executeTool.bind(headless);
+	// D1 — turn-budget awareness at the tool-result seam. The SDK injects
+	// additionalContext only on turns 0–1 (shouldRefreshContextForTurn), so
+	// the buildQaContext budget block goes stale immediately. The model sees a
+	// tool result EVERY turn; appending the live remaining-budget count to the
+	// LAST tool result of each turn would need turn-boundary knowledge we don't
+	// have here — instead we annotate the two wrap-up-relevant tools and rely
+	// on the system context for the rest. See appendBudgetNote below.
+	const turnLimitForBudget = Number.isInteger(session.maxTurns) && session.maxTurns >= 1
+		? session.maxTurns
+		: null;
+	const budgetNote = () => {
+		if (turnLimitForBudget == null) return '';
+		const remaining = turnLimitForBudget - (Number(session.turnCount) || 0);
+		if (remaining <= 0) return '';
+		if (remaining > 10) return '';
+		return `\n[BUDGET] ${remaining} turn(s) of ${turnLimitForBudget} left. If fewer than 8: stop opening new areas, call report_finding for anything confirmed, then call finish_qa_report BEFORE the budget runs out — a run that hits the wall gets no model-authored report and generates no test cases.`;
+	};
 	headless.executeTool = async function* (toolName, input, toolCallId, signal) {
 		// onToolStart became async (M1-P4.1 target validation) — its result is
 		// not needed for the tool stream, so drift is fine.
 		void Promise.resolve(record.onToolStart?.(toolName, input, toolCallId)).catch(() => {});
-		yield* originalExecute(toolName, input, toolCallId, signal);
+		const iterator = originalExecute(toolName, input, toolCallId, signal);
+		let wrapped = false;
+		for await (const part of iterator) {
+			if (!wrapped && turnLimitForBudget != null && (part?.type === 'tool_result')
+				&& !['finish_qa_report', 'ask_question'].includes(toolName)) {
+				wrapped = true;
+				const note = budgetNote();
+				if (note && part.result && typeof part.result === 'object') {
+					// Annotate a COPY — never mutate SDK-owned result objects.
+					yield { ...part, result: { ...part.result, budget_note: note.trim() } };
+					continue;
+				}
+			}
+			yield part;
+		}
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
@@ -535,8 +586,12 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 	// Mission-level turn timeout guard. If the turn exceeds the limit,
 	// abort the controller and mark the session as errored. This prevents
 	// runaway agent loops from holding browser resources indefinitely.
+	// D2.1 — flag the abort cause so the catch cascade can attribute it
+	// truthfully (wall-clock timeout, NOT turn budget, NOT user stop).
+	let timeoutWallClock = false;
 	let turnTimeoutTimer = setTimeout(() => {
 		if (!controller.signal.aborted) {
+			timeoutWallClock = true;
 			controller.abort();
 			addMessage(session, {
 				role: 'system',
@@ -761,6 +816,22 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 			} else {
 				setStatus(session, 'idle', 'Model went silent after retries.');
 			}
+		} else if (timeoutWallClock) {
+			// D2.1 — wall-clock session timeout. Not an error, not a budget
+			// event, not a user stop: the run exceeded its authorized
+			// wall-clock window. Settled 'done' so finalizeTurnLimitedRun()
+			// compiles the honest deterministic report with TRUE attribution
+			// (stopCause='wall_clock_timeout'); zero further model turns.
+			session.turnCount = turnCount;
+			session.stopCause = 'wall_clock_timeout';
+			setStatus(session, 'done');
+			addMessage(session, {
+				role: 'system',
+				text: `Session wall-clock timeout of ${SESSION_TURN_TIMEOUT_MS / 60000} minutes reached at turn ${turnCount}${turnLimit != null ? ` of ${turnLimit}` : ''}. Closing out from the evidence collected so far.`,
+				kind: 'error'
+			});
+			void closeBrowser(session.id);
+			record?.dispose?.();
 		} else if (controller.signal.aborted) {
 			setStatus(session, 'idle', 'Stopped by user.');
 		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModelTimeout(error)) {
@@ -835,6 +906,8 @@ export function finalizeTurnLimitedRun(session) {
 		.filter(Boolean);
 	const uniqueCovered = [...new Set(covered)];
 	const turnLimit = Number.isInteger(session.maxTurns) ? session.maxTurns : null;
+	// D2.1 — truthful attribution: a wall-clock stop is NOT a budget stop.
+	const wallClock = session.stopCause === 'wall_clock_timeout';
 
 	session.report = {
 		ts: Date.now(),
@@ -843,12 +916,17 @@ export function finalizeTurnLimitedRun(session) {
 			: findings.length > 0
 				? 'pass_with_issues'
 				: 'inconclusive',
-		summary: `Run stopped at the authorized turn budget${turnLimit != null ? ` (${turnLimit} turns)` : ''}. ` +
-			`This report was compiled deterministically from the evidence already collected (${findings.length} finding(s), ${uniqueCovered.length} covered area(s)); no additional testing was performed after the budget was reached.`,
+		summary: wallClock
+			? `Run stopped at the session wall-clock timeout (${SESSION_TURN_TIMEOUT_MS / 60000} min, reached at turn ${Number(session.turnCount) || '?'}${turnLimit != null ? ` of ${turnLimit}` : ''}). ` +
+				`This report was compiled deterministically from the evidence already collected (${findings.length} finding(s), ${uniqueCovered.length} covered area(s)); no additional testing was performed after the timeout.`
+			: `Run stopped at the authorized turn budget${turnLimit != null ? ` (${turnLimit} turns)` : ''}. ` +
+				`This report was compiled deterministically from the evidence already collected (${findings.length} finding(s), ${uniqueCovered.length} covered area(s)); no additional testing was performed after the budget was reached.`,
 		covered: uniqueCovered,
 		notCovered: [],
 		recommendations: [
-			'Rerun with a higher authorized turn budget for deeper coverage of areas not yet explored.',
+			wallClock
+				? 'Rerun with a higher session timeout (QASE_SESSION_TIMEOUT_MINUTES) or a tighter scope so the run can complete its plan.'
+				: 'Rerun with a higher authorized turn budget for deeper coverage of areas not yet explored.',
 			...findings.slice(0, 5).map(f => `${f.severity?.toUpperCase() ?? 'ISSUE'}: ${f.title ?? 'finding'} — ${f.recommendation ?? f.description ?? ''}`.trim())
 		],
 		targetUrl: session.targetUrl ?? null,

@@ -93,9 +93,40 @@ async function loadTestCases() {
 	state.testCasesLoaded = true;
 	clearPageState(el.testcasePane);
 
+	// D1.9 — provenance cache for the Source row on test-case cards:
+	// workflow (sessionId) → session (missionId). Loaded once per page load;
+	// failures degrade silently to showing only the workflow chip.
+	await ensureProvenanceCache();
+
 	renderSuiteTree();
 	renderTestsStats();
 	renderTestCases();
+}
+
+// D1.9 — provenance lookups for test-case cards. Kept separate from the
+// workflows page state (workflowState) so this page stays self-contained.
+const provenanceCache = { workflows: null, sessions: null };
+
+// Short ID for provenance chips (e.g. "91c6e23c"), independent of truncate().
+const shortIdLabel = (id) => (typeof id === 'string' ? id.slice(0, 8) : String(id));
+
+async function ensureProvenanceCache() {
+	if (!provenanceCache.workflows) {
+		try {
+			const data = await api('/workflows');
+			provenanceCache.workflows = Array.isArray(data) ? data : [];
+		} catch {
+			provenanceCache.workflows = [];
+		}
+	}
+	if (!provenanceCache.sessions) {
+		try {
+			const data = await api('/sessions');
+			provenanceCache.sessions = Array.isArray(data) ? data : [];
+		} catch {
+			provenanceCache.sessions = [];
+		}
+	}
 }
 
 function renderTestCases() {
@@ -401,6 +432,53 @@ function renderTestCaseCard(tc) {
 			bugBadges.append(badge);
 		}
 		header.append(bugBadges);
+	}
+
+	// D1.9 — Source provenance: Mission → Session → Workflow (concise, clickable
+	// where the hash router supports navigation). D1 final pass: the test case
+	// record itself carries sessionId + missionId when generated from a mission
+	// (authoritative, immune to Phase 9.3 session-shell pruning); the
+	// workflow → session → mission chain is the fallback for older records.
+	// Rendered only when at least one link is available, so manual test cases
+	// are unaffected.
+	const sourceLinks = [];
+	const wfId = tc.sourceWorkflowId ?? tc.workflowId ?? null;
+	if (tc.sessionId) {
+		sourceLinks.push({ label: `Session ${shortIdLabel(tc.sessionId)}`, hash: `#/runs/${tc.sessionId}`, title: `Source session ${tc.sessionId}` });
+		if (tc.missionId) {
+			sourceLinks.unshift({ label: `Mission ${shortIdLabel(tc.missionId)}`, hash: null, title: `Source mission ${tc.missionId}` });
+		}
+		if (wfId) {
+			sourceLinks.push({ label: `Workflow ${shortIdLabel(wfId)}`, hash: null, title: `Source workflow ${wfId}` });
+		}
+	} else if (wfId) {
+		sourceLinks.push({ label: `Workflow ${shortIdLabel(wfId)}`, hash: null, title: `Source workflow ${wfId}` });
+		const wf = (provenanceCache.workflows ?? []).find(w => w.id === wfId);
+		if (wf?.sessionId) {
+			sourceLinks.push({ label: `Session ${shortIdLabel(wf.sessionId)}`, hash: `#/runs/${wf.sessionId}`, title: `Source session ${wf.sessionId}` });
+			const mid = (provenanceCache.sessions ?? []).find(s => s.id === wf.sessionId)?.missionId ?? wf.missionId ?? null;
+			if (mid) sourceLinks.unshift({ label: `Mission ${shortIdLabel(mid)}`, hash: null, title: `Source mission ${mid}` });
+		}
+	}
+	if (sourceLinks.length > 0) {
+		const src = document.createElement('div');
+		src.className = 'tc-source-row';
+		const lbl = document.createElement('span');
+		lbl.className = 'tc-source-label';
+		lbl.textContent = 'Source:';
+		src.append(lbl);
+		for (const link of sourceLinks) {
+			const chip = document.createElement(link.hash ? 'a' : 'span');
+			chip.className = link.hash ? 'tc-source-chip tc-source-link' : 'tc-source-chip';
+			chip.textContent = link.label;
+			chip.title = link.title;
+			if (link.hash) {
+				chip.href = link.hash;
+				chip.onclick = (e) => { e.stopPropagation(); };
+			}
+			src.append(chip);
+		}
+		header.append(src);
 	}
 
 	// Body (collapsible)

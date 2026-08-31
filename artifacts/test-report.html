@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>QASE test report</title>
+<style>body{font:14px/1.5 -apple-system,system-ui,sans-serif;margin:2rem;color:#1a1a2e}
+h1{margin:0 0 .3rem}table{border-collapse:collapse;width:100%;margin-top:1rem}
+td,th{border:1px solid #d0d0e0;padding:.4rem .6rem;text-align:left;vertical-align:top;font-size:13px}
+tr.good td{background:#e8f7ee}tr.warn td{background:#fff6e0}tr.bad td{background:#fde8e8}
+.meta{color:#555;font-size:12px}.gate{padding:.8rem 1rem;border-radius:8px;font-weight:600;margin-top:1rem}
+.gate.pass{background:#e8f7ee;color:#0a6b35}.gate.fail{background:#fde8e8;color:#a11}
+ul.known{color:#7a5200;font-size:13px;margin:.4rem 0 0}</style></head>
+<body><h1>QASE / CASE — test report</h1>
+<div class="meta">2026-08-29T19:53:17.779Z · node 20.20.2 · server http://127.0.0.1:5173 (up) · benchmarks 3/3 · total 35.6s</div>
+<div class="gate pass">PRODUCTION GATE: NOT EVALUATED (single-category mode) — gate not evaluated in mode=e2e</div>
+<ul class="known"><b>Known open bugs / product findings (surfaced, tracked — do NOT block the gate):</b><li>e2e: journey.spec.mjs: P1-4 duplicate test-case names not double-rendered — conc-test-0 appears 2× (known open bug)</li></ul>
+
+<table><tr><th>category</th><th>label</th><th>files</th><th>tests</th><th>pass</th><th>fail</th><th>known</th><th>skip</th><th>canc</th><th>dur</th><th>policy</th><th>failures (first 5)</th></tr>
+		<tr class="warn">
+			<td>e2e</td><td>CASE UI E2E (Playwright)</td><td>1</td><td>31</td><td>30</td>
+			<td>0</td><td>1</td><td>0</td><td>0</td><td>35.6s</td>
+			<td>BLOCKING</td><td>—</td>
+		</tr></table>
+<p class="meta">Machine report: artifacts/test-report.json · Logs: artifacts/test-&lt;category&gt; taps + per-script .log files</p></body></html>

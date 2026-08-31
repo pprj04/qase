@@ -7,10 +7,11 @@ import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun } from './
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
 import {
-	SESSION_COOKIE, listCodes, mintCode, revokeCode, restoreCode,
-	loginWithCode, resolveSession, destroySession, sessionFromCookieHeader,
-	loginRateLimited, recordLoginFailure, recordLoginSuccess, resetLoginLimiter
-} from './uiAccess.js';
+	hasUsers, listUsers, createUser, findUserById, updateUser, setPassword,
+	login as userLogin, createSession as createUserSession, resolveSession as resolveUserSession,
+	revokeSession as revokeUserSession, getAuditTrail, loginRateLimited as userLoginRateLimited,
+	resetLoginFails, __resetForTests as resetUserStoreForTests
+} from './userStore.js';
 import { mountDemoSite } from './demoSite.js';
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets, vaultFor } from './secrets.js';
@@ -257,7 +258,8 @@ function safeEqual(a, b) {
  *
  * Authentication methods:
  *   1. Bearer token via Authorization header (for external API / CI-CD)
- *   2. qase_token cookie (set automatically for same-origin browser UI)
+ *   2. qase_token cookie (legacy — only if it already exists and matches;
+ *      humans authenticate via method 5 user sessions instead)
  *
  * Usage: apply to specific routes via `app.post('/path', requireApiToken, handler)`.
  */
@@ -316,21 +318,24 @@ function requireApiToken(request, response, next) {
 		return next();
 	}
 
-	// Method 4 (D0.5): qase_session cookie from a scoped UI access code
-	// (viewer = read-only, operator = read + missions). Sessions are held
-	// server-side; the cookie carries only the random session id. ADDITIVE —
-	// the three master-token paths above are untouched, and every session
-	// request is still subject to the role gate in enforceRole below.
-	const sessionId = sessionFromCookieHeader(request.headers.cookie);
-	if (sessionId) {
-		const session = resolveSession(sessionId);
-		if (session) {
-			request.auth = { kind: 'session', role: session.role, label: session.label, sessionId: session.id };
-			return enforceRole(request, response, next);
-		}
+	// Method 4 (D2): qase_session cookie from a USER account login
+	// (email+password). Durable — the token hash lives in
+	// .qase/auth-sessions.json, so sessions survive restarts. Role comes
+	// from the user record (admin|operator|viewer). ADMIN users get broad
+	// access except credential-bearing config, which requires the master
+	// token itself — humans should not hold the machine token.
+	const userSession = resolveUserSession(userSessionFromCookieHeader(request.headers.cookie));
+	if (userSession && userSession.user.disabledAt == null) {
+		request.auth = { kind: 'user', role: userSession.user.role, userId: userSession.user.id, email: userSession.user.email, name: userSession.user.name, sessionId: userSession.session.tokenHash.slice(0, 12) };
+		return enforceRole(request, response, next);
 	}
 
-	response.status(401).json({ error: 'Invalid or missing API token. Set Authorization: Bearer <token> header.' });
+	response.status(401).json({ error: 'Authentication required. Sign in at the login screen (session cookie), or use Authorization: Bearer <token> for API/CI access.' });
+}
+
+function userSessionFromCookieHeader(cookieHeader) {
+	const match = /(?:^|;\s*)qase_session=([^;]+)/.exec(cookieHeader ?? '');
+	return match ? decodeURIComponent(match[1]) : null;
 }
 
 /* ═════════════ D0.5 — scoped team access (roles) ═══════════════════
@@ -358,46 +363,57 @@ const MASTER_ONLY_PREFIXES = [
 
 function enforceRole(request, response, next) {
 	const { kind, role } = request.auth ?? {};
-	if (kind !== 'session') return next(); // master / open access — unchanged
-
-	if (request.method === 'GET' || request.method === 'HEAD') {
-		// VIEWER and OPERATOR both read. Master-only READs (config, admin)
-		// are handled below via prefix, before this early return.
-		if (!MASTER_ONLY_PREFIXES.some((prefix) => request.path.startsWith(prefix))) {
-			return next();
+	// Express matches routes CASE-INSENSITIVELY but req.path preserves the
+	// caller's case — normalize before every prefix check or /API/CONFIG
+	// walks straight past the master-only gate (D2 review finding #1).
+	const pathLower = request.path.toLowerCase();
+	if (kind === 'user' && role === 'admin') {
+		// D2 admin users: full access EXCEPT credential-bearing config
+		// surfaces (/api/config, /api/auth/admin, webhooks, diagnostics),
+		// which stay master-token-only — the machine token is not shared
+		// with humans, and admin humans manage users via /api/auth/users.
+		if (request.method !== 'GET' && MASTER_ONLY_PREFIXES.some((prefix) => pathLower.startsWith(prefix))) {
+			return response.status(403).json({ error: 'This credential-bearing surface requires the master API token.' });
 		}
+		if (request.method === 'GET' && (pathLower.startsWith('/api/auth/admin') || pathLower.startsWith('/api/v1/webhooks') || pathLower.startsWith('/api/v1/diagnostics'))) {
+			// Read-side of credential-bearing admin surfaces stays master-only.
+			return response.status(403).json({ error: 'This credential-bearing surface requires the master API token.' });
+		}
+		// Admin users may READ /api/config (sanitized in the route itself).
+		return next();
 	}
+	if (kind !== 'user') return next(); // master / open access — unchanged (code sessions removed in D2 Stage 3)
 
-	if (MASTER_ONLY_PREFIXES.some((prefix) => request.path.startsWith(prefix))) {
+	// Credential-bearing surfaces stay master-only for session + operator/viewer users.
+	// EXCEPTION: GET /api/config is allowed through to the route, which returns
+	// a SANITIZED projection for session/user kinds (no provider/model/token
+	// hints) — the SPA must boot for team roles. All other methods and all
+	// other master-only prefixes remain 403.
+	if (pathLower === '/api/config' && (request.method === 'GET' || request.method === 'HEAD')) {
+		return next();
+	}
+	if (MASTER_ONLY_PREFIXES.some((prefix) => pathLower.startsWith(prefix))) {
 		return response.status(403).json({ error: 'This operation requires the admin API token.' });
 	}
 
-	if (role === 'operator') return next(); // missions/tests/workflows/etc.
+	if (request.method === 'GET' || request.method === 'HEAD') {
+		// VIEWER and OPERATOR both read. Master-only READs (config, admin)
+		// are handled above via prefix, before this early return.
+		return next();
+	}
+
+	if (role === 'operator' || (kind === 'user' && role === 'admin')) return next(); // missions/tests/workflows/etc.
 	return response.status(403).json({ error: 'Viewer access is read-only.' });
 }
 
 /**
- * M1-P3 P0-5: the auth cookie is NO LONGER auto-granted on anonymous
- * responses. Previously this middleware handed the full mutation bearer
- * token to ANY visitor (including a first anonymous page load), making the
- * token gate cosmetic for anyone who could reach the origin.
- *
- * The SPA does not need the auto-grant to function: public reads remain open
- * (single-tenant posture) and the token for mutations is pasted once in
- * Settings → stored in localStorage (`qase_token`), which every fetch wrapper
- * already falls back to. Same-origin demo UX is preserved without
- * broadcasting the token to every request.
+ * D2 Stage 3 — the qase_token cookie is no longer granted or refreshed.
+ * Humans authenticate via user sessions (qase_session cookie, method 4);
+ * the master API token is a server-side machine credential used by
+ * CI/integration-tests over the Authorization header. This stub is kept so
+ * the middleware chain order stays identical (app.use(setAuthCookie)).
  */
-function setAuthCookie(request, response, next) {
-	const token = getConfig().apiToken;
-	if (!token) return next();
-	// Honor an existing valid cookie (no-op refresh keeps sessions stable),
-	// but never SET the token cookie from scratch on an anonymous request.
-	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
-	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
-		// Refresh the expiry of an already-valid cookie only.
-		response.setHeader('Set-Cookie', `qase_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`);
-	}
+function setAuthCookie(_request, _response, next) {
 	next();
 }
 
@@ -495,132 +511,174 @@ function startMissionExecution(mission, begin) {
 	});
 }
 
-/* ═════════════ D0.5 — auth/session routes ═══════════════════════════
+/* ═════════════ D2 — user account authentication ══════════════════════
  *
- * POST   /api/auth/session  { accessCode } → qase_session cookie (generic
- *                             success/failure only — never echoes the code)
- * DELETE /api/auth/session  invalidate the CURRENT session
- * GET    /api/auth/session  whoami for the UI (role, label, kind)
+ * POST   /api/auth/register-admin   ONE-TIME claim when zero users exist
+ *                                   (permanently 403 afterwards)
+ * POST   /api/auth/login            { email, password } → qase_session
+ *                                   (durable; generic failure message)
+ * POST   /api/auth/logout           destroy the current user session
+ * GET    /api/auth/me               whoami (user, code session, or master)
+ * GET    /api/auth/users            admin-user list (user admin only)
+ * POST   /api/auth/users            create user (user admin only)
+ * PATCH  /api/auth/users/:id        role/name/disable (user admin only)
+ * POST   /api/auth/users/:id/password  reset password (user admin only;
+ *                                   revokes that user's other sessions)
  *
- * These three are deliberately OUTSIDE requireApiToken: the session
- * exchange IS the authentication act for team members. Rate limit applies.
+ * Login/logout/register are OUTSIDE requireApiToken (they ARE the auth
+ * act) and rate-limited inside userStore. User management routes sit
+ * behind requireApiToken and gate on request.auth.kind === 'user' && role
+ * admin (the master token may also manage users — it outranks everyone).
  */
-app.post('/api/auth/session', (request, response) => {
-	const ip = request.socket.remoteAddress ?? 'unknown';
-	if (loginRateLimited(ip)) {
-		return response.status(429).json({ error: 'Too many attempts. Try again later.' });
-	}
-	const accessCode = request.body?.accessCode;
-	const result = loginWithCode(accessCode);
-	if (!result.ok) {
-		recordLoginFailure(ip);
-		// Generic message — do not reveal whether the code exists.
-		return response.status(401).json({ error: 'Invalid access code.' });
-	}
-	recordLoginSuccess(ip);
-	const s = result.session;
+
+function userCookieString(token, request, maxAgeSeconds) {
 	const secure = request.headers['x-forwarded-proto'] === 'https' || request.secure ? '; Secure' : '';
-	response.setHeader('Set-Cookie', `${SESSION_COOKIE}=${s.id}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${Math.floor((s.expiresAt - Date.now()) / 1000)}`);
-	response.json({ ok: true, role: s.role, label: s.label });
+	return `qase_session=${token}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=${maxAgeSeconds}`;
+}
+
+function requireUserAdmin(request, response, next) {
+	const { kind, role } = request.auth ?? {};
+	if (kind === 'master') return next(); // machine master token outranks
+	if (kind === 'user' && role === 'admin') return next();
+	return response.status(403).json({ error: 'User management requires an admin account.' });
+}
+
+app.post('/api/auth/register-admin', (request, response) => {
+	try {
+		if (hasUsers()) {
+			return response.status(403).json({ error: 'An admin account already exists. Sign in instead.' });
+		}
+		const { email, name, password } = request.body ?? {};
+		const user = createUser({ email, name, password, role: 'admin', createdBy: 'bootstrap' });
+		const token = createUserSession(user.id);
+		response.setHeader('Set-Cookie', userCookieString(token, request, 7 * 24 * 3600));
+		response.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+	} catch (error) {
+		response.status(error.status ?? 400).json({ error: error.message });
+	}
 });
 
-app.delete('/api/auth/session', (request, response) => {
-	const sessionId = sessionFromCookieHeader(request.headers.cookie);
-	if (sessionId) destroySession(sessionId);
-	response.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`);
+// Public bootstrap probe for the login screen (no secrets; tells the UI
+// whether to offer the one-time admin claim). Never requires auth.
+app.get('/api/auth/bootstrap', (request, response) => {
+	response.json({ needsAdmin: !hasUsers(), version: 2 });
+});
+
+app.post('/api/auth/login', (request, response) => {
+	// Behind Caddy the socket address is the proxy — prefer the first
+	// X-Forwarded-For hop so per-IP lockout buckets separate attackers.
+	const ip = (request.headers['x-forwarded-for'] ?? '').split(',')[0].trim()
+		|| (request.socket.remoteAddress ?? 'unknown');
+	try {
+		const { email, password } = request.body ?? {};
+		const { user, token } = userLogin(email, password, ip);
+		response.setHeader('Set-Cookie', userCookieString(token, request, 7 * 24 * 3600));
+		response.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+	} catch (error) {
+		response.status(error.status ?? 401).json({ error: error.message });
+	}
+});
+
+app.post('/api/auth/logout', (request, response) => {
+	const token = userSessionFromCookieHeader(request.headers.cookie);
+	if (token) revokeUserSession(token);
+	response.setHeader('Set-Cookie', userCookieString('', request, 0));
 	response.json({ ok: true });
 });
 
-app.get('/api/auth/session', (request, response) => {
-	// Works with either auth kind; used by the SPA to adapt its UI.
-	if (getConfig().apiToken) {
+app.delete('/api/auth/logout', (request, response) => {
+	// Same behavior on DELETE — the SPA may send either verb.
+	const token = userSessionFromCookieHeader(request.headers.cookie);
+	if (token) revokeUserSession(token);
+	response.setHeader('Set-Cookie', userCookieString('', request, 0));
+	response.json({ ok: true });
+});
+
+app.get('/api/auth/me', (request, response) => {
+	// This route is outside requireApiToken, so resolve identity manually —
+	// same order: master token (header), then user session.
+	const token = getConfig().apiToken;
+	if (token) {
 		const auth = request.headers.authorization ?? '';
 		const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-		if (bearer && safeEqual(bearer, getConfig().apiToken)) {
-			return response.json({ kind: 'master' });
-		}
-		const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
-		if (cookieMatch && safeEqual(cookieMatch[1], getConfig().apiToken)) {
-			return response.json({ kind: 'master' });
-		}
+		if (bearer && safeEqual(bearer, token)) return response.json({ kind: 'master' });
 	}
-	const sessionId = sessionFromCookieHeader(request.headers.cookie);
-	const session = sessionId ? resolveSession(sessionId) : null;
-	if (!session) return response.status(401).json({ error: 'Not authenticated.' });
-	response.json({ kind: 'session', role: session.role, label: session.label });
+	const userToken = userSessionFromCookieHeader(request.headers.cookie);
+	const userSession = userToken ? resolveUserSession(userToken) : null;
+	if (userSession && userSession.user.disabledAt == null) {
+		const u = userSession.user;
+		return response.json({ kind: 'user', role: u.role, email: u.email, name: u.name, userId: u.id });
+	}
+	return response.status(401).json({ error: 'Not authenticated.' });
 });
 
-/** D0.5 — session roles get a SANITIZED /api/config so the SPA boots
- *  normally (no 403 on first fetch) without seeing provider/model/token
- *  hints, BrowserStack state, or any credential-adjacent field. */
-/* ═════════════ D0.5 — admin: access-code management (master only) ════
- *
- * POST   /api/auth/admin/codes        { label, role } → metadata + the
- *                                      ONE-TIME plaintext code (shown once
- *                                      by the UI, never stored again)
- * GET    /api/auth/admin/codes         list metadata (no hashes, no codes)
- * DELETE /api/auth/admin/codes/:id     revoke a code (kills its sessions
- *                                      on their very next request)
- * POST   /api/auth/admin/codes/:id/restore  re-activate
- */
-app.post('/api/auth/admin/codes', requireApiToken, (request, response) => {
-	if (request.auth?.kind !== 'master') {
-		return response.status(403).json({ error: 'Admin API token required.' });
-	}
-	const { label, role } = request.body ?? {};
-	let minted;
+app.get('/api/auth/users', requireApiToken, requireUserAdmin, (request, response) => {
+	response.json({ users: listUsers() });
+});
+
+app.post('/api/auth/users', requireApiToken, requireUserAdmin, (request, response) => {
 	try {
-		minted = mintCode({ label, role });
-	} catch (err) {
-		return response.status(400).json({ error: err.message });
+		const { email, name, password, role } = request.body ?? {};
+		const user = createUser({ email, name, password, role, createdBy: request.auth?.email ?? request.auth?.kind });
+		response.status(201).json({ ok: true, user });
+	} catch (error) {
+		response.status(error.status ?? 400).json({ error: error.message });
 	}
-	response.json({
-		id: minted.id,
-		label: minted.label,
-		role: minted.role,
-		createdAt: minted.createdAt,
-		// Shown exactly once. The server keeps only the scrypt hash.
-		code: minted.code
-	});
 });
 
-app.get('/api/auth/admin/codes', requireApiToken, (request, response) => {
-	if (request.auth?.kind !== 'master') {
-		return response.status(403).json({ error: 'Admin API token required.' });
+app.patch('/api/auth/users/:id', requireApiToken, requireUserAdmin, (request, response) => {
+	try {
+		const user = updateUser(request.params.id, request.body ?? {}, { id: request.auth?.userId, email: request.auth?.email });
+		response.json({ ok: true, user });
+	} catch (error) {
+		response.status(error.status ?? 400).json({ error: error.message });
 	}
-	response.json({ codes: listCodes() });
 });
 
-/** Ops hook — clear the failed-login limiter (locked-out teammate unlock). */
-app.post('/api/auth/admin/codes/limiter-reset', requireApiToken, (request, response) => {
-	if (request.auth?.kind !== 'master') {
-		return response.status(403).json({ error: 'Admin API token required.' });
+app.post('/api/auth/users/:id/password', requireApiToken, requireUserAdmin, (request, response) => {
+	try {
+		const user = setPassword(request.params.id, request.body?.password, { id: request.auth?.userId, email: request.auth?.email });
+		response.json({ ok: true, user });
+	} catch (error) {
+		response.status(error.status ?? 400).json({ error: error.message });
 	}
-	resetLoginLimiter();
-	response.json({ ok: true });
 });
 
-app.delete('/api/auth/admin/codes/:id', requireApiToken, (request, response) => {
-	if (request.auth?.kind !== 'master') {
-		return response.status(403).json({ error: 'Admin API token required.' });
-	}
-	const revoked = revokeCode(request.params.id);
-	if (!revoked) return response.status(404).json({ error: 'Unknown code id.' });
-	response.json({ ok: true, ...revoked });
+app.get('/api/auth/admin/audit', requireApiToken, requireUserAdmin, (request, response) => {
+	response.json({ entries: getAuditTrail(Number(request.query?.limit ?? 200)) });
 });
 
-app.post('/api/auth/admin/codes/:id/restore', requireApiToken, (request, response) => {
-	if (request.auth?.kind !== 'master') {
-		return response.status(403).json({ error: 'Admin API token required.' });
-	}
-	const restored = restoreCode(request.params.id);
-	if (!restored) return response.status(404).json({ error: 'Unknown code id.' });
-	response.json({ ok: true, ...restored });
-});
+/* ═════════════ D0.5 — auth/session routes (REMOVED, D2 Stage 3) ══════
+ * Access codes were replaced by real user accounts (see /api/auth/login).
+ * The code mint/list/revoke admin routes and the code login flow are gone;
+ * .qase/ui-access.json was archived then deleted. Machine auth (master
+ * token) is unchanged for CI/tests.
+ */
+
 
 app.get('/api/config', requireApiToken, (request, response) => {
-	if (request.auth?.kind === 'session') {
+	if (request.auth?.kind === 'session' || request.auth?.kind === 'user') {
+		const isAdminUser = request.auth?.kind === 'user' && request.auth?.role === 'admin';
 		const c = getPublicConfig();
+		if (isAdminUser) {
+			// D2 admin users may read config (without token/credential hints).
+			delete c.apiTokenHint;
+			delete c.apiTokenFromEnv;
+			delete c.hasApiToken;
+			delete c.browserstackKeyEncrypted;
+			delete c.browserstackNeedsReentry;
+			delete c.browserstackKeyLength;
+			delete c.browserstackKeyFromEnv;
+			delete c.browserstackCredentialSource;
+			delete c.hasBrowserstackKey;
+			delete c.problem;
+			delete c.ready;
+			response.json(c);
+			return;
+		}
+		// Viewer/operator users and code sessions: sanitized projection so
+		// the SPA boots without a 403 while seeing no credential-adjacent
+		// fields at all.
 		delete c.provider;
 		delete c.baseUrl;
 		delete c.model;
@@ -3822,6 +3880,7 @@ app.get('/api/v1/missions/:id/evidence/compare/:iter1/:iter2', requireApiToken, 
  */
 app.post('/api/v1/evidence/validate', requireApiToken, (request, response) => {
 	const { missions, sessions, findings } = request.body ?? {};
+	// eslint-disable-next-line no-shadow -- separate evidence-graph namespace
 	const context = {};
 	if (missions) context.missions = new Map(Object.entries(missions));
 	if (sessions) context.sessions = new Map(Object.entries(sessions));
@@ -3963,6 +4022,11 @@ async function attemptAutonomyBeforeFinalize(mission, session) {
 			// verdict; discarding them would hide the very issues the
 			// decision engine acted on).
 			const preservedFindings = session.findings ?? [];
+			// D1: the STOP_FAIL/STOP_BLOCKED path exits before the normal
+			// finalizer's Phase 6 evidence collection. Collect it here so a
+			// decision-engine stop records the same evidence graph as any
+			// other terminal session.
+			collectEvidenceForSession(mission, session);
 			finalizeMission(mission.id, {
 				status: 'failed',
 				failureReason: action.reason ?? `Autonomy decision: ${action.stopReason}`,
@@ -3976,6 +4040,27 @@ async function attemptAutonomyBeforeFinalize(mission, session) {
 	} catch (error) {
 		console.error(`[autonomy] pre-finalize decision failed: ${error?.message ?? error} — proceeding with normal finalization`);
 		return 'proceed';
+	}
+}
+
+/**
+ * D1 — shared Phase 6 evidence collection. Runs collectSessionEvidence for a
+ * terminal session on EVERY terminal path (normal completion, autonomy
+ * STOP_FAIL/STOP_BLOCKED, honesty guard error/interrupted). Idempotence is
+ * not yet tracked per-session here; callers invoke it exactly once per
+ * session settle.
+ */
+function collectEvidenceForSession(mission, session) {
+	try {
+		const current = getMission(mission?.id);
+		const iterNum = current?.currentIteration ?? 1;
+		const iterId = `iter_${iterNum}`;
+		const evidenceResult = collectSessionEvidence(session, current, iterId);
+		if (evidenceResult.evidenceCreated > 0) {
+			console.log(`[evidence-graph] Collected ${evidenceResult.evidenceCreated} evidence items, ${evidenceResult.observationsCreated} observations, ${evidenceResult.linksCreated} links for mission ${mission.id} iteration ${iterNum}`);
+		}
+	} catch (egErr) {
+		console.error(`[evidence-graph] Failed to collect evidence for mission ${mission?.id}:`, egErr.message);
 	}
 }
 
@@ -4022,6 +4107,11 @@ async function finalizeMissionFromSession(mission, session) {
 	// report instead of a quality score.
 	if (session.status === 'error' || session.status === 'interrupted') {
 		const firstErr = (session.transcript ?? []).find((m) => m.role === 'system' && /error/i.test(m.text ?? ''));
+		// D1: evidence collection must run for EVERY terminal session — an
+		// interrupted/error run still produced real browser actions and those
+		// are the mission's evidence. Previously this path returned before
+		// Phase 6, so honest-failure runs recorded ZERO evidence nodes.
+		collectEvidenceForSession(mission, session);
 		finalizeMission(mission.id, {
 			status: 'failed',
 			failureReason: firstErr ? String(firstErr.text).slice(0, 300)
@@ -4128,17 +4218,12 @@ async function finalizeMissionFromSession(mission, session) {
 		console.log(`[validation-loop] Mission ${mission.id} stop reason: ${stopReason}${autonomyStop && !getStopReason(updatedMission) ? ' (autonomy decision)' : ''}`);
 	}
 
-	// Phase 6: Collect evidence from session into the evidence graph
-	try {
-		const iterNum = getMission(mission.id)?.currentIteration ?? 1;
-		const iterId = `iter_${iterNum}`;
-		const evidenceResult = collectSessionEvidence(session, getMission(mission.id), iterId);
-		if (evidenceResult.evidenceCreated > 0) {
-			console.log(`[evidence-graph] Collected ${evidenceResult.evidenceCreated} evidence items, ${evidenceResult.observationsCreated} observations, ${evidenceResult.linksCreated} links for mission ${mission.id} iteration ${iterNum}`);
-		}
-	} catch (egErr) {
-		console.error(`[evidence-graph] Failed to collect evidence for mission ${mission.id}:`, egErr.message);
-	}
+	// Phase 6: Collect evidence from session into the evidence graph.
+	// D1: extracted to collectEvidenceForSession() so EVERY terminal path
+	// (normal completion, autonomy STOP_FAIL/STOP_BLOCKED, honesty guard)
+	// records evidence — previously only the normal path did, silently
+	// producing zero-evidence missions for honest failure runs.
+	collectEvidenceForSession(mission, session);
 
 	// Phase 17: fire-and-forget UX + application-quality assessment after
 	// finalize. Runs off the request path so mission completion latency is
