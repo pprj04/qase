@@ -29,7 +29,15 @@ function masterToken() {
 	} catch { return ''; }
 }
 const TOKEN = masterToken();
-const hasServer = TOKEN !== '';
+// QASE_AUTH_MODE: this suite verifies user-session auth (D2) against a live
+// REQUIRED-mode server. When the target runs disabled mode, user-session
+// enforcement is intentionally inert (kind:'open' passes everything) and the
+// required-mode matrix is covered by tests-real/auth-mode.test.js instead.
+const OPEN_MODE = await fetch(`${BASE}/api/auth/me`)
+	.then((r) => (r.ok ? r.json() : null))
+	.then((j) => j?.kind === 'open')
+	.catch(() => false);
+const hasServer = TOKEN !== '' && !OPEN_MODE;
 
 async function call(path, { method = 'GET', body, token, cookie } = {}) {
 	const headers = { 'content-type': 'application/json' };

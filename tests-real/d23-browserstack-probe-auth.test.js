@@ -32,7 +32,15 @@ const ENV = (() => {
 	} catch { return {}; }
 })();
 const TOKEN = ENV.QASE_API_TOKEN;
-const hasServer = Boolean(TOKEN);
+// QASE_AUTH_MODE: when the target server runs in disabled mode, role
+// enforcement is intentionally inert — every request passes (kind:'open').
+// The required-mode matrix (including this suite's discrimination) is
+// covered by tests-real/auth-mode.test.js against an isolated child server.
+const OPEN_MODE = await fetch(`${BASE}/api/auth/me`)
+	.then((r) => (r.ok ? r.json() : null))
+	.then((j) => j?.kind === 'open')
+	.catch(() => false);
+const hasServer = Boolean(TOKEN) && !OPEN_MODE;
 const RUN = Date.now();
 
 async function call(path, { method = 'GET', token, cookie, body } = {}) {

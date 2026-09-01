@@ -56,6 +56,19 @@ const MISSIONS = '/api/v1/integration/missions';
 
 describe('B1 security-negative matrix', { skip: !SECRET }, () => {
 
+	// QASE_AUTH_MODE: this matrix verifies REQUIRED-mode enforcement. When the
+	// dev server runs in disabled mode (development/integration), anonymous
+	// access is the documented contract (tests-real/auth-mode.test.js) and
+	// these negative assertions do not apply — verify the mode flag first.
+	const authMode = (() => {
+		try { return readFileSync('/workspace/.env', 'utf8').match(/^QASE_AUTH_MODE=(.+)$/m)?.[1].trim() ?? 'required'; }
+		catch { return 'required'; }
+	})();
+	if (authMode === 'disabled') {
+		test('disabled mode active — negative auth matrix skipped (covered by auth-mode.test.js)', { skip: true }, () => {});
+		return;
+	}
+
 	test('AUTH: anonymous → 401 with stable envelope', async () => {
 		const r = await raw('GET', WHOAMI);
 		assert.equal(r.status, 401);

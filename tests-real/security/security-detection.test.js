@@ -142,6 +142,15 @@ describe('SECURITY [S7] — single-tenant model honesty', () => {
 		// B1 W3 closed the anonymous read surface. This test now guards the
 		// NEW posture: the sessions list (and every other data read) must
 		// reject anonymous requests with 401.
+		// QASE_AUTH_MODE: in disabled mode (development/integration — see
+		// tests-real/auth-mode.test.js) anonymous access is the documented
+		// contract; the 401 posture is only guaranteed in required mode.
+		const mode = await fetch(`${BASE}/api/auth/me`).then(r => r.json()).catch(() => null);
+		if (mode && mode.kind === 'open') {
+			// Disabled mode: verify the mode is EXPLICITLY declared, not accidental.
+			assert.equal(mode.mode, 'disabled', 'open access must be declared via QASE_AUTH_MODE=disabled');
+			return;
+		}
 		const r = await fetch(`${BASE}/api/sessions`);
 		assert.equal(r.status, 401, 'sessions GET is open again — REGRESSION: anonymous read surface reopened');
 	});

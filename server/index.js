@@ -286,7 +286,19 @@ function correlationIdMiddleware(request, response, next) {
 	request.log = (...args) => console.log(`[${cid}]`, ...args);
 	next();
 }
+const AUTH_MODE_DISABLED = process.env.QASE_AUTH_MODE === 'disabled';
+
 function requireApiToken(request, response, next) {
+	// QASE_AUTH_MODE=disabled — development/integration mode. EVERY request
+	// passes (tagged kind:'open'); no session cookie or master token is
+	// required, the UI boots without a login gate, and /api/v1 + /api/v2
+	// serve anonymous callers. Default (QASE_AUTH_MODE unset or 'required')
+	// keeps the full enforcement below byte-identical — flip the env var to
+	// restore it. Env-only: never persisted in the settings store.
+	if (AUTH_MODE_DISABLED) {
+		request.auth = { kind: 'open' };
+		return next();
+	}
 	const token = getConfig().apiToken;
 	if (!token) {
 		return next(); // No token configured — open access.
@@ -606,6 +618,11 @@ app.delete('/api/auth/logout', (request, response) => {
 });
 
 app.get('/api/auth/me', (request, response) => {
+	// QASE_AUTH_MODE=disabled — there is no identity to resolve; report the
+	// open mode so the SPA boots with no login chip and never arms the gate.
+	if (AUTH_MODE_DISABLED) {
+		return response.json({ kind: 'open', mode: 'disabled' });
+	}
 	// This route is outside requireApiToken, so resolve identity manually —
 	// same order: master token (header), then user session.
 	const token = getConfig().apiToken;
