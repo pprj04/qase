@@ -110,12 +110,21 @@ describe('document shape', () => {
 	});
 
 	test('no standalone {"type": "null"} anywhere', () => {
-		const json = JSON.stringify(doc);
-		const matches = json.match(/"type"\s*:\s*"null"/g) ?? [];
-		// Only legal inside anyOf/oneOf unions — find each and check parent
-		let raw = json.replace(/"anyOf":\[[^\]]*\]/g, '').replace(/"oneOf":\[[^\]]*\]/g, '');
-		const standalone = raw.match(/"type"\s*:\s*"null"/g) ?? [];
-		assert.equal(standalone.length, 0, `standalone type:null found: ${standalone.length} (total incl. unions: ${matches.length})`);
+		// Structural walk: type:'null' is legal only inside anyOf/oneOf unions.
+		// (A regex strip cannot handle nested arrays — enum: [...] inside a union
+		// branch — and would miscount union branches as standalone.)
+		let standalone = 0;
+		const walk = (node, inUnion) => {
+			if (Array.isArray(node)) { node.forEach((n) => walk(n, inUnion)); return; }
+			if (node && typeof node === 'object') {
+				if (node.type === 'null' && !inUnion) standalone += 1;
+				for (const [k, v] of Object.entries(node)) {
+					walk(v, inUnion || k === 'anyOf' || k === 'oneOf');
+				}
+			}
+		};
+		walk(doc, false);
+		assert.equal(standalone, 0, `standalone type:null found: ${standalone}`);
 	});
 
 	test('timestamps declared as date-time; ids + names beside foreign ids', () => {
