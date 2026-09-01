@@ -17,7 +17,13 @@ async function liveConfig() {
 	const res = await fetch(`${BASE}/api/config`, {
 		headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}
 	});
-	if (!res.ok) throw new Error(`config ${res.status}`);
+	if (!res.ok) {
+		// D2+: /api/config is token-gated. Anonymous 401 means the server IS
+		// up but unauthenticated — skipping on that hides real failures.
+		const err = new Error(`config ${res.status}`);
+		err.status = res.status;
+		throw err;
+	}
 	return res.json();
 }
 
@@ -25,8 +31,12 @@ test('B0-4: restart preserves operator config (live server)', { timeout: 15_000 
 	let before;
 	try {
 		before = await liveConfig();
-	} catch {
-		t.skip('live server not reachable — skipping restart config test');
+	} catch (err) {
+		if (err?.status === 401) {
+			t.skip('server reachable but unauthenticated — export QASE_API_TOKEN to run B0-4');
+		} else {
+			t.skip(`live server not reachable (${err.message}) — skipping restart config test`);
+		}
 		return;
 	}
 	const fields = ['maxTurns', 'concurrentRuns', 'retriesCount', 'browserstackEnabled', 'browserstackStrict', 'model', 'provider'];
