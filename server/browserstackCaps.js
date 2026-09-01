@@ -77,8 +77,14 @@ export function resolveLaunchPlan(config = {}, opts = {}) {
 			os_version: null,
 			device: BROWSERSTACK_REAL_DEVICES[deviceName],
 			real_mobile: 'true',
-			'browserstack.user': config.browserstackUser,
-			'browserstack.key': config.browserstackKey,
+			// C4.1-FIX — BrowserStack's Playwright CDP contract reads
+			// 'browserstack.username' / 'browserstack.accessKey' (documented
+			// capability names). The previous 'browserstack.user'/'browserstack.key'
+			// names were ignored by the CDP endpoint, which then closed with
+			// 1001 "Invalid username or password" — while REST Basic-auth
+			// succeeded with the same credentials.
+			'browserstack.username': config.browserstackUser,
+			'browserstack.accessKey': config.browserstackKey,
 			'name': opts.testName || `Qase test run`,
 			'browserstack.local': 'false'
 		};
@@ -90,8 +96,10 @@ export function resolveLaunchPlan(config = {}, opts = {}) {
 		browser: osInfo.browser,
 		os: osInfo.os,
 		os_version: osInfo.os_version,
-		'browserstack.user': config.browserstackUser,
-		'browserstack.key': config.browserstackKey,
+		// C4.1-FIX — documented BrowserStack Playwright CDP capability names
+		// (was browserstack.user/browserstack.key — ignored by the endpoint).
+		'browserstack.username': config.browserstackUser,
+		'browserstack.accessKey': config.browserstackKey,
 		'name': opts.testName || `Qase test run`,
 		'browserstack.local': 'false'
 	};

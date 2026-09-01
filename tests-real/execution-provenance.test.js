@@ -76,7 +76,7 @@ console.log('\n[3] resolveLaunchPlan — strict mode decision logic');
 	ok(bsDefault.mode === 'browserstack', 'BS enabled → browserstack plan');
 	ok(bsDefault.strict === true, 'strict is the DEFAULT');
 	ok(bsDefault.caps.browser === 'firefox' && bsDefault.caps.os === 'OS X', 'caps built from OS map');
-	ok(bsDefault.caps['browserstack.user'] === 'u' && bsDefault.caps['browserstack.key'] === 'k', 'caps carry credentials');
+	ok(bsDefault.caps['browserstack.username'] === 'u' && bsDefault.caps['browserstack.accessKey'] === 'k', 'caps carry credentials');
 
 	const bsStrictOff = replay.resolveLaunchPlan({ browserstackEnabled: true, browserstackUser: 'u', browserstackKey: 'k', browserstackStrict: false }, {});
 	ok(bsStrictOff.strict === false, 'explicit browserstackStrict=false honored (legacy loud fallback)');

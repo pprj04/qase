@@ -109,8 +109,11 @@ async function probeCdp({ user, key, timeoutMs, wsFactory }) {
 		browser: 'chrome',
 		os: 'OS X',
 		os_version: 'Sonoma',
-		'browserstack.user': user,
-		'browserstack.key': key,
+		// C4.1-FIX — documented BrowserStack Playwright CDP capability names
+		// (was browserstack.user/browserstack.key — ignored by the endpoint,
+		// causing the false REST-pass / CDP-fail divergence this probe detects).
+		'browserstack.username': user,
+		'browserstack.accessKey': key,
 		name: 'Qase connection test'
 	}));
 	// C4.1 — the wss endpoint ALWAYS completes the TLS/101 upgrade, even for

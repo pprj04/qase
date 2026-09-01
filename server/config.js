@@ -109,8 +109,13 @@ function fromEnv() {
 		exploreViewports: process.env.QASE_EXPLORE_VIEWPORTS === undefined ? undefined : process.env.QASE_EXPLORE_VIEWPORTS !== 'false',
 		defaultScheduleCron: process.env.QASE_DEFAULT_CRON,
 		browserstackEnabled: process.env.QASE_BROWSERSTACK_ENABLED === undefined ? undefined : process.env.QASE_BROWSERSTACK_ENABLED === 'true',
-		browserstackUser: process.env.QASE_BROWSERSTACK_USER,
-		browserstackKey: process.env.QASE_BROWSERSTACK_KEY,
+		// C4.1-FIX2 — standard BrowserStack Playwright credential env vars as
+		// a FALLBACK source only. Precedence is unchanged (B0.1): Settings-stored
+		// (encrypted) credentials always win; these seed env-only boots. Values
+		// are never logged, echoed, or returned by getPublicConfig beyond the
+		// existing redacted booleans/lengths.
+		browserstackUser: process.env.QASE_BROWSERSTACK_USER ?? process.env.BROWSERSTACK_USERNAME,
+		browserstackKey: process.env.QASE_BROWSERSTACK_KEY ?? process.env.BROWSERSTACK_ACCESS_KEY,
 		browserstackBrowsers: process.env.QASE_BROWSERSTACK_BROWSERS,
 		selfHealEnabled: process.env.QASE_SELF_HEAL === undefined ? undefined : process.env.QASE_SELF_HEAL !== 'false',
 		selfHealThreshold: process.env.QASE_SELF_HEAL_THRESHOLD ? Number(process.env.QASE_SELF_HEAL_THRESHOLD) : undefined

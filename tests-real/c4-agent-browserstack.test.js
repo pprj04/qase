@@ -43,8 +43,8 @@ test('C4-A3: explicit browserstack + valid-shaped creds → browserstack plan wi
 	const plan = resolveAgentExecutionPlan({ device: null, explicitProvider: 'browserstack', config: CREDS });
 	assert.equal(plan.mode, 'browserstack');
 	assert.equal(plan.strict, true);
-	assert.equal(plan.caps['browserstack.user'], 'user1');
-	assert.equal(plan.caps['browserstack.key'], 'key1');
+	assert.equal(plan.caps['browserstack.username'], 'user1');
+	assert.equal(plan.caps['browserstack.accessKey'], 'key1');
 	assert.equal(plan.osInfo.os, 'OS X');
 	assert.equal(plan.device, null);
 });
