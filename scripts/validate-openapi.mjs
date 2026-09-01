@@ -75,15 +75,14 @@ async function main() {
 	for (const [path, methods] of Object.entries(doc.paths ?? {})) {
 		for (const [method, op] of Object.entries(methods)) {
 			if (method === 'parameters' || !op || typeof op !== 'object') continue;
-			if (method.toUpperCase() !== 'GET') continue; // only GETs become tools
-			ops.push({ path, method, op });
+			ops.push({ path, method, op }); // lint ALL methods — POSTs are first-class ops on the integration surface
 		}
 	}
-	if (ops.length === 0) fail('no GET operations found');
+	if (ops.length === 0) fail('no operations found');
 
 	const seenIds = new Map();
-	for (const { path, op } of ops) {
-		const label = `${path}`;
+	for (const { path, method, op } of ops) {
+		const label = `${method.toUpperCase()} ${path}`;
 
 		// operationId
 		const oid = op.operationId;
@@ -99,15 +98,41 @@ async function main() {
 		if (!Array.isArray(op.tags) || op.tags.length === 0) fail(`${label}: missing tags`);
 		else for (const t of op.tags) if (!doc.tags?.some(x => x.name === t)) warn(`${label}: tag "${t}" not declared in top-level tags`);
 
-		// response schema
-		const schema = op.responses?.['200']?.content?.['application/json']?.schema;
-		if (!schema) fail(`${label}: GET without 200 response schema`);
+		// security: explicit `security: []` = intentionally public (health).
+		// Fails only when an op is implicitly public (no key AND no doc-level scheme).
+		const schemes = (op.security ?? doc.security ?? []).flatMap(s => Object.keys(s));
+		if (schemes.length === 0 && op.security === undefined && !doc.security?.length) {
+			fail(`${label}: no security scheme declared anywhere`);
+		}
+		if (path.startsWith('/api/v1/integration/') && !schemes.includes('hmacAuth')) {
+			fail(`${label}: integration op must declare hmacAuth security (got ${schemes.join(',') || 'none'})`);
+		}
+
+		// response schema — success may be 200/201/202 depending on the op
+		const okCodes = Object.keys(op.responses ?? {}).filter(c => c.startsWith('2'));
+		if (okCodes.length === 0) fail(`${label}: no 2xx response declared`);
+		for (const code of okCodes) {
+			if (!op.responses[code]?.content?.['application/json']?.schema && !op.responses[code]?.content?.['text/markdown']) {
+				fail(`${label}: ${code} response without JSON (or markdown) schema`);
+			}
+		}
+		// 4xx documented on every authenticated op
+		if (!(op.security ?? []).length ? false : true) {
+			const errCodes = Object.keys(op.responses ?? {}).filter(c => c.startsWith('4'));
+			if (errCodes.length === 0) warn(`${label}: authenticated op without any 4xx response documented`);
+		}
+		// request bodies on POST/PUT/PATCH must be JSON
+		if (['post', 'put', 'patch'].includes(method)) {
+			const body = op.requestBody;
+			if (body?.required && !body.content?.['application/json']) fail(`${label}: required requestBody without application/json schema`);
+		}
 
 		const params = Array.isArray(op.parameters) ? op.parameters : [];
 		const hasPage = params.some(p => p.name === 'page' && p.in === 'query');
 		const hasPageSize = params.some(p => p.name === 'page_size' && p.in === 'query');
 		const hasFrom = params.some(p => p.name === 'from');
 		const hasTo = params.some(p => p.name === 'to');
+		const schema = okCodes.map(c => op.responses[c]?.content?.['application/json']?.schema).find(Boolean);
 
 		// collection detection: response schema with `data` array property
 		const props = schema?.properties ?? {};
@@ -163,7 +188,7 @@ async function main() {
 
 	// report
 	console.log(`\ndocument: ${docUrl}`);
-	console.log(`operations: ${ops.length} GETs, ${seenIds.size} unique operationIds`);
+	console.log(`operations: ${ops.length} total (${ops.filter(o => o.method === 'get').length} GETs), ${seenIds.size} unique operationIds`);
 	for (const w of warnings) console.log(`WARN: ${w}`);
 	if (problems.length) {
 		for (const p of problems) console.log(`FAIL: ${p}`);

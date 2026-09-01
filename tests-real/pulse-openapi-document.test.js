@@ -151,6 +151,34 @@ describe('document shape', () => {
 		assert.equal(standalone, 0, `standalone type:null found: ${standalone}`);
 	});
 
+	test('projector-null fields declare nullable anyOf unions', () => {
+		// Regression guard for the Phase-1 handoff fix: every field whose
+		// projector (server/pulseProjection.js) emits `?? null` must declare
+		// an anyOf union including {type:'null'} — a bare {type:'string'}
+		// here is exactly the drift that failed the external handoff test.
+		const expects = {
+			Project: ['workspace_id', 'base_url'],
+			Mission: ['quality_score', 'verdict', 'release_ready', 'session_id', 'failure_reason', 'correlation_id'],
+			Session: ['mission_id', 'project_id'],
+			Finding: ['confidence', 'url', 'duplicate_of', 'primary_category'],
+			TestCase: ['workflow_id', 'suite_id'],
+			Suite: ['parent_id'],
+			Schedule: ['last_run', 'project_id'],
+			RegressionRun: ['schedule_id', 'project_id'],
+			FixValidationRun: ['fix_status', 'validation_confidence', 'partial_fix', 'requested_by'],
+			KnowledgePattern: ['pattern', 'confidence'],
+		};
+		for (const [schemaName, fields] of Object.entries(expects)) {
+			const props = doc.components.schemas[schemaName]?.properties ?? {};
+			for (const f of fields) {
+				const p = props[f];
+				assert.ok(p, `${schemaName}.${f} not declared`);
+				const inUnion = p?.anyOf?.some((b) => b.type === 'null') ?? false;
+				assert.ok(inUnion, `${schemaName}.${f} missing nullable anyOf union`);
+			}
+		}
+	});
+
 	test('timestamps declared as date-time; ids + names beside foreign ids', () => {
 		const S = doc.components.schemas;
 		for (const name of ['Mission', 'Session', 'Finding', 'TestCase', 'Workflow', 'Suite', 'Schedule', 'RegressionRun', 'FixValidationRun']) {
