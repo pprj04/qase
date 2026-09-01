@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Qase \u2014 an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
+  "description": "Qase — an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
@@ -38,6 +38,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "axe-core": "4.10.2"
+    "axe-core": "4.10.2",
+    "js-yaml": "^5.4.1"
   }
 }

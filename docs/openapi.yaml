@@ -49,14 +49,18 @@ servers:
       baseUrl:
         default: http://localhost:5173
 security:
-  - hmacSignature: []
+  - hmacAuth: []
 components:
   securitySchemes:
-    hmacSignature:
+    hmacAuth:
       type: apiKey
       in: header
       name: Authorization
-      description: 'QASE-HMAC-SHA256 keyId:timestampMs:nonce:signature'
+      description: |
+        QASE-HMAC-SHA256 keyId:timestampMs:nonce:signature — per-request
+        signing. Same scheme as the live /openapi.json document (hmacAuth);
+        see that document's scheme description for the full canonical-string
+        and error-code contract.
   schemas:
     Error:
       type: object
@@ -148,13 +152,14 @@ paths:
       tags: [integration]
       responses:
         '200':
-          description: Key list
+          description: 'Key list ({integrations: [...]}; no secrets — there are none)'
           content:
             application/json:
               schema:
                 type: object
+                required: [integrations]
                 properties:
-                  keys:
+                  integrations:
                     type: array
                     items:
                       type: object
@@ -196,9 +201,10 @@ paths:
       responses:
         '202': { description: Created and started (or queued) }
         '201': { description: Created, not started (autoStart=false) — POST /:id/start to begin }
-        '200': { description: Idempotent replay }
+        '200': { description: Idempotent replay (same Idempotency-Key + same request fingerprint; body carries idempotentReplay=true) }
         '400': { description: invalid_max_turns / target rejected by SSRF guard }
         '403': { description: scope_forbidden }
+        '409': { description: idempotency_key_reused (same key, different request fingerprint) }
   /api/v1/integration/missions/{id}:
     get:
       operationId: get_mission_status
@@ -254,7 +260,7 @@ paths:
       tags: [findings]
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
-        - { in: query, name: limit, schema: { type: integer, maximum: 200, default: 100 } }
+        - { in: query, name: limit, schema: { type: integer, maximum: 200, default: 50 } }
         - { in: query, name: offset, schema: { type: integer, default: 0 } }
       responses:
         '200':
@@ -300,6 +306,31 @@ paths:
                   limit: { type: integer }
                   offset: { type: integer }
         '403': { description: workspace_forbidden }
+  /api/v1/integration/missions/{id}/decision-trace:
+    get:
+      operationId: get_mission_decision_trace
+      summary: Autonomy decision trace (deterministic CONTINUE/INVESTIGATE/REPLAN/STOP)
+      tags: [missions]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: Decision records ({missionId, autonomyEnabled, count, decisions[]})
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [missionId, count, decisions]
+                properties:
+                  missionId: { type: string }
+                  autonomyEnabled: { type: boolean }
+                  count: { type: integer }
+                  decisions:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '403': { description: workspace_forbidden }
+        '404': { description: mission_not_found }
   /api/v1/integration/missions/{id}/revalidate:
     post:
       summary: Trigger a revalidation iteration (validation loop)

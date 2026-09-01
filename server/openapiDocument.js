@@ -943,7 +943,7 @@ function integrationOps() {
 				} } },
 			},
 			status: 202,
-			successDescription: 'Mission created and auto-started (governor slot or queue). 201 = created not started; 200 = idempotent replay; 409 idempotency_key_reused = same key, different body.',
+			successDescription: 'Mission created and auto-started (governor slot or queue). 201 = created not started (autoStart=false); 200 = idempotent replay (same Idempotency-Key + same request fingerprint; body carries idempotentReplay=true); 409 idempotency_key_reused = same key, different body.',
 			response: {
 				type: 'object',
 				required: ['id'],
@@ -951,9 +951,14 @@ function integrationOps() {
 					id: { type: 'string', description: 'Mission id (m_<uuid>).' },
 					status: { type: 'string' },
 					queuePosition: { type: 'integer', description: 'Queue depth when the governor has no free slot.' },
+					idempotentReplay: { type: 'boolean', description: 'True on 200 replay responses.' },
 				},
 			},
-			extraResponses: integrationErrorResponses([403, 409]),
+			extraResponses: {
+				201: { description: 'Mission created, not started (autoStart=false) — POST /{id}/start to begin.', content: { 'application/json': { schema: { type: 'object' } } } },
+				200: { description: 'Idempotent replay of an earlier request (idempotentReplay=true).', content: { 'application/json': { schema: { type: 'object' } } } },
+				...integrationErrorResponses([403, 409]),
+			},
 		},
 		{
 			path: '/api/v1/integration/missions/{id}', method: 'GET',
@@ -1086,7 +1091,10 @@ function integrationOps() {
 				type: 'object',
 				properties: { id: { type: 'string' }, status: { type: 'string' } },
 			},
-			extraResponses: integrationErrorResponses([403]),
+			extraResponses: {
+				409: { description: 'Already running/queued/terminal, or target rejected at execution time.', content: { 'application/json': { schema: errorSchema } } },
+				...integrationErrorResponses([403]),
+			},
 		},
 		{
 			path: '/api/v1/integration/webhooks', method: 'POST',
@@ -1123,6 +1131,10 @@ function integrationOps() {
 				type: 'object',
 				properties: { id: { type: 'string' }, status: { type: 'string' } },
 			},
+			extraResponses: {
+				409: { description: 'Already running / MAX_ITERATIONS / NO_IMPROVEMENT convergence.', content: { 'application/json': { schema: errorSchema } } },
+				...integrationErrorResponses([403]),
+			},
 		},
 		{
 			path: '/api/v1/integration/findings/{id}/revalidate', method: 'POST',
@@ -1132,12 +1144,15 @@ function integrationOps() {
 			parameters: [pathId('id', 'Finding id.')],
 			security: INTEGRATION_SECURITY,
 			status: 202,
-			successDescription: 'Revalidation accepted; 200 = duplicate/already-scheduled; 409 = validation_active.',
+			successDescription: 'Revalidation accepted (body includes validationId + pollUrl); 200 = idempotent duplicate; 409 = validation_active.',
 			response: {
 				type: 'object',
-				properties: { id: { type: 'string' }, status: { type: 'string' } },
+				properties: { id: { type: 'string' }, status: { type: 'string' }, validationId: { type: 'string' }, pollUrl: { type: 'string' } },
 			},
-			extraResponses: integrationErrorResponses([409]),
+			extraResponses: {
+				200: { description: 'Idempotent duplicate of an earlier request.', content: { 'application/json': { schema: { type: 'object' } } } },
+				...integrationErrorResponses([409]),
+			},
 		},
 		{
 			path: '/api/v1/integration/findings/{id}/validation', method: 'GET',

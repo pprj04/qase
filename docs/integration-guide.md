@@ -4,7 +4,7 @@ How a completely separate application consumes QASE — create test missions,
 wait for execution, receive results, trigger revalidation — **without ever
 opening the QASE UI**.
 
-- Contract: [`docs/openapi.yaml`](openapi.yaml) (mirrors the live API)
+- Contract: the live document at `/openapi.json` on your Qase instance (OpenAPI 3.1, canonical — includes the full integration surface with the `hmacAuth` security scheme). [`docs/openapi.yaml`](openapi.yaml) is the human-readable mirror; parity between the two is enforced by `tests-real/openapi-docs-parity.test.js`.
 - Reference client: [`examples/reference-client/qase-client.mjs`](../examples/reference-client/qase-client.mjs)
 - Golden-flow proof: [`examples/reference-client/golden-flow.mjs`](../examples/reference-client/golden-flow.mjs)
 
