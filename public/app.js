@@ -2593,9 +2593,12 @@ document.addEventListener('click', event => {
 	initThemeToggle();
 
 	// Fire independent boot requests in parallel (config + projects).
+	// A 401 here is the normal unauthenticated path (the sign-in gate below
+	// handles it) — log it quietly, not as console.error noise on every
+	// anonymous first load.
 	const [config, projects] = await Promise.all([
-		api('/config').catch(err => { console.error('[boot] config fetch failed:', err.message); return undefined; }),
-		api('/projects').catch(err => { console.error('[boot] projects fetch failed:', err.message); return []; })
+		api('/config').catch(err => { console.info('[boot] config needs sign-in:', err.message); return undefined; }),
+		api('/projects').catch(err => { console.info('[boot] projects needs sign-in:', err.message); return []; })
 	]);
 
 	// B1 W3 — the API is token-gated now. If the very first boot request was
