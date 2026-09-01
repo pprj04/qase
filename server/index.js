@@ -368,6 +368,17 @@ function enforceRole(request, response, next) {
 	// walks straight past the master-only gate (D2 review finding #1).
 	const pathLower = request.path.toLowerCase();
 	if (kind === 'user' && role === 'admin') {
+		// D2.3 (#7702) — EXACT-PATH diagnostic exception: ADMIN user sessions
+		// may run the BrowserStack connection probe. This route accepts
+		// unsaved form values and returns ONLY a redacted verdict
+		// (ok/code/maskedUser) — it never reads back or returns credential
+		// material, so the master-only rule for /api/config writes does not
+		// apply to it. Exact path + method only: every other /api/config
+		// surface (PUT/GET config, auth/admin, webhooks, diagnostics) stays
+		// master-token-only.
+		if (request.method === 'POST' && pathLower === '/api/config/test-browserstack') {
+			return next();
+		}
 		// D2 admin users: full access EXCEPT credential-bearing config
 		// surfaces (/api/config, /api/auth/admin, webhooks, diagnostics),
 		// which stay master-token-only — the machine token is not shared
