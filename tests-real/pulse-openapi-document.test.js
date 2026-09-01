@@ -49,20 +49,44 @@ describe('document shape', () => {
 		}
 	});
 
-	test('every GET has summary, tags, and a 200 response schema', () => {
+	test('every operation has summary, tags, and a success response schema (per-method)', () => {
 		for (const [path, methods] of Object.entries(doc.paths)) {
-			const get = methods.get;
-			assert.ok(get, `${path} missing GET`);
-			assert.ok(get.summary, `${path} missing summary`);
-			assert.ok(Array.isArray(get.tags) && get.tags.length > 0, `${path} missing tags`);
-			assert.ok(get.responses['200']?.content?.['application/json']?.schema, `${path} missing response schema`);
+			for (const [method, op] of Object.entries(methods)) {
+				assert.ok(op.summary, `${method.toUpperCase()} ${path} missing summary`);
+				assert.ok(Array.isArray(op.tags) && op.tags.length > 0, `${method.toUpperCase()} ${path} missing tags`);
+				const okCodes = Object.keys(op.responses ?? {}).filter((c) => c.startsWith('2'));
+				assert.ok(okCodes.length > 0, `${method.toUpperCase()} ${path} missing a 2xx response`);
+				for (const code of okCodes) {
+					assert.ok(
+						op.responses[code]?.content?.['application/json']?.schema,
+						`${method.toUpperCase()} ${path} ${code} missing JSON schema`
+					);
+				}
+			}
 		}
+	});
+
+	test('integration ops exist (15) and all carry hmacAuth security', () => {
+		const intPaths = Object.entries(doc.paths).filter(([p]) => p.startsWith('/api/v1/integration/'));
+		const opCount = intPaths.reduce((n, [, methods]) => n + Object.keys(methods).length, 0);
+		assert.equal(opCount, 15, `expected 15 integration operations, got ${opCount}`);
+		for (const [p, methods] of intPaths) {
+			for (const [method, op] of Object.entries(methods)) {
+				assert.ok(
+					JSON.stringify(op.security ?? []).includes('hmacAuth'),
+					`${method.toUpperCase()} ${p} missing hmacAuth security`
+				);
+			}
+		}
+		assert.ok(doc.components.securitySchemes.hmacAuth, 'hmacAuth scheme missing');
 	});
 
 	test('collections declare data + total + page/page_size with default and maximum', () => {
 		for (const [path, methods] of Object.entries(doc.paths)) {
 			const get = methods.get;
-			const schema = get.responses['200'].content['application/json'].schema;
+			if (!get) continue; // POST-only paths are legal on the integration surface
+			const schema = get.responses['200']?.content?.['application/json']?.schema;
+			if (!schema) continue;
 			const props = schema.properties ?? {};
 			if (!props.data || props.data.type !== 'array') continue;
 			const label = `${path} (collection)`;

@@ -826,39 +826,387 @@ export function operations() {
 
 /* ── document assembly ── */
 
+/* ── integration surface (/api/v1/integration/*) ── */
+
+const INTEGRATION_SECURITY = [{ hmacAuth: [] }];
+const integrationErrorResponses = (codes) => Object.fromEntries(
+	codes.map((c) => [c, { description: 'See the hmacAuth security scheme description for error codes.', content: { 'application/json': { schema: errorSchema } } }])
+);
+
+function integrationOps() {
+	return [
+		{
+			path: '/api/v1/integration/whoami', method: 'GET',
+			operationId: 'integration_whoami',
+			summary: 'Verify the signing key: returns keyId, principal, workspace binding, label and scopes.',
+			tags: ['Integration'],
+			parameters: [],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				required: ['keyId', 'principal', 'workspaceId', 'scopes'],
+				properties: {
+					keyId: { type: 'string' },
+					principal: { type: 'string', enum: ['admin', 'integration'] },
+					workspaceId: { type: 'string' },
+					label: nullable({ type: 'string' }),
+					scopes: { type: 'array', items: { type: 'string' } },
+				},
+			},
+		},
+		{
+			path: '/api/v1/integration/keys', method: 'POST',
+			operationId: 'integration_register_key',
+			summary: 'Register an integration key (admin principal only). The shared secret is issued out-of-band by the operator.',
+			tags: ['IntegrationKeys'],
+			parameters: [],
+			security: INTEGRATION_SECURITY,
+			requestBody: {
+				required: true,
+				content: { 'application/json': { schema: {
+					type: 'object',
+					required: ['keyId', 'workspaceId'],
+					properties: {
+						keyId: { type: 'string', description: '4–64 chars [A-Za-z0-9_-].' },
+						workspaceId: { type: 'string', description: 'Workspace binding (≤100 chars; * for admin).' },
+						label: { type: 'string' },
+					},
+				} } },
+			},
+			status: 201,
+			successDescription: 'Key registered (upsert semantics).',
+			response: {
+				type: 'object',
+				required: ['keyId', 'principal', 'workspaceId'],
+				properties: {
+					keyId: { type: 'string' },
+					principal: { type: 'string', enum: ['integration'] },
+					workspaceId: { type: 'string' },
+					label: nullable({ type: 'string' }),
+				},
+			},
+			extraResponses: integrationErrorResponses([403]),
+		},
+		{
+			path: '/api/v1/integration/keys', method: 'GET',
+			operationId: 'integration_list_keys',
+			summary: 'List registered integration principals (admin only; no secrets — there are none).',
+			tags: ['IntegrationKeys'],
+			parameters: [],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				required: ['integrations'],
+				properties: {
+					integrations: {
+						type: 'array',
+						items: {
+							type: 'object',
+							required: ['keyId', 'principal', 'workspaceId'],
+							properties: {
+								keyId: { type: 'string' },
+								principal: { type: 'string' },
+								workspaceId: { type: 'string' },
+								label: nullable({ type: 'string' }),
+							},
+						},
+					},
+				},
+			},
+			extraResponses: integrationErrorResponses([403]),
+		},
+		{
+			path: '/api/v1/integration/missions', method: 'POST',
+			operationId: 'integration_create_mission',
+			summary: 'Create an audit mission (scope mission:create). Idempotent per workspace + Idempotency-Key + request fingerprint.',
+			tags: ['Integration'],
+			parameters: [],
+			security: INTEGRATION_SECURITY,
+			requestBody: {
+				required: true,
+				content: { 'application/json': { schema: {
+					type: 'object',
+					required: ['targetUrl', 'buildPrompt'],
+					properties: {
+						targetUrl: { type: 'string', description: 'Public URL under test (SSRF-validated at ingest).' },
+						buildPrompt: { type: 'string', description: 'What the auditor should verify.' },
+						requirements: { type: 'string' },
+						businessGoals: { type: 'string' },
+						credentials: { type: 'object', description: 'Optional test credentials (memory-only vault).' },
+						context: {
+							type: 'object',
+							properties: {
+								maxTurns: { type: 'integer', minimum: 1, maximum: 500, description: 'Turn budget; clamped, default 120. Violation → 400 invalid_max_turns.' },
+							},
+						},
+					},
+				} } },
+			},
+			status: 202,
+			successDescription: 'Mission created and auto-started (governor slot or queue). 201 = created not started; 200 = idempotent replay; 409 idempotency_key_reused = same key, different body.',
+			response: {
+				type: 'object',
+				required: ['id'],
+				properties: {
+					id: { type: 'string', description: 'Mission id (m_<uuid>).' },
+					status: { type: 'string' },
+					queuePosition: { type: 'integer', description: 'Queue depth when the governor has no free slot.' },
+				},
+			},
+			extraResponses: integrationErrorResponses([403, 409]),
+		},
+		{
+			path: '/api/v1/integration/missions/{id}', method: 'GET',
+			operationId: 'integration_get_mission',
+			summary: 'Mission execution snapshot (scope mission:read): status, scores, verdict, turn counts.',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Mission id.')],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				required: ['id', 'status'],
+				properties: {
+					id: { type: 'string' },
+					status: { type: 'string', enum: MISSION_STATUS },
+					type: { type: 'string' },
+					targetUrl: { type: 'string' },
+					qualityScore: nullable({ type: 'integer' }),
+					verdict: nullable({ type: 'string' }),
+					releaseReady: nullable({ type: 'boolean' }),
+					findingsCount: { type: 'integer' },
+					sessionId: nullable({ type: 'string' }),
+					turnCount: nullable({ type: 'integer' }),
+					maxTurns: nullable({ type: 'integer' }),
+					correlationId: nullable({ type: 'string' }),
+					createdAt: { type: 'string', format: 'date-time' },
+					completedAt: dtOrNull,
+					failureReason: nullable({ type: 'string' }),
+				},
+			},
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/report', method: 'GET',
+			operationId: 'integration_mission_report',
+			summary: 'Final mission report. JSON by default; ?format=md returns text/markdown.',
+			tags: ['Integration'],
+			parameters: [
+				pathId('id', 'Mission id.'),
+				query('format', 'Response format.', { type: 'string', enum: ['json', 'md', 'markdown'] }),
+			],
+			security: INTEGRATION_SECURITY,
+			response: { type: 'object', description: 'Mission report JSON (structure defined by the report builder).' },
+			extraContent: { 'text/markdown': { schema: { type: 'string' } } },
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/decision-trace', method: 'GET',
+			operationId: 'integration_decision_trace',
+			summary: 'Autonomy decision trace for the mission (deterministic CONTINUE/INVESTIGATE/REPLAN/STOP records).',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Mission id.')],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				required: ['missionId', 'count', 'decisions'],
+				properties: {
+					missionId: { type: 'string' },
+					autonomyEnabled: { type: 'boolean' },
+					count: { type: 'integer' },
+					decisions: { type: 'array', items: { type: 'object', description: '13-field decision records (no prompts).' } },
+				},
+			},
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/findings', method: 'GET',
+			operationId: 'integration_mission_findings',
+			summary: 'Findings for a mission (mission inline + store, deduped by id). Default limit 50, max 200.',
+			tags: ['Integration'],
+			parameters: [
+				pathId('id', 'Mission id.'),
+				query('limit', 'Rows per page (default 50, max 200).', { type: 'integer', minimum: 1, maximum: 200, default: 50 }),
+				query('offset', 'Row offset.', { type: 'integer', minimum: 0, default: 0 }),
+			],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				required: ['missionId', 'findings', 'total', 'limit', 'offset'],
+				properties: {
+					missionId: { type: 'string' },
+					findings: { type: 'array', items: ref('Finding') },
+					total: { type: 'integer' },
+					limit: { type: 'integer' },
+					offset: { type: 'integer' },
+				},
+			},
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/evidence', method: 'GET',
+			operationId: 'integration_mission_evidence',
+			summary: 'Evidence artifacts for a mission. Default limit 100, max 500.',
+			tags: ['Integration'],
+			parameters: [
+				pathId('id', 'Mission id.'),
+				query('limit', 'Rows per page (default 100, max 500).', { type: 'integer', minimum: 1, maximum: 500, default: 100 }),
+				query('offset', 'Row offset.', { type: 'integer', minimum: 0, default: 0 }),
+			],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				properties: {
+					missionId: { type: 'string' },
+					evidence: { type: 'array', items: { type: 'object' } },
+					total: { type: 'integer' },
+					limit: { type: 'integer' },
+					offset: { type: 'integer' },
+				},
+			},
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/stop', method: 'POST',
+			operationId: 'integration_stop_mission',
+			summary: 'Stop a running mission (scope mission:stop).',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Mission id.')],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				properties: { id: { type: 'string' }, status: { type: 'string' } },
+			},
+			extraResponses: integrationErrorResponses([403]),
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/start', method: 'POST',
+			operationId: 'integration_start_mission',
+			summary: 'Start (or restart) a mission (scope mission:create). 202 — execution is asynchronous.',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Mission id.')],
+			security: INTEGRATION_SECURITY,
+			status: 202,
+			successDescription: 'Start accepted; monitor via mission status endpoints.',
+			response: {
+				type: 'object',
+				properties: { id: { type: 'string' }, status: { type: 'string' } },
+			},
+			extraResponses: integrationErrorResponses([403]),
+		},
+		{
+			path: '/api/v1/integration/webhooks', method: 'POST',
+			operationId: 'integration_register_webhook',
+			summary: 'Register a webhook receiver (SSRF-validated URL). Deliveries are HMAC-signed (X-Qase-Signature) with ~1s→256s backoff, 5 attempts.',
+			tags: ['Integration'],
+			parameters: [],
+			security: INTEGRATION_SECURITY,
+			requestBody: {
+				required: true,
+				content: { 'application/json': { schema: {
+					type: 'object',
+					required: ['url'],
+					properties: {
+						url: { type: 'string', description: 'HTTPS receiver URL (SSRF-validated).' },
+						events: { type: 'array', items: { type: 'string' }, description: 'Event types to subscribe to.' },
+					},
+				} } },
+			},
+			status: 201,
+			successDescription: 'Webhook registered.',
+			response: { type: 'object', properties: { id: { type: 'string' }, url: { type: 'string' } } },
+		},
+		{
+			path: '/api/v1/integration/missions/{id}/revalidate', method: 'POST',
+			operationId: 'integration_revalidate_mission',
+			summary: 'Re-run validation for a completed mission (scope revalidate). 202 — asynchronous.',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Mission id.')],
+			security: INTEGRATION_SECURITY,
+			status: 202,
+			successDescription: 'Revalidation accepted.',
+			response: {
+				type: 'object',
+				properties: { id: { type: 'string' }, status: { type: 'string' } },
+			},
+		},
+		{
+			path: '/api/v1/integration/findings/{id}/revalidate', method: 'POST',
+			operationId: 'integration_revalidate_finding',
+			summary: 'Re-run validation for one finding (scope revalidate). 202 accepted; 200 idempotent replay; 409 when a validation is already active.',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Finding id.')],
+			security: INTEGRATION_SECURITY,
+			status: 202,
+			successDescription: 'Revalidation accepted; 200 = duplicate/already-scheduled; 409 = validation_active.',
+			response: {
+				type: 'object',
+				properties: { id: { type: 'string' }, status: { type: 'string' } },
+			},
+			extraResponses: integrationErrorResponses([409]),
+		},
+		{
+			path: '/api/v1/integration/findings/{id}/validation', method: 'GET',
+			operationId: 'integration_finding_validation',
+			summary: 'Fix-validation runs for one finding (scope findings:read). 404 no_runs when none exist yet.',
+			tags: ['Integration'],
+			parameters: [pathId('id', 'Finding id.')],
+			security: INTEGRATION_SECURITY,
+			response: {
+				type: 'object',
+				properties: {
+					findingId: { type: 'string' },
+					runs: { type: 'array', items: ref('FixValidationRun') },
+				},
+			},
+		},
+	];
+}
+
+
 export function buildOpenApiDocument({ serverUrl = '' } = {}) {
 	const paths = {};
-	for (const op of operations()) {
+	for (const op of [...operations(), ...integrationOps()]) {
 		paths[op.path] ??= {};
+		const success = op.status ?? 200;
+		const errorResponses = op.public ? {} : {
+			400: { description: 'Bad request (e.g. invalid date filter).', content: { 'application/json': { schema: errorSchema } } },
+			401: { description: 'Missing or invalid credentials.', content: { 'application/json': { schema: errorSchema } } },
+			404: { description: 'Record not found.', content: { 'application/json': { schema: errorSchema } } },
+		};
 		paths[op.path][op.method.toLowerCase()] = {
 			operationId: op.operationId,
 			summary: op.summary,
 			tags: op.tags,
 			parameters: op.parameters,
-			security: op.public ? [] : [{ bearerAuth: [] }],
+			security: op.security ?? (op.public ? [] : [{ bearerAuth: [] }]),
+			requestBody: op.requestBody,
 			responses: {
-				200: {
-					description: 'OK',
-					content: { 'application/json': { schema: op.response } },
-				},
-				...(op.public ? {} : {
-					400: { description: 'Bad request (e.g. invalid date filter).', content: { 'application/json': { schema: errorSchema } } },
-					401: { description: 'Missing or invalid Bearer token.', content: { 'application/json': { schema: errorSchema } } },
-					404: { description: 'Record not found.', content: { 'application/json': { schema: errorSchema } } },
-				}),
+				...(op.response !== undefined ? {
+					[success]: {
+						description: op.successDescription ?? (success === 200 ? 'OK' : 'Accepted/Created'),
+						content: { 'application/json': { schema: op.response } },
+					},
+				} : {}),
+				...(op.extraResponses ?? {}),
+				...(op.public ? {} : errorResponses),
 			},
 		};
+		// Extra content types (e.g. report markdown variant) ride alongside JSON.
+		if (op.extraContent) {
+			for (const [code, entry] of Object.entries(paths[op.path][op.method.toLowerCase()].responses)) {
+				if (Number(code) === success && entry?.content) entry.content = { ...entry.content, ...op.extraContent };
+			}
+		}
 	}
 
 	return {
 		openapi: '3.1.0',
 		info: {
-			title: 'Qase Read API (for Pulse)',
-			version: '1.0.0',
+			title: 'Qase API',
+			version: '1.1.0',
 			description: [
-				'Read surface of Qase — the autonomous QA agent — for external analytics agents (Drytis Pulse).',
+				'Qase — the autonomous QA agent — external API.',
 				'',
-				'Every operation here is GET; nothing in this document mutates state.',
+				'Two surfaces:',
+				'1. Read surface (/api/v2/*): GET-only analytics and record listings.',
+				'2. Integration surface (/api/v1/integration/*): HMAC-SHA256-signed mission',
+				'   control for external applications — create and monitor audit missions,',
+				'   read findings/evidence, register webhooks. Auth via hmacAuth.',
 				'',
 				'Collections answer `{ data, total, page, page_size }` when `page`/`page_size` are sent;',
 				'without them the legacy array shape is returned. Timestamps are ISO 8601 UTC.',
@@ -867,9 +1215,8 @@ export function buildOpenApiDocument({ serverUrl = '' } = {}) {
 				'Excluded from this document by design:',
 				'- /api/sessions/{id}/events — SSE stream, never terminates (would hang the agent).',
 				'- /api/artifacts/{runId}/{filename} — binary file, not JSON.',
-				'- export endpoints (/api/findings/export, /api/test-cases/export, mission reports) — file attachments.',
-				'- /api/v1/integration/* — per-request HMAC signing; a pull connector cannot sign.',
-				'- All POST/PUT/PATCH/DELETE operations — the connector only ever calls GET.',
+				'- export endpoints (/api/findings/export, /api/test-cases/export) — file attachments.',
+				'- Legacy /api/* write surface (workflows, schedules, runs) — replaced by the integration surface.',
 			].join('\n'),
 		},
 		servers: [{ url: serverUrl || 'http://localhost:5173' }],
@@ -889,6 +1236,11 @@ export function buildOpenApiDocument({ serverUrl = '' } = {}) {
 			{ name: 'FixValidation', description: 'Fix-validation runs and outcomes.' },
 			{ name: 'Knowledge', description: 'Learned patterns with confidence decay.' },
 			{ name: 'Metrics', description: 'Dashboard and UX metrics.' },
+			{
+				name: 'Integration',
+				description: 'HMAC-authenticated mission control for external applications: create/monitor missions, read findings and evidence, register webhooks.',
+			},
+			{ name: 'IntegrationKeys', description: 'Integration key registration (admin principal only).' },
 		],
 		security: [{ bearerAuth: [] }],
 		components: {
@@ -897,6 +1249,33 @@ export function buildOpenApiDocument({ serverUrl = '' } = {}) {
 					type: 'http',
 					scheme: 'bearer',
 					description: 'Long-lived API token (QASE_API_TOKEN). Read-only in practice: nothing documented here mutates state.',
+				},
+				hmacAuth: {
+					type: 'apiKey',
+					in: 'header',
+					name: 'Authorization',
+					description: [
+						'Per-request HMAC-SHA256 signing for external application integrations.',
+						'',
+						'Header: `Authorization: QASE-HMAC-SHA256 keyId:timestampMs:nonce:signature`',
+						'',
+						'Canonical string (joined with \\n):',
+						'1. HTTP method (uppercase)',
+						'2. Path (pathname only, no query string)',
+						'3. Timestamp in milliseconds since epoch (rejected outside ±5 min)',
+						'4. Nonce (random hex; single-use per keyId — replays rejected)',
+						'5. Body digest: hex(HMAC-SHA256 with EMPTY key over the raw request body; empty string body for GETs)',
+						'',
+						'signature = hex(HMAC-SHA256(sharedSecret, canonicalString)).',
+						'The shared secret (QASE_INTEGRATION_SECRET) is issued by the Qase operator when your',
+						'keyId is registered; it is never transmitted. keyIds are registered by an admin via',
+						'POST /api/v1/integration/keys and carry a workspace binding plus scopes',
+						'(mission:create, mission:read, mission:stop, findings:read, evidence:read, revalidate).',
+						'',
+						'Error codes (401): unknown_key, bad_signature, stale_signature, replayed_nonce,',
+						'invalid_auth_header, not_configured. Admin/scope violations return 403:',
+						'admin_required, scope_forbidden, workspace_forbidden.',
+					].join('\n'),
 				},
 			},
 			schemas: {

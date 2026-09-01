@@ -11,6 +11,7 @@
  */
 import { createHmacClient } from './hmac-client.mjs';
 import { createValidator } from './schema-validate.mjs';
+import { randomBytes } from 'node:crypto';
 
 const BASE = process.env.HANDOFF_BASE_URL || 'https://pulse-review-workspa-6grhjr.drytis.dev';
 const KEY_ID = process.env.HANDOFF_HMAC_KEY_ID || 'ext-handoff-test';
@@ -38,14 +39,44 @@ let spec = null;
 	const paths = Object.entries(spec?.paths ?? {});
 	const withParams = paths.filter(([, ops]) => Object.values(ops).some((op) => (op.parameters ?? []).length > 0)).length;
 	t('openapi.4', 'Request parameters documented', withParams >= paths.length * 0.7, `${withParams}/${paths.length} paths carry parameter docs`);
-	const withSchemas = paths.filter(([, ops]) => Object.values(ops).some((op) => op.responses?.['200']?.content?.['application/json']?.schema)).length;
-	t('openapi.5', 'Response schemas documented', withSchemas === paths.length, `${withSchemas}/${paths.length} paths declare a 200 JSON schema`);
+	const withSchemas = paths.filter(([, ops]) => Object.values(ops).some((op) => Object.keys(op.responses ?? {}).some((c) => c.startsWith('2') && op.responses[c]?.content?.['application/json']?.schema))).length;
+	t('openapi.5', 'Response schemas documented (2xx success)', withSchemas === paths.length, `${withSchemas}/${paths.length} paths declare a 2xx JSON schema`);
 	const withErrors = paths.filter(([, ops]) => Object.values(ops).some((op) => Object.keys(op.responses ?? {}).some((c) => c.startsWith('4') || c.startsWith('5')))).length;
 	t('openapi.6', 'Error responses documented', withErrors >= paths.length - 1, `${withErrors}/${paths.length} paths document 4xx/5xx`);
 }
 
 const v = createValidator(spec);
 const hmac = createHmacClient({ baseUrl: BASE, keyId: KEY_ID, secret: SECRET });
+
+// ---------- STEP 1b: integration surface discoverable in the LIVE spec ----------
+{
+	const intPaths = Object.entries(spec.paths ?? {}).filter(([p]) => p.startsWith('/api/v1/integration/'));
+	const opCount = intPaths.reduce((n, [, m]) => n + Object.keys(m).length, 0);
+	t('intspec.1', 'Live OpenAPI includes the integration surface (15 ops)', opCount === 15, `${intPaths.length} paths / ${opCount} ops`);
+	const scheme = spec.components?.securitySchemes?.hmacAuth;
+	const desc = scheme?.description ?? '';
+	t('intspec.2', 'hmacAuth scheme documents signing format', scheme?.type === 'apiKey' && desc.includes('QASE-HMAC-SHA256') && desc.includes('canonical'), `type=${scheme?.type}, format + canonical documented: ${desc.includes('QASE-HMAC-SHA256') && desc.includes('canonical')}`);
+	const codesOk = ['unknown_key', 'bad_signature', 'stale_signature', 'replayed_nonce', 'invalid_auth_header', 'not_configured'].every((c) => desc.includes(c));
+	t('intspec.3', 'hmacAuth scheme documents the 401 error codes', codesOk, codesOk ? 'all six 401 codes present' : 'missing some codes');
+	const secOk = intPaths.every(([, m]) => Object.values(m).every((op) => JSON.stringify(op.security ?? []).includes('hmacAuth')));
+	t('intspec.4', 'Every integration op carries hmacAuth security', secOk, secOk ? 'yes' : 'some ops missing security');
+	const expected = {
+		'get /api/v1/integration/whoami': '200', 'post /api/v1/integration/keys': '201', 'get /api/v1/integration/keys': '200',
+		'post /api/v1/integration/missions': '202', 'get /api/v1/integration/missions/{id}': '200',
+		'get /api/v1/integration/missions/{id}/report': '200', 'get /api/v1/integration/missions/{id}/decision-trace': '200',
+		'get /api/v1/integration/missions/{id}/findings': '200', 'get /api/v1/integration/missions/{id}/evidence': '200',
+		'post /api/v1/integration/missions/{id}/stop': '200', 'post /api/v1/integration/missions/{id}/start': '202',
+		'post /api/v1/integration/webhooks': '201', 'post /api/v1/integration/missions/{id}/revalidate': '202',
+		'post /api/v1/integration/findings/{id}/revalidate': '202', 'get /api/v1/integration/findings/{id}/validation': '200',
+	};
+	const mismatch = [];
+	for (const [key, want] of Object.entries(expected)) {
+		const [m, p] = key.split(' ');
+		const codes = Object.keys(spec.paths[p]?.[m]?.responses ?? {}).filter((c) => c.startsWith('2') || c === '409');
+		if (!codes.includes(want)) mismatch.push(`${key} wants ${want}, has ${codes.join(',') || 'none'}`);
+	}
+	t('intspec.5', 'Integration success codes match the documented contract (201/202/200 + 409s)', mismatch.length === 0, mismatch.length ? mismatch.slice(0, 3).join('; ') : 'all 15 match');
+}
 
 // ---------- STEP 2: Authentication (HMAC integration credential) ----------
 {
@@ -67,7 +98,7 @@ const hmac = createHmacClient({ baseUrl: BASE, keyId: KEY_ID, secret: SECRET });
 	t('auth.5', 'Insufficient permission (integration principal → admin op) → 403', r4.status === 403, `HTTP ${r4.status} code=${r4.json?.error?.code}`);
 
 	// Anti-replay: reuse the exact same (ts, nonce, signature) on a second request
-	const fixed = { timestampMs: Date.now(), nonce: 'deadbeefdeadbeef' };
+	const fixed = { timestampMs: Date.now(), nonce: randomBytes(8).toString('hex') };
 	const ra = await hmac.request('GET', '/api/v1/integration/whoami', { signOverrides: fixed });
 	const rb = await hmac.request('GET', '/api/v1/integration/whoami', { signOverrides: fixed });
 	t('auth.6', 'Replayed signature rejected', ra.status === 200 && rb.status === 401, `first=${ra.status} replay=${rb.status} code=${rb.json?.error?.code}`);
