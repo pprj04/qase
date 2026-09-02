@@ -30,7 +30,9 @@ import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FILE = join(__dirname, '..', '.qase', 'integrations.json');
+// R1 — store path honors QASE_DATA_DIR (same contract as config.js /
+// findings.js). See missions.js for rationale.
+const FILE = join(process.env.QASE_DATA_DIR ?? join(__dirname, '..', '.qase'), 'integrations.json');
 
 /** Replay window: signatures older/newer than this are rejected. */
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;

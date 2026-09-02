@@ -162,6 +162,12 @@ export async function ensureRuntime(session) {
 	if (record.runtime) {
 		return record;
 	}
+	// R1-G7 — mark the kick as pending for the whole construction window:
+	// set before ANY await, cleared on every exit path (success, thrown
+	// error, early returns). The governor's stuck detector reads this so a
+	// slow (not stuck) runtime construction is never mis-finalized.
+	record.pendingRuntimeKick = true;
+	try {
 	await useBundledChromium();
 
 	const settings = getModelTier('discovery');
@@ -374,7 +380,13 @@ export async function ensureRuntime(session) {
 			// Disposing a runtime that never opened a browser is not an error.
 		}
 	};
+	record.pendingRuntimeKick = false;
 	return record;
+	} finally {
+		// R1-G7 — clear on the throw path too: a FAILED kick is not a pending
+		// kick; the stuck detector may legitimately finalize after it.
+		record.pendingRuntimeKick = false;
+	}
 }
 
 /**

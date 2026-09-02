@@ -25,7 +25,12 @@ import { attemptMissionTransition } from './stateTransitions.js';
 /* ── Constants ──────────────────────────────────────────────────── */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const FILE = join(__dirname, '..', '.qase', 'missions.json');
+// R1 — store paths honor QASE_DATA_DIR (same contract as config.js /
+// findings.js / evidenceGraph.js). Module-relative fallback preserves the
+// legacy location for normal boots; tests and production deploys can now
+// redirect the whole .qase tree with one env var, so a spawned child never
+// shares the parent's mission store.
+const FILE = join(process.env.QASE_DATA_DIR ?? join(__dirname, '..', '.qase'), 'missions.json');
 export const MISSION_TYPES = [
 	'full_audit', 'security', 'ux', 'regression', 'feature_gap', 'accessibility'
 ];

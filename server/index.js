@@ -481,6 +481,19 @@ function requireSession(request, response) {
  * Non-mission turns pass no hooks — zero behavior change.
  */
 function startTurn(session, options) {
+	// R1-G7 — a late-resolving runtime kick must never resurrect a mission
+	// the governor already finalized as terminal (stuck/timeout path). The
+	// kick resolves AFTER the settle window, but completed→running is a LEGAL
+	// transition (revalidate exception), so the status guard alone cannot
+	// stop it — check the mission explicitly and refuse to enter runTurn.
+	if (session?.missionId) {
+		const mission = getMission(session.missionId);
+		if (mission && isTerminalStatus(mission.status)) {
+			addMessage(session, { role: 'system', text: 'Mission already finalized (timeout or stuck close-out) before this turn could start.', kind: 'error' });
+			setStatus(session, 'error', 'Mission finalized before turn start.');
+			return;
+		}
+	}
 	const hooks = session?.missionId
 		? {
 			onTurnBoundary: (sess, turnCount) => {
@@ -505,6 +518,7 @@ import {
 	submitMission, releaseMission, cancelMission as governorCancelMission,
 	startGovernorWatchdog, governorStats, queuePositionOf
 } from './missionGovernor.js';
+import { createMissionWatchdogHandlers } from './missionWatchdog.js';
 
 /**
  * The ONLY path from a mission to an agent execution. Every start route
@@ -2210,6 +2224,40 @@ app.post('/api/v1/integration/missions/:id/stop', requireIntegrationAuth, (reque
 	if (!hasScope(request.integration, 'mission:stop')) {
 		return response.status(403).json({ error: { code: 'scope_forbidden', message: 'Principal lacks mission:stop.' } });
 	}
+	// M1-P4.2 parity — a QUEUED mission cancels without ever executing; an
+	// unstarted CREATED shell cancels directly. Both must never re-execute
+	// after a restart (requeuePersistedMissions only re-queues status
+	// 'queued'). Previously this route wrote 'aborted' unconditionally: for
+	// queued/created missions that transition is ILLEGAL (stateTransitions),
+	// so the status write was silently dropped — the mission stayed 'queued'
+	// forever in-process AND boot re-EXECUTED a mission the integrator had
+	// stopped.
+	if (mission.status === 'queued') {
+		const result = governorCancelMission(mission.id);
+		if (result === 'cancelled-queued') {
+			updateMission(mission.id, {
+				status: 'cancelled',
+				cancelledAt: Date.now(),
+				cancellationReason: 'cancelled_before_execution'
+			});
+			return response.json({ missionId: mission.id, status: 'cancelled', cancelledWhile: 'queued', stopReason: 'integration_stop' });
+		}
+		return response.status(409).json({ error: 'Mission is not tracked by the execution queue' });
+	}
+	if (mission.status === 'created') {
+		updateMission(mission.id, {
+			status: 'cancelled',
+			cancelledAt: Date.now(),
+			cancellationReason: 'cancelled_before_execution'
+		});
+		return response.json({ missionId: mission.id, status: 'cancelled', cancelledWhile: 'created', stopReason: 'integration_stop' });
+	}
+	if (mission.status !== 'running') {
+		// Terminal for a terminal status: idempotent no-op with the honest
+		// current status (never flips a terminal mission).
+		return response.json({ missionId: mission.id, status: mission.status, stopReason: 'integration_stop' });
+	}
+
 	if (mission.sessionId) {
 		const record = liveFor(mission.sessionId);
 		record?.controller?.abort();
@@ -4134,7 +4182,11 @@ async function finalizeMissionFromSession(mission, session) {
 	// success. Route dead sessions to mission status 'failed' with a minimal
 	// report instead of a quality score.
 	if (session.status === 'error' || session.status === 'interrupted') {
-		const firstErr = (session.transcript ?? []).find((m) => m.role === 'system' && /error/i.test(m.text ?? ''));
+		// R1-G12 — the session store records its transcript in `messages`
+		// (store.js addMessage); the old `session.transcript` read never
+		// existed, so firstErr was ALWAYS undefined and every dead-session
+		// finalize got a generic failure reason.
+		const firstErr = (session.messages ?? []).find((m) => m.role === 'system' && /error/i.test(m.text ?? ''));
 		// D1: evidence collection must run for EVERY terminal session — an
 		// interrupted/error run still produced real browser actions and those
 		// are the mission's evidence. Previously this path returned before
@@ -4716,52 +4768,22 @@ registerAutonomyHooks({
 	}
 });
 
+const watchdogHandlers = createMissionWatchdogHandlers({
+	getMission,
+	getSession,
+	liveFor,
+	finalizeMission,
+	finalizeMissionFromSession,
+	collectEvidenceForSession,
+	getConfig,
+	log: (message) => console.log(message)
+});
+
 startGovernorWatchdog({
 	getMissionStatus: (id) => getMission(id)?.status,
 	getMissionStartedAt: (id) => getMission(id)?.startedAt,
 	getSessionIdFor: (id) => getMission(id)?.sessionId ?? null,
-	probeSession: (sessionId) => {
-		const session = getSession(sessionId);
-		if (!session) return { settled: true, running: false, settledAt: Date.now(), status: 'gone' };
-		const record = liveFor(sessionId);
-		const settledStatuses = ['idle', 'done', 'error', 'interrupted'];
-		const settled = settledStatuses.includes(session.status);
-		return {
-			settled,
-			running: Boolean(record?.running),
-			// updatedAt as the settle timestamp: session records are re-stamped
-			// on every mutation, so updatedAt ≈ when it last changed state.
-			settledAt: session.updatedAt ?? Date.now(),
-			status: session.status
-		};
-	},
-	onStuck: (missionId) => {
-		// Same honesty finalizer the lazy GET path uses — no duplicate logic.
-		const mission = getMission(missionId);
-		if (!mission || mission.status !== 'running' || !mission.sessionId) return;
-		const session = getSession(mission.sessionId);
-		if (!session) return;
-		// B2 — deterministic close-out (zero model turns), then finalize.
-		finalizeTurnLimitedRun(session);
-		Promise.resolve(finalizeMissionFromSession(mission, session)).catch(() => {});
-	},
-	onTimeout: (missionId) => {
-		const mission = getMission(missionId);
-		if (!mission || !isTerminalStatus(mission.status)) {
-			finalizeMission(missionId, {
-				status: 'failed',
-				failureReason: `execution_timeout: exceeded the ${getConfig().missionTimeoutMinutes}-minute wall clock`,
-				findings: [],
-				summary: null
-			});
-			if (mission?.sessionId) {
-				const record = liveFor(mission.sessionId);
-				record?.controller?.abort();
-				void closeBrowser(mission.sessionId);
-			}
-		}
-	},
-	log: (message) => console.log(message)
+	...watchdogHandlers
 });
 
 requeuePersistedMissions();
