@@ -92,6 +92,17 @@ async function launchBrowser(opts = {}) {
 	const config = getConfig();
 	const plan = resolveLaunchPlan(config, opts);
 
+	// ── P0-F1 — BrowserStack configuration validated BEFORE execution ──
+	// Enabled-with-incomplete-credentials is a deterministic provider failure:
+	// no launch attempt, no local substitution, truthful failed provenance.
+	if (plan.mode === 'error') {
+		console.error(`[BrowserStack] ${plan.error}`);
+		const err = new Error(plan.error);
+		err.browserstackInvalidConfig = true;
+		err.providerCode = plan.code;
+		throw err;
+	}
+
 	// ── BrowserStack CDP path ──
 	if (plan.mode === 'browserstack') {
 		if (plan.unsupported) {
@@ -859,6 +870,23 @@ export async function runTestCase(testCase, { credentials, onProgress, attempt =
 				executedOn: Date.now(),
 				failed: true
 			});
+		} else if (error?.browserstackInvalidConfig && !result.executionEnvironment) {
+			// P0-F1 — enabled BrowserStack with incomplete credentials: the run
+			// must fail VISIBLY as a BrowserStack provider failure. Provenance
+			// says browserstack/failed — never local, never a phantom success.
+			result.error = error.message;
+			result.providerFailure = { provider: 'browserstack', code: error.providerCode ?? 'invalid_credentials' };
+			result.executionEnvironment = buildExecutionEnvironment({
+				provider: 'browserstack',
+				browser: browserType || 'chrome',
+				browserVersion: null,
+				os: null,
+				osVersion: null,
+				device: deviceName,
+				engineEmulated: false,
+				executedOn: Date.now(),
+				failed: true
+			});
 		} else if (!result.executionEnvironment) {
 			// Launch failed before the environment existed — record local with
 			// failed:true rather than leaving null (never invent details).
@@ -1125,6 +1153,20 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 	// executed (null environments from legacy shapes are simply absent).
 	const providers = [...new Set(finalResults.map(r => r.executionEnvironment?.provider).filter(Boolean))];
 
+	// P0-F1 — provider failure must be visible at RUN level too, not only on
+	// individual results: when every result failed for the same deterministic
+	// provider cause (config validated before execution), the summary says so
+	// truthfully — an operator reading only schedule.lastRun sees the provider
+	// failure instead of a bare "errored: N".
+	const providerFailures = finalResults
+		.map(r => r.providerFailure ?? null)
+		.filter(Boolean);
+	const summaryProviderFailure = providerFailures.length > 0
+		&& providerFailures.length === finalResults.filter(r => r.result === 'error').length
+		&& finalResults.length > 0
+		? providerFailures[0]
+		: null;
+
 	const summary = {
 		id: randomUUID(),
 		total: testCases.length,
@@ -1141,6 +1183,9 @@ export async function runTestSuite(testCases, { credentials, onProgress, concurr
 				? (getConfig().browserstackStrict !== false)
 				: undefined
 		},
+		// P0-F1 — truthful provider-failure rollup (see above). Null unless
+		// every errored result shares one deterministic provider failure.
+		providerFailure: summaryProviderFailure,
 		results: finalResults
 	};
 

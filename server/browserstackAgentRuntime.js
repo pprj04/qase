@@ -83,6 +83,11 @@ export async function attachBrowserstackRuntime(service, session, { config } = {
 		return { provider: 'local', device: plan.device ?? null };
 	}
 
+	// P0-F1 — validate the configuration shape BEFORE the CDP attempt for the
+	// agent path too (resolveLaunchPlan already rejects enabled-incomplete
+	// configs; an explicit request with incomplete stored creds reaches the
+	// same deterministic error via resolveAgentExecutionPlan above).
+
 	// Explicit BrowserStack session. Attach BEFORE the SDK can lazily launch
 	// local Chromium; if the service already has a context (should not happen
 	// in the ensureRuntime ordering), that is a wiring bug — fail loudly.

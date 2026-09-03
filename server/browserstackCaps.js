@@ -46,11 +46,56 @@ export { BROWSERSTACK_OS_MAP };
  *   - BrowserStack NOT selected → local emulated context (device descriptor
  *     applied to browser.newContext — see launchLocal/launchBrowser).
  */
+/**
+ * P0-F1 — BrowserStack configuration validation, BEFORE any execution attempt.
+ *
+ * browserstackEnabled with only one of user/key present is an INCOMPLETE
+ * configuration, not a "silent local" one: previously resolveLaunchPlan treated
+ * user-set+key-missing as a selected BrowserStack run, built caps carrying an
+ * EMPTY access key, and the CDP endpoint then failed with an auth error — while
+ * the run's provenance claimed provider 'browserstack' even though no
+ * BrowserStack session was ever possible. That phantom provider claim is an
+ * execution-truth defect (observed live: execution-provenance suite [5]/[8]
+ * recorded browserstack on runs whose credentials could never connect).
+ *
+ * Returns { ok:true } only when BOTH credentials are present and non-empty.
+ * The message never contains the credential values themselves.
+ */
+export function validateBrowserstackConfig(config = {}) {
+	const user = typeof config.browserstackUser === 'string' ? config.browserstackUser.trim() : '';
+	const key = typeof config.browserstackKey === 'string' ? config.browserstackKey.trim() : '';
+	if (!user || !key) {
+		const missing = !user && !key
+			? 'username and access key'
+			: (!user ? 'username' : 'access key');
+		return {
+			ok: false,
+			code: 'invalid_credentials',
+			error: `BrowserStack is enabled but its credentials are incomplete (missing ${missing}). Execution was not attempted: add the BrowserStack username and access key in Settings (or disable BrowserStack), verify the connection, then retry.`
+		};
+	}
+	return { ok: true };
+}
+
 export function resolveLaunchPlan(config = {}, opts = {}) {
 	const browserstackSelected = config.browserstackEnabled === true
 		&& Boolean(config.browserstackUser) && Boolean(config.browserstackKey);
 	const deviceName = opts.device != null ? String(opts.device) : null;
 	if (!browserstackSelected) {
+		// P0-F1 — enabled with INCOMPLETE credentials is a deterministic
+		// configuration error, never a silent local run. Enabled with neither
+		// credential stored also lands here (an operator turned the provider on
+		// without ever saving credentials): the run must fail truthfully as a
+		// provider configuration failure.
+		if (config.browserstackEnabled === true) {
+			const check = validateBrowserstackConfig(config);
+			return {
+				mode: 'error',
+				code: check.code,
+				error: check.error,
+				strict: true
+			};
+		}
 		return { mode: 'local', strict: false, device: deviceName };
 	}
 	// ── BrowserStack real-device path (B0.3) ──
