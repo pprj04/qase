@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun } from './agent.js';
+import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun, disposeSessionResources, settleThenDispose } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
 import {
@@ -180,6 +180,19 @@ pruneOldSessions();
 startScheduler();
 startWatchdog();
 
+/* ── R2-B/D: boot-time orphan browser sweep ───────────────────────── */
+// Before the governor starts any mission, no QASE-owned Chromium is
+// legitimately running — anything matching our Playwright cache at this
+// moment is an orphan of a previous abnormal shutdown. Conservative
+// ownership match (ms-playwright cache path + browser binary shape,
+// never system chrome, never node). See server/orphanSweep.js.
+try {
+	const { sweepOrphanBrowsers } = await import('./orphanSweep.js');
+	sweepOrphanBrowsers();
+} catch (err) {
+	console.error('[orphan-sweep] boot sweep failed:', err?.message ?? err);
+}
+
 /* ── R2-A/G3: awaiting-input expiry close-out ────────────────────── */
 // The store watchdog owns detection (it marks the session interrupted and
 // hands it here). This close-out OWNS the session until it finishes: governor
@@ -195,7 +208,8 @@ setAwaitingInputExpiryHandler(async (session) => {
 		// Awaited (NOT fire-and-forget): the correctness contract is that no
 		// Chromium/bridge outlives expiry, so closeBrowser must complete
 		// before the mission is finalized. Bounded by the bridge timeout.
-		await closeBrowser(session.id);
+		// R2-B: disposeSessionResources also removes the session workspace.
+		await disposeSessionResources(session.id);
 		const mission = session.missionId ? getMission(session.missionId) : null;
 		if (mission && !isTerminalStatus(mission.status)) {
 			await finalizeMissionFromSession(mission, session);
@@ -230,8 +244,7 @@ globalThis.__qasePhase18KnowledgeWriter = (run, originalFinding) => {
  * 2. Prunes the session list to the most recent 50 so sessions.json
  *    stays bounded as missions accumulate.
  */
-function runResourceCleanup() {
-	try {
+async function runResourceCleanup() {	try {
 		for (const summary of listSessions()) {
 			const record = liveFor(summary.id);
 			// M1-P4.2 fix: the old check `record?.browser` never matched — the
@@ -239,7 +252,21 @@ function runResourceCleanup() {
 			// browser-reclaim branch was dead code and idle Chromiums survived
 			// until the next runTurn's closeOtherBrowsers.
 			if (summary.status && !['running', 'awaiting_input'].includes(summary.status) && record?.bridge) {
-				void closeBrowser(summary.id).catch(() => { /* best effort */ });
+				// R2-B — terminal sessions (done/error/interrupted) get the
+				// full deterministic cleanup: dispose + workspace removal.
+				// `idle` sessions stay RESUMABLE (closeBrowser's suspend keeps
+				// the runtime; the conversation survives), so they only get an
+				// awaited browser close — never dispose, never workspace removal.
+				// R2-B/G8 — awaited instead of fire-and-forget: disposal
+				// ordering matters (bridge suspend → Chromium exit) and an
+				// unawaited close could race the prune in the same tick.
+				try {
+					if (['done', 'error', 'interrupted'].includes(summary.status)) {
+						await disposeSessionResources(summary.id);
+					} else {
+						await closeBrowser(summary.id);
+					}
+				} catch { /* best effort */ }
 			}
 		}
 		const pruned = pruneOldSessions(50);
@@ -1083,8 +1110,10 @@ app.post('/api/sessions/:id/stop', requireApiToken, (request, response) => {
 	}
 	const record = liveFor(session.id);
 	record?.controller?.abort();
-	// Phase 1: close browser resources on stop to prevent orphaned Chromium.
-	void closeBrowser(session.id);
+	// R2-B/G8 — awaited-and-caught dispose (was fire-and-forget) + workspace
+	// removal. User stop on a session is terminal intent for its browser;
+	// the record itself stays (conversation is preserved in messages).
+	void disposeSessionResources(session.id).catch(() => { /* best effort */ });
 	response.json({ ok: true });
 });
 
@@ -2311,7 +2340,10 @@ app.post('/api/v1/integration/missions/:id/stop', requireIntegrationAuth, (reque
 	if (mission.sessionId) {
 		const record = liveFor(mission.sessionId);
 		record?.controller?.abort();
-		void closeBrowser(mission.sessionId);
+		// R2-B/G8 — settle the aborted turn (bounded) so the runtime cannot
+		// re-create the workspace after removal, then dispose + workspace
+		// cleanup (aborted is terminal).
+		void settleThenDispose(mission.sessionId).catch(() => { /* best effort */ });
 	}
 	updateMission(mission.id, { status: 'aborted', completedAt: Date.now(), stopReason: 'integration_stop' });
 	releaseMission(mission.id);
@@ -3208,8 +3240,9 @@ app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
 	if (mission.sessionId) {
 		const record = liveFor(mission.sessionId);
 		record?.controller?.abort();
-		// Phase 1: close browser resources to prevent orphaned Chromium.
-		void closeBrowser(mission.sessionId);
+		// R2-B/G8 — mission aborted by user stop: settle the aborted turn
+		// (bounded), then dispose + workspace removal; aborted is terminal.
+		void settleThenDispose(mission.sessionId).catch(() => { /* best effort */ });
 	}
 
 	updateMission(mission.id, { status: 'aborted', completedAt: Date.now(), stopReason: 'manual_stop' });
@@ -4371,7 +4404,9 @@ async function finalizeMissionFromSession(mission, session) {
 	try {
 		const sessionStatus = session.status;
 		if (sessionStatus !== 'done' && sessionStatus !== 'running' && sessionStatus !== 'awaiting_input') {
-			void closeBrowser(session.id);
+			// R2-B/G8 — error/interrupted leftovers after finalization:
+			// awaited dispose + workspace removal (was fire-and-forget).
+			void disposeSessionResources(session.id).catch(() => { /* best effort */ });
 		}
 	} catch (cleanupErr) {
 		console.error(`[resource-cleanup] finalizer browser cleanup failed for ${session.id}:`, cleanupErr?.message || cleanupErr);

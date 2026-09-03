@@ -179,6 +179,25 @@ export function pruneOldSessions(keep = SESSION_COUNT_KEEP) {
 		survivors = survivors.slice(0, cutoff);
 	}
 	for (const session of doomed) {
+		// R2-B/G6 — never orphan a browser: dispose the live record (bridge +
+		// runtime) and remove the session workspace BEFORE the record leaves
+		// the map. After sessions.delete the session is invisible to every
+		// later cleanup pass, so this is the last chance for its Chromium.
+		const record = live.get(session.id);
+		if (record) {
+			try {
+				record.dispose?.();
+			} catch (err) {
+				console.error(`[prune] dispose failed for ${session.id}: ${err?.message ?? err}`);
+			}
+			live.delete(session.id);
+		}
+		// R2-B/G2 — remove the session's scratch workspace (idempotent;
+		// kernel-corrupted dirs throw EUCLEAN and are skipped silently —
+		// they predate the ownership model).
+		try {
+			fs.rmSync(path.join(process.cwd(), '.qase', 'workspaces', session.id), { recursive: true, force: true });
+		} catch { /* best-effort: fs corruption */ }
 		sessions.delete(session.id);
 	}
 	if (doomed.length > 0) {
@@ -225,6 +244,11 @@ export function deleteSession(id) {
 	record?.dispose?.();
 	live.delete(id);
 	const existed = sessions.delete(id);
+	// R2-B/G2 — remove the session's scratch workspace with the record.
+	// Idempotent (force), best-effort on corrupt filesystems.
+	try {
+		fs.rmSync(path.join(process.cwd(), '.qase', 'workspaces', id), { recursive: true, force: true });
+	} catch { /* best-effort: fs corruption */ }
 	persistSoon();
 	return existed;
 }

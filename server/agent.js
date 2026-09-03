@@ -132,6 +132,76 @@ function liveBrowserUrl(record) {
  * relaunches on the next browser tool call, and the bridge replays the session
  * into it.
  */
+/**
+ * R2-B/G2 — wait for a session's in-flight turn to settle (bounded), then
+ * dispose resources + remove the workspace. Stopping a mission aborts the
+ * controller, but the SDK's model socket can take a moment to unwind; if we
+ * rm the workspace immediately the runtime's .state writes re-create it.
+ * Bounded poll on record.running; total wait ≤ ~10s.
+ */
+export async function settleThenDispose(sessionId, { log = console.error } = {}) {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		const record = liveFor(sessionId);
+		if (!record?.running) break;
+		await new Promise((resolve) => setTimeout(resolve, 200));
+	}
+	if (liveFor(sessionId)?.running) {
+		log(`[r2b-cleanup] ${sessionId} turn still running after settle window — disposing anyway`);
+	}
+	return disposeSessionResources(sessionId, { log });
+}
+
+/**
+ * R2-B — workspace root for a session (single source of truth, matches
+ * ensureRuntime's mkdirSync). null when the caller passed a non-session id.
+ */
+export function workspacePathFor(sessionId) {
+	return sessionId ? path.join(process.cwd(), '.qase', 'workspaces', sessionId) : null;
+}
+
+/**
+ * R2-B/G2 — deterministic per-session cleanup: dispose bridge + runtime,
+ * then remove the session workspace. Idempotent (safe when the browser is
+ * already dead / bridge disposed / workspace missing), observable on
+ * failure, and never touches paths outside .qase/workspaces/<sessionId>.
+ * Returns a structured result for diagnostics (E of the R2-B contract).
+ */
+export async function disposeSessionResources(sessionId, { log = console.error } = {}) {
+	const result = { sessionId, browserDisposed: false, workspaceRemoved: false, error: null };
+	if (!sessionId) return result;
+	// R2-B/G2 — remove the workspace FIRST, synchronously: every caller is
+	// terminal-intent and no post-terminal reader exists, so removal must not
+	// depend on the browser dispose completing (a hung model socket can stall
+	// the bridge suspend indefinitely). Scratch-only dir; force rm is
+	// idempotent and already-missing is fine.
+	const dir = workspacePathFor(sessionId);
+	if (dir) {
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+			result.workspaceRemoved = true;
+		} catch (err) {
+			result.error = `rm: ${err?.message ?? err}`;
+			log(`[r2b-cleanup] ${sessionId} workspace remove failed: ${err?.message ?? err}`);
+		}
+	}
+	try {
+		const record = liveFor(sessionId);
+		try {
+			record?.dispose?.();
+			result.browserDisposed = true;
+		} catch (err) {
+			result.error = result.error ? `${result.error}; dispose: ${err?.message ?? err}` : `dispose: ${err?.message ?? err}`;
+			log(`[r2b-cleanup] ${sessionId} dispose failed: ${err?.message ?? err}`);
+		}
+		liveFor(sessionId).dispose = undefined;
+	} catch (err) {
+		result.error = `${result.error ? `${result.error}; ` : ''}${err?.message ?? err}`;
+		log(`[r2b-cleanup] ${sessionId} cleanup failed: ${err?.message ?? err}`);
+	}
+	return result;
+}
+
 export async function closeBrowser(sessionId) {
 	const record = liveFor(sessionId);
 	if (!record?.bridge) return;
