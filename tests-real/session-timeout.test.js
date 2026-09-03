@@ -13,8 +13,48 @@
  * Runs offline against the module — no server required (spawns of index.js
  * are avoided; the resolver is a pure env reader).
  */
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/* ── Hermeticity (R2-B-H) ──────────────────────────────────────────────
+ * This suite dynamically imports server/agent.js, which instantiates a
+ * FRESH server/store.js whose STATE_DIR is derived from process.cwd().
+ * Run from /workspace, that fresh store's persistSoon() debounce wrote
+ * its EMPTY map over the REAL .qase/sessions.json (proven pre-existing
+ * at f18049a). The suite therefore runs inside its own temporary cwd so
+ * the fresh store can only ever write <tmp>/.qase — and the after()
+ * guard below proves the real store is byte-identical afterwards.
+ * NOTE: relative specifiers ('../server/agent.js') resolve from this
+ * FILE's URL, not cwd, so the imports are unaffected by the chdir. */
+const ORIGINAL_CWD = process.cwd();
+const REAL_SESSIONS_FILE = join(ORIGINAL_CWD, '.qase', 'sessions.json');
+const realSessionsBefore = existsSync(REAL_SESSIONS_FILE) ? readFileSync(REAL_SESSIONS_FILE) : null;
+const TEST_CWD = mkdtempSync(join(tmpdir(), 'qase-st-'));
+process.chdir(TEST_CWD);
+
+after(async () => {
+	// Let any in-flight persistSoon() debounce (250 ms, unref'd) land in the
+	// TEMP store so the existence proof below is deterministic.
+	await new Promise(resolve => setTimeout(resolve, 600));
+	const tempStore = join(TEST_CWD, '.qase', 'sessions.json');
+	if (!existsSync(tempStore)) {
+		process.chdir(ORIGINAL_CWD);
+		rmSync(TEST_CWD, { recursive: true, force: true });
+		throw new Error(
+			`[hermeticity] expected this suite's store writes to land in ${tempStore} — they went somewhere else`
+		);
+	}
+	const realSessionsAfter = existsSync(REAL_SESSIONS_FILE) ? readFileSync(REAL_SESSIONS_FILE) : null;
+	process.chdir(ORIGINAL_CWD);
+	rmSync(TEST_CWD, { recursive: true, force: true });
+	assert.ok(
+		realSessionsBefore === null ? realSessionsAfter === null : realSessionsAfter?.equals(realSessionsBefore),
+		'[hermeticity] the real /workspace/.qase/sessions.json changed during this suite'
+	);
+});
 
 /* ── resolver under a controlled env ───────────────────────────────── */
 

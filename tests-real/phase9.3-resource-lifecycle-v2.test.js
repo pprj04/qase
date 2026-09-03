@@ -15,36 +15,94 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 
+/* ── Hermetic store harness (R2-B-H) ────────────────────────────────────
+ * RL-1/RL-2 previously read the LIVE dev .qase/sessions.json (cwd = /workspace)
+ * and asserted `data.length > 0` — dev data that another suite's isolation
+ * bug had legitimately wiped to []. They now own a temporary cwd: a fresh
+ * store module (cache-busted dynamic import, own cwd-derived STATE_DIR) is
+ * loaded there, seeded with 80 sessions, pruned, and the on-disk bound
+ * assertions run against the TEMP store only. The real /workspace/.qase is
+ * never read or written by this suite. All other tests below stay anchored
+ * to the repo cwd (they read repo source files). */
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+
+function createHermeticStoreHarness() {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'qase-rl-'));
+  const prevCwd = process.cwd();
+  process.chdir(cwd);
+  return {
+    cwd,
+    async load() {
+      return await import(
+        `../server/store.js?hermetic=${encodeURIComponent(cwd)}&t=${Date.now()}-${Math.random()}`
+      );
+    },
+    cleanup() {
+      process.chdir(prevCwd);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  };
+}
+
 /* ── Tests ──────────────────────────────────────────────────────── */
 
 describe('Phase 9.3 — Resource Lifecycle', () => {
 
-  it('RL-1: sessions.json is bounded (< 10MB after pruning)', () => {
-    const stateFile = path.join(process.cwd(), '.qase', 'sessions.json');
-    if (!fs.existsSync(stateFile)) {
-      console.log('  sessions.json does not exist — skipping');
-      return;
+  it('RL-1: sessions.json is bounded (< 10MB after pruning)', async () => {
+    // R2-B-H: hermetic — measured on a temp store seeded and pruned by this test.
+    const harness = createHermeticStoreHarness();
+    try {
+      const store = await harness.load();
+      for (let i = 0; i < 80; i++) {
+        const s = store.createSession(`hermetic-rl1-${i}`);
+        s.messages.push({ id: `m${i}`, ts: 1, role: 'user', content: 'x'.repeat(500 + (i % 7) * 250) });
+      }
+      await new Promise(r => setTimeout(r, 500)); // let persistSoon debounce flush to disk
+      store.pruneOldSessions();
+      store.persistSessionsNow();
+
+      const stateFile = path.join(harness.cwd, '.qase', 'sessions.json');
+      assert.ok(fs.existsSync(stateFile), 'temp sessions.json should exist after persist');
+      const stats = fs.statSync(stateFile);
+      const sizeMB = stats.size / 1024 / 1024;
+      console.log(`  hermetic sessions.json: ${sizeMB.toFixed(2)}MB`);
+      assert.ok(sizeMB < 15,
+        `sessions.json should be < 15MB after pruning, got ${sizeMB.toFixed(2)}MB`);
+    } finally {
+      harness.cleanup();
     }
-    const stats = fs.statSync(stateFile);
-    const sizeMB = stats.size / 1024 / 1024;
-    console.log(`  sessions.json: ${sizeMB.toFixed(1)}MB`);
-    // After pruning (keep 50), should be well under 10MB
-    assert.ok(sizeMB < 15,
-      `sessions.json should be < 15MB after pruning, got ${sizeMB.toFixed(1)}MB`);
   });
 
-  it('RL-2: Session count is bounded (pruned at 50 by server)', () => {
-    const stateFile = path.join(process.cwd(), '.qase', 'sessions.json');
-    if (!fs.existsSync(stateFile)) return;
-    const data = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    console.log(`  Session count: ${data.length}`);
-    // The server prunes to 50 on startup and periodically. During a test run,
-    // earlier tests that start a server instance may create additional sessions
-    // before this test runs. Accept up to 200 (well below the 33MB OOM that
-    // motivated this fix — 50 sessions = ~6MB).
-    assert.ok(data.length <= 200,
-      `Session count should be ≤ 200 (well-bounded), got ${data.length}`);
-    assert.ok(data.length > 0, 'Should have some sessions');
+  it('RL-2: Session count is bounded (pruned at 50 by server)', async () => {
+    // R2-B-H: hermetic — count bound verified on a temp store seeded with 80
+    // sessions then pruned. Previously this read the live dev store and failed
+    // `data.length > 0` whenever dev data was legitimately empty (wiped by the
+    // session-timeout isolation bug this ticket fixes). Same bounds as before
+    // (≤ 200, > 0), now against deterministic seeded input.
+    const harness = createHermeticStoreHarness();
+    try {
+      const store = await harness.load();
+      for (let i = 0; i < 80; i++) {
+        const s = store.createSession(`hermetic-rl2-${i}`);
+        s.messages.push({ id: `m${i}`, ts: 1, role: 'user', content: 'x'.repeat(300 + (i % 5) * 100) });
+      }
+      store.pruneOldSessions();
+      store.persistSessionsNow();
+
+      const stateFile = path.join(harness.cwd, '.qase', 'sessions.json');
+      const data = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      console.log(`  hermetic session count: ${data.length}`);
+      assert.ok(data.length <= 200,
+        `Session count should be ≤ 200 (well-bounded), got ${data.length}`);
+      assert.ok(data.length > 0, 'Should have some sessions');
+      // The prune cap is the contract: 80 seeded → at most 50 kept (and never
+      // below the 5-session floor from the byte-budget pass).
+      assert.ok(data.length <= 50,
+        `Pruned store should respect the keep-50 cap, got ${data.length}`);
+    } finally {
+      harness.cleanup();
+    }
   });
 
   it('RL-3: No live Chrome processes when no session is running', () => {
