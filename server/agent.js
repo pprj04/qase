@@ -218,13 +218,53 @@ export async function closeBrowser(sessionId) {
 	}
 }
 
-/** Closes every other session's browser, so only one is ever running. */
+/**
+ * P0-F2 — resource ownership: which sessions have a LEGITIMATE hold on
+ * their live browser, so another mission starting must NOT close it.
+ *
+ * `running` — a turn is executing right now.
+ * `awaiting_input` — the agent asked the user a question; the browser IS
+ *   the session's working state and must survive until answered, expired,
+ *   or cancelled.
+ *
+ * Terminal states (done/error/interrupted/cancelled) and bare `idle` have
+ * NO ownership hold: their browsers may be reclaimed by closeOtherBrowsers
+ * (idle stays resumable via closeBrowser's suspend semantics — unchanged
+ * from the pre-F2 behavior).
+ */
+const BROWSER_HOLD_STATUSES = new Set(['running', 'awaiting_input']);
+
+function browserHasActiveHold(summary) {
+	if (!summary) return false;
+	if (BROWSER_HOLD_STATUSES.has(summary.status)) return true;
+	// Defensive: a live turn flag without a status stamp (transition window)
+	// still owns its browser — never kill mid-flight.
+	return Boolean(liveFor(summary.id)?.running);
+}
+
+/**
+ * Closes every other session's browser, so only one non-holding browser
+ * remains. P0-F2: sessions that OWN their browser (running / awaiting_input,
+ * see browserHasActiveHold) are never touched here — cleanup for those
+ * happens at their genuine lifecycle end (terminate/expire/cancel) through
+ * disposeSessionResources / closeBrowser / runResourceCleanup.
+ */
 async function closeOtherBrowsers(keepSessionId) {
 	await Promise.all(
 		listSessions()
 			.filter(summary => summary.id !== keepSessionId)
-			.map(summary => (liveFor(summary.id).running ? undefined : closeBrowser(summary.id)))
+			.map(summary => (browserHasActiveHold(summary) ? undefined : closeBrowser(summary.id)))
 	);
+}
+
+// P0-F2 — test seam: the ownership rule is behavioral and cross-module, so
+// the sweep is exposed (name-mangled, never called by production code) for
+// regression tests. Returns which sessions were left untouched.
+export async function __closeOtherBrowsersForTests(keepSessionId) {
+	await closeOtherBrowsers(keepSessionId);
+	return listSessions()
+		.filter(summary => summary.id !== keepSessionId && browserHasActiveHold(summary))
+		.map(summary => summary.id);
 }
 
 export async function ensureRuntime(session) {
