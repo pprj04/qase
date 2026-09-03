@@ -57,6 +57,16 @@ export function createMissionWatchdogHandlers({
 		if (record?.pendingRuntimeKick) {
 			return { settled: false, running: false, status: session.status };
 		}
+		// R2-A/G3 — while awaiting-input expiry close-out owns the session,
+		// the governor must not race-finalize it as a generic execution
+		// timeout. The session is already terminal ('interrupted') with a
+		// truthful awaiting_input_timeout reason being finalized by the
+		// expiry path; probeSession reports settled:false so the sweep skips
+		// it. If the close-out later FAILS, it clears the flag and the
+		// governor's normal recovery may resume.
+		if (record?.expiryClosingOut) {
+			return { settled: false, running: false, status: session.status };
+		}
 		const settledStatuses = ['idle', 'done', 'error', 'interrupted'];
 		const settled = settledStatuses.includes(session.status);
 		return {

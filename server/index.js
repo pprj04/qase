@@ -19,7 +19,7 @@ import { validateDeviceRequest } from './deviceContext.js';
 import {
 	addMessage, bus, createSession, deleteSession, emit, getSession,
 	listSessions, liveFor, loadSessions, setStatus, startWatchdog, pruneOldSessions,
-	flushSessionsForShutdown
+	flushSessionsForShutdown, setAwaitingInputExpiryHandler
 } from './store.js';
 import {
 	saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, updateWorkflow
@@ -179,6 +179,33 @@ loadAssessments(); // Phase 17 UX assessment store (survives restarts)
 pruneOldSessions();
 startScheduler();
 startWatchdog();
+
+/* ── R2-A/G3: awaiting-input expiry close-out ────────────────────── */
+// The store watchdog owns detection (it marks the session interrupted and
+// hands it here). This close-out OWNS the session until it finishes: governor
+// sweeps see record.expiryClosingOut and stand down (missionWatchdog.js), a
+// late answer is rejected with 410 by the answer routes, and the startTurn
+// terminal-mission guard (R1) blocks any resurrection. Failure clears the
+// flag so the governor's normal recovery may resume.
+setAwaitingInputExpiryHandler(async (session) => {
+	let cleared = false;
+	const record = liveFor(session.id);
+	const clearFlag = () => { if (!cleared) { record.expiryClosingOut = false; cleared = true; } };
+	try {
+		// Awaited (NOT fire-and-forget): the correctness contract is that no
+		// Chromium/bridge outlives expiry, so closeBrowser must complete
+		// before the mission is finalized. Bounded by the bridge timeout.
+		await closeBrowser(session.id);
+		const mission = session.missionId ? getMission(session.missionId) : null;
+		if (mission && !isTerminalStatus(mission.status)) {
+			await finalizeMissionFromSession(mission, session);
+		}
+	} catch (error) {
+		console.error(`[awaiting-input-expiry] close-out failed for ${session.id}: ${error?.message ?? error}`);
+	} finally {
+		clearFlag();
+	}
+});
 
 /* ── Phase 18: cross-module hooks (wired after stores are live) ───── */
 
@@ -954,7 +981,10 @@ app.post('/api/sessions/:id/message', requireApiToken, async (request, response)
 	}
 
 	// A pending question means the user typed instead of using the answer form.
-	const pending = session.pendingQuestion;
+	// R2-A late-answer race: if the question expired (status no longer
+	// awaiting_input), typing must NOT resume the turn — the expiry path owns
+	// or has already closed the session.
+	const pending = session.pendingQuestion && session.status === 'awaiting_input' ? session.pendingQuestion : undefined;
 	startTurn(session, pending ? { resumeAnswer: text } : { task: text });
 	response.json({ ok: true });
 });
@@ -967,6 +997,18 @@ app.post('/api/sessions/:id/answer', requireApiToken, (request, response) => {
 	}
 	if (!session.pendingQuestion) {
 		response.status(409).json({ error: 'Nothing is waiting on an answer.' });
+		return;
+	}
+	// R2-A late-answer race — the pending question may have been consumed by
+	// awaiting-input expiry between the user's read and this submit. A turn
+	// now would resurrect a mission the expiry path just finalized. Answer
+	// with a deterministic conflict instead; no turn, no browser.
+	if (session.status === 'interrupted' && liveFor(session.id).expiryClosingOut) {
+		response.status(410).json({ error: 'The question expired (awaiting_input_timeout). Restart the mission to continue.' });
+		return;
+	}
+	if (session.status !== 'awaiting_input') {
+		response.status(409).json({ error: `Session is ${session.status}, not awaiting input.` });
 		return;
 	}
 	const answer = String(request.body?.answer ?? '').trim();
@@ -992,7 +1034,15 @@ app.post('/api/sessions/:id/credentials', requireApiToken, (request, response) =
 		response.status(409).json({ error: 'Nothing is waiting on an answer.' });
 		return;
 	}
-
+	// R2-A late-answer race — same guard as /answer above.
+	if (session.status === 'interrupted' && liveFor(session.id).expiryClosingOut) {
+		response.status(410).json({ error: 'The question expired (awaiting_input_timeout). Restart the mission to continue.' });
+		return;
+	}
+	if (session.status !== 'awaiting_input') {
+		response.status(409).json({ error: `Session is ${session.status}, not awaiting input.` });
+		return;
+	}
 	const fields = request.body?.fields;
 	if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
 		response.status(400).json({ error: 'No credentials supplied.' });

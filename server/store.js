@@ -284,6 +284,13 @@ export function updateActivity(session, id, patch) {
 
 export function setStatus(session, status, detail) {
 	session.status = status;
+	// R2-A/G3 — stamp when the session began awaiting input; the watchdog
+	// expiry reads this (updatedAt fallback for legacy rows).
+	if (status === 'awaiting_input') {
+		session.awaitingInputSince = Date.now();
+	} else if (session.awaitingInputSince !== undefined) {
+		session.awaitingInputSince = undefined;
+	}
 	emit(session, 'status', { status, detail });
 }
 
@@ -345,12 +352,67 @@ export function backfillProjectId(defaultId) {
 
 const WATCHDOG_INTERVAL_MS = 60_000; // check every 60s
 const MAX_RUNNING_DURATION_MS = 30 * 60 * 1000; // 30 min same as agent timeout
+/** R2-A/G3 — awaiting_input default timeout when config is unavailable. */
+const DEFAULT_AWAITING_INPUT_TIMEOUT_MS = 60 * 60 * 1000;
+
+/**
+ * R2-A/G3 — clock seam for the awaiting_input expiry. Tests substitute a
+ * fake clock via __setWatchdogClock; production returns real time.
+ */
+let watchdogClock = () => Date.now();
+export function __setWatchdogClock(fn) { watchdogClock = typeof fn === 'function' ? fn : () => Date.now(); }
+
+/**
+ * R2-A/G3 — close-out callback for awaiting_input expiry. The session store
+ * owns detection (it owns the sweep); the app layer (index.js) owns browser
+ * close + mission finalization, injected here to avoid a store→agent import.
+ */
+let awaitingInputExpiryHandler = null;
+export function setAwaitingInputExpiryHandler(fn) { awaitingInputExpiryHandler = fn; }
 
 let watchdogTimer = null;
 
+/** R2-A/G3 — timeout ms from config, clamped to the documented 5–1440 min range. */
+function awaitingInputTimeoutMs() {
+	try {
+		const getConfig = globalThis.__qaseAwaitingInputConfig?.getConfig;
+		const mins = Number(getConfig?.().awaitingInputTimeoutMinutes);
+		if (Number.isFinite(mins) && mins >= 5 && mins <= 1440) return mins * 60_000;
+	} catch { /* config unavailable → default */ }
+	return DEFAULT_AWAITING_INPUT_TIMEOUT_MS;
+}
+
 function runWatchdog() {
-	const now = Date.now();
+	const now = watchdogClock();
 	for (const session of sessions.values()) {
+		// R2-A/G3 — awaiting_input expiry. A mission paused for user input
+		// previously held its browser + session record FOREVER (this sweep
+		// skipped it, resource cleanup excluded it, BROWSER_IDLE_MS=0).
+		// Now: past the configured timeout the session is interrupted here
+		// and handed to the app-layer close-out (browser + mission), which is
+		// guarded by expiryClosingOut so governor sweeps cannot race it.
+		if (session.status === 'awaiting_input') {
+			const record = liveFor(session.id);
+			if (record?.expiryClosingOut) continue;
+			const limitMs = awaitingInputTimeoutMs();
+			const enteredAt = session.awaitingInputSince ?? session.updatedAt;
+			if (now - enteredAt > limitMs) {
+				record.expiryClosingOut = true;
+				session.status = 'interrupted';
+				session.pendingQuestion = undefined;
+				session.awaitingInputSince = undefined;
+				emit(session, 'status', { status: 'interrupted', detail: `awaiting_input_timeout: no answer arrived before the configured limit (${Math.round(limitMs / 60000)} minutes)` });
+				const pending = { sessionId: session.id, enteredAt };
+				// Handler is the index.js close-out: await closeBrowser +
+				// finalizeMissionFromSession. It clears record.expiryClosingOut
+				// when done — including on failure, so a failed close-out
+				// does not wedge the session invisible to the governor.
+				if (typeof awaitingInputExpiryHandler === 'function') {
+					Promise.resolve(awaitingInputExpiryHandler(session, pending)).catch(() => {});
+				}
+			}
+			continue;
+		}
 		if (session.status !== 'running') continue;
 
 		const record = live.get(session.id);
@@ -388,4 +450,7 @@ export function stopWatchdog() {
 	clearInterval(watchdogTimer);
 	watchdogTimer = null;
 }
+
+/** R2-A/G3 — test seam: run one watchdog sweep immediately (fake-clock tests). */
+export function __runWatchdogOnce() { runWatchdog(); }
 

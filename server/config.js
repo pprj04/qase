@@ -101,6 +101,11 @@ function fromEnv() {
 		retriesCount: process.env.QASE_RETRIES ? Number(process.env.QASE_RETRIES) : undefined,
 		maxConcurrentMissions: process.env.QASE_MAX_MISSIONS ? Number(process.env.QASE_MAX_MISSIONS) : undefined,
 		missionTimeoutMinutes: process.env.QASE_MISSION_TIMEOUT_MIN ? Number(process.env.QASE_MISSION_TIMEOUT_MIN) : undefined,
+		// R2-A/G3 — awaiting_input session timeout. A mission that pauses for
+		// user input must not hold its browser + session record forever when
+		// nobody answers. Default 60 minutes; clamped to [5, 1440].
+		awaitingInputTimeoutMinutes: process.env.QASE_AWAITING_INPUT_TIMEOUT_MINUTES
+			? Number(process.env.QASE_AWAITING_INPUT_TIMEOUT_MINUTES) : undefined,
 		autoSaveWorkflow: process.env.QASE_AUTO_SAVE_WORKFLOW === undefined ? undefined : process.env.QASE_AUTO_SAVE_WORKFLOW !== 'false',
 		autoGenerateTests: process.env.QASE_AUTO_GEN_TESTS === undefined ? undefined : process.env.QASE_AUTO_GEN_TESTS !== 'false',
 		autoSmokeRun: process.env.QASE_AUTO_SMOKE_RUN === undefined ? undefined : process.env.QASE_AUTO_SMOKE_RUN === 'true',
@@ -137,6 +142,8 @@ const DEFAULTS = {
 	// concurrentRuns pool; these bound the mission layer only.
 	maxConcurrentMissions: 3,
 	missionTimeoutMinutes: 60,
+	// R2-A/G3 — default awaiting-input timeout (minutes). See env mapping above.
+	awaitingInputTimeoutMinutes: 60,
 	autoSaveWorkflow: true,
 	autoGenerateTests: true,
 	autoSmokeRun: false,
@@ -332,6 +339,11 @@ export function saveConfig(patch) {
 	}
 	if (patch.maxConcurrentMissions !== undefined) {
 		next.maxConcurrentMissions = Math.max(1, Math.min(10, Number(patch.maxConcurrentMissions) || DEFAULTS.maxConcurrentMissions));
+	}
+	if (patch.awaitingInputTimeoutMinutes !== undefined) {
+		// R2-A/G3 — clamp 5..1440 minutes (same validation pattern as
+		// missionTimeoutMinutes below).
+		next.awaitingInputTimeoutMinutes = Math.max(5, Math.min(1440, Number(patch.awaitingInputTimeoutMinutes) || DEFAULTS.awaitingInputTimeoutMinutes));
 	}
 	if (patch.missionTimeoutMinutes !== undefined) {
 		next.missionTimeoutMinutes = Math.max(5, Math.min(720, Number(patch.missionTimeoutMinutes) || DEFAULTS.missionTimeoutMinutes));
