@@ -17,6 +17,16 @@ import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 import { classifyViewport } from './deviceClassify.js';
 import { renderExecMeta, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
 
+/* P0-F3 — human labels for the truthful interruptedReason a session carries.
+ * Keys match server/store.js INTERRUPT_REASONS. A session with a reason we
+ * don't recognize renders the plain 'interrupted' chip — never a guess. */
+const INTERRUPT_REASON_LABELS = {
+	server_restart_recovery: 'server restart',
+	awaiting_input_timeout: 'input timeout',
+	watchdog_stuck: 'watchdog',
+	max_running_duration: 'run limit'
+};
+
 async function refreshRuns() {
 	const query = state.projectId ? `?projectId=${state.projectId}` : '';
 	const runs = await api(`/sessions${query}`).catch(err => {
@@ -214,6 +224,13 @@ function setStatus(status) {
 	} else {
 		el.statusChip.dataset.status = status;
 	}
+	// P0-F3 — an interrupted session carries a truthful reason; surface it so
+	// "interrupted" is explainable instead of a bare amber chip. Never guessed:
+	// the field is null when the cause wasn't recorded.
+	if (status === 'interrupted' && state.session?.interruptedReason) {
+		const reasonLabel = INTERRUPT_REASON_LABELS[state.session.interruptedReason];
+		label = reasonLabel ? `interrupted — ${reasonLabel}` : 'interrupted';
+	}
 	el.statusChip.textContent = label;
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
@@ -335,7 +352,9 @@ function updateExecStats() {
 	} else if (session.status === 'error') {
 		stats.push('<span class="es-item es-failed">✕ RUN FAILED</span>');
 	} else if (session.status === 'interrupted') {
-		stats.push('<span class="es-item es-failed">⏸ RUN INTERRUPTED</span>');
+		// P0-F3 — the bar says WHY, using the truthful reason (never guessed).
+		const reason = session.interruptedReason ? INTERRUPT_REASON_LABELS[session.interruptedReason] : null;
+		stats.push(`<span class="es-item es-failed">⏸ RUN INTERRUPTED${reason ? ` — ${reason}` : ''}</span>`);
 	} else if (session.status === 'idle' && watchdogEnded(session)) {
 		// Engine fact: the 20-minute turn watchdog aborts the agent and the
 		// engine settles the session in `idle` (same as a manual stop). The
@@ -1630,6 +1649,14 @@ function handleEvent(event) {
 			break;
 
 		case 'status':
+			// P0-F3 — the interruption reason travels with the status event;
+			// keep it on the session so setStatus can render it truthfully.
+			if (event.interruptedReason !== undefined) {
+				session.interruptedReason = event.interruptedReason;
+			}
+			if (event.interruptedWhile !== undefined) {
+				session.interruptedWhile = event.interruptedWhile;
+			}
 			setStatus(event.status);
 			updateMissionPhase(event.status, event.activity);
 			updateExecStats();

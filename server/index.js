@@ -943,7 +943,15 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 		running: Boolean(record.running),
 		frame: record.bridge?.getLastFrame?.(),
 		pipeline: session.pipeline ?? null,
-		devIntelligence: session.devIntelligence ?? null
+		devIntelligence: session.devIntelligence ?? null,
+		// P0-F3 — truthful interruption facts: why the session ended up
+		// 'interrupted' (null unless it actually was), what state it was in
+		// when that happened, and the pending question if one was preserved
+		// by a restart interruption (deliberate lifecycles clear it).
+		interruptedReason: session.interruptedReason ?? null,
+		interruptedWhile: session.interruptedWhile ?? null,
+		interruptedAt: session.interruptedAt ?? null,
+		pendingQuestion: session.pendingQuestion ?? null
 	};
 
 	if (!stripHeavy) {

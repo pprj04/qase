@@ -62,9 +62,20 @@ export function loadSessions() {
 		const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
 		for (const session of Array.isArray(raw) ? raw : []) {
 			// Nothing survives a restart mid-run, so anything that was in flight is stale.
+			// P0-F3 — record WHY it was interrupted and, when the agent had a
+			// pending question at the crash, PRESERVE it: the user deserves to
+			// see what was being asked when the server went down. Deliberate
+			// lifecycles (expiry close-out) still clear the question — that is
+			// a decision, not an accident. No reason is fabricated for sessions
+			// that already carried one from a previous lifecycle event.
 			if (session.status === 'running' || session.status === 'awaiting_input') {
-				session.status = 'interrupted';
-				session.pendingQuestion = undefined;
+				// A running session had no answerable question — any stale
+				// pendingQuestion on it is cleared. An awaiting_input session's
+				// question was live at crash time and is PRESERVED.
+				const wasAwaiting = session.status === 'awaiting_input';
+				markSessionInterrupted(session, INTERRUPT_REASONS.SERVER_RESTART_RECOVERY,
+					'Interrupted by server restart or recovery',
+					{ clearPendingQuestion: !wasAwaiting });
 			}
 			// Earlier versions stored reasoning as a message; it is live-only now.
 			session.messages = (session.messages ?? []).filter(message => message.role !== 'thinking');
@@ -318,6 +329,47 @@ export function setStatus(session, status, detail) {
 	emit(session, 'status', { status, detail });
 }
 
+/**
+ * P0-F3 — the ONE place a session becomes 'interrupted', so the reason is
+ * always truthful and persisted. Semantics:
+ *   reason     — machine code, one of INTERRUPT_REASONS (persisted as
+ *                session.interruptedReason; an existing reason is never
+ *                overwritten by a later transition).
+ *   clearPendingQuestion — DELIBERATE lifecycles (expiry, stuck detection,
+ *                max-duration abort) end the Q&A; the pending question is no
+ *                longer answerable, so it is cleared with a recorded
+ *                interruptedWhile. An accidental restart interruption KEEPS
+ *                the question (loadSessions) — it stays answerable context.
+ */
+export const INTERRUPT_REASONS = Object.freeze({
+	SERVER_RESTART_RECOVERY: 'server_restart_recovery',
+	AWAITING_INPUT_TIMEOUT: 'awaiting_input_timeout',
+	WATCHDOG_STUCK: 'watchdog_stuck',
+	MAX_RUNNING_DURATION: 'max_running_duration'
+});
+
+export function markSessionInterrupted(session, reason, detail, { clearPendingQuestion = false } = {}) {
+	const wasAwaitingInput = session.status === 'awaiting_input';
+	const hadPendingQuestion = Boolean(session.pendingQuestion);
+	session.status = 'interrupted';
+	if (!session.interruptedReason) {
+		session.interruptedReason = reason;
+	}
+	session.interruptedAt = session.interruptedAt ?? Date.now();
+	session.interruptedWhile = session.interruptedWhile
+		?? (wasAwaitingInput ? 'awaiting_input' : undefined);
+	if (clearPendingQuestion && hadPendingQuestion) {
+		session.pendingQuestion = undefined;
+	}
+	session.awaitingInputSince = undefined;
+	emit(session, 'status', {
+		status: 'interrupted',
+		detail,
+		interruptedReason: session.interruptedReason,
+		interruptedWhile: session.interruptedWhile ?? null
+	});
+}
+
 /** Immediately persist all in-memory sessions to disk. */
 export function saveSessions() {
 	try {
@@ -422,10 +474,12 @@ function runWatchdog() {
 			const enteredAt = session.awaitingInputSince ?? session.updatedAt;
 			if (now - enteredAt > limitMs) {
 				record.expiryClosingOut = true;
-				session.status = 'interrupted';
-				session.pendingQuestion = undefined;
-				session.awaitingInputSince = undefined;
-				emit(session, 'status', { status: 'interrupted', detail: `awaiting_input_timeout: no answer arrived before the configured limit (${Math.round(limitMs / 60000)} minutes)` });
+				// Deliberate lifecycle: the Q&A window closed — the pending
+				// question is no longer answerable, so it is cleared and the
+				// reason recorded truthfully.
+				markSessionInterrupted(session, INTERRUPT_REASONS.AWAITING_INPUT_TIMEOUT,
+					`awaiting_input_timeout: no answer arrived before the configured limit (${Math.round(limitMs / 60000)} minutes)`,
+					{ clearPendingQuestion: true });
 				const pending = { sessionId: session.id, enteredAt };
 				// Handler is the index.js close-out: await closeBrowser +
 				// finalizeMissionFromSession. It clears record.expiryClosingOut
@@ -443,9 +497,8 @@ function runWatchdog() {
 		// Case 1: record.running is false but session.status is still 'running'
 		if (record && record.running === false) {
 			console.warn(`[watchdog] Session ${session.id} stuck in 'running' but not actually running — marking interrupted`);
-			session.status = 'interrupted';
-			session.pendingQuestion = undefined;
-			emit(session, 'status', { status: 'interrupted', detail: 'Detected stuck by watchdog' });
+			markSessionInterrupted(session, INTERRUPT_REASONS.WATCHDOG_STUCK,
+				'Detected stuck by watchdog', { clearPendingQuestion: true });
 			continue;
 		}
 
@@ -453,9 +506,8 @@ function runWatchdog() {
 		if (now - session.updatedAt > MAX_RUNNING_DURATION_MS) {
 			console.warn(`[watchdog] Session ${session.id} exceeded max running duration (${Math.round((now - session.updatedAt) / 1000)}s) — marking interrupted`);
 			record?.controller?.abort();
-			session.status = 'interrupted';
-			session.pendingQuestion = undefined;
-			emit(session, 'status', { status: 'interrupted', detail: 'Exceeded max running duration' });
+			markSessionInterrupted(session, INTERRUPT_REASONS.MAX_RUNNING_DURATION,
+				'Exceeded max running duration', { clearPendingQuestion: true });
 		}
 	}
 }
