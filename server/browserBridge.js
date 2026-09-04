@@ -215,6 +215,12 @@ export function attachBrowserBridge(session, service) {
 			// A browser that died on its own takes its state with it.
 		}
 		stopFrames();
+		// P0-F5 — the browser this frame came from is going away. Keep the
+		// stale JPEG and the SSE replay / GET /api/sessions/:id would keep
+		// serving a screenshot of a browser that no longer exists — a frozen
+		// lie. The empty stage ("No browser yet") is the truthful state until
+		// the browser is recreated and streams a real frame again.
+		bridge.lastFrame = undefined;
 		try {
 			await service.dispose();
 		} catch {
@@ -261,6 +267,16 @@ export function attachBrowserBridge(session, service) {
 				await page.goto(saved.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
 			}
 			emit(session, 'browser', { browser: { url: currentPage()?.url(), action: 'restored' } });
+			// P0-F5 — the browser was recreated on demand. The frame timer
+			// stopped when the old browser was suspended (or died); a resumed
+			// session that never navigates again (click/snapshot only) would
+			// otherwise keep executing while the panel stays "No browser yet"
+			// forever. Restarting here — the first observable moment of the
+			// new browser — makes the stream follow the browser again.
+			// startFrames is idempotent (guards on frameTimer), so a
+			// navigation-triggered restart later is still a single stream.
+			startFrames();
+			void captureFrame();
 		} catch {
 			// Best effort — a failed restore is no worse than not trying.
 		} finally {

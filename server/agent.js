@@ -587,6 +587,14 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 	if (bridge.hasPage()) {
 		bridge.startFrames();
 		void bridge.captureFrame();
+	} else {
+		// P0-F5 — the browser was closed while this session was paused
+		// (idle timer / reclaimed / died). It will be recreated lazily by the
+		// next browser tool call, and restoreSession restarts the stream at
+		// that moment. Tell the panel the truth in the meantime: the browser
+		// is being re-established, not permanently absent. Without this the
+		// UI sits on "No browser yet" while the agent visibly keeps working.
+		emit(session, 'browser', { browser: { url: null, title: null, loading: true, action: 'reconnecting' } });
 	}
 
 	// Only the session being worked on keeps a browser open.

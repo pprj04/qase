@@ -646,6 +646,9 @@ function applyFrame(frame) {
 	el.frame.src = `data:${frame.mimeType};base64,${frame.base64}`;
 	el.stageEmpty.hidden = true;
 	el.stageInner.hidden = false;
+	// P0-F5 — a real frame arrived: the browser is back. The reconnecting
+	// placeholder (if any) is no longer the truthful state.
+	delete el.stageEmpty.dataset.mode;
 	if (frame.viewport) {
 		state.viewport = frame.viewport;
 	}
@@ -1669,6 +1672,18 @@ function handleEvent(event) {
 			break;
 
 		case 'browser':
+			// P0-F5 — a resumed session whose browser was closed emits a
+			// truthful reconnecting state: the agent is working, the browser
+			// is being re-established. Show that instead of the false
+			// "No browser yet" while waiting for the first real frame.
+			// A live frame element means the panel already shows reality.
+			if (event.browser?.action === 'reconnecting' && !el.frame.src) {
+				el.stageEmpty.hidden = false;
+				el.stageInner.hidden = true;
+				el.stageEmpty.dataset.mode = 'reconnecting';
+			} else if (event.browser?.action === 'restored') {
+				delete el.stageEmpty.dataset.mode;
+			}
 			if (event.browser?.url) {
 				el.browserUrl.textContent = event.browser.url;
 			}

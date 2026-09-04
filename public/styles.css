@@ -809,6 +809,18 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .stage-empty small { color: rgba(235, 235, 245, .18); font-size: 11.5px; font-weight: 400; max-width: 200px; }
 .stage-empty[hidden] { display: none; }
 
+/* P0-F5 — truthful reconnecting state: the agent is working and the browser
+ * is being re-established (session resumed after its browser was closed).
+ * Distinct from the honest "No browser yet" idle state; never fakes a frame. */
+.stage-empty[data-mode="reconnecting"] > span { color: var(--accent); font-size: 0; }
+.stage-empty[data-mode="reconnecting"] > span::after {
+	content: 'Reconnecting browser…';
+	font-size: 13px;
+}
+.stage-empty[data-mode="reconnecting"] > small::after {
+	content: 'The browser is being re-established — live view resumes shortly';
+}
+
 /* Cursor + target overlay, drawn over the frame rather than inside the page. */
 .overlay { position: absolute; inset: 0; pointer-events: none; }
 
