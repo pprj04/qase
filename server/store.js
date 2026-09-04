@@ -137,7 +137,12 @@ export function createSession(title = 'New test run', projectId = undefined, opt
 		/** C4 — truthful execution provenance once the runtime has launched (agent path). */
 		execution: undefined,
 		/** Resolved device context (set by the agent runtime once applied). */
-		device: undefined
+		device: undefined,
+		/**
+		 * P0-F4 — owning user (qase_session user id) for server-side isolation.
+		 * null = master/open-created or pre-F4 legacy record (shared history).
+		 */
+		ownerUserId: options.ownerUserId ?? null
 	};
 	sessions.set(session.id, session);
 	persistSoon();
@@ -232,9 +237,12 @@ export function persistSessionsNow() {
 	}
 }
 
-export function listSessions({ projectId } = {}) {
+export function listSessions({ projectId, ownerFilter } = {}) {
 	return [...sessions.values()]
 		.filter(s => !projectId || s.projectId === projectId)
+		// P0-F4 — server-side owner scoping: a user-kind caller only ever
+		// sees their own + shared legacy sessions, regardless of frontend.
+		.filter(s => ownerFilter == null || ownerFilter(s))
 		.sort((a, b) => b.updatedAt - a.updatedAt)
 		.map(session => ({
 			id: session.id,
@@ -246,7 +254,8 @@ export function listSessions({ projectId } = {}) {
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			findingCount: session.findings.length,
-			messageCount: session.messages.length
+			messageCount: session.messages.length,
+			ownerUserId: session.ownerUserId ?? null
 		}));
 }
 

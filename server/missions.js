@@ -143,6 +143,9 @@ export function createMission(data = {}) {
 		// Phase 10: workspace + identity traceability
 		workspaceId: data.workspaceId || null,
 		createdByUserId: data.createdByUserId || null,
+		// P0-F4 — the owning USER (qase_session identity) for server-side
+		// isolation. null = master/open-created or pre-F4 legacy (shared).
+		ownerUserId: data.ownerUserId ?? null,
 		correlationId: data.correlationId || null,
 		idempotencyKey: data.idempotencyKey || null,
 		idempotencyFingerprint: data.idempotencyFingerprint || null,
@@ -213,7 +216,7 @@ export function findByIdempotencyKey(key) {
 	return null;
 }
 
-export function listMissions({ projectId, status, type, source, workspaceId, correlationId } = {}) {
+export function listMissions({ projectId, status, type, source, workspaceId, correlationId, ownerFilter } = {}) {
 	let list = [...store.values()];
 	if (projectId) list = list.filter(m => m.projectId === projectId);
 	if (status) list = list.filter(m => m.status === status);
@@ -222,6 +225,9 @@ export function listMissions({ projectId, status, type, source, workspaceId, cor
 	// Phase 10: workspace + correlation filtering
 	if (workspaceId) list = list.filter(m => m.workspaceId === workspaceId);
 	if (correlationId) list = list.filter(m => m.correlationId === correlationId);
+	// P0-F4 — server-side owner scoping: user-kind callers only ever see
+	// their own + shared legacy missions, regardless of frontend filtering.
+	if (ownerFilter) list = list.filter(m => ownerFilter(m));
 	// M1-P4.1 — deterministic ordering: newest updatedAt first; ties broken
 	// by descending createdAt then id so updatedAt-churn (e.g. reaper rewrites)
 	// cannot reshuffle equal timestamps between requests.

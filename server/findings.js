@@ -340,6 +340,10 @@ export function addFinding(data) {
 		// never overwrites an existing correct value with null/undefined.
 		device: data.device != null ? String(data.device) : undefined,
 		environment: (data.environment && typeof data.environment === 'object') ? data.environment : undefined,
+
+		// ── P0-F4 — owning user for server-side isolation ──
+		// null = master/open-created or pre-F4 legacy (shared history).
+		ownerUserId: data.ownerUserId ?? null,
 	};
 	findings.push(finding);
 	persistSoon();
@@ -351,9 +355,12 @@ export function listFindings({
 	// Phase 16 filters
 	primaryCategory, priority, findingStatus, reviewStatus, workflowId, featureId,
 	reproducibility, minConfidence, missionId, includeDuplicates = true,
+	// P0-F4 — server-side owner scoping (predicate from ownership.js)
+	ownerFilter,
 } = {}) {
 	return findings
 		.filter(f => {
+			if (ownerFilter && !ownerFilter(f)) return false;
 			if (projectId && f.projectId !== projectId) return false;
 			if (severity && f.severity !== severity) return false;
 			if (status && f.status !== status) return false;
@@ -743,6 +750,9 @@ export function syncSessionFinding(session, finding) {
 		...(finding.missionId != null && { missionId: finding.missionId }),
 		...(finding.device != null && { device: finding.device }),
 		...(finding.environment != null && { environment: finding.environment }),
+		// P0-F4 — agent-filed findings inherit the owning user of the session
+		// that produced them, so per-user scoping reaches session-born findings.
+		ownerUserId: session?.ownerUserId ?? null,
 		createdBy: 'agent'
 	});
 }

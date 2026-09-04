@@ -14,6 +14,8 @@
  */
 
 import { Router } from 'express';
+// P0-F4 — ownership scoping for the v2 read surface (same model as index.js).
+import { canAccessResource, isUserScoped } from './ownership.js';
 import { parsePulsePaging, parseDateRange, applyDateRange, deepIsoTimestamps, deepSnakeKeys } from './pulseHelpers.js';
 import {
 	nameResolver, projectProject, projectMission, projectSessionSummary, projectSessionDetail,
@@ -45,6 +47,16 @@ import {
 	CATEGORIES, SEVERITIES, PRIORITIES, LIFECYCLE, REVIEW_STATUSES,
 	REPRODUCIBILITIES, ROOT_CAUSES, RISKS, LIFECYCLE_TRANSITIONS,
 } from './findingIntelligence.js';
+
+
+/** P0-F4 — ownership-scoped 404 for the v2 surface. */
+function denyResource(req, res, kind, record) {
+	if (!record || !canAccessResource(req, record)) {
+		res.status(404).json({ error: { code: `${kind.toLowerCase()}_not_found`, message: `${kind} not found.` } });
+		return true;
+	}
+	return false;
+}
 
 export function pulseV2Router(requireApiToken, usageCounter = null) {
 	const router = Router();
@@ -131,13 +143,15 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			status: req.query.status,
 			type: req.query.type,
 			source: req.query.source,
+			// P0-F4 — user-kind callers see own + legacy only.
+			ownerFilter: isUserScoped(req) ? m => canAccessResource(req, m) : null,
 		}), range, 'createdAt');
 		sendList(res, req.query, raw.map(m => projectMission(m, names)), {});
 	});
 
 	router.get('/missions/:id', (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return notFound(res, 'Mission');
+		if (denyResource(req, res, 'Mission', mission)) return; // P0-F4
 		res.json(projectMission(mission, names));
 	});
 
@@ -146,6 +160,8 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			projectId: req.query.project_id,
 			status: req.query.status,
 			type: req.query.type,
+			// P0-F4 — user-kind callers see own + legacy only.
+			ownerFilter: isUserScoped(req) ? m => canAccessResource(req, m) : null,
 		});
 		const range = parseDateRange(req.query);
 		if (range?.error) return res.status(400).json({ error: range.error });
@@ -162,7 +178,7 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 
 	router.get('/mission-status/:id', (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return notFound(res, 'Mission');
+		if (denyResource(req, res, 'Mission', mission)) return; // P0-F4
 		res.json(projectMission(mission, names));
 	});
 
@@ -171,13 +187,17 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 	router.get('/sessions', (req, res) => {
 		const range = parseDateRange(req.query);
 		if (range?.error) return res.status(400).json({ error: range.error });
-		const raw = applyDateRange(listSessions({ projectId: req.query.project_id }), range, 'createdAt');
+		const raw = applyDateRange(listSessions({
+			projectId: req.query.project_id,
+			// P0-F4 — user-kind callers see own + legacy only.
+			ownerFilter: isUserScoped(req) ? s => canAccessResource(req, s) : null,
+		}), range, 'createdAt');
 		sendList(res, req.query, raw.map(s => projectSessionSummary(s, names)), {});
 	});
 
 	router.get('/sessions/:id', (req, res) => {
 		const session = getSession(req.params.id);
-		if (!session) return notFound(res, 'Session');
+		if (denyResource(req, res, 'Session', session)) return; // P0-F4
 		const record = liveFor(session.id);
 		res.json(projectSessionDetail(session, names, record));
 	});
@@ -201,6 +221,8 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			reproducibility: req.query.reproducibility,
 			missionId: req.query.mission_id,
 			q: req.query.q,
+			// P0-F4 — user-kind callers see own + legacy only.
+			ownerFilter: isUserScoped(req) ? f => canAccessResource(req, f) : null,
 		}), range, 'ts');
 		sendList(res, req.query, raw.map(f => projectFinding(f, names)), {});
 	});
@@ -216,7 +238,8 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 		if (!valid.includes(groupBy)) {
 			return res.status(400).json({ error: `group_by must be one of ${valid.join(', ')}` });
 		}
-		const all = getAllFindings().filter(f => f.review_status !== 'false_positive');
+		const visible = isUserScoped(req) ? getAllFindings().filter(f => canAccessResource(req, f)) : getAllFindings();
+		const all = visible.filter(f => f.review_status !== 'false_positive');
 		const grouped = groupFindings(all, groupBy);
 		const groups = Object.values(grouped.groups ?? {}).map(g => ({
 			key: g.key,
@@ -233,7 +256,7 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 
 	router.get('/findings/:id', (req, res) => {
 		const finding = getFinding(req.params.id);
-		if (!finding) return notFound(res, 'Finding');
+		if (denyResource(req, res, 'Finding', finding)) return; // P0-F4
 		res.json(projectFinding(finding, names));
 	});
 

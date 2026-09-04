@@ -45,9 +45,38 @@ import { executeValidation } from './validationExecutorCore.js';
 import {
 	VALIDATION_REVIEW_STATES, canTransitionReview,
 } from './fixStatusEngine.js';
+// P0-F4 — ownership scoping for the phase-router surface (same model as
+// index.js; open/master/admin see everything, users see own + legacy).
+import { canAccessResource, isUserScoped } from './ownership.js';
 
 const VALID_REVIEW_STATES = ['unreviewed', 'confirmed', 'false_positive', 'duplicate', 'wont_fix', 'reopened'];
 	const VALID_UX_REVIEW_STATES = ['UNREVIEWED', 'AUTO_VERIFIED', 'REVIEW_REQUIRED', 'REJECTED'];
+
+/** P0-F4 — send 404 (never a leak) and return false when access is denied. */
+function denyFinding(req, res, finding) {
+	if (!finding) {
+		res.status(404).json({ error: 'Finding not found' });
+		return true;
+	}
+	if (!canAccessResource(req, finding)) {
+		res.status(404).json({ error: 'Finding not found' });
+		return true;
+	}
+	return false;
+}
+
+/** P0-F4 — same guard for missions. */
+function denyMission(req, res, mission) {
+	if (!mission) {
+		res.status(404).json({ error: 'Mission not found' });
+		return true;
+	}
+	if (!canAccessResource(req, mission)) {
+		res.status(404).json({ error: 'Mission not found' });
+		return true;
+	}
+	return false;
+}
 
 export function phaseRouter(auth, publicReadGet = []) {
 	const router = Router();
@@ -57,7 +86,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// always gated.
 	router.get('/findings/export', auth || ((req, res, next) => next()), (req, res) => {
 		const { format = 'markdown' } = req.query;
-		const all = getAllFindings().filter(f => !f.isDuplicate);
+		const visible = isUserScoped(req) ? getAllFindings().filter(f => canAccessResource(req, f)) : getAllFindings();
+		const all = visible.filter(f => !f.isDuplicate);
 		if (format === 'markdown') {
 			res.type('text/markdown').send(exportFindingsBulkMarkdown(all));
 			return;
@@ -122,7 +152,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.patch('/findings/:id/classification', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { primaryCategory, secondaryCategories, confidence } = req.body ?? {};
 		if (!primaryCategory || !CATEGORIES.includes(primaryCategory)) {
 			return res.status(400).json({ error: `primaryCategory must be one of ${CATEGORIES.join(', ')}` });
@@ -140,7 +170,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.patch('/findings/:id/severity', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { severity, confidence, rationale } = req.body ?? {};
 		if (!severity || !SEVERITIES.includes(severity)) {
 			return res.status(400).json({ error: `severity must be one of ${SEVERITIES.join(', ')}` });
@@ -154,7 +184,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.patch('/findings/:id/priority', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { priority, rationale } = req.body ?? {};
 		if (!priority || !PRIORITIES.includes(priority)) {
 			return res.status(400).json({ error: `priority must be one of ${PRIORITIES.join(', ')}` });
@@ -167,7 +197,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.patch('/findings/:id/lifecycle', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { findingStatus } = req.body ?? {};
 		if (!findingStatus || !LIFECYCLE.includes(findingStatus)) {
 			return res.status(400).json({ error: `findingStatus must be one of ${LIFECYCLE.join(', ')}` });
@@ -180,6 +210,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 	});
 
 	router.patch('/findings/:id/review', (req, res) => {
+		// P0-F4 — ownership before review transition.
+		if (denyFinding(req, res, getFinding(req.params.id))) return;
 		const { reviewStatus, note, by } = req.body ?? {};
 		if (!reviewStatus || !VALID_REVIEW_STATES.includes(reviewStatus)) {
 			return res.status(400).json({ error: `reviewStatus must be one of ${VALID_REVIEW_STATES.join(', ')}` });
@@ -196,7 +228,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/findings/:id/duplicates', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const others = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate);
 		const { candidates, duplicate_of, canonicalId } = detectDuplicates(f, others);
 		res.json({ candidates, duplicate_of, canonicalId, isDuplicate: Boolean(f.isDuplicate), duplicateOf: f.duplicateOf ?? null });
@@ -204,7 +236,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.post('/findings/:id/duplicates', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { canonicalId } = req.body ?? {};
 		const canonical = getFinding(String(canonicalId));
 		if (!canonical || canonical.id === f.id || canonical.isDuplicate) {
@@ -216,7 +248,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/findings/:id/related', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const all = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate);
 		const related = all.map(x => {
 			const cmp = compareForDuplicates(f, x);
@@ -229,13 +261,13 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/findings/:id/affected-workflow', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		res.json({ workflow: f.workflow_name ?? f.workflow_id ?? null, basis: f.linkage_basis ?? null });
 	});
 
 	router.get('/findings/:id/affected-feature', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		res.json({ feature: f.feature_name ?? f.feature_id ?? null, basis: f.linkage_basis ?? null });
 	});
 
@@ -246,7 +278,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// server-redacted. All phaseRouter MUTATIONS stay gated.
 	router.get('/findings/:id/evidence', (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const evidence = getFindingEvidence(f.id) ?? [];
 		res.json(evidence.map(e => redactEvidenceItem(e)));
 	});
@@ -259,7 +291,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 		// False positives are a separate representation: reviewed-out defects are
 		// excluded from grouped defect counts (Phase 16 spec — FP never counts
 		// alongside confirmed defects).
-		const all = getAllFindings().filter(f => f.review_status !== 'false_positive');
+		const visible = isUserScoped(req) ? getAllFindings().filter(f => canAccessResource(req, f)) : getAllFindings();
+		const all = visible.filter(f => f.review_status !== 'false_positive');
 		const grouped = groupFindings(all, groupBy);
 		res.json({
 			groupBy,
@@ -281,7 +314,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/missions/:id/ux-quality', (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return res.status(404).json({ error: 'Mission not found' });
+		if (denyMission(req, res, mission)) return; // P0-F4
 		const a = getAssessmentForMission(mission.id);
 		if (!a) return res.status(404).json({ error: 'No UX assessment yet' });
 		res.json({
@@ -302,7 +335,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// POST trigger: run the (async) UX assessment for a mission.
 	router.post('/v1/missions/:id/ux-assess', async (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return res.status(404).json({ error: 'Mission not found' });
+		if (denyMission(req, res, mission)) return; // P0-F4
 		res.status(202).json({
 			missionId: mission.id,
 			status: 'accepted',
@@ -320,7 +353,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	const missionAssessment = (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return res.status(404).json({ error: 'Mission not found' });
+		if (denyMission(req, res, mission)) return; // P0-F4
 		const a = getAssessmentForMission(mission.id);
 		if (!a) return res.status(404).json({ error: 'No UX assessment for this mission yet' });
 		return { mission, a };
@@ -380,7 +413,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.patch('/v1/missions/:id/ux/issues/:issueId/review', (req, res) => {
 		const mission = getMission(req.params.id);
-		if (!mission) return res.status(404).json({ error: 'Mission not found' });
+		if (denyMission(req, res, mission)) return; // P0-F4
 		const { reviewState, reason, by } = req.body ?? {};
 		if (!reviewState || !VALID_UX_REVIEW_STATES.includes(reviewState)) {
 			return res.status(400).json({ error: `reviewState must be one of ${VALID_UX_REVIEW_STATES.join(', ')}` });
@@ -402,7 +435,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// reproduce again, so this counts as a real reproduction observation.
 	router.post('/findings/:id/revalidate', async (req, res) => {
 		const f = getFinding(req.params.id);
-		if (!f) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		try {
 			const { reenrichFindingWithObservation } = await import('./findingEnrichment.js');
 			const derived = await reenrichFindingWithObservation(f.id, { hasReproObservation: true });
@@ -416,7 +449,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.post('/v1/findings/:id/revalidate', (req, res) => {
 		const finding = getFinding(req.params.id);
-		if (!finding) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, finding)) return; // P0-F4
 		const idemKey = req.headers['idempotency-key'] || null;
 		if (idemKey) {
 			const existing = findByIdempotencyKey(idemKey);
@@ -444,7 +477,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/v1/findings/:id/validation', (req, res) => {
 		const finding = getFinding(req.params.id);
-		if (!finding) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, finding)) return; // P0-F4
 		const runs = getRunsForFinding(finding.id); // newest-first
 		if (!runs.length) return res.status(404).json({ error: 'No validation runs' });
 		res.json({
@@ -456,7 +489,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 
 	router.get('/v1/findings/:id/comparison', (req, res) => {
 		const finding = getFinding(req.params.id);
-		if (!finding) return res.status(404).json({ error: 'Finding not found' });
+		if (denyFinding(req, res, finding)) return; // P0-F4
 		const runs = getRunsForFinding(finding.id);
 		const completed = runs.find(r => r.status === 'COMPLETED' && r.comparison);
 		if (!completed) return res.status(404).json({ error: 'No completed comparison yet' });
@@ -470,6 +503,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 	});
 
 	router.post('/v1/findings/:id/approve', (req, res) => {
+		// P0-F4 — ownership before approving a validation outcome.
+		if (denyFinding(req, res, getFinding(req.params.id))) return;
 		const { decision, comment } = req.body ?? {};
 		if (decision !== 'APPROVED') return res.status(400).json({ error: 'decision must be APPROVED' });
 		const runs = getRunsForFinding(req.params.id);
@@ -491,6 +526,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 	});
 
 	router.post('/v1/findings/:id/reopen', (req, res) => {
+		// P0-F4 — ownership before reopening.
+		if (denyFinding(req, res, getFinding(req.params.id))) return;
 		const { comment } = req.body ?? {};
 		const runs = getRunsForFinding(req.params.id);
 		const latest = runs.find(r => r.status === 'COMPLETED');
@@ -524,6 +561,8 @@ export function phaseRouter(auth, publicReadGet = []) {
 			projectId: req.query.projectId,
 			status: req.query.status,
 			type: req.query.type,
+			// P0-F4 — user-kind callers only see their own + legacy missions.
+			ownerFilter: isUserScoped(req) ? m => canAccessResource(req, m) : null,
 		}).slice(0, limit).map(m => ({
 			id: m.id, name: m.name, status: m.status, type: m.type,
 			targetUrl: m.targetUrl, sessionId: m.sessionId,

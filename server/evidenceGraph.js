@@ -303,6 +303,10 @@ export function createEvidence(input = {}) {
     missionId:   input.missionId   || null,
     iterationId: input.iterationId || null,
     sessionId:   input.sessionId   || null,
+    // P0-F4 — owning user inherited from the parent session/mission; null =
+    // system-created or pre-F4 legacy (shared). Immutable like the other
+    // provenance fields.
+    ownerUserId: input.ownerUserId ?? null,
 
     type:        Object.values(EVIDENCE_TYPES).includes(input.type) ? input.type : EVIDENCE_TYPES.OBSERVATION,
     source:      input.source      || 'agent',        // 'agent' | 'browser' | 'network' | 'system'
@@ -470,6 +474,8 @@ export function createObservation(input = {}) {
     missionId:   input.missionId   || null,
     iterationId: input.iterationId || null,
     sessionId:   input.sessionId   || null,
+    // P0-F4 — owning user inherited from the parent session/mission.
+    ownerUserId: input.ownerUserId ?? null,
 
     action:      input.action       || null,    // browser action that triggered this
     description: input.description  || '',       // factual description of what happened
@@ -1122,6 +1128,9 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
 
   const missionId = mission?.id || null;
   const sessionId = session.id;
+  // P0-F4 — evidence inherits the owning user of the session that produced
+  // it (falling back to the mission), so per-user scoping reaches evidence.
+  const ownerUserId = session.ownerUserId ?? mission?.ownerUserId ?? null;
   const iterId = iterationNumber;
   let evidenceCreated = 0;
   let observationsCreated = 0;
@@ -1134,6 +1143,7 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
 
     const ev = createEvidence({
       missionId,
+      ownerUserId,
       iterationId: iterId,
       sessionId,
       type: EVIDENCE_TYPES.STEP_OUTCOME,
@@ -1182,6 +1192,7 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
     // Create observation for each finding
     const obs = createObservation({
       missionId,
+      ownerUserId,
       iterationId: iterId,
       sessionId,
       action: finding.steps?.length > 0 ? finding.steps.join(' → ') : null,

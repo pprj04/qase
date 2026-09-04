@@ -69,6 +69,10 @@ import {
 	getComparisonIterations, isTerminalStatus, listQueuedMissionIds,
 	flushMissionsForShutdown, findByIdempotencyKey
 } from './missions.js';
+// P0-F4 — server-side ownership & workspace isolation (single choke point).
+import {
+	ownerOfRequest, canAccessResource, requireOwnedResource, scopeList, isUserScoped
+} from './ownership.js';
 // B1 W1/W2 — integration auth boundary + workspace ownership.
 import {
 	requireIntegrationAuth, workspaceMatches, hasScope, listIntegrations,
@@ -355,7 +359,10 @@ function requireApiToken(request, response, next) {
 	}
 	const token = getConfig().apiToken;
 	if (!token) {
-		return next(); // No token configured — open access.
+		// No token configured — open access. Tag the principal explicitly so
+		// P0-F4 ownership scoping sees a defined identity (single-tenant).
+		request.auth = { kind: 'open' };
+		return next();
 	}
 
 	// Method 1: Bearer header (external API / CI-CD).
@@ -516,13 +523,30 @@ async function extractUrl(text) {
 	return check.ok ? candidate : undefined;
 }
 
+/**
+ * P0-F4 — session lookup WITH server-side ownership enforcement.
+ * A cross-user request gets the same 404 as a missing session, so the
+ * response never leaks that another user's session exists.
+ */
 function requireSession(request, response) {
-	const session = getSession(request.params.id);
-	if (!session) {
-		response.status(404).json({ error: 'No such session.' });
-		return undefined;
-	}
+	const session = requireOwnedResource(request, response, 'session', request.params.id, getSession);
 	return session;
+}
+
+/**
+ * P0-F4 — mission lookup WITH ownership enforcement (same 404 convention).
+ * Integration principals bypass this helper — they are workspace-scoped by
+ * requireMissionForIntegration instead.
+ */
+function requireMission(request, response) {
+	return requireOwnedResource(request, response, 'mission', request.params.id, getMission);
+}
+
+/**
+ * P0-F4 — finding lookup WITH ownership enforcement.
+ */
+function requireFinding(request, response) {
+	return requireOwnedResource(request, response, 'finding', request.params.id, getFinding);
 }
 
 /**
@@ -878,7 +902,11 @@ app.post('/api/config/test-browserstack', requireApiToken, async (request, respo
 app.get('/api/sessions', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	// Ordered newest-first (lastActivity) so pages are stable.
-	const list = listSessions({ projectId: request.query.projectId })
+	// P0-F4 — user-kind callers only see their own + shared legacy sessions.
+	const ownerFilter = isUserScoped(request)
+		? s => canAccessResource(request, s)
+		: null;
+	const list = listSessions({ projectId: request.query.projectId, ownerFilter })
 		.slice()
 		.sort((a, b) => (b.lastActivity ?? b.createdAt ?? 0) - (a.lastActivity ?? a.createdAt ?? 0));
 	const { body } = paginateList(list, request.query);
@@ -903,7 +931,9 @@ app.post('/api/sessions', requireApiToken, (request, response) => {
 	}
 	response.status(201).json(createSession('New test run', projectId, {
 		...(deviceCheck?.deviceName ? { deviceRequest: deviceCheck.deviceName } : {}),
-		...(providerInput ? { executionProvider: providerInput } : {})
+		...(providerInput ? { executionProvider: providerInput } : {}),
+		// P0-F4 — stamp the creating user so later reads can be scoped.
+		ownerUserId: ownerOfRequest(request)
 	}));
 });
 
@@ -938,6 +968,8 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 		// C4 — explicit execution provider + truthful provenance once launched.
 		executionProvider: session.executionProvider ?? null,
 		execution: session.execution ?? null,
+		// P0-F4 — owning user (null = master/open/legacy shared record).
+		ownerUserId: session.ownerUserId ?? null,
 		viewportsExplored: session.viewportsExplored ?? [],
 		secretNames: secretNames(session.id),
 		running: Boolean(record.running),
@@ -976,6 +1008,11 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 });
 
 app.delete('/api/sessions/:id', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before delete; 404 covers missing and not-yours.
+	const session = requireSession(request, response);
+	if (!session) {
+		return;
+	}
 	clearSecrets(request.params.id);
 	response.json({ deleted: deleteSession(request.params.id) });
 });
@@ -1233,6 +1270,9 @@ app.get('/api/sessions/:id/feature-gaps', requireApiToken, (request, response) =
 
 /** Per-finding intelligence: structured fix suggestion. */
 app.get('/api/findings/:id/dev-analysis', requireApiToken, async (request, response) => {
+	// P0-F4 — ownership before analysis.
+	const owned = requireFinding(request, response);
+	if (!owned) return;
 	const finding = getFinding(request.params.id);
 	if (!finding) return response.status(404).json({ error: 'Finding not found' });
 	if (!finding.devIntelligence || request.query.force === '1') {
@@ -1248,6 +1288,9 @@ app.get('/api/findings/:id/dev-analysis', requireApiToken, async (request, respo
 
 /** Per-finding AI-ready fix prompt. */
 app.get('/api/findings/:id/fix-prompt', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before prompt generation.
+	const owned = requireFinding(request, response);
+	if (!owned) return;
 	const finding = getFinding(request.params.id);
 	if (!finding) return response.status(404).json({ error: 'Finding not found' });
 	const prompt = buildFixPrompt(finding, finding.devIntelligence ?? finding.intelligence ?? null);
@@ -1365,8 +1408,9 @@ app.get('/api/sessions/:id/decisions', requireApiToken, (request, response) => {
  * Get decisions for a mission — looks up the linked session(s).
  */
 app.get('/api/missions/:id/decisions', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
-	if (!mission) return response.status(404).json({ error: 'Mission not found' });
+	// P0-F4 — ownership before reading decision history.
+	const mission = requireMission(request, response);
+	if (!mission) return;
 
 	const decisions = [];
 	// Check current session
@@ -1927,6 +1971,10 @@ app.get('/api/projects', requireApiToken, (_request, response) => {
 
 app.get('/api/findings', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	// P0-F4 — user-kind callers only see their own + shared legacy findings.
+	const ownerFilter = isUserScoped(request)
+		? f => canAccessResource(request, f)
+		: null;
 	const { body } = paginateList(listFindings({
 		projectId: request.query.projectId,
 		severity: request.query.severity,
@@ -1934,18 +1982,24 @@ app.get('/api/findings', requireApiToken, (request, response) => {
 		category: request.query.category,
 		assignee: request.query.assignee,
 		sessionId: request.query.sessionId,
-		q: request.query.q
+		q: request.query.q,
+		ownerFilter
 	}), request.query);
 	response.json(body);
 });
 
 app.get('/api/missions', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
+	// P0-F4 — user-kind callers only see their own + shared legacy missions.
+	const ownerFilter = isUserScoped(request)
+		? m => canAccessResource(request, m)
+		: null;
 	const { body } = paginateList(listMissions({
 		projectId: request.query.projectId,
 		status: request.query.status,
 		type: request.query.type,
-		source: request.query.source
+		source: request.query.source,
+		ownerFilter
 	}), request.query);
 	response.json(body);
 });
@@ -2170,7 +2224,10 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 		workspaceId: request.integration.workspaceId === '*' ? (body.workspaceId || undefined) : request.integration.workspaceId,
 		correlationId: request.correlationId,
 		idempotencyKey: compositeKey || undefined,
-		idempotencyFingerprint: requestFingerprint || undefined
+		idempotencyFingerprint: requestFingerprint || undefined,
+		// P0-F4 — a signed-in UI user owns the mission they create; integration
+		// principals keep workspace scoping (owner stays null there).
+		ownerUserId: ownerOfRequest(request)
 	});
 
 	if (body.autoStart !== false) {
@@ -2180,7 +2237,8 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 			const session = createSession(mission.name || 'Integration Mission', mission.projectId, {
 				...(missionDevice ? { deviceRequest: missionDevice } : {}),
 				...(missionProviderInput ? { executionProvider: missionProviderInput } : {}),
-				missionId: mission.id
+				missionId: mission.id,
+				ownerUserId: mission.ownerUserId ?? null // P0-F4 — inherit mission owner
 			});
 			session.targetUrl = mission.targetUrl;
 			const missionTurns = Number(mission.context?.maxTurns);
@@ -2535,15 +2593,17 @@ app.post('/api/findings', requireApiToken, (request, response) => {
 	const finding = addFinding({
 		...data,
 		projectId: data.projectId ?? getDefaultProjectId(),
-		createdBy: 'user'
+		createdBy: 'user',
+		// P0-F4 — stamp the creating user; body-supplied value is overwritten.
+		ownerUserId: ownerOfRequest(request)
 	});
 	response.status(201).json(finding);
 });
 
 app.get('/api/findings/:id', requireApiToken, (request, response) => {
-	const finding = getFinding(request.params.id);
+	const finding = requireFinding(request, response);
 	if (!finding) {
-		return response.status(404).json({ error: 'Finding not found' });
+		return;
 	}
 	// Enrich with linked test case names.
 	const linkedTests = (finding.testCaseIds ?? [])
@@ -2554,6 +2614,11 @@ app.get('/api/findings/:id', requireApiToken, (request, response) => {
 });
 
 app.put('/api/findings/:id', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before mutation.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const finding = updateFinding(request.params.id, request.body ?? {});
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -2562,12 +2627,22 @@ app.put('/api/findings/:id', requireApiToken, (request, response) => {
 });
 
 app.delete('/api/findings/:id', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before delete; 404 covers missing and not-yours.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const deleted = deleteFinding(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
 
 // M1-P3 P0-6: mutation endpoints require the token (was open).
 app.patch('/api/findings/:id/status', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before status transition.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const { status, by } = request.body ?? {};
 	const finding = changeStatus(request.params.id, status, by);
 	if (!finding) {
@@ -2577,6 +2652,11 @@ app.patch('/api/findings/:id/status', requireApiToken, (request, response) => {
 });
 
 app.post('/api/findings/:id/comments', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before commenting.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const { author, text } = request.body ?? {};
 	const comment = addComment(request.params.id, author, text);
 	if (!comment) {
@@ -2586,6 +2666,11 @@ app.post('/api/findings/:id/comments', requireApiToken, (request, response) => {
 });
 
 app.post('/api/findings/:id/link/:testCaseId', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before linking.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const finding = linkTestCase(request.params.id, request.params.testCaseId);
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -2601,6 +2686,11 @@ app.post('/api/findings/:id/link/:testCaseId', requireApiToken, (request, respon
 });
 
 app.delete('/api/findings/:id/link/:testCaseId', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before unlinking.
+	const owned = requireFinding(request, response);
+	if (!owned) {
+		return;
+	}
 	const finding = unlinkTestCase(request.params.id, request.params.testCaseId);
 	if (!finding) {
 		return response.status(404).json({ error: 'Finding not found' });
@@ -2687,19 +2777,26 @@ app.post('/api/missions', requireApiToken, async (request, response) => {
 			return response.status(400).json({ error: legacyTargetCheck.message, code: legacyTargetCheck.code });
 		}
 	}
-	const mission = createMission(request.body ?? {});
+	// P0-F4 — stamp the creating user (server-side; body-supplied value is
+	// overwritten, callers cannot claim someone else's identity).
+	const mission = createMission({ ...request.body, ownerUserId: ownerOfRequest(request) });
 	response.status(201).json(mission);
 });
 
 app.get('/api/missions/:id', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	response.json(mission);
 });
 
 app.put('/api/missions/:id', requireApiToken, async (request, response) => {
+	// P0-F4 — ownership before any mutation read/write.
+	const owned = requireMission(request, response);
+	if (!owned) {
+		return;
+	}
 	// M1-P4.1 — targetUrl is in the update allowlist; it must pass the SSRF
 	// boundary before being persisted (stored URLs are executed later).
 	if (typeof request.body?.targetUrl === 'string' && request.body.targetUrl.trim() !== '') {
@@ -2743,6 +2840,11 @@ app.put('/api/missions/:id', requireApiToken, async (request, response) => {
 });
 
 app.delete('/api/missions/:id', requireApiToken, (request, response) => {
+	// P0-F4 — ownership before delete; 404 covers both missing and not-yours.
+	const owned = requireMission(request, response);
+	if (!owned) {
+		return;
+	}
 	const deleted = deleteMission(request.params.id);
 	response.status(deleted ? 204 : 404).end();
 });
@@ -2752,13 +2854,14 @@ app.delete('/api/missions/:id', requireApiToken, (request, response) => {
  * into the mission, then runs quality scoring.
  */
 app.post('/api/missions/:id/link-session', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
-	const session = getSession(request.body?.sessionId);
+	// P0-F4 — the adopted session must ALSO be accessible to this caller.
+	const session = requireOwnedResource(request, response, 'session', request.body?.sessionId, getSession);
 	if (!session) {
-		return response.status(404).json({ error: 'Session not found' });
+		return;
 	}
 
 	// M1-P4.1 — session.targetUrl passes through the SSRF boundary before it
@@ -2809,6 +2912,12 @@ function workspaceOfMission(mission) {
 function requireMissionForIntegration(request, response) {
 	const mission = getMission(request.params.id);
 	if (!mission) {
+		response.status(404).json({ error: { code: 'mission_not_found', message: 'Mission not found.' } });
+		return undefined;
+	}
+	// P0-F4 — user-kind callers on the v1 surface are ownership-scoped too;
+	// integration principals keep the workspace boundary below (unchanged).
+	if (!request.integration && !canAccessResource(request, mission)) {
 		response.status(404).json({ error: { code: 'mission_not_found', message: 'Mission not found.' } });
 		return undefined;
 	}
@@ -2933,7 +3042,10 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		correlationId: request.correlationId,
 		idempotencyKey: idempotencyKey
 			? `${request.integration?.workspaceId ?? '__ui__'}:${idempotencyKey}`
-			: (body.idempotencyKey || undefined)
+			: (body.idempotencyKey || undefined),
+		// P0-F4 — a signed-in UI user owns the mission they create; integration
+		// principals keep workspace scoping (owner stays null there).
+		ownerUserId: ownerOfRequest(request)
 	});
 
 	// Optionally auto-start: create a session and kick off the agent
@@ -2945,7 +3057,8 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			const session = createSession(mission.name || 'API Mission', mission.projectId, {
 				...(missionDevice ? { deviceRequest: missionDevice } : {}),
 				...(missionProviderInput ? { executionProvider: missionProviderInput } : {}),
-				missionId: mission.id
+				missionId: mission.id,
+				ownerUserId: mission.ownerUserId ?? null // P0-F4 — inherit mission owner
 			});
 			session.targetUrl = mission.targetUrl;
 
@@ -3066,7 +3179,8 @@ async function startMissionByIdHandler(request, response, mission) {
 			const session = createSession(mission.name || 'API Mission', mission.projectId, {
 				...(missionDeviceCheck.deviceName ? { deviceRequest: missionDeviceCheck.deviceName } : {}),
 				...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
-				missionId: mission.id
+				missionId: mission.id,
+				ownerUserId: mission.ownerUserId ?? null // P0-F4 — inherit mission owner
 			});
 			session.targetUrl = mission.targetUrl;
 
@@ -3133,9 +3247,11 @@ async function startMissionByIdHandler(request, response, mission) {
 }
 
 app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before starting (integration callers bypass via
+	// requireMissionForIntegration on their own surface).
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	await startMissionByIdHandler(request, response, mission);
 });
@@ -3144,9 +3260,9 @@ app.post('/api/v1/missions/:id/start', requireApiToken, async (request, response
  * Gets mission status + results. External consumers poll this.
  */
 app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	// If mission has a linked session, sync session state
@@ -3222,9 +3338,10 @@ app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
  * Aborts a running mission or cancels a queued one.
  */
 app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before stopping another user's mission.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	// M1-P4.2 — QUEUED missions cancel without ever executing.
@@ -3267,9 +3384,10 @@ app.post('/api/v1/missions/:id/stop', requireApiToken, (request, response) => {
  * validate → improve → validate again → compare → approve.
  */
 app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before iterating.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	if (mission.status === 'running') {
 		return response.status(409).json({ error: 'Mission is already running. Stop it first.' });
@@ -3373,7 +3491,8 @@ async function revalidateMissionByIdHandler(request, response, mission) {
 			return response.status(error.statusCode).json({
 				error: error.message,
 				code: error.code ?? 'revalidation_refused',
-				missionId: mission.id
+				missionId: mission.id,
+				ownerUserId: mission.ownerUserId ?? null // P0-F4 — inherit mission owner
 			});
 		}
 		throw error;
@@ -3639,9 +3758,10 @@ async function revalidateMissionByIdHandlerInner(request, response, mission) {
 }
 
 app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before revalidating.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	await revalidateMissionByIdHandler(request, response, mission);
 });
@@ -3657,9 +3777,10 @@ app.post('/api/v1/missions/:id/revalidate', requireApiToken, async (request, res
  * Structured metadata only (13-field schema): no prompts, no CoT, no secrets.
  */
 app.get('/api/v1/missions/:id/decision-trace', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading the decision trace.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	const traces = getDecisionTraces(mission.id);
 	response.json({
@@ -3671,9 +3792,10 @@ app.get('/api/v1/missions/:id/decision-trace', requireApiToken, (request, respon
 });
 
 app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response) => { // M1-P3 public read (pipeline validation loop panel)
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading loop status.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const loopStatus = getLoopStatus(mission);
@@ -3687,9 +3809,10 @@ app.get('/api/v1/missions/:id/loop-status', requireApiToken, (request, response)
  * trend analysis, and iteration context.
  */
 app.get('/api/v1/missions/:id/validation-comparison', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading comparisons.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const summary = getComparisonSummary(mission);
@@ -3708,9 +3831,10 @@ app.get('/api/v1/missions/:id/validation-comparison', requireApiToken, (request,
  *   "Is the app improving? Is it ready for release?"
  */
 app.get('/api/v1/missions/:id/comparison', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading comparisons.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	if (mission.iterations.length === 0) {
@@ -3763,9 +3887,10 @@ app.get('/api/v1/missions/:id/comparison', requireApiToken, (request, response) 
  *   verdict, qualityScore, findings with fixPrompt, improvementPrompt, regressionReady
  */
 app.get('/api/v1/missions/:id/report', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading the report.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const findings = mission.findings ?? [];
@@ -3798,9 +3923,10 @@ app.get('/api/v1/missions/:id/report', requireApiToken, (request, response) => {
  * Supports pagination via ?limit= and ?offset=.
  */
 app.get('/api/v1/missions/:id/evidence', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading evidence.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
@@ -3815,9 +3941,10 @@ app.get('/api/v1/missions/:id/evidence', requireApiToken, (request, response) =>
  * Returns the provenance chain (finding → observation → evidence → session → iteration → decision).
  */
 app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading the evidence chain.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const findingId = request.params.findingId;
@@ -3844,9 +3971,10 @@ app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiTok
  * Returns the percentage of findings backed by evidence.
  */
 app.get('/api/v1/missions/:id/evidence-coverage', requireApiToken, (request, response) => { // M1-P3 public read (pipeline evidence panel)
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading coverage.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const findings = mission.findings ?? [];
@@ -3859,9 +3987,10 @@ app.get('/api/v1/missions/:id/evidence-coverage', requireApiToken, (request, res
  * Phase 6: Get graph integrity report for a mission.
  */
 app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading integrity.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 
 	const result = validateGraphIntegrity({
@@ -3971,7 +4100,9 @@ app.post('/api/v1/diagnostics/artifacts/cleanup', requireApiToken, (request, res
  */
 app.get('/api/v1/evidence/:id', requireApiToken, (request, response) => {
 	const evidence = getEvidence(request.params.id);
-	if (!evidence) {
+	if (!evidence || !canAccessResource(request, evidence)) {
+		// P0-F4 — evidence items are owner-scoped through their parent record;
+		// a cross-owner item is indistinguishable from a missing one.
 		return response.status(404).json({ error: 'Evidence not found' });
 	}
 	response.json(evidence);
@@ -3981,9 +4112,10 @@ app.get('/api/v1/evidence/:id', requireApiToken, (request, response) => {
  * Phase 6: Get all observations for a session.
  */
 app.get('/api/v1/sessions/:id/observations', requireApiToken, (request, response) => {
-	const session = getSession(request.params.id);
+	// P0-F4 — ownership before reading session observations.
+	const session = requireSession(request, response);
 	if (!session) {
-		return response.status(404).json({ error: 'Session not found' });
+		return;
 	}
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
@@ -3997,9 +4129,10 @@ app.get('/api/v1/sessions/:id/observations', requireApiToken, (request, response
  * Phase 6: Get evidence for a specific session.
  */
 app.get('/api/v1/sessions/:id/evidence', requireApiToken, (request, response) => {
-	const session = getSession(request.params.id);
+	// P0-F4 — ownership before reading session evidence.
+	const session = requireSession(request, response);
 	if (!session) {
-		return response.status(404).json({ error: 'Session not found' });
+		return;
 	}
 
 	const limit = Math.min(parseInt(request.query.limit) || 100, 500);
@@ -4013,9 +4146,10 @@ app.get('/api/v1/sessions/:id/evidence', requireApiToken, (request, response) =>
  * Phase 6: Get evidence for a specific iteration of a mission.
  */
 app.get('/api/v1/missions/:id/evidence/iterations/:iteration', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before reading iteration evidence.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	const iteration = parseInt(request.params.iteration);
 	if (!iteration || iteration < 1) {
@@ -4029,9 +4163,10 @@ app.get('/api/v1/missions/:id/evidence/iterations/:iteration', requireApiToken, 
  * Phase 6: Compare evidence across two iterations.
  */
 app.get('/api/v1/missions/:id/evidence/compare/:iter1/:iter2', requireApiToken, (request, response) => {
-	const mission = getMission(request.params.id);
+	// P0-F4 — ownership before comparing evidence.
+	const mission = requireMission(request, response);
 	if (!mission) {
-		return response.status(404).json({ error: 'Mission not found' });
+		return;
 	}
 	const iter1 = parseInt(request.params.iter1);
 	const iter2 = parseInt(request.params.iter2);
@@ -4736,7 +4871,9 @@ async function startQueuedMission(mission) {
 			// every other mission-start path; an explicitly-requested BrowserStack
 			// mission must never silently degrade to local Chromium in the queue.
 			...(missionExecutionProvider(mission) ? { executionProvider: missionExecutionProvider(mission) } : {}),
-			missionId: mission.id
+			missionId: mission.id,
+			// P0-F4 — the queue requeue path inherits the mission owner too.
+			ownerUserId: mission.ownerUserId ?? null
 		});
 		session.targetUrl = mission.targetUrl;
 
