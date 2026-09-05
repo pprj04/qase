@@ -256,7 +256,9 @@ export function updateMission(id, patch = {}) {
 		// Execution timing
 		'startedAt', 'estimatedDuration',
 		// M1-P4.2: execution-governor fields
-		'queuedAt', 'failureReason', 'cancelledAt', 'cancellationReason'
+		'queuedAt', 'failureReason', 'cancelledAt', 'cancellationReason',
+		// R6-T1: attempted-vs-persisted evidence counters (stamped at finalize)
+		'evidenceStats'
 	];
 
 	for (const key of allowed) {

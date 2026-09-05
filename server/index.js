@@ -129,6 +129,7 @@ import {
 	computeEvidenceConfidence, determineEvidenceStatus, validateGraphIntegrity,
 	detectOrphans, getGraphStats, compareIterationEvidence, getHistoricalEvidence,
 	getEvidenceCount, getObservationCount, getEdgeCount,
+	getEvidenceSaveHealth, getEvidenceCollectionStats,
 	EVIDENCE_TYPES, EVIDENCE_STATUS
 } from './evidenceGraph.js';
 // B2 — Autonomous Control Loop
@@ -3999,7 +4000,23 @@ app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, re
 		sessions: undefined
 	});
 
-	response.json({ missionId: mission.id, ...result });
+	// R6-T1 — attempted-vs-persisted counters + persistence-path health.
+	// counters: from the mission record when stamped (post-finalize), else from
+	// the last collection run in this process. saveHealth: explicit nulls for
+	// never-failed (never fabricated).
+	const findingRecords = (mission.findings ?? []).map(f => getFinding(f.id)).filter(Boolean);
+	const linked = findingRecords.filter(f => Array.isArray(f.evidenceIds) && f.evidenceIds.length > 0).length;
+	response.json({
+		missionId: mission.id,
+		...result,
+		evidenceStats: mission.evidenceStats ?? getEvidenceCollectionStats(),
+		evidenceSaveHealth: getEvidenceSaveHealth(),
+		linkage: {
+			findings: findingRecords.length,
+			findingsWithTypedEvidence: linked,
+			findingsWithoutTypedEvidence: findingRecords.length - linked
+		}
+	});
 });
 
 /**
@@ -4360,6 +4377,18 @@ function collectEvidenceForSession(mission, session) {
 		const evidenceResult = collectSessionEvidence(session, current, iterId);
 		if (evidenceResult.evidenceCreated > 0) {
 			console.log(`[evidence-graph] Collected ${evidenceResult.evidenceCreated} evidence items, ${evidenceResult.observationsCreated} observations, ${evidenceResult.linksCreated} links for mission ${mission.id} iteration ${iterNum}`);
+		}
+		// R6-T1 — stamp attempted-vs-persisted evidence counters on the mission
+		// record (additive field; updateMission allows evidenceStats). stampedAt
+		// plus save-health so a debounced-save loss is attributable at read time.
+		if (evidenceResult.stats) {
+			updateMission(mission.id, {
+				evidenceStats: {
+					...evidenceResult.stats,
+					stampedAt: Date.now(),
+					saveHealth: getEvidenceSaveHealth()
+				}
+			});
 		}
 	} catch (egErr) {
 		console.error(`[evidence-graph] Failed to collect evidence for mission ${mission?.id}:`, egErr.message);

@@ -57,6 +57,10 @@ function load() {
 		if (!Array.isArray(f.comments)) f.comments = [];
 		if (!Array.isArray(f.testCaseIds)) f.testCaseIds = [];
 		if (!Array.isArray(f.steps)) f.steps = [];
+		// R6-T1 — historical compatibility: findings written before typed
+		// linkage existed load as evidenceIds: [] (never undefined), so every
+		// consumer can treat the field as an array without guarding.
+		if (!Array.isArray(f.evidenceIds)) f.evidenceIds = [];
 	}
 }
 
@@ -327,6 +331,9 @@ export function addFinding(data) {
 			? data.secondary_categories.filter(c => CATEGORIES.includes(c)).slice(0, 3)
 			: undefined,
 		priority: PRIORITIES.includes(data.priority) ? data.priority : undefined,
+		// R6-T1 — typed evidence linkage mirror (populated at linkage time by
+		// evidenceGraph.appendEvidenceIdsToFinding; empty at creation).
+		evidenceIds: Array.isArray(data.evidenceIds) ? data.evidenceIds.filter(eid => typeof eid === 'string') : [],
 		missionId: data.missionId ?? undefined,
 		workflowId: data.workflowId ?? undefined,
 		featureId: data.featureId ?? undefined,
@@ -398,6 +405,32 @@ export function listFindings({
 
 export function getFinding(id) {
 	return findings.find(f => f.id === id);
+}
+
+/**
+ * R6-T1 — typed evidence linkage mirror. Persists `evidenceIds` onto the
+ * findings-store record so the Bugs surface sees evidence without graph
+ * queries. The evidence graph remains the SOURCE OF TRUTH (SUPPORTS edges);
+ * this field is a derived mirror and is only ever written with IDs the graph
+ * itself resolves.
+ *
+ * Idempotent by construction: an ID already present is never appended, so
+ * repeated collection runs (fix-validation re-linking, session re-finalize)
+ * neither duplicate links nor rewrite the record unnecessarily.
+ *
+ * @param {string} id finding id
+ * @param {string[]} evidenceIds graph-resolved evidence node ids
+ * @returns {object|null} the updated finding, or null (not found / nothing new)
+ */
+export function appendEvidenceIdsToFinding(id, evidenceIds = []) {
+	const finding = findings.find(f => f.id === id);
+	if (!finding) return null;
+	const existing = Array.isArray(finding.evidenceIds) ? finding.evidenceIds : [];
+	const fresh = evidenceIds.filter(eid => typeof eid === 'string' && eid && !existing.includes(eid));
+	if (fresh.length === 0) return null;
+	finding.evidenceIds = [...existing, ...fresh];
+	persistSoon();
+	return finding;
 }
 
 export function updateFinding(id, patch) {

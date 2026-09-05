@@ -40,6 +40,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+// R6-T1 — one-way import is safe: findings.js does not import this module
+// (verified at 4ce0803; findings.js deliberately keeps the graph at arm's length).
+import { appendEvidenceIdsToFinding } from './findings.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -153,6 +156,33 @@ let edges = [];                   // [{ from, to, type, metadata }]
 let saveTimer = null;
 let pendingSave = false;
 
+// R6-T1 — save-failure visibility. The debounced save previously only logged
+// errors; counters make evidence-loss detectable (surfaced via
+// getEvidenceSaveHealth() on the evidence-integrity diagnostics path).
+let saveFailures = 0;
+let lastSaveError = null;
+let lastSaveErrorAt = null;
+
+// R6-T1 — last collection snapshot (attempted vs persisted), module-level
+// because collection can run for several missions before a debounced save lands.
+let lastCollectionStats = null;
+
+/**
+ * R6-T1 — health of the evidence-graph persistence path. Explicit null for
+ * never-failed (never fabricated). Exposed on GET /api/v1/missions/:id/evidence-integrity.
+ */
+export function getEvidenceSaveHealth() {
+  return { saveFailures, lastSaveError, lastSaveErrorAt, pendingSave };
+}
+
+/**
+ * R6-T1 — counters from the most recent collectSessionEvidence() run
+ * (attempted vs persisted evidence, linkage write-back count), or null.
+ */
+export function getEvidenceCollectionStats() {
+  return lastCollectionStats;
+}
+
 /**
  * Loads the evidence graph from disk. Called on module init.
  */
@@ -171,6 +201,8 @@ function loadFromDisk() {
         edges = data.edges;
       }
     }
+    // R6-T1 — unknown keys are ignored; health counters are runtime-only and
+    // intentionally reset on every boot.
   } catch (err) {
     // M1-P3 P0-1: a corrupt graph must NEVER silently reset to empty — that
     // erases the entire evidence history with no trace. Fail LOUD (matches
@@ -211,6 +243,11 @@ function scheduleSave() {
       renameSync(tmp, GRAPH_FILE);
       pendingSave = false;
     } catch (err) {
+      // R6-T1 — count and remember save failures so evidence-loss is visible
+      // in diagnostics instead of console-only.
+      saveFailures++;
+      lastSaveError = err?.message || String(err);
+      lastSaveErrorAt = Date.now();
       console.error('[evidence-graph] Failed to save:', err.message);
     }
   }, 250);
@@ -1168,6 +1205,8 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
 
   // 2. Extract evidence from findings (each finding's evidence field)
   const findings = session.findings || [];
+  // R6-T1 — linkage write-back tracking (evidenceIds persisted onto findings).
+  let evidenceIdsPersisted = 0;
   for (const finding of findings) {
     if (finding.evidence) {
       const ev = createEvidence({
@@ -1187,6 +1226,17 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
       // Link evidence to finding
       linkEvidenceToFinding(ev.id, finding.id);
       linksCreated++;
+
+      // R6-T1 — write the typed linkage back onto the findings-store record so
+      // the Bugs surface and exports see evidence without graph queries.
+      // Idempotent (appendEvidenceIdsToFinding dedupes); graph edges stay the
+      // source of truth — the record field is a derived mirror. IDs are read
+      // back through the graph so the mirror only ever contains IDs the graph
+      // actually resolves (guards against foreign/stale IDs).
+      const linkedEvidence = getFindingEvidence(finding.id);
+      if (appendEvidenceIdsToFinding(finding.id, linkedEvidence.map(e => e.id))) {
+        evidenceIdsPersisted++;
+      }
     }
 
     // Create observation for each finding
@@ -1230,7 +1280,22 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
     }
   }
 
-  return { evidenceCreated, observationsCreated, linksCreated };
+  // R6-T1 — attempted-vs-persisted counters for this collection run, kept at
+  // module level so a later save failure is attributable to the last known
+  // collection. Persisted means: created in the graph AND the linkage mirror
+  // written onto the findings-store record.
+  lastCollectionStats = {
+    at: Date.now(),
+    missionId: missionId ?? null,
+    sessionId: sessionId ?? null,
+    evidenceAttempted: (steps.filter(s => s.outcome).length) + findings.filter(f => f.evidence).length,
+    evidencePersisted: evidenceCreated,
+    observationsCreated,
+    linksCreated,
+    evidenceIdsPersisted
+  };
+
+  return { evidenceCreated, observationsCreated, linksCreated, evidenceIdsPersisted, stats: lastCollectionStats };
 }
 
 /* ── Iteration Evidence Preservation (Step 8) ────────────────────── */
@@ -1309,6 +1374,10 @@ export function _clearForTesting() {
   observationStore.clear();
   edges = [];
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  saveFailures = 0;
+  lastSaveError = null;
+  lastSaveErrorAt = null;
+  lastCollectionStats = null;
 }
 
 /**
