@@ -156,7 +156,11 @@ const DEFAULTS = {
 	browserstackKey: '',
 	browserstackBrowsers: 'chrome',
 	selfHealEnabled: true,
-	selfHealThreshold: 0.8
+	selfHealThreshold: 0.8,
+	// R6-T3 — evidence/artifact retention (link-aware; see
+	// server/artifactRetention.js + the R6 spec). Conservative local defaults.
+	retentionArtifactMaxCount: 20_000,
+	retentionArtifactMaxAgeDays: 180
 };
 
 /** The effective settings the agent runs with. Includes the key — server only. */
@@ -246,6 +250,10 @@ export function getPublicConfig() {
 		retriesCount: config.retriesCount,
 		maxConcurrentMissions: config.maxConcurrentMissions,
 		missionTimeoutMinutes: config.missionTimeoutMinutes,
+		// R6-T3 — retention policy echo (public because it decides deletion
+		// behavior; numbers only, never a secret).
+		retentionArtifactMaxCount: config.retentionArtifactMaxCount,
+		retentionArtifactMaxAgeDays: config.retentionArtifactMaxAgeDays,
 		autoSaveWorkflow: config.autoSaveWorkflow,
 		autoGenerateTests: config.autoGenerateTests,
 		autoSmokeRun: config.autoSmokeRun,
@@ -347,6 +355,14 @@ export function saveConfig(patch) {
 	}
 	if (patch.missionTimeoutMinutes !== undefined) {
 		next.missionTimeoutMinutes = Math.max(5, Math.min(720, Number(patch.missionTimeoutMinutes) || DEFAULTS.missionTimeoutMinutes));
+	}
+	// R6-T3 — retention clamps (same validation pattern as above). Invalid
+	// values fall back to documented defaults — NEVER to 0/delete-everything.
+	if (patch.retentionArtifactMaxCount !== undefined) {
+		next.retentionArtifactMaxCount = Math.max(100, Math.min(500_000, Math.floor(Number(patch.retentionArtifactMaxCount) || DEFAULTS.retentionArtifactMaxCount)));
+	}
+	if (patch.retentionArtifactMaxAgeDays !== undefined) {
+		next.retentionArtifactMaxAgeDays = Math.max(1, Math.min(3650, Math.floor(Number(patch.retentionArtifactMaxAgeDays) || DEFAULTS.retentionArtifactMaxAgeDays)));
 	}
 	if (patch.browserstackBrowsers !== undefined) {
 		next.browserstackBrowsers = String(patch.browserstackBrowsers).trim();

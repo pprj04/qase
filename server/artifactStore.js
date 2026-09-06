@@ -240,6 +240,37 @@ export function getArtifactSaveHealth() {
 	return { saveFailures, lastSaveError, lastSaveErrorAt };
 }
 
+/**
+ * R6-T3 — raw registry rows for the retention analyzer (internal shape,
+ * includes relPath; NEVER projected to API clients).
+ */
+export function listArtifactRows() {
+	return [...registry.values()];
+}
+
+/**
+ * R6-T3 — ordered single-artifact deletion used by the retention executor.
+ * Order: bytes file FIRST, then registry row + atomic persist. Crash between
+ * the two leaves a row whose getArtifact() truthfully returns null (missing
+ * bytes — R6-T2 semantics); the next cycle re-claims it. Returns
+ * {deleted:true} only when the row is gone; failures carry the error.
+ */
+export function deleteArtifactById(artifactId) {
+	const row = registry.get(artifactId);
+	if (!row) return { deleted: false, error: 'no such artifact row' };
+	try {
+		const absPath = join(dataDir(), row.relPath);
+		if (existsSync(absPath)) unlinkSync(absPath);
+	} catch (err) {
+		// Bytes deletion failed — keep the row (truthful: artifact still
+		// registered) and report. NEVER delete the reference first.
+		return { deleted: false, error: `bytes unlink failed: ${err.message}` };
+	}
+	registry.delete(artifactId);
+	persistRegistry();
+	return { deleted: true };
+}
+
 export function artifactStoreStats() {
 	let totalBytes = 0;
 	const sessions = new Set();

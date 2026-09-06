@@ -103,6 +103,8 @@ import { flushBaselinesForShutdown } from './baselines.js';
 import { flushSchedulesForShutdown } from './scheduler.js';
 // M1-P4.4 Phases 3–4 — store hygiene + artifact lifecycle diagnostics.
 import { analyzeStoreHygiene, applyStoreHygiene } from './storeHygiene.js';
+// R6-T3 — link-aware evidence/artifact retention, same dry-run/apply surface.
+import { analyzeArtifactRetention, applyArtifactRetention } from './artifactRetention.js';
 import { analyzeArtifacts, applyArtifactsCleanup } from './artifactLifecycle.js';
 import { buildDevReportMarkdown } from './devReport.js';
 import {
@@ -4107,7 +4109,28 @@ app.get('/api/v1/diagnostics/state-integrity', requireApiToken, (request, respon
 app.get('/api/v1/diagnostics/store-hygiene', requireApiToken, (request, response) => {
 	const t0 = Date.now();
 	const report = analyzeStoreHygiene();
-	response.status(200).json({ ...report, analysisMs: Date.now() - t0 });
+	// R6-T3 — artifacts-retention block: dry-run, NEVER mutates. Effective
+	// policy (post-clamp) is echoed so the operator sees exactly what WOULD run.
+	const cfg = getConfig();
+	const retention = analyzeArtifactRetention({
+		policy: {
+			artifactMaxCount: cfg.retentionArtifactMaxCount,
+			artifactMaxAgeDays: cfg.retentionArtifactMaxAgeDays
+		}
+	});
+	response.status(200).json({
+		...report,
+		artifactsRetention: {
+			effectivePolicy: retention.effectivePolicy,
+			stats: retention.stats,
+			total: retention.total,
+			protectedCount: retention.protectedCount,
+			eligibleCount: retention.eligibleCount,
+			projectedDeletions: retention.projectedDeletions,
+			projectedReclaimedBytes: retention.projectedReclaimedBytes
+		},
+		analysisMs: Date.now() - t0
+	});
 });
 
 /**
@@ -4127,6 +4150,17 @@ app.post('/api/v1/diagnostics/store-hygiene/cleanup', requireApiToken, (request,
 		pruneAssessmentsByIds,
 		pruneUnlinked
 	});
+	// R6-T3 — run artifact retention AFTER store hygiene so mission/replay
+	// pruning decisions are already reflected in the live-resource snapshot
+	// the link-aware analyzer reads (order: references evaluated against the
+	// POST-hygiene world). Same explicit apply:true interlock as above.
+	const cfg = getConfig();
+	const retention = applyArtifactRetention({
+		policy: {
+			artifactMaxCount: cfg.retentionArtifactMaxCount,
+			artifactMaxAgeDays: cfg.retentionArtifactMaxAgeDays
+		}
+	});
 	response.status(200).json({
 		appliedAt: result.appliedAt,
 		pruned: {
@@ -4134,6 +4168,12 @@ app.post('/api/v1/diagnostics/store-hygiene/cleanup', requireApiToken, (request,
 			'replay-runs': result.pruned['replay-runs']?.length ?? 0,
 			'ux-assessments': result.pruned['ux-assessments']?.length ?? 0,
 			'evidence-graph': result.pruned['evidence-graph'] ?? { prunedEvidence: 0, prunedObservations: 0 }
+		},
+		artifactsRetention: {
+			deletedCount: retention.deletedCount,
+			reclaimedBytes: retention.reclaimedBytes,
+			failed: retention.failed,
+			protectedCount: retention.protectedCount
 		},
 		skipped: result.skipped
 	});

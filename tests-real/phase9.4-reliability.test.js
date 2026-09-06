@@ -193,7 +193,10 @@ describe('Phase 9.4 — Reasoning Idle Timer', () => {
 
 		// Without reasoning refresh
 		const noRefreshStart = Date.now();
-		setTimeout(() => { timerFired = true; }, IDLE_TIMEOUT);
+		// Keep the handle: a leaked live timer keeps the test runner's event
+		// loop alive ~300s after every test has passed (suite hang, not a
+		// product issue). Cleared below with the other simulated timers.
+		const noRefreshTimer = setTimeout(() => { timerFired = true; }, IDLE_TIMEOUT);
 
 		// With reasoning refresh (simulated)
 		let withRefreshFired = false;
@@ -206,7 +209,8 @@ describe('Phase 9.4 — Reasoning Idle Timer', () => {
 		setTimeout(() => {
 			clearInterval(refreshInterval);
 			clearTimeout(refreshedTimer);
-		}, reasoningDuration);
+			clearTimeout(noRefreshTimer);
+		}, Math.min(reasoningDuration, 1000));
 
 		// The test validates the pattern: refreshing prevents false timeout
 		assert.ok(true, 'Pattern validated');
