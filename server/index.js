@@ -103,6 +103,8 @@ import { flushBaselinesForShutdown } from './baselines.js';
 import { flushSchedulesForShutdown } from './scheduler.js';
 // M1-P4.4 Phases 3–4 — store hygiene + artifact lifecycle diagnostics.
 import { analyzeStoreHygiene, applyStoreHygiene } from './storeHygiene.js';
+// R6-T4 — never-started mission-shell TTL (created→cancelled, preserve).
+import { analyzeMissionShells, applyMissionShellTtl, SHELL_CANCEL_REASON } from './missionShells.js';
 // R6-T3 — link-aware evidence/artifact retention, same dry-run/apply surface.
 import { analyzeArtifactRetention, applyArtifactRetention } from './artifactRetention.js';
 import { analyzeArtifacts, applyArtifactsCleanup } from './artifactLifecycle.js';
@@ -4118,8 +4120,25 @@ app.get('/api/v1/diagnostics/store-hygiene', requireApiToken, (request, response
 			artifactMaxAgeDays: cfg.retentionArtifactMaxAgeDays
 		}
 	});
+	// R6-T4 — mission-shell TTL block: dry-run, NEVER mutates. Same shape
+	// convention: effective policy echoed + zero-mutation analysis.
+	const shells = analyzeMissionShells({ ttlHours: cfg.missionShellTtlHours });
 	response.status(200).json({
 		...report,
+		missionShells: {
+			ttlHours: shells.ttlHours,
+			cancelReason: SHELL_CANCEL_REASON,
+			total: shells.total,
+			byStatus: shells.byStatus,
+			created: shells.created,
+			freshCreated: shells.freshCreated,
+			staleCreated: shells.staleCreated,
+			eligible: shells.eligible,
+			eligibleIds: shells.eligibleIds,
+			protectedAnomalies: shells.protectedAnomalies,
+			anomalyIds: shells.anomalyIds,
+			projectedCancellations: shells.projectedCancellations
+		},
 		artifactsRetention: {
 			effectivePolicy: retention.effectivePolicy,
 			stats: retention.stats,
@@ -4148,8 +4167,12 @@ app.post('/api/v1/diagnostics/store-hygiene/cleanup', requireApiToken, (request,
 		deleteMission,
 		pruneRunsByIds,
 		pruneAssessmentsByIds,
-		pruneUnlinked
+		pruneUnlinked,
+		cancelMissionShells: () => applyMissionShellTtl({ ttlHours: getConfig().missionShellTtlHours })
 	});
+	// R6-T4 — shell expiry ran INSIDE applyStoreHygiene (first, sequenced
+	// before mission pruning). Report it truthfully here.
+	const shellResult = result.pruned.missionShells ?? null;
 	// R6-T3 — run artifact retention AFTER store hygiene so mission/replay
 	// pruning decisions are already reflected in the live-resource snapshot
 	// the link-aware analyzer reads (order: references evaluated against the

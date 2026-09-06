@@ -30,7 +30,11 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const QASE_DIR = join(__dirname, '..', '.qase');
+// R6-T4 fix — honor QASE_DATA_DIR (the documented isolation contract from
+// config.js/findings.js/missions.js). The module-load constant broke child
+// servers run with a temp data dir: hygiene analyzed the REAL .qase even
+// though every other store read the temp one.
+const QASE_DIR = process.env.QASE_DATA_DIR ?? join(__dirname, '..', '.qase');
 
 const HYGIENE_DEFAULTS = {
 	missionMax: 400,
@@ -80,8 +84,11 @@ export function analyzeStoreHygiene(options = {}) {
 	const terminal = missions.filter(m => TERMINAL.has(m.status));
 	const nonTerminal = missions.length - terminal.length;
 	// Stale shells: `created` missions that never got a session or a single
-	// iteration — leftovers of deleted runs / never-started drafts. These are
-	// NOT product data; older than 30d they are pure debris.
+	// iteration — leftovers of deleted runs / never-started drafts.
+	// R6-T4 — shells are NO LONGER deletion-eligible here. The mission-shell
+	// TTL (server/missionShells.js, default 24h) transitions them
+	// created→cancelled with the record PRESERVED; the count stays in this
+	// report as a visibility signal only.
 	const staleShells = missions.filter(m =>
 		m.status === 'created' && !m.sessionId && (m.iterations ?? []).length === 0
 		&& daysOld(m.updatedAt ?? m.createdAt) > cfg.staleShellOlderThanDays);
@@ -97,10 +104,9 @@ export function analyzeStoreHygiene(options = {}) {
 		.sort((a, b) => String(a.updatedAt ?? a.createdAt ?? 0).localeCompare(String(b.updatedAt ?? b.createdAt ?? 0)))
 		.slice(0, Math.max(0, excess - debris.length) + Math.max(0, debris.length - 0));
 	const missionEligible = [...new Set([
-		...staleShells.map(m => m.id),
 		...debris.map(m => m.id),
 		...oldest.map(m => m.id)
-	])]; // shells + debris are always eligible; `oldest` is already floor-limited
+	])]; // R6-T4: shells are EXCLUDED from deletion (cancel+preserve instead); `oldest` is floor-limited
 	const missionBytes = missions.reduce((n, m) => n + JSON.stringify(m).length, 0);
 	const eligibleSet = new Set(missionEligible);
 	const eligibleMissionBytes = missions
@@ -205,8 +211,23 @@ export function applyStoreHygiene(options = {}, deps = {}) {
 	// deps must be injected by the caller (index.js passes the live modules;
 	// tests pass scratch instances). Missing dep → skipped, never crash.
 	const {
-		deleteMission, pruneRunsByIds, pruneAssessmentsByIds, pruneUnlinked
+		deleteMission, pruneRunsByIds, pruneAssessmentsByIds, pruneUnlinked,
+		cancelMissionShells
 	} = deps;
+
+	// R6-T4 — expire never-started shells FIRST, through the transition choke
+	// point (created→cancelled, record preserved). Sequenced before mission
+	// pruning so shells this pass cancels become terminal and are then subject
+	// to the SAME count-based caps as any other terminal mission — never
+	// deleted as "shells" simply for being shells (operator decision: the
+	// record is preserved; ordinary retention still applies to everything).
+	if (cancelMissionShells) {
+		try {
+			result.pruned.missionShells = cancelMissionShells();
+		} catch (err) {
+			result.skipped.push(`mission-shells: ${err.message}`);
+		}
+	}
 
 	if (deleteMission) {
 		const ids = analysis.stores.missions.eligibleIds ?? [];

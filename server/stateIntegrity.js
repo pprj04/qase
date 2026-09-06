@@ -250,7 +250,7 @@ export function checkStateIntegrity(options = {}) {
 			entity: 'missions',
 			entityId: null,
 			detail: `${shellCount} 'created' missions with no session/iterations older than 7d (draft/debris shells)`,
-			remediation: 'Reclaimable via POST /api/v1/diagnostics/store-hygiene/cleanup {apply:true}.'
+			remediation: 'R6-T4: expire via the mission-shell TTL in POST /api/v1/diagnostics/store-hygiene/cleanup {apply:true} — created→cancelled, record preserved.'
 		});
 	}
 

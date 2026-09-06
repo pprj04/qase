@@ -276,6 +276,7 @@ export function updateMission(id, patch = {}) {
 			mission.status = before; // revert the field write from the loop above
 		}
 	}
+	delete mission.__actor;
 
 	mission.updatedAt = Date.now();
 	scheduleSave();
@@ -349,6 +350,17 @@ export function deleteMission(id) {
 		bus.emit('mission:deleted', id);
 	}
 	return existed;
+}
+
+/** Test-only: reset the in-memory mission store (hermetic R6-T4 suites).
+ *  Same convention as evidenceGraph._clearForTesting(). */
+export function _clearForTesting() {
+	store.clear();
+	if (saveTimer) {
+		clearTimeout(saveTimer);
+		saveTimer = null;
+	}
+	dirty = false;
 }
 
 /**

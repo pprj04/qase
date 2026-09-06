@@ -1410,6 +1410,19 @@ export function getEvidenceCount() {
 }
 
 /**
+ * R6-T4 — single-pass set of every missionId that owns at least one
+ * evidence node. Used by missionShells.js to detect "execution began"
+ * across the whole graph in ONE scan instead of one scan per mission.
+ */
+export function getMissionIdsWithEvidence() {
+  const ids = new Set();
+  for (const ev of evidenceStore.values()) {
+    if (ev.missionId) ids.add(ev.missionId);
+  }
+  return ids;
+}
+
+/**
  * Gets total observation count (for stats).
  */
 export function getObservationCount() {

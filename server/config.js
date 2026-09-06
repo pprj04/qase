@@ -160,7 +160,11 @@ const DEFAULTS = {
 	// R6-T3 — evidence/artifact retention (link-aware; see
 	// server/artifactRetention.js + the R6 spec). Conservative local defaults.
 	retentionArtifactMaxCount: 20_000,
-	retentionArtifactMaxAgeDays: 180
+	retentionArtifactMaxAgeDays: 180,
+	// R6-T4 — never-started mission shells (`created`, no execution markers)
+	// older than this TTL are transitioned created→cancelled with
+	// cancellationReason 'never_started_ttl_expired' (record preserved).
+	missionShellTtlHours: 24
 };
 
 /** The effective settings the agent runs with. Includes the key — server only. */
@@ -252,8 +256,10 @@ export function getPublicConfig() {
 		missionTimeoutMinutes: config.missionTimeoutMinutes,
 		// R6-T3 — retention policy echo (public because it decides deletion
 		// behavior; numbers only, never a secret).
-		retentionArtifactMaxCount: config.retentionArtifactMaxCount,
-		retentionArtifactMaxAgeDays: config.retentionArtifactMaxAgeDays,
+	retentionArtifactMaxCount: config.retentionArtifactMaxCount,
+	retentionArtifactMaxAgeDays: config.retentionArtifactMaxAgeDays,
+	// R6-T4 — shell-TTL echo (numeric policy, not a secret).
+	missionShellTtlHours: config.missionShellTtlHours,
 		autoSaveWorkflow: config.autoSaveWorkflow,
 		autoGenerateTests: config.autoGenerateTests,
 		autoSmokeRun: config.autoSmokeRun,
@@ -363,6 +369,11 @@ export function saveConfig(patch) {
 	}
 	if (patch.retentionArtifactMaxAgeDays !== undefined) {
 		next.retentionArtifactMaxAgeDays = Math.max(1, Math.min(3650, Math.floor(Number(patch.retentionArtifactMaxAgeDays) || DEFAULTS.retentionArtifactMaxAgeDays)));
+	}
+	// R6-T4 — shell TTL clamp. Invalid input falls back to the 24h default,
+	// never to 0 (cancel-everything) or an accidental infinite TTL.
+	if (patch.missionShellTtlHours !== undefined) {
+		next.missionShellTtlHours = Math.max(1, Math.min(8760, Math.floor(Number(patch.missionShellTtlHours) || DEFAULTS.missionShellTtlHours)));
 	}
 	if (patch.browserstackBrowsers !== undefined) {
 		next.browserstackBrowsers = String(patch.browserstackBrowsers).trim();
