@@ -10,7 +10,7 @@ import {
 	hasUsers, listUsers, createUser, findUserById, updateUser, setPassword,
 	login as userLogin, createSession as createUserSession, resolveSession as resolveUserSession,
 	revokeSession as revokeUserSession, getAuditTrail, loginRateLimited as userLoginRateLimited,
-	resetLoginFails, __resetForTests as resetUserStoreForTests
+	resetLoginFails, flushUsers, __resetForTests as resetUserStoreForTests
 } from './userStore.js';
 import { mountDemoSite } from './demoSite.js';
 import { buildReportMarkdown } from './report.js';
@@ -81,6 +81,8 @@ import {
 // M1-P4.4 Phase 2 — graceful-shutdown flush registry (SIGINT/SIGTERM).
 import { registerStoreFlush, flushAllStores } from './shutdown.js';
 import { flushEvidenceGraphForShutdown, pruneUnlinked } from './evidenceGraph.js';
+// R6-T2 — screenshot artifact persistence + retrieval.
+import { getArtifact, artifactRef, getArtifactSaveHealth, artifactStoreStats, removeArtifactsForSession } from './artifactStore.js';
 import { flushFixValidationForShutdown, validationBus } from './fixValidation.js';
 // B1 W7 — Phase 18 fix-validation primitives shared with the integration surface.
 import {
@@ -688,6 +690,10 @@ app.post('/api/auth/login', (request, response) => {
 	try {
 		const { email, password } = request.body ?? {};
 		const { user, token } = userLogin(email, password, ip);
+		// R6-T2 — flush the debounced users.json write before returning:
+		// lastLoginAt just mutated; a crash must not orphan the fresh
+		// session row (auth-sessions.json is already written synchronously).
+		flushUsers();
 		response.setHeader('Set-Cookie', userCookieString(token, request, 7 * 24 * 3600));
 		response.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
 	} catch (error) {
@@ -1015,6 +1021,13 @@ app.delete('/api/sessions/:id', requireApiToken, (request, response) => {
 		return;
 	}
 	clearSecrets(request.params.id);
+	// R6-T2 — session-scoped artifact cleanup rides the EXISTING session
+	// delete seam. Evidence nodes keep their artifact refs (the graph stays
+	// the source of truth for what was attempted); the retrieval route then
+	// truthfully 404s for artifacts whose session was deleted. No earlier
+	// eviction — completed runs keep their artifacts until their session
+	// record is actually deleted (long-term retention = R6-T3 policy).
+	removeArtifactsForSession(request.params.id);
 	response.json({ deleted: deleteSession(request.params.id) });
 });
 
@@ -4018,6 +4031,56 @@ app.get('/api/v1/missions/:id/evidence-integrity', requireApiToken, (request, re
 		}
 	});
 });
+
+/**
+ * R6-T2 — screenshot artifact retrieval.
+ *
+ * GET /api/v1/artifacts/:artifactId          → metadata projection
+ * GET /api/v1/artifacts/:artifactId/content  → the actual persisted bytes
+ *
+ * Ownership: the artifact row is resolved through the SAME choke point as
+ * every other resource (canAccessResource — user isolation, admin sees all,
+ * open/master unchanged). Identical 404 for missing vs unauthorized (F4
+ * convention); disabled-auth dev mode stays open (auth middleware decides,
+ * not this route). No filesystem paths are ever projected.
+ */
+app.get('/api/v1/artifacts/stats', requireApiToken, (request, response) => {
+	response.json({ ...artifactStoreStats(), saveHealth: getArtifactSaveHealth() });
+});
+
+app.get('/api/v1/artifacts/:artifactId', requireApiToken, (request, response) => {
+	const art = getArtifact(request.params.artifactId);
+	if (!art) {
+		// Unknown id, write-failed row, missing bytes, or size-mismatch
+		// (corrupt) — one honest 404, no existence leak.
+		return response.status(404).json({ error: 'Artifact not found.' });
+	}
+	if (!canAccessResource(request, art)) {
+		return response.status(404).json({ error: 'Artifact not found.' });
+	}
+	response.json(artifactRef(art));
+});
+
+app.get('/api/v1/artifacts/:artifactId/content', requireApiToken, (request, response) => {
+	const art = getArtifact(request.params.artifactId);
+	if (!art) {
+		return response.status(404).json({ error: 'Artifact not found.' });
+	}
+	if (!canAccessResource(request, art)) {
+		return response.status(404).json({ error: 'Artifact not found.' });
+	}
+	response.set('Content-Type', art.mimeType || 'image/jpeg');
+	response.set('Content-Length', String(art.byteLength));
+	response.set('Cache-Control', 'private, max-age=3600');
+	response.send(art.data);
+});
+
+/**
+ * R6-T2 — artifact-store health/facts (diagnostics surface, master-gated by
+ * the MASTER_ONLY_PREFIXES convention? No: kept under /api/v1 read with
+ * requireApiToken like the evidence stats route above; it exposes counts
+ * only, never paths or owner identities).
+ */
 
 /**
  * Phase 6: Get evidence graph stats.

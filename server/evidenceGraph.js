@@ -1172,11 +1172,37 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
   let evidenceCreated = 0;
   let observationsCreated = 0;
   let linksCreated = 0;
+  // R6-T2 — screenshot artifact attempted-vs-persisted counters (same
+  // convention as the R6-T1 evidence counters).
+  let screenshotsAttempted = 0;
+  let screenshotsPersisted = 0;
 
   // 1. Extract evidence from captured steps (browser actions)
   const steps = session.capturedSteps || [];
-  for (const step of steps) {
+  // R6-T2 — idempotency guard: a step already collected (re-finalize,
+  // fix-validation re-link, boot-recovery re-run) must never mint a second
+  // step_outcome node. Step identity = step.id (stable across runs; the
+  // agent assigns it at capture time), falling back to toolCallId, then to
+  // index for legacy steps with neither.
+  const sessionStepKey = (step, idx) => step.id || step.toolCallId || `idx:${idx}`;
+  const collectedStepKeys = new Set(
+    [...evidenceStore.values()]
+      .filter(e => e.sessionId === sessionId && e.type === EVIDENCE_TYPES.STEP_OUTCOME && e.metadata?.stepKey)
+      .map(e => e.metadata.stepKey)
+  );
+  for (const [stepIndex, step] of steps.entries()) {
     if (!step.outcome) continue;
+    const stepKey = sessionStepKey(step, stepIndex);
+    if (collectedStepKeys.has(stepKey)) {
+      // Counters stay truthful on re-collection: the step's screenshot was
+      // attempted/persisted on the ORIGINAL pass — report it again per-run
+      // without minting a node.
+      if (step.screenshot) {
+        screenshotsAttempted += 1;
+        if (step.screenshot.persisted === true) screenshotsPersisted += 1;
+      }
+      continue;
+    }
 
     const ev = createEvidence({
       missionId,
@@ -1198,8 +1224,37 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
         networkErrors: step.outcome.networkErrors,
         elementsFound: step.outcome.elementsFound
       },
-      metadata: { stepId: step.id, toolCallId: step.toolCallId }
+      // R6-T2 — screenshot artifact reference ON THE EXISTING step_outcome
+      // node's metadata (createEvidence has a closed field list; metadata is
+      // the free-form channel). No duplicate evidence node is created for
+      // persistence. Explicit artifact:null when capture was attempted but
+      // nothing persisted — never a phantom ref, never a silent success.
+      metadata: {
+        stepId: step.id,
+        toolCallId: step.toolCallId,
+        // R6-T2 — stable re-collection identity (see guard above).
+        stepKey: sessionStepKey(step, stepIndex),
+        ...(step.screenshot ? {
+          artifact: step.screenshot.artifactId ? {
+            id: step.screenshot.artifactId,
+            sessionId,
+            mimeType: 'image/jpeg',
+            bytes: step.screenshot.bytes ?? null,
+            capturedAt: step.screenshot.capturedAt ?? null
+          } : null,
+          screenshotAttempted: true,
+          screenshotPersisted: step.screenshot.persisted === true,
+          screenshotStatus: step.screenshot.status ?? null,
+          screenshotError: step.screenshot.error ?? null
+        } : {})
+      }
     });
+    if (step.screenshot?.persisted) {
+      screenshotsPersisted = (screenshotsPersisted || 0) + 1;
+    }
+    if (step.screenshot) {
+      screenshotsAttempted = (screenshotsAttempted || 0) + 1;
+    }
     evidenceCreated++;
   }
 
@@ -1292,7 +1347,9 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
     evidencePersisted: evidenceCreated,
     observationsCreated,
     linksCreated,
-    evidenceIdsPersisted
+    evidenceIdsPersisted,
+    screenshotsAttempted,
+    screenshotsPersisted
   };
 
   return { evidenceCreated, observationsCreated, linksCreated, evidenceIdsPersisted, stats: lastCollectionStats };

@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { atomicWrite } from './atomicWrite.js';
+// R6-T2 — screenshot artifacts ride the session lifecycle (prune cleanup).
+// artifactStore.js imports only atomicWrite.js — verified no import cycle.
+import { removeArtifactsForSession } from './artifactStore.js';
 
 /**
  * In-memory session store with a JSON mirror on disk.
@@ -214,6 +217,12 @@ export function pruneOldSessions(keep = SESSION_COUNT_KEEP) {
 		try {
 			fs.rmSync(path.join(process.cwd(), '.qase', 'workspaces', session.id), { recursive: true, force: true });
 		} catch { /* best-effort: fs corruption */ }
+		// R6-T2 — budget-pruned sessions take their screenshot artifacts with
+		// them (same lifecycle anchor: the session record). Static import:
+		// artifactStore.js imports only atomicWrite.js — no cycle.
+		try {
+			removeArtifactsForSession(session.id);
+		} catch { /* best-effort: artifact cleanup must never block pruning */ }
 		sessions.delete(session.id);
 	}
 	if (doomed.length > 0) {

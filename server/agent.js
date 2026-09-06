@@ -13,6 +13,9 @@ import { createQaTools } from './qaTools.js';
 import { notifyReport } from './webhooks.js';
 import { runAutonomyPipeline } from './pipeline.js';
 import { captureStep, finalizeStepOutcome } from './workflows.js';
+// R6-T2 — screenshot artifact persistence (byte-store + registry the
+// evidence graph references; NOT a parallel evidence system).
+import { persistScreenshotArtifact } from './artifactStore.js';
 import { buildQaContext } from './prompt.js';
 import { attachBrowserBridge } from './browserBridge.js';
 import { planSessionExecution, attachBrowserstackRuntime, BrowserStackMissionError } from './browserstackAgentRuntime.js';
@@ -852,6 +855,55 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 					finalizeStepOutcome(session, part.toolCallId, part.toolName, result);
 					openActivities.delete(part.toolCallId);
 
+					// R6-T2 — persist REAL screenshot bytes when the
+					// browser_screenshot tool produced them. Runs after the
+					// step outcome is finalized so the artifact facts attach
+					// to the captured step (and from there into the existing
+					// STEP_OUTCOME evidence node — no duplicate nodes).
+					// Truth table: captureAttempted always true for this tool;
+					// artifactPersisted only when bytes landed on disk;
+					// failure keeps the textual outcome AND records why.
+					if (part.toolName === 'browser_screenshot') {
+						try {
+							const b64 = firstScreenshotBase64(result);
+							const art = persistScreenshotArtifact({
+								sessionId: session.id,
+								missionId: session.missionId ?? null,
+								ownerUserId: session.ownerUserId ?? null,
+								toolCallId: part.toolCallId ?? null,
+								base64: b64,
+								mimeType: firstScreenshotMime(result),
+								url: result?.url ?? null,
+								title: result?.title ?? null
+							});
+							const step = session.capturedSteps?.find(s => s.toolCallId === part.toolCallId);
+							if (step) {
+								step.screenshot = {
+									captureAttempted: true,
+									persisted: art.persisted,
+									artifactId: art.artifactId ?? null,
+									status: art.status,
+									bytes: art.bytes ?? 0,
+									error: art.error ?? null,
+									capturedAt: art.capturedAt
+								};
+							}
+						} catch (artifactErr) {
+							const step = session.capturedSteps?.find(s => s.toolCallId === part.toolCallId);
+							if (step) {
+								step.screenshot = {
+									captureAttempted: true,
+									persisted: false,
+									artifactId: null,
+									status: 'write_failed',
+									bytes: 0,
+									error: String(artifactErr?.message ?? artifactErr),
+									capturedAt: Date.now()
+								};
+							}
+						}
+					}
+
 					// Reset idle watchdog — a tool completed, proving progress
 					idleTimer.refresh();
 
@@ -1100,6 +1152,39 @@ export function finalizeTurnLimitedRun(session) {
 		console.error(`[agent] deterministic close-out pipeline failed for ${session.id}:`, err?.message ?? err);
 	});
 	return true;
+}
+
+/**
+ * R6-T2 — locate screenshot bytes in a browser_screenshot tool result.
+ * SDK result shapes vary by provider (flat base64 / dataUrl / nested
+ * image|screenshot object); accept the known ones, return null otherwise —
+ * the artifact path then truthfully records not_attempted rather than
+ * fabricating an artifact from a text-only result.
+ */
+function firstScreenshotBase64(result) {
+	if (!result || typeof result !== 'object') return null;
+	if (typeof result.base64 === 'string' && result.base64.length > 0) return result.base64;
+	if (typeof result.dataUrl === 'string' && result.dataUrl.startsWith('data:')) {
+		const comma = result.dataUrl.indexOf(',');
+		if (comma > 0) return result.dataUrl.slice(comma + 1);
+	}
+	const nested = result.image ?? result.screenshot ?? result.artifact;
+	if (nested && typeof nested === 'object') {
+		if (typeof nested.base64 === 'string' && nested.base64.length > 0) return nested.base64;
+		if (typeof nested.dataUrl === 'string' && nested.dataUrl.startsWith('data:')) {
+			const comma = nested.dataUrl.indexOf(',');
+			if (comma > 0) return nested.dataUrl.slice(comma + 1);
+		}
+	}
+	return null;
+}
+
+function firstScreenshotMime(result) {
+	if (typeof result?.mimeType === 'string' && result.mimeType.startsWith('image/')) return result.mimeType;
+	if (typeof result?.dataUrl === 'string' && result.dataUrl.startsWith('data:image/')) {
+		return result.dataUrl.slice(5, result.dataUrl.indexOf(';')) || 'image/jpeg';
+	}
+	return 'image/jpeg';
 }
 
 function summariseResult(toolName, result) {

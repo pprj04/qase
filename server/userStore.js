@@ -98,6 +98,32 @@ function persistUsers() {
 	}, 120);
 }
 
+/**
+ * R6-T2 — flush the debounced users write NOW.
+ *
+ * Root cause found building the R6-T2 required-auth regression: `login()`
+ * mutates `lastLoginAt` and calls the debounced `persistUsers()`; a hard
+ * SIGKILL inside the 120ms window drops users.json entirely. The cookie's
+ * session row (auth-sessions.json, written synchronously) then survives the
+ * restart orphaned — boot#2 loads zero users, resolveSession deletes the
+ * orphan, and every previously-valid cookie 401s. persistSessions already
+ * writes synchronously ("a crash never loses a fresh login"); the user row
+ * deserves the same guarantee because resolveSession needs BOTH files.
+ */
+export function flushUsers() {
+	if (saveDebounce) {
+		clearTimeout(saveDebounce);
+		saveDebounce = null;
+	}
+	try {
+		atomicWrite(usersFile(), JSON.stringify(users, null, 2) + '\n', { mode: 0o600 });
+	} catch (error) {
+		console.error('[userStore] failed to flush users:', error?.message ?? error);
+		return false;
+	}
+	return true;
+}
+
 function persistSessions() {
 	try {
 		// Sessions churn; write immediately so a crash never loses a fresh login.
