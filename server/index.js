@@ -105,6 +105,8 @@ import { flushSchedulesForShutdown } from './scheduler.js';
 import { analyzeStoreHygiene, applyStoreHygiene } from './storeHygiene.js';
 // R6-T4 — never-started mission-shell TTL (created→cancelled, preserve).
 import { analyzeMissionShells, applyMissionShellTtl, SHELL_CANCEL_REASON } from './missionShells.js';
+// R6-T5 — store-integrity visibility on the state-integrity diagnostics route.
+import { getStoreHealthSnapshot } from './storeHealth.js';
 // R6-T3 — link-aware evidence/artifact retention, same dry-run/apply surface.
 import { analyzeArtifactRetention, applyArtifactRetention } from './artifactRetention.js';
 import { analyzeArtifacts, applyArtifactsCleanup } from './artifactLifecycle.js';
@@ -4101,6 +4103,10 @@ app.get('/api/v1/evidence/stats', requireApiToken, (request, response) => { // M
 app.get('/api/v1/diagnostics/state-integrity', requireApiToken, (request, response) => {
 	const deep = request.query.deep === '1' || request.query.deep === 'true';
 	const result = checkStateIntegrity({ deep });
+	// R6-T5 — storeHealth block: per-store corrupt-load/write-failure
+	// visibility (process-scoped counters; basename-only quarantine ids;
+	// explicit nulls, never fabricated). Read-only, same route.
+	result.storeHealth = getStoreHealthSnapshot();
 	response.status(200).json(result);
 });
 
@@ -4733,6 +4739,10 @@ function fireMissionWebhooks(missionId, report, event = 'mission.completed') {
 		verdict: report?.verdict ?? mission.verdict ?? null,
 		qualityScore: report?.qualityScore ?? mission.qualityScore ?? null,
 		findingsCount: (report?.findings ?? mission.findings ?? []).length,
+		// R6-T5 — mission.failed contract: the failure reason travels WITH the
+		// delivery (the repaired listener passes it; the enqueue builder was
+		// silently dropping it). mission.completed keeps it null.
+		failureReason: event === 'mission.failed' ? (report?.failureReason ?? mission.failureReason ?? null) : null,
 		completedAt: Date.now()
 	}, {
 		workspaceId: workspaceOfMission(mission),
@@ -5183,9 +5193,13 @@ missionBus.on('finalized', ({ missionId, report }) => {
 
 // B1 W5 — mission.failed webhooks: one listener catches every failure path
 // (runtime start, governor catch, blocked target) because they all funnel
-// through updateMission → mission:updated.
+// through updateMission → 'mission:updated'. R6-T5 fix: this listener
+// subscribed to 'updated', but missions.js emits 'mission:updated' — the
+// listener was dead and updateMission-path failures fired NO webhook. The
+// event name is now aligned; everything else (signing, queue, retry,
+// once-per-mission guard, mission:finalized handling) is unchanged.
 const failedWebhookSent = new Set(); // missionId — once per process per mission
-missionBus.on('updated', (mission) => {
+missionBus.on('mission:updated', (mission) => {
 	if (mission?.status === 'failed' && !failedWebhookSent.has(mission.id)) {
 		failedWebhookSent.add(mission.id);
 		fireMissionWebhooks(mission.id, {

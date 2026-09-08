@@ -43,6 +43,9 @@ import { join, dirname } from 'node:path';
 // R6-T1 — one-way import is safe: findings.js does not import this module
 // (verified at 4ce0803; findings.js deliberately keeps the graph at arm's length).
 import { appendEvidenceIdsToFinding } from './findings.js';
+// R6-T5 — store-integrity visibility (corrupt loads + write failures).
+// storeHealth.js imports nothing from this module — verified no cycle.
+import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -214,7 +217,11 @@ function loadFromDisk() {
     );
     try {
       renameSync(GRAPH_FILE, GRAPH_FILE + '.corrupt');
-    } catch { /* nothing to preserve */ }
+      // R6-T5 — record for diagnostics (basename only in the public snapshot).
+      recordCorruptLoad('evidence', { error: err?.message || String(err), backupPath: GRAPH_FILE + '.corrupt' });
+    } catch {
+      recordCorruptLoad('evidence', { error: err?.message || String(err) });
+    }
   }
 }
 
@@ -244,10 +251,12 @@ function scheduleSave() {
       pendingSave = false;
     } catch (err) {
       // R6-T1 — count and remember save failures so evidence-loss is visible
-      // in diagnostics instead of console-only.
+      // in diagnostics instead of console-only. R6-T5 — also feed the shared
+      // storeHealth registry (state-integrity route reads one shape).
       saveFailures++;
       lastSaveError = err?.message || String(err);
       lastSaveErrorAt = Date.now();
+      recordWriteFailure('evidence', { error: err?.message || String(err) });
       console.error('[evidence-graph] Failed to save:', err.message);
     }
   }, 250);

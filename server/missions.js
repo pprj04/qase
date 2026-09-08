@@ -21,6 +21,8 @@ import { getDefaultProjectId } from './projects.js';
 import { atomicWrite } from './atomicWrite.js';
 // M1-P4.3 — centralized status-transition validation for ALL writers.
 import { attemptMissionTransition } from './stateTransitions.js';
+// R6-T5 — store-integrity visibility (corrupt loads + write failures).
+import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -69,12 +71,16 @@ function loadMissions() {
 	} catch (err) {
 		// M1-P4.4 Phase 5 — never silently start empty on a damaged store
 		// file: preserve it for forensics and continue from an empty store.
+		const backupPath = `${FILE}.corrupt-${Date.now()}`;
 		try {
-			renameSync(FILE, `${FILE}.corrupt-${Date.now()}`);
+			renameSync(FILE, backupPath);
+			// R6-T5 — record for diagnostics (visibility only).
+			recordCorruptLoad('missions', { error: err.message, backupPath });
 			console.error(
 				`[missions] STORE CORRUPT: load failed (${err.message}). File preserved as missions.json.corrupt-<ts> — starting EMPTY.`
 			);
 		} catch (renameErr) {
+			recordCorruptLoad('missions', { error: err.message });
 			console.error(`[missions] STORE CORRUPT: ${err.message} (preserve failed: ${renameErr.message}) — starting EMPTY.`);
 		}
 	}
@@ -92,6 +98,9 @@ function scheduleSave() {
 				const arr = [...store.values()];
 				atomicWrite(FILE, JSON.stringify(arr, null, 2));
 			} catch (err) {
+			// R6-T5 — write failures must be visible in diagnostics, not
+			// console-only.
+			recordWriteFailure('missions', { error: err.message });
 			console.error('[missions] save failed:', err.message);
 		}
 	}, 500);
@@ -110,6 +119,8 @@ export function flushMissionsForShutdown() {
 		atomicWrite(FILE, JSON.stringify([...store.values()], null, 2));
 		return { dirty: true, ok: true };
 	} catch (err) {
+		// R6-T5 — shutdown-flush failures are write failures too.
+		recordWriteFailure('missions', { error: err.message });
 		return { dirty: true, ok: false, error: err.message };
 	}
 }

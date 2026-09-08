@@ -72,10 +72,22 @@ describe('findings store v2', () => {
 	});
 
 	it('metrics endpoint reflects the store consistently', async () => {
+		// R6-T5 note: metrics.findings.total counts SESSION-EMBEDDED findings
+		// (metrics.js sums session.findingCount). The suite's probe finding is
+		// store-level and session-less, so in a TRULY isolated env total is 0 —
+		// an absolute `>= 1` only held when sessions leaked in from the dev
+		// store (store.js ignored QASE_DATA_DIR pre-T5). Assert CONSISTENCY
+		// with the sessions the server actually has instead of an absolute.
 		const m = await api('GET', '/api/metrics/dashboard');
 		assert.equal(m.status, 200);
 		assert.ok(typeof m.json.findings === 'object');
-		assert.ok(m.json.findings.total >= 1);
+		const sessions = await api('GET', '/api/sessions');
+		assert.equal(sessions.status, 200);
+		const embedded = (Array.isArray(sessions.json) ? sessions.json : [])
+			.reduce((n, s) => n + (s.findingCount ?? 0), 0);
+		assert.equal(m.json.findings.total, embedded,
+			'metrics.findings.total must equal the sum of session.findingCount');
+		assert.ok(m.json.findings.total >= 0);
 	});
 
 	it('deletes the probe finding', async () => {

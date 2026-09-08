@@ -14,6 +14,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
+// R6-T5 — store-integrity visibility (corrupt loads + write failures).
+import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
 import {
 	LIFECYCLE, REVIEW_STATUSES, REPRODUCIBILITIES, CATEGORIES, PRIORITIES,
 	validateLifecycleTransition, normalizeCategory,
@@ -46,6 +48,11 @@ function load() {
 		// disk is damaged (observed 2026-08-16: inode corruption after a
 		// container pause). Log loudly so operators notice data loss instead
 		// of discovering it via an empty UI later.
+		// R6-T5 — record for diagnostics too. NOTE: findings has NO quarantine
+		// rename by design (the damaged file stays in place for forensics), so
+		// no backup identifier is recorded — the store continues from empty
+		// in-process and that fact is now VISIBLE.
+		recordCorruptLoad('findings', { error: error.message });
 		console.error('[findings] FAILED to load store:', error.message);
 		findings = [];
 	}
@@ -78,6 +85,8 @@ function flush() {
 		atomicWrite(FINDINGS_FILE, JSON.stringify(findings, null, '\t'));
 		pendingWrite = false;
 	} catch (error) {
+		// R6-T5 — write failures must be visible in diagnostics.
+		recordWriteFailure('findings', { error: error.message });
 		console.error('[findings] Failed to persist:', error.message);
 		throw error; // report failure to shutdown registry
 	}

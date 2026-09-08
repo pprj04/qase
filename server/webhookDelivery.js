@@ -25,8 +25,12 @@ import { validateWebhookUrl } from './targetGuard.js';
 import { atomicWrite } from './atomicWrite.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SUBS_FILE = join(__dirname, '..', '.qase', 'webhook-subscriptions.json');
-const DELIV_FILE = join(__dirname, '..', '.qase', 'webhook-deliveries.json');
+// R6-T5 fix — honor QASE_DATA_DIR (the documented isolation contract; same
+// class of bug as storeHygiene.js pre-T4). Without this, a child server run
+// with a temp data dir wrote webhook deliveries into the REAL store.
+const QASE_DIR = process.env.QASE_DATA_DIR ?? join(__dirname, '..', '.qase');
+const SUBS_FILE = join(QASE_DIR, 'webhook-subscriptions.json');
+const DELIV_FILE = join(QASE_DIR, 'webhook-deliveries.json');
 
 export const WEBHOOK_EVENTS = ['mission.completed', 'mission.failed', 'finding.revalidated'];
 

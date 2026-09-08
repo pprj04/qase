@@ -3,10 +3,14 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { atomicWrite } from './atomicWrite.js';
+
+// R6-T5 — store-integrity visibility (corrupt loads + write failures).
+// storeHealth.js imports nothing from this module — verified no cycle.
+import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
+
 // R6-T2 — screenshot artifacts ride the session lifecycle (prune cleanup).
 // artifactStore.js imports only atomicWrite.js — verified no import cycle.
 import { removeArtifactsForSession } from './artifactStore.js';
-
 /**
  * In-memory session store with a JSON mirror on disk.
  *
@@ -16,7 +20,8 @@ import { removeArtifactsForSession } from './artifactStore.js';
  * kept on a parallel `runtime` record that never reaches disk.
  */
 
-const STATE_DIR = path.join(process.cwd(), '.qase');
+// Honor the existing QASE_DATA_DIR isolation contract; preserve the production fallback.
+const STATE_DIR = process.env.QASE_DATA_DIR ?? path.join(process.cwd(), '.qase');
 const STATE_FILE = path.join(STATE_DIR, 'sessions.json');
 
 /** Live, non-serialisable per-session handles, keyed by session id. */
@@ -37,8 +42,10 @@ function persistSoon() {
 			fs.mkdirSync(STATE_DIR, { recursive: true });
 			atomicWrite(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
 			pendingWrite = false;
-		} catch {
-			// A dashboard that cannot write its history is still a usable dashboard.
+		} catch (err) {
+			// A dashboard that cannot write its history is still a usable
+			// dashboard — but the loss must be VISIBLE, not silent (G6).
+			recordWriteFailure('sessions', { error: err?.message ?? String(err) });
 		}
 	}, 250).unref?.();
 }
@@ -56,6 +63,7 @@ export function flushSessionsForShutdown() {
 		pendingWrite = false;
 		return { dirty: true, ok: true };
 	} catch (err) {
+		recordWriteFailure('sessions', { error: err.message });
 		return { dirty: true, ok: false, error: err.message };
 	}
 }
@@ -92,12 +100,17 @@ export function loadSessions() {
 		if (err && err.code === 'ENOENT') return; // no history yet — normal first boot
 		// M1-P4.4 Phase 5 — damaged store file: preserve for forensics, start
 		// empty. Never overwrite a corrupt file with a fresh valid one.
+		const backupPath = `${STATE_FILE}.corrupt-${Date.now()}`;
 		try {
-			fs.renameSync(STATE_FILE, `${STATE_FILE}.corrupt-${Date.now()}`);
+			fs.renameSync(STATE_FILE, backupPath);
+			// R6-T5 — record for diagnostics (visibility only; the quarantine
+			// behavior above is unchanged).
+			recordCorruptLoad('sessions', { error: err.message, backupPath });
 			console.error(
 				`[sessions] STORE CORRUPT: load failed (${err.message}). File preserved as sessions.json.corrupt-<ts> — starting EMPTY.`
 			);
 		} catch (renameErr) {
+			recordCorruptLoad('sessions', { error: err.message });
 			console.error(`[sessions] STORE CORRUPT: ${err.message} (preserve failed: ${renameErr.message}) — starting EMPTY.`);
 		}
 	}
