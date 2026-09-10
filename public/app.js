@@ -2479,6 +2479,7 @@ const cfg = {
 	provider: $('cfg-provider'),
 	providerNote: $('cfg-provider-note'),
 	key: $('cfg-key'),
+	keyField: $('cfg-key-field'),
 	keyNote: $('cfg-key-note'),
 	baseUrlField: $('cfg-baseurl-field'),
 	baseUrl: $('cfg-baseurl'),
@@ -2496,6 +2497,7 @@ const cfg = {
 const BASE_URL_REQUIRED = new Set(['custom', 'azureOpenAI']);
 const BASE_URL_OPTIONAL = new Set(['openai', 'openrouter', 'nvidia', 'grok']);
 const CUSTOM_MODEL_VALUE = '__qase_custom_model__';
+const DEFAULT_CUSTOM_MODEL = 'z-ai/glm-5.2';
 
 function selectedModelId() {
 	return (cfg.model.value === CUSTOM_MODEL_VALUE ? cfg.modelCustom.value : cfg.model.value).trim();
@@ -2526,8 +2528,12 @@ function fillModelOptions(models = [], selected = '') {
 		cfg.model.value = CUSTOM_MODEL_VALUE;
 		cfg.modelCustom.value = selected;
 	} else {
-		cfg.model.value = selectedIsListed ? selected : (uniqueModels[0] ?? CUSTOM_MODEL_VALUE);
-		if (selectedIsListed) cfg.modelCustom.value = '';
+		// When no model is explicitly configured, prefer the server default
+		// (z-ai/glm-5.2 for the managed custom gateway) over the first listed.
+		const preferred = selectedIsListed ? selected
+			: (uniqueModels.includes(DEFAULT_CUSTOM_MODEL) ? DEFAULT_CUSTOM_MODEL : (uniqueModels[0] ?? CUSTOM_MODEL_VALUE));
+		cfg.model.value = preferred;
+		if (preferred !== CUSTOM_MODEL_VALUE) cfg.modelCustom.value = '';
 	}
 	syncCustomModelField();
 }
@@ -2571,8 +2577,15 @@ function syncProviderFields() {
 	const provider = cfg.provider.value;
 	const required = BASE_URL_REQUIRED.has(provider);
 	cfg.baseUrlField.hidden = !required && !BASE_URL_OPTIONAL.has(provider);
+	// The custom gateway is provisioned by the server (key comes from env) —
+	// no API key entry needed unless the user wants to override with their own.
+	const managedKey = provider === 'custom';
+	cfg.keyField.hidden = managedKey;
+	cfg.keyNote.hidden = managedKey;
 	cfg.providerNote.textContent = required
-		? 'Any OpenAI-compatible API: key, base URL, model name.'
+		? (managedKey
+			? 'OpenAI-compatible endpoint managed by this server — key and base URL are preconfigured.'
+			: 'Any OpenAI-compatible API: key, base URL, model name.')
 		: BASE_URL_OPTIONAL.has(provider)
 			? 'Base URL is optional — leave it blank to use the provider default.'
 			: 'This provider uses its own endpoint.';
