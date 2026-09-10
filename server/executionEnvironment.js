@@ -22,8 +22,14 @@ export function buildExecutionEnvironment(input = {}) {
 	const viewport = input.viewport && Number.isFinite(input.viewport.width) && Number.isFinite(input.viewport.height)
 		? { width: input.viewport.width, height: input.viewport.height }
 		: null;
+	// HOTFIX C — explicit execution-type provenance, derived ONLY from what
+	// actually ran. LOCAL_EMULATION = local provider + named device context.
+	let executionType;
+	if (provider === 'local') executionType = input.device != null ? 'LOCAL_EMULATION' : 'LOCAL_DESKTOP';
+	else executionType = input.device != null ? (input.engineEmulated === true ? 'LOCAL_EMULATION' : 'REAL_DEVICE') : 'CLOUD_DESKTOP';
 	return {
 		provider,
+		executionType,
 		device: input.device != null ? String(input.device) : null,
 		browser: input.browser != null ? String(input.browser) : null,
 		browserVersion: input.browserVersion != null ? String(input.browserVersion) : null,

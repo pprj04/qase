@@ -80,6 +80,7 @@ const reportFinding = {
 							device: `${deviceContext.deviceName}${deviceContext.os ? ` · ${deviceContext.os}` : ''}`,
 							environment: {
 								provider: 'local',
+								executionType: 'LOCAL_EMULATION',
 								device: deviceContext.deviceName ?? null,
 								browser: `${deviceContext.browser ?? 'chromium'} (emulated on Chromium)`,
 								browserVersion: null,
@@ -147,9 +148,23 @@ const reportFinding = {
 			required: ['verdict', 'summary']
 		},
 		async run(input) {
+			// HOTFIX B — separate REPORT GENERATION from EXECUTION OUTCOME. A
+			// report can always be published; what it must never do is imply
+			// testing succeeded when the browser never ran. If no browser step
+			// succeeded, the outcome is 'blocked' regardless of the requested
+			// verdict.
+			const successfulBrowserSteps = (session.capturedSteps ?? [])
+				.filter(step => step?.outcome?.status === 'success').length;
+			const browserNeverRan = successfulBrowserSteps === 0;
+			const executionOutcome = browserNeverRan ? 'blocked' : 'completed';
+			const effectiveVerdict = browserNeverRan && ['pass', 'pass_with_issues'].includes(input.verdict)
+				? 'blocked'
+				: (input.verdict ?? 'pass_with_issues');
 			const report = redact(session.id, {
 				ts: Date.now(),
-				verdict: input.verdict ?? 'pass_with_issues',
+				executionOutcome,
+				outcomeReason: browserNeverRan ? 'no_successful_browser_steps' : null,
+				verdict: effectiveVerdict,
 				summary: String(input.summary ?? '').trim(),
 				covered: Array.isArray(input.covered) ? input.covered.map(String) : [],
 				notCovered: Array.isArray(input.not_covered) ? input.not_covered.map(String) : [],
@@ -167,7 +182,7 @@ const reportFinding = {
 			notifyReport(session); // fire-and-forget webhook
 			// Phase 12: trigger the autonomy pipeline (fire-and-forget).
 			runAutonomyPipeline(session, {}).catch(() => {});
-			return { success: true, published: true, verdict: report.verdict, findings: report.findings };
+			return { success: true, published: true, verdict: report.verdict, executionOutcome, findings: report.findings };
 		}
 	};
 

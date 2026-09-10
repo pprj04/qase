@@ -31,7 +31,9 @@ test('resolveDeviceContext: android alias (case-insensitive)', () => {
 	assert.equal(ctx.deviceName, 'Pixel 8');
 	assert.equal(ctx.deviceType, 'phone');
 	assert.equal(ctx.os, 'Android 14');
-	assert.equal(ctx.browser, 'Chrome');
+	// HOTFIX C — local execution always runs Chromium; the label states the
+	// actual engine, never the emulated platform browser as if real.
+	assert.equal(ctx.browser, 'Chromium');
 });
 
 test('resolveDeviceContext: tablet classification', () => {

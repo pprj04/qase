@@ -1034,7 +1034,14 @@ async function renderReport() {
 	label.textContent = verdict.label;
 	const sub = document.createElement('div');
 	sub.className = 'verdict-sub';
-	sub.textContent = `${report.findings} finding${report.findings === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}`;
+	// HOTFIX B — surface the execution outcome next to the verdict so a
+	// blocked/incomplete run can never read as a normal completed test.
+	const outcomeNote = report.executionOutcome === 'blocked'
+		? ' · BLOCKED — testing could not run'
+		: report.executionOutcome === 'incomplete'
+			? ' · INCOMPLETE — budget/timeout reached'
+			: '';
+	sub.textContent = `${report.findings} finding${report.findings === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}${outcomeNote}`;
 	text.append(label, sub);
 	banner.append(mark, text);
 	el.reportView.append(banner);
@@ -1617,7 +1624,18 @@ function handleEvent(event) {
 		case 'report':
 			session.report = event.report;
 			renderReport();
-			toast('Report published.', 'good');
+			// HOTFIX B — the toast must reflect the OUTCOME, not just the fact
+			// that a report exists. A blocked/failed run producing a report is
+			// not a success story.
+			if (event.report?.executionOutcome === 'blocked' || event.report?.verdict === 'blocked') {
+				toast('Blocked report generated — browser/testing could not run.', 'bad');
+			} else if (event.report?.executionOutcome === 'incomplete') {
+				toast('Report published — testing incomplete (budget or timeout reached).', 'warn' );
+			} else if (event.report?.verdict === 'fail') {
+				toast('Report published — verdict: fail.', 'bad');
+			} else {
+				toast('Report published.', 'good');
+			}
 			break;
 
 		case 'pipeline_start':

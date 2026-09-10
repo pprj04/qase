@@ -67,6 +67,22 @@ export function completeExecutionHealth(health) {
 }
 
 export function classifyExecutionFailure(error, context = {}) {
+	// HOTFIX A — structured preflight codes are authoritative: they are set
+	// by preflightLocalBrowser() which classified the failure against the
+	// FULL Playwright message. Never re-derive them from a (possibly
+	// truncated) diagnostic string.
+	if (error?.code === 'BROWSER_RUNTIME_DEPENDENCY_MISSING') {
+		return failure('browser', 'BROWSER_RUNTIME_DEPENDENCY_MISSING',
+			'The local browser cannot start — required system libraries are missing.',
+			'Install the browser system dependencies (npx playwright install-deps chromium) and restart QASE, then retry the run.',
+			false, String(error?.diagnostic ?? error?.message ?? error), context);
+	}
+	if (error?.code === 'BROWSER_LAUNCH_FAILED') {
+		return failure('browser', 'BROWSER_LAUNCH_FAILED',
+			'The local browser could not be started.',
+			'Review the browser diagnostic, then retry the run. If it repeats, check the Chromium installation.',
+			false, String(error?.diagnostic ?? error?.message ?? error), context);
+	}
 	const raw = String(error?.message ?? error ?? 'Unknown execution failure');
 	const text = raw.toLowerCase();
 	const status = statusFrom(error, context);
@@ -119,6 +135,14 @@ export function classifyExecutionFailure(error, context = {}) {
 			'The target application returned an error response.',
 			'Review the captured network response and target application logs.',
 			status >= 500, raw, classifiedContext);
+	}
+	// HOTFIX A — dependency-missing launch failures are their own class:
+	// they are environment problems, not retryable execution problems.
+	if (/BROWSER_RUNTIME_DEPENDENCY_MISSING|error while loading shared librar|cannot open shared object|\.so(\.\d+)?[^ ]*not found/i.test(raw)) {
+		return failure('browser', 'BROWSER_RUNTIME_DEPENDENCY_MISSING',
+			'The local browser cannot start — required system libraries are missing.',
+			'Install the browser system dependencies (npx playwright install-deps chromium) and restart QASE, then retry the run.',
+			false, raw, classifiedContext);
 	}
 	if (/browser.*(closed|crash|disconnect)|target closed|page.*closed|chromium.*failed|playwright.*failed|frame was detached/i.test(text)
 		|| stage === 'browser_tool') {

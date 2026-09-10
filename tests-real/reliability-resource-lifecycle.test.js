@@ -360,7 +360,7 @@ async function bootServer(opts = {}) {
 		cwd: home,
 		env: {
 			...process.env,
-			QASE_AUTH_MODE: '', QASE_API_TOKEN: '',
+			QASE_AUTH_MODE: 'disabled', QASE_API_TOKEN: '',
 			PORT: String(port),
 			NODE_PATH: join(ROOT, 'node_modules'),
 			QASE_INTEGRATION_SECRET: opts.secret ?? secret,

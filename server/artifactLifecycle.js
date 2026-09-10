@@ -36,7 +36,9 @@ function loadJson(file, fallback) {
 /** Collect every artifact dir name mentioned anywhere durable. */
 export function collectArtifactReferences() {
 	const refs = new Set();
-	for (const file of ['replay-runs.json', 'baselines.json', 'missions.json', 'findings.json', 'sessions.json', 'evidence-graph.json', 'test-cases.json', 'workflows.json']) {
+	// artifacts.json is the canonical evidence registry (relPath:
+	// 'artifacts/<sessionId>/<file>') — always part of the reference scan.
+	for (const file of ['artifacts.json', 'replay-runs.json', 'baselines.json', 'missions.json', 'findings.json', 'sessions.json', 'evidence-graph.json', 'test-cases.json', 'workflows.json']) {
 		const data = loadJson(join(QASE_DIR, file), null);
 		if (!data) continue;
 		const text = JSON.stringify(data);

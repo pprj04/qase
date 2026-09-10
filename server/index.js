@@ -4679,9 +4679,20 @@ async function finalizeMissionFromSession(mission, session) {
 		});
 	}
 
-	// Also update mission top-level fields
+	// HOTFIX B — truthful terminal status. A run that exhausted its turn
+	// budget or hit the wall-clock timeout did NOT complete its testing:
+	// finalizing it as 'completed' fabricates a finished QA pass. The
+	// transition matrix maps running → 'timeout' (terminal, honest).
+	const budgetExhausted = session.report?.executionOutcome === 'incomplete'
+		|| session.report?.outcomeReason === 'turn_budget_exhausted'
+		|| session.report?.outcomeReason === 'session_wall_clock_timeout';
 	finalizeMission(mission.id, {
-		status: 'completed',
+		status: budgetExhausted ? 'timeout' : 'completed',
+		failureReason: budgetExhausted
+			? (session.report?.outcomeReason === 'session_wall_clock_timeout'
+				? 'Session wall-clock timeout reached before testing completed — outcomes are partial.'
+				: 'Authorized turn budget exhausted before testing completed — outcomes are partial.')
+			: undefined,
 		qualityScore: quality.score,
 		verdict: quality.verdict,
 		improvementPrompt: report.improvementPrompt,

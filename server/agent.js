@@ -76,14 +76,23 @@ export { resolveSessionTimeoutMs as __resolveSessionTimeoutMs };
  */
 const MODEL_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-/** The tools the agent is allowed to use. */
+/** The tools the agent is allowed to use.
+ * HOTFIX D — the browser tool surface now matches the SDK registry 1:1.
+ * The registry ships no browser_close / browser_select_option /
+ * browser_press_key / browser_navigate_back (those names were dead entries:
+ * calls could never run), and browser_get_url / browser_check /
+ * browser_select / browser_key are safe QA-useful SDK tools that were
+ * previously gated off while still being advertised — every denial burned a
+ * real turn. Filesystem, shell, web-fetch and worker tools remain denied. */
 const ALLOWED_TOOLS = new Set([
-	'browser_open', 'browser_close', 'browser_click', 'browser_type',
-	'browser_fill', 'browser_select_option', 'browser_press_key',
-	'browser_hover', 'browser_scroll', 'browser_screenshot',
-	'browser_snapshot', 'browser_diagnostics', 'browser_wait',
-	'browser_navigate_back', 'browser_tabs',
-	'browser_dialog', 'browser_new_tab', 'browser_select_tab', 'browser_close_tab',
+	// SDK registry browser tools (all of them)
+	'browser_open', 'browser_get_url', 'browser_snapshot',
+	'browser_click', 'browser_hover', 'browser_fill', 'browser_check',
+	'browser_select', 'browser_type', 'browser_key', 'browser_scroll',
+	'browser_screenshot', 'browser_diagnostics', 'browser_dialog',
+	'browser_tabs', 'browser_new_tab', 'browser_select_tab',
+	'browser_close_tab', 'browser_wait',
+	// QA tools (registered in qaTools.js) + interaction tools
 	'update_todo', 'ask_question', 'report_finding', 'finish_qa_report',
 	'set_viewport'
 ]);
@@ -91,19 +100,19 @@ const ALLOWED_TOOLS = new Set([
 /** Display labels for activity feed entries. */
 const ACTIVITY_LABELS = {
 	browser_open: 'Opening',
-	browser_close: 'Closing browser',
+	browser_get_url: 'Reading URL',
 	browser_click: 'Clicking',
 	browser_type: 'Typing',
 	browser_fill: 'Filling',
-	browser_select_option: 'Selecting',
-	browser_press_key: 'Pressing key',
+	browser_check: 'Checking control',
+	browser_select: 'Selecting option',
+	browser_key: 'Pressing key',
 	browser_hover: 'Hovering',
 	browser_scroll: 'Scrolling',
 	browser_screenshot: 'Screenshot',
 	browser_snapshot: 'Snapshot',
 	browser_diagnostics: 'Diagnostics',
 	browser_wait: 'Waiting',
-	browser_navigate_back: 'Going back',
 	browser_tabs: 'Switching tab',
 	browser_dialog: 'Handling dialog',
 	browser_new_tab: 'Opening tab',
@@ -287,6 +296,28 @@ export async function ensureRuntime(session) {
 	record.pendingRuntimeKick = true;
 	try {
 	await useBundledChromium();
+	// HOTFIX A — prove Chromium launches BEFORE the mission starts. A
+	// missing system library must surface as browser='blocked'/target=
+	// 'pending' with a dependency-missing classification, never as a
+	// mid-mission browser failure (or worse, a fabricated pass).
+	const preflight = await preflightLocalBrowser();
+	if (!preflight.ok) {
+		// HOTFIX A — structured failure: the code travels with the error so
+		// classifyExecutionFailure never has to re-derive it from a string.
+		const actionable = preflight.code === 'BROWSER_RUNTIME_DEPENDENCY_MISSING'
+			? 'The local browser cannot start — required system libraries are missing. Install the browser system dependencies (npx playwright install-deps chromium) and restart QASE, then retry the run.'
+			: 'The local browser could not be started. Review the browser diagnostic, then retry the run.';
+		const err = new Error(actionable);
+		err.code = preflight.code;
+		err.diagnostic = preflight.error;
+		err.executable = preflight.executable;
+		// Truthful health state: the browser is BLOCKED (not merely pending),
+		// the target was never reached, and this is not retryable from within
+		// the run — the operator must install the missing dependencies.
+		session.executionHealth = markExecutionComponent(session.executionHealth ?? createExecutionHealth(), 'browser', 'blocked');
+		session.executionHealth = markExecutionComponent(session.executionHealth, 'target', 'pending');
+		throw err;
+	}
 
 	const settings = getModelTier('discovery');
 	const problem = getPublicConfig().problem;
@@ -405,9 +436,39 @@ export async function ensureRuntime(session) {
 		return `\n[BUDGET] ${remaining} turn(s) of ${turnLimitForBudget} left. If fewer than 8: stop opening new areas, call report_finding for anything confirmed, then call finish_qa_report BEFORE the budget runs out — a run that hits the wall gets no model-authored report and generates no test cases.`;
 	};
 	headless.executeTool = async function* (toolName, input, toolCallId, signal) {
+		// HOTFIX D — deterministic browser tool-argument validation. A model
+		// tool call that cannot possibly succeed (e.g. a click with no locator
+		// and no x/y point) is rejected HERE, before it costs a browser
+		// round-trip, and returns a repair hint the model can act on in one
+		// turn. The SDK's own locator() would eventually throw the same class
+		// of error, but only after the call reached the browser layer.
+		let invalidBrowserToolResult = null;
+		if (toolName === 'browser_click' || toolName === 'browser_hover') {
+			const locatorKeys = ['elementId', 'selector', 'testId', 'role', 'label', 'placeholder', 'text'];
+			const hasLocator = locatorKeys.some(k => typeof input?.[k] === 'string' && input[k].trim());
+			const roleNeedsName = typeof input?.role === 'string' && input.role.trim()
+				&& (input.name === undefined || String(input.name).trim() === '');
+			const hasPoint = Number.isFinite(input?.x) && Number.isFinite(input?.y);
+			if ((!hasLocator && !hasPoint) || roleNeedsName) {
+				invalidBrowserToolResult = {
+					type: 'tool_result', toolName, toolCallId,
+					result: {
+						success: false,
+						code: 'invalid_tool_arguments',
+						error: roleNeedsName
+							? `${toolName} rejected: role "${input.role}" requires a "name" (accessible name). Take a browser_snapshot and retry with elementId, role+name, selector, or x/y coordinates.`
+							: `${toolName} rejected: no element reference. Provide one of elementId (from the latest browser_snapshot), selector, role+name, label, placeholder, text, or explicit x AND y coordinates.`
+					}
+				};
+			}
+		}
 		// onToolStart became async (M1-P4.1 target validation) — its result is
 		// not needed for the tool stream, so drift is fine.
 		void Promise.resolve(record.onToolStart?.(toolName, input, toolCallId)).catch(() => {});
+		if (invalidBrowserToolResult) {
+			yield invalidBrowserToolResult;
+			return;
+		}
 		const iterator = originalExecute(toolName, input, toolCallId, signal);
 		let wrapped = false;
 		for await (const part of iterator) {
@@ -1138,11 +1199,19 @@ export function finalizeTurnLimitedRun(session) {
 
 	session.report = {
 		ts: Date.now(),
+		// HOTFIX B — a run that hit the wall did NOT finish testing. Whatever
+		// the findings say, the verdict must not read as a normal pass:
+		// budget/wall-clock exhaustion is at best 'pass_with_issues' with an
+		// explicit incomplete marker, never a clean pass.
 		verdict: findings.some(f => f.severity === 'critical')
 			? 'fail'
 			: findings.length > 0
 				? 'pass_with_issues'
 				: 'inconclusive',
+		executionOutcome: 'incomplete',
+		outcomeReason: wallClock
+			? 'session_wall_clock_timeout'
+			: 'turn_budget_exhausted',
 		summary: wallClock
 			? `Run stopped at the session wall-clock timeout (${SESSION_TURN_TIMEOUT_MS / 60000} min, reached at turn ${Number(session.turnCount) || '?'}${turnLimit != null ? ` of ${turnLimit}` : ''}). ` +
 				`This report was compiled deterministically from the evidence already collected (${findings.length} finding(s), ${uniqueCovered.length} covered area(s)); no additional testing was performed after the timeout.`
@@ -1374,6 +1443,53 @@ async function useBundledChromium() {
 			} catch { /* not valid, try next */ }
 		}
 	}
+}
+
+/**
+ * HOTFIX A — BROWSER RUNTIME PREFLIGHT.
+ *
+ * Proves the local Chromium can actually LAUNCH (process start + CDP
+ * handshake) before any mission declares local-browser execution available.
+ * An ELF-valid binary with missing shared libraries (libglib-2.0.so.0 etc.)
+ * passes every file-level check and still fails at launch — so the only
+ * honest preflight is a real launch. The result is cached for the process
+ * lifetime: a Chromium that launched once keeps launching.
+ *
+ * Returns { ok, code, executable, error }. On failure code is
+ * 'BROWSER_RUNTIME_DEPENDENCY_MISSING' (shared-library class) or
+ * 'BROWSER_LAUNCH_FAILED' — callers set executionHealth
+ * browser='blocked', target='pending' and never declare local execution
+ * available.
+ */
+let browserPreflightResult = null;
+export async function preflightLocalBrowser() {
+	if (browserPreflightResult) return browserPreflightResult;
+	await useBundledChromium();
+	const executable = process.env.CLEANSLATE_BROWSER_EXECUTABLE;
+	if (!executable) {
+		browserPreflightResult = { ok: false, code: 'BROWSER_RUNTIME_DEPENDENCY_MISSING', executable: null, error: 'No Chromium executable found in the Playwright cache or on the system.' };
+		return browserPreflightResult;
+	}
+	try {
+		const { chromium } = await import('playwright');
+		const browser = await chromium.launch({ headless: true, executablePath: executable, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+		await browser.close();
+		browserPreflightResult = { ok: true, code: null, executable, error: null };
+	} catch (error) {
+		const msg = String(error?.message ?? error);
+		// HOTFIX A — classify against the FULL message; Playwright's
+		// shared-library evidence can sit thousands of chars into the error
+		// text (observed at position ~2061 of 4763). Truncate only AFTER
+		// classification, and keep the structured `code` authoritative.
+		const dependencyMissing = /error while loading shared librar|cannot open shared object|\.so(\.\d+)?[^ ]*not found|cannot find.*lib/i.test(msg);
+		browserPreflightResult = {
+			ok: false,
+			code: dependencyMissing ? 'BROWSER_RUNTIME_DEPENDENCY_MISSING' : 'BROWSER_LAUNCH_FAILED',
+			executable,
+			error: msg.slice(0, 2000)
+		};
+	}
+	return browserPreflightResult;
 }
 
 /**

@@ -139,8 +139,9 @@ function normalizeDeviceRequest(input) {
 	}
 	if (typeof input === 'object') {
 		// Accept { device: ... } / { deviceName: ... } / { mode: ... } /
-		// { deviceType: ... } shapes
-		const raw = input.device ?? input.deviceName ?? input.mode ?? input.deviceType;
+		// { deviceType: ... } / { class: ... } shapes. HOTFIX C: 'class' was
+		// previously ignored, so { class: 'mobile' } silently became desktop.
+		const raw = input.device ?? input.deviceName ?? input.mode ?? input.deviceType ?? input.class;
 		if (raw == null) return null;
 		if (typeof raw === 'string') {
 			const trimmed = raw.trim();
@@ -166,8 +167,13 @@ function buildDeviceContext(name, descriptor) {
 		deviceType: /ipad|tablet|nexus 7|kindle/i.test(name) ? 'tablet' : 'phone',
 		/** Human OS label, e.g. "iOS 17" / "Android 14". */
 		os: extractOs(name, descriptor.userAgent),
-		/** Human browser label from the UA actually applied, e.g. "Safari" / "Chrome". */
-		browser: descriptor.defaultBrowserType === 'webkit' ? 'Safari' : 'Chrome',
+		// HOTFIX C — truthful browser label. Local execution ALWAYS runs the
+		// installed Chromium; an iOS device's UA imitates Safari but no Safari
+		// binary exists here. The label states the actual engine first, the
+		// emulated profile second — never a bare "Safari" for a local run.
+		browser: descriptor.defaultBrowserType === 'webkit'
+			? 'Chromium (emulating Safari UA)'
+			: 'Chromium',
 		/** Raw UA string actually applied to the context. */
 		userAgent: descriptor.userAgent,
 		/** Actual Playwright viewport for this device. */
@@ -182,6 +188,9 @@ function buildDeviceContext(name, descriptor) {
 		engineRequested: requestedEngine,
 		/** True when the platform engine differs from what actually runs. */
 		engineEmulated: requestedEngine !== engine,
+		// HOTFIX C — explicit execution-type provenance on the persisted
+		// device context: a local context is ALWAYS LOCAL_EMULATION.
+		executionType: 'LOCAL_EMULATION',
 		source: 'playwright-registry'
 	};
 }

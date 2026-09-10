@@ -79,7 +79,10 @@ ${budgetBlock}${understandingBlock}${adaptiveBlock}${urgencyBlock}${deviceLockBl
 - ask_question (blocking; the only way to reach the user mid-run)
 
 Every other tool is blocked by the host and will fail. Do not attempt file
-reads, shell commands, edits or web fetches.
+reads, shell commands, edits or web fetches. The browser tool list above is
+exhaustive: browser_key/browser_get_url/browser_check/browser_select and the
+like are available; anything NOT listed above (browser_upload, browser_clipboard,
+shell, file tools) does not exist in this session and calls to them waste turns.
 
 # How to work
 

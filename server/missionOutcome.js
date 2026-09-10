@@ -35,5 +35,5 @@ export function prepareMissionOutcome(mission, patch = {}) {
  if (linkedSessions.length) { saveSessions(); publicationFailed = !flushSessionsForShutdown().ok || publicationFailed; }
  publicationFailed = !flushFindingsForShutdown().ok || publicationFailed;
  if (publicationFailed) Object.assign(quality,{verdict:'inconclusive',releaseReady:false,confidence:0,score:null,reason:'Evidence or execution persistence failed.'});
- return {findings,evidenceStats,quality,coverage:quality.coverage,qualityScore:quality.score,verdict:quality.verdict,releaseReady:quality.releaseReady};
+ return {findings,findingsCount:findings.length,evidenceStats,quality,coverage:quality.coverage,qualityScore:quality.score,verdict:quality.verdict,releaseReady:quality.releaseReady};
 }

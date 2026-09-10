@@ -117,7 +117,9 @@ console.log('\n[5] LIVE — local execution provenance');
 {
 	const BASE = process.env.QASE_URL || 'http://127.0.0.1:5173';
 	const envText = fs.readFileSync(path.join(ROOT, '.env'), 'utf8');
-	const token = (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim() ?? '';
+	const token = process.env.QASE_API_TOKEN
+		|| (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim()
+		|| (JSON.parse(fs.readFileSync(path.join(ROOT, '.qase', 'config.json'), 'utf8')).apiToken ?? '');
 	ok(!!token, 'QASE_API_TOKEN found');
 
 	const list = await fetch(`${BASE}/api/test-cases?limit=50`, { headers: { authorization: `Bearer ${token}` } }).then(r => r.json()).catch(() => null);
@@ -163,7 +165,9 @@ console.log('\n[6] LIVE — strict BrowserStack: failure is loud, never local');
 {
 	const BASE = process.env.QASE_URL || 'http://127.0.0.1:5173';
 	const envText = fs.readFileSync(path.join(ROOT, '.env'), 'utf8');
-	const token = (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim() ?? '';
+	const token = process.env.QASE_API_TOKEN
+		|| (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim()
+		|| (JSON.parse(fs.readFileSync(path.join(ROOT, '.qase', 'config.json'), 'utf8')).apiToken ?? '');
 
 	const before = await fetch(`${BASE}/api/config`, { headers: { authorization: `Bearer ${token}` } }).then(r => r.json());
 	const origEnabled = before.browserstackEnabled === true;
@@ -270,7 +274,9 @@ console.log('\n[8] LIVE — Phase 18 validation provenance (behavior unchanged)'
 {
 	const BASE = process.env.QASE_URL || 'http://127.0.0.1:5173';
 	const envText = fs.readFileSync(path.join(ROOT, '.env'), 'utf8');
-	const token = (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim() ?? '';
+	const token = process.env.QASE_API_TOKEN
+		|| (envText.match(/^QASE_API_TOKEN=(.*)$/m) || [])[1]?.trim()
+		|| (JSON.parse(fs.readFileSync(path.join(ROOT, '.qase', 'config.json'), 'utf8')).apiToken ?? '');
 
 	// Find a finding with steps pointing at a benchmark app (9901-9907) so
 	// validation can actually execute.

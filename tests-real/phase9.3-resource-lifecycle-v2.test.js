@@ -174,9 +174,10 @@ describe('Phase 9.3 — Resource Lifecycle', () => {
   });
 
   it('RL-7: Benchmark server config includes ContactVault on port 9906', () => {
-    const serverFile = path.join(process.cwd(), '.drytis', 'benchmark-server.js');
+    // The benchmark server is scripts/serve-benchmarks.py (was .drytis/benchmark-server.js).
+    const serverFile = path.join(process.cwd(), 'scripts', 'serve-benchmarks.py');
     const code = fs.readFileSync(serverFile, 'utf8');
-    assert.ok(code.includes("9906: 'app6-contactvault.html'"),
+    assert.ok(code.includes('9906') && code.includes('app6-contactvault.html'),
       'Benchmark server should serve ContactVault on port 9906');
   });
 
