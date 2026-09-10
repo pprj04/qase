@@ -4,7 +4,7 @@ import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
 	addActivity, addMessage, bus, createSession, deleteSession, emit, getSession,
-	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, peekLive, setStatus, updateActivity
+	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, peekLive, setStatus, updateActivity, watchRunBus
 } from './store.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
@@ -175,6 +175,10 @@ export function createLocalApplicationServices(options = {}) {
 		subscribe(sessionId, listener) {
 			bus.on(sessionId, listener);
 			return () => bus.off(sessionId, listener);
+		},
+		/** Global run-bus subscription: observes events from every session. */
+		subscribeGlobal(listener) {
+			return watchRunBus(listener);
 		},
 		liveFor,
 		peekLive,

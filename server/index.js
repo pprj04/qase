@@ -6,6 +6,7 @@ import { createOperationalLogger } from './operationalLogger.js';
 import { createConfiguredApplicationServices } from './serviceFactory.js';
 import { createConfiguredDrytisIntegration } from './drytisIntegrationFactory.js';
 import { closeApplicationBrowsers, drainHttpServer, installShutdownHandlers } from './processLifecycle.js';
+import { createRunKeepalive, isRunStatusActive } from './keepalive.js';
 
 // Validate process-local operational limits and metrics credentials before
 // opening PostgreSQL or Redis clients.
@@ -18,6 +19,26 @@ const {
 	services, mode: runStoreMode, executionMode, tenantContext, pool, executionQueue
 } = await createConfiguredApplicationServices();
 const access = createInstanceAccess({ tenantContext });
+
+// Inbound-traffic keepalive: workspace containers pause after an idle window.
+// During an agent run the server is busy but receives almost no inbound HTTP,
+// so the container can be paused mid-run and the run dies on the next resume.
+// While runs are active the keepalive self-pings /healthz over loopback.
+const keepalive = createRunKeepalive({ getUrl: () => `http://127.0.0.1:${port}/healthz`, logger });
+if (typeof services.runs.setStatus === 'function') {
+	const setStatus = services.runs.setStatus.bind(services.runs);
+	services.runs.setStatus = async (session, status, detail) => {
+		await setStatus(session, status, detail);
+		if (isRunStatusActive(status)) keepalive.noteActive();
+	};
+}
+if (typeof services.events.subscribeGlobal === 'function') {
+	// Run-bus events (messages, activity, live frames) only flow while a run
+	// is in flight, so they are a precise liveness signal.
+	services.events.subscribeGlobal((_sessionId, event) => {
+		if (event?.type === 'status' ? isRunStatusActive(event.status) : true) keepalive.noteActive();
+	});
+}
 const drytisIntegration = createConfiguredDrytisIntegration({
 	services,
 	tenantContext,
@@ -42,6 +63,7 @@ installShutdownHandlers({
 		logger.info('process.draining', { signal });
 	},
 	steps: [
+		() => { keepalive.stop(); },
 		() => drainHttpServer(server),
 		() => closeApplicationBrowsers(services),
 		() => services.lifecycle.close()

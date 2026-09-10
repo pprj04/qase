@@ -25,6 +25,16 @@ const live = new Map();
 const sessions = new Map();
 export const bus = new EventEmitter();
 bus.setMaxListeners(0);
+// EventEmitters route strictly by event name; the run bus uses session ids.
+// Hook emit so a global subscriber (the keepalive) can observe every session.
+const globalListeners = new Set();
+const originalEmit = bus.emit.bind(bus);
+bus.emit = (sessionId, event) => {
+	for (const listener of globalListeners) {
+		try { listener(sessionId, event); } catch { /* observer errors must not break the bus */ }
+	}
+	return originalEmit(sessionId, event);
+};
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_DRYTIS_INTEGRATION_BYTES = 1_000_000;
@@ -223,6 +233,12 @@ export function emit(session, type, payload = {}) {
 		persistSoon();
 	}
 	bus.emit(session.id, { type, sessionId: session.id, ts: Date.now(), ...payload });
+}
+
+/** Subscribe to run-bus events from every session (used by the keepalive). */
+export function watchRunBus(listener) {
+	globalListeners.add(listener);
+	return () => globalListeners.delete(listener);
 }
 
 export function addMessage(session, message) {

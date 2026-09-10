@@ -1,12 +1,55 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { testConnection } from './config.js';
+import { getConfig, getPublicConfig, testConnection, withUserConfiguration } from './config.js';
 
 const CANDIDATE = Object.freeze({
 	provider: 'custom', apiKey: 'test-key', baseUrl: 'https://models.openai.com/v1', model: 'quality-model'
 });
 const PUBLIC_DNS = async () => [{ address: '104.18.33.45', family: 4 }];
 const PRODUCTION = Object.freeze({ NODE_ENV: 'production' });
+
+test('user-scope settings inherit env gateway defaults so new users start with a usable key', async () => {
+	const saved = { ...process.env };
+	const settings = {};
+	try {
+		process.env.QASE_PROVIDER = 'custom';
+		process.env.QASE_API_KEY = 'env-key-1234';
+		process.env.QASE_BASE_URL = 'https://llm.drytis.ai';
+		process.env.QASE_MODEL = 'env-model';
+		await withUserConfiguration(settings, () => {}, async () => {
+			// New user: empty settings store → inherits env values.
+			assert.equal(getConfig().provider, 'custom');
+			assert.equal(getConfig().apiKey, 'env-key-1234');
+			assert.equal(getConfig().baseUrl, 'https://llm.drytis.ai');
+			assert.equal(getConfig().model, 'env-model');
+			const pub = getPublicConfig();
+			assert.equal(pub.hasApiKey, true);
+			assert.equal(pub.apiKeyHint, '••••1234');
+			assert.equal(pub.apiKeyFromEnv, true);
+			assert.equal(pub.ready, true);
+		});
+	} finally {
+		for (const key of ['QASE_PROVIDER', 'QASE_API_KEY', 'QASE_BASE_URL', 'QASE_MODEL']) {
+			if (key in saved) process.env[key] = saved[key]; else delete process.env[key];
+		}
+	}
+});
+
+test('user-scope settings that were explicitly saved override env values', async () => {
+	const saved = { ...process.env };
+	try {
+		process.env.QASE_API_KEY = 'env-key-1234';
+		await withUserConfiguration({ apiKey: 'user-key-9999', model: 'user-model' }, () => {}, async () => {
+			assert.equal(getConfig().apiKey, 'user-key-9999');
+			assert.equal(getConfig().model, 'user-model');
+			const pub = getPublicConfig();
+			assert.equal(pub.apiKeyHint, '••••9999');
+			assert.equal(pub.apiKeyFromEnv, false);
+		});
+	} finally {
+		if ('QASE_API_KEY' in saved) process.env.QASE_API_KEY = saved.QASE_API_KEY; else delete process.env.QASE_API_KEY;
+	}
+});
 
 test('model probe explains nested transport failures without exposing cause details', async () => {
 	for (const [code, expected] of [

@@ -72,15 +72,36 @@ const DEFAULTS = {
 	headless: true
 };
 
+/** Default model per provider when none is configured. */
+const DEFAULT_MODELS = { custom: 'z-ai/glm-5.2' };
+
+/** Models that were once configured by default but are not served by this
+ * gateway. Stored copies of these are stale; fall back to the provider default
+ * so accounts created before the change start working without manual edits. */
+const STALE_MODELS = new Set(['gpt-4.1']);
+
+function defaultModelFor(provider) {
+	return DEFAULT_MODELS[provider];
+}
+
 /** The effective settings the agent runs with. Includes the key — server only. */
 export function getConfig() {
 	const merged = { ...DEFAULTS };
-	for (const source of [userConfiguration.getStore() ? {} : fromEnv(), readStored()]) {
+	// Process scope: env configures the whole instance. User scope: the user's
+	// saved settings win, but env acts as the default layer so every new user
+	// inherits the instance's configured gateway instead of starting blank.
+	const stored = readStored();
+	const sources = [fromEnv(), stored];
+	for (const source of sources) {
 		for (const [key, value] of Object.entries(source)) {
 			if (value !== undefined && value !== null && value !== '') {
 				merged[key] = value;
 			}
 		}
+	}
+	if ((!stored.model || STALE_MODELS.has(stored.model)) && (!fromEnv().model || STALE_MODELS.has(fromEnv().model))) {
+		const fallback = defaultModelFor(merged.provider);
+		if (fallback) merged.model = fallback;
 	}
 	return merged;
 }
@@ -97,7 +118,7 @@ export function getPublicConfig() {
 		headless: config.headless,
 		hasApiKey: Boolean(config.apiKey),
 		apiKeyHint: config.apiKey ? `••••${config.apiKey.slice(-4)}` : '',
-		apiKeyFromEnv: !userConfiguration.getStore() && Boolean(fromEnv().apiKey) && !readStored().apiKey,
+		apiKeyFromEnv: Boolean(fromEnv().apiKey) && !readStored().apiKey,
 		providers: PROVIDERS,
 		ready: isReady(config),
 		problem: describeProblem(config)
