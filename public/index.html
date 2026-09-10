@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <script>
   // Apply saved theme before paint to prevent flash.
@@ -22,14 +22,14 @@
 <!-- ── Top Navigation Bar ─────────────────────────────────────── -->
 <nav class="topnav">
   <div class="topnav-left">
-    <a class="topnav-brand" href="#/runs">
+    <a class="topnav-brand" href="/runs">
       <span class="brand-mark">Qase</span>
     </a>
-    <a class="topnav-link" data-nav="runs" href="#/runs">Runs</a>
-    <a class="topnav-link" data-nav="tests" href="#/tests">Tests</a>
-    <a class="topnav-link" data-nav="workflows" href="#/workflows">Workflows</a>
-    <a class="topnav-link" data-nav="schedules" href="#/schedules">Schedules</a>
-    <a class="topnav-link" data-nav="bugs" href="#/bugs">
+    <a class="topnav-link" data-nav="runs" href="/runs">Runs</a>
+    <a class="topnav-link" data-nav="tests" href="/tests">Tests</a>
+    <a class="topnav-link" data-nav="workflows" href="/workflows">Workflows</a>
+    <a class="topnav-link" data-nav="schedules" href="/schedules">Schedules</a>
+    <a class="topnav-link" data-nav="bugs" href="/bugs">
       Bugs <span class="count" id="nav-count-bugs"></span>
     </a>
   </div>
@@ -62,6 +62,7 @@
     <aside class="panel runs">
       <header class="panel-head">
         <button id="new-run" class="btn btn-primary" title="New run  (⌘N)">New run</button>
+		<button id="close-runs-drawer" class="btn btn-ghost btn-sm" type="button" aria-label="Close run history">Close</button>
       </header>
       <div class="run-list" id="run-list"></div>
       <footer class="panel-foot">
@@ -79,11 +80,20 @@
           <p class="exec-meta subtle" id="exec-meta" hidden></p>
         </div>
         <div class="head-actions">
+		  <button id="mobile-runs-toggle" class="btn btn-ghost btn-sm" type="button" aria-controls="run-list" aria-expanded="false">Runs</button>
           <span class="exec-mode-chip" id="exec-mode-chip" hidden></span>
           <span class="status-chip" id="status-chip" data-status="idle">idle</span>
           <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
         </div>
       </header>
+	  <section class="execution-health" id="execution-health" hidden aria-live="polite">
+		<div class="execution-health-main">
+		  <strong id="execution-health-title">Execution health</strong>
+		  <span id="execution-health-summary"></span>
+		</div>
+		<div class="execution-health-components" id="execution-health-components"></div>
+		<p id="execution-health-action"></p>
+	  </section>
 
       <div class="transcript" id="transcript">
         <div class="empty-state" id="chat-empty">
@@ -105,13 +115,13 @@
               <input id="auth-gate-password" type="password" placeholder="Password" autocomplete="current-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
               <button id="auth-gate-signin" class="btn" style="padding:8px 14px;">Sign in</button>
             </div>
-            <div id="auth-gate-register" style="display:none;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
-              <p class="subtle" style="font-size:13px;opacity:.8;margin:0;">No admin account exists yet — create one to take ownership of this workspace. This can be done only once.</p>
-              <input id="auth-gate-reg-email" type="email" placeholder="Your email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <input id="auth-gate-reg-name" type="text" placeholder="Your name (optional)" autocomplete="name" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <input id="auth-gate-reg-password" type="password" placeholder="Password (10+ characters)" autocomplete="new-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <button id="auth-gate-reg-save" class="btn" style="padding:8px 14px;">Create admin account</button>
-            </div>
+			<div id="auth-gate-bootstrap" style="display:none;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
+			  <p class="subtle" style="font-size:13px;opacity:.8;margin:0;">Create the first QASE administrator to initialize this workspace. This one-time setup closes as soon as the account is created.</p>
+			  <input id="auth-gate-bootstrap-email" type="email" placeholder="Administrator email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+			  <input id="auth-gate-bootstrap-name" type="text" placeholder="Name (optional)" autocomplete="name" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+			  <input id="auth-gate-bootstrap-password" type="password" placeholder="Password" autocomplete="new-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
+			  <button id="auth-gate-bootstrap-submit" class="btn" style="padding:8px 14px;">Create administrator</button>
+			</div>
             <p class="subtle" style="font-size:12px;opacity:.7;" id="auth-gate-hint">Passwords are never shown again. Session stored in a cookie only.</p>
             <p id="auth-gate-error" role="alert" style="color:#f66;font-size:13px;min-height:1em;"></p>
           </div>
@@ -167,6 +177,7 @@
               <option value="iPad Mini">iPad Mini</option>
             </select>
           </label>
+          <p class="intent-help">Enter the target URL below, then Send. These fields start a new mission and are saved with its test context.</p>
           <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-up">Hide</button>
         </div>
         <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-down" hidden>+ Mission intent</button>
@@ -518,6 +529,13 @@
     <!-- Board -->
     <div class="bugs-board-wrap">
       <div class="bugs-hub-board" id="bugs-board"></div>
+	  <div class="bugs-pagination" id="bugs-pagination" hidden>
+		<span id="bugs-page-summary" aria-live="polite"></span>
+		<div class="bugs-pagination-actions">
+		  <button class="btn btn-ghost btn-sm" id="bugs-page-prev" type="button">Previous</button>
+		  <button class="btn btn-ghost btn-sm" id="bugs-page-next" type="button">Next</button>
+		</div>
+	  </div>
     </div>
   </div>
 </div>
@@ -608,7 +626,10 @@
 
       <label class="field">
         <span>API key</span>
-        <input id="cfg-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+        <div class="cfg-token-row">
+          <input id="cfg-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…">
+          <button class="btn btn-ghost btn-sm" type="button" id="cfg-key-clear" title="Clear API key">Clear</button>
+        </div>
         <small id="cfg-key-note"></small>
       </label>
 
@@ -899,6 +920,6 @@
 
 <div class="toasts" id="toasts"></div>
 
-<script src="app.js" type="module"></script>
+<script src="/app.js" type="module"></script>
 </body>
 </html>

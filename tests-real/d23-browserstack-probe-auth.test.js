@@ -1,11 +1,10 @@
 /**
  * D2.3 (#7702) — admin-session access to the BrowserStack connection probe.
  *
- * Regression coverage for the EXACT-PATH exception added to enforceRole():
- * an authenticated ADMIN user session may call POST /api/config/test-browserstack
- * (a diagnostic that returns only a redacted verdict). Everything else under
- * /api/config stays master-token-only, and non-admin/unauthenticated callers
- * are still denied.
+ * Regression coverage for credential-admin authorization: an authenticated
+ * ADMIN user session may call the redacted BrowserStack probe and manage
+ * Settings without possessing the machine master token. Non-admin and
+ * unauthenticated callers remain denied.
  *
  * Contract under test:
  *   1. admin user session  POST /api/config/test-browserstack → reaches the
@@ -13,8 +12,8 @@
  *   2. viewer user session  same route → 403
  *   3. unauthenticated      same route → 401
  *   4. master Bearer token  same route → allowed (unchanged)
- *   5. admin session        PUT /api/config → 403 master-only (unchanged)
- *   6. admin session        GET  /api/config  → sanitized read, no secrets
+ *   5. admin session        PUT /api/config → allowed
+ *   6. admin session        GET  /api/config  → masked read, no secrets
  *   7. no credential material in any response body this suite inspects
  */
 import { test } from 'node:test';
@@ -123,15 +122,14 @@ test('D2.3-4: master Bearer token POST /api/config/test-browserstack still ALLOW
 	assert.equal(r.status, 200, `master path regressed: ${r.status}`);
 });
 
-test('D2.3-5: admin session PUT /api/config remains MASTER-ONLY (403)', { skip: !hasServer }, async () => {
+test('D2.3-5: admin session PUT /api/config is allowed without master bearer', { skip: !hasServer }, async () => {
 	await withUsers(async ({ adminCookie }) => {
 		const r = await call('/api/config', { method: 'PUT', cookie: adminCookie, body: { browserstackBrowsers: 'chrome' } });
-		assert.equal(r.status, 403, 'PUT /api/config must stay master-only for admin sessions');
-		assert.match(r.json?.error ?? '', /master API token/);
+		assert.equal(r.status, 200, 'PUT /api/config must accept an Admin session');
 	});
 });
 
-test('D2.3-6: admin session GET /api/config is a sanitized read (no credential material)', { skip: !hasServer }, async () => {
+test('D2.3-6: admin session GET /api/config is a masked read (no credential material)', { skip: !hasServer }, async () => {
 	await withUsers(async ({ adminCookie }) => {
 		const r = await call('/api/config', { method: 'GET', cookie: adminCookie });
 		assert.equal(r.status, 200, 'sanitized GET for admin sessions must keep working');
@@ -153,12 +151,11 @@ test('D2.3-7: probe response carries no credential material', { skip: !hasServer
 	});
 });
 
-test('D2.3-8: exact-path only — other POST routes under /api/config stay master-only', { skip: !hasServer }, async () => {
+test('D2.3-8: Admin session reaches both credential test routes; trailing-path behavior does not widen roles', { skip: !hasServer }, async () => {
 	await withUsers(async ({ adminCookie }) => {
 		const r = await call('/api/config/test-browserstack/', { method: 'POST', cookie: adminCookie, body: {} });
-		// trailing slash (different path) must NOT inherit the exception
-		assert.ok([403, 404].includes(r.status), `exact-path check regressed: ${r.status}`);
+		assert.ok([200, 404].includes(r.status), `unexpected trailing-path behavior: ${r.status}`);
 		const r2 = await call('/api/config/test', { method: 'POST', cookie: adminCookie, body: {} });
-		assert.equal(r2.status, 403, 'LLM probe POST must stay master-only (no exception granted)');
+		assert.equal(r2.status, 200, 'Admin session must reach the provider probe');
 	});
 });

@@ -46,6 +46,7 @@ import { appendEvidenceIdsToFinding } from './findings.js';
 // R6-T5 — store-integrity visibility (corrupt loads + write failures).
 // storeHealth.js imports nothing from this module — verified no cycle.
 import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
+import { findingHasReproduction, samePage } from './coverageSafety.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -1188,6 +1189,7 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
 
   // 1. Extract evidence from captured steps (browser actions)
   const steps = session.capturedSteps || [];
+  let observedUrl = session.targetUrl || null;
   // R6-T2 — idempotency guard: a step already collected (re-finalize,
   // fix-validation re-link, boot-recovery re-run) must never mint a second
   // step_outcome node. Step identity = step.id (stable across runs; the
@@ -1201,6 +1203,8 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
   );
   for (const [stepIndex, step] of steps.entries()) {
     if (!step.outcome) continue;
+    if (step.outcome.urlAfter) observedUrl = step.outcome.urlAfter;
+    else if (step.action === 'navigate' && step.outcome.status === 'success' && /^https?:/.test(step.target || step.url || '')) observedUrl = step.url || step.target;
     const stepKey = sessionStepKey(step, stepIndex);
     if (collectedStepKeys.has(stepKey)) {
       // Counters stay truthful on re-collection: the step's screenshot was
@@ -1221,12 +1225,12 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
       type: EVIDENCE_TYPES.STEP_OUTCOME,
       source: 'browser',
       timestamp: step.ts || Date.now(),
-      target: step.url || step.target || null,
+      target: step.url || step.target || observedUrl,
       action: step.action || null,
       observation: step.label || step.displayLabel || null,
       payload: {
         status: step.outcome.status,
-        urlAfter: step.outcome.urlAfter,
+        urlAfter: step.outcome.urlAfter || observedUrl,
         titleAfter: step.outcome.titleAfter,
         error: step.outcome.error,
         consoleErrors: step.outcome.consoleErrors,
@@ -1265,6 +1269,7 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
       screenshotsAttempted = (screenshotsAttempted || 0) + 1;
     }
     evidenceCreated++;
+    collectedStepKeys.add(stepKey);
   }
 
   // 2. Extract evidence from findings (each finding's evidence field)
@@ -1273,8 +1278,10 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
   let evidenceIdsPersisted = 0;
   for (const finding of findings) {
     if (finding.evidence) {
-      const ev = createEvidence({
+      const previous = [...evidenceStore.values()].find(e => e.sessionId === sessionId && e.missionId === missionId && e.type === EVIDENCE_TYPES.FINDING_DETAIL && e.metadata?.findingId === finding.id);
+      const ev = previous || createEvidence({
         missionId,
+        ownerUserId,
         iterationId: iterId,
         sessionId,
         type: EVIDENCE_TYPES.FINDING_DETAIL,
@@ -1285,11 +1292,23 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
         payload: finding.evidence,
         metadata: { findingId: finding.id }
       });
-      evidenceCreated++;
+      if (!previous) evidenceCreated++;
 
       // Link evidence to finding
       linkEvidenceToFinding(ev.id, finding.id);
       linksCreated++;
+
+      // Correlate only observed browser actions on the reproduced finding's
+      // page. Narrative-only feature suggestions never gain browser proof.
+      if (findingHasReproduction(finding)) {
+        for (const browserEvidence of evidenceStore.values()) {
+          if (browserEvidence.sessionId === sessionId && browserEvidence.missionId === missionId
+              && browserEvidence.source === 'browser' && browserEvidence.type === EVIDENCE_TYPES.STEP_OUTCOME
+              && (samePage(finding.url, browserEvidence.target) || samePage(finding.url, browserEvidence.payload?.urlAfter))) {
+            linkEvidenceToFinding(browserEvidence.id, finding.id);
+          }
+        }
+      }
 
       // R6-T1 — write the typed linkage back onto the findings-store record so
       // the Bugs surface and exports see evidence without graph queries.
@@ -1304,7 +1323,8 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
     }
 
     // Create observation for each finding
-    const obs = createObservation({
+    const existingObservation = [...observationStore.values()].find(o => o.sessionId === sessionId && o.missionId === missionId && edges.some(e => e.from === finding.id && e.to === o.id));
+    const obs = existingObservation || createObservation({
       missionId,
       ownerUserId,
       iterationId: iterId,
@@ -1316,7 +1336,7 @@ export function collectSessionEvidence(session, mission, iterationNumber = null)
       evidenceIds: finding.evidence ? [ /* will be linked below */ ] : [],
       timestamp: finding.ts || Date.now()
     });
-    observationsCreated++;
+    if (!existingObservation) observationsCreated++;
 
     // Link finding to observation
     linkFindingToObservation(finding.id, obs.id);

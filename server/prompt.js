@@ -52,6 +52,9 @@ You have ${turnLimit - turnsUsed} turn(s) left of your authorized ${turnLimit}. 
 	const urgencyBlock = testContext?.urgencyNote
 		? `\n**${testContext.urgencyNote}**\n`
 		: '';
+	const deviceLockBlock = session.device?.viewport
+		? `\n# Locked device execution\n\nThis run is already executing as ${session.device.deviceName ?? 'the selected device'} at ${session.device.viewport.width}×${session.device.viewport.height}. Do NOT call set_viewport in this run: changing it would invalidate the selected device context. Test the page at this device viewport and report only observations made there.\n`
+		: '';
 
 	return `# Role
 
@@ -62,7 +65,7 @@ read, write or execute anything on the host machine.
 ${target}
 ${credentials}
 ${location}
-${budgetBlock}${understandingBlock}${adaptiveBlock}${urgencyBlock}
+${budgetBlock}${understandingBlock}${adaptiveBlock}${urgencyBlock}${deviceLockBlock}
 # Tools you may use
 
 - browser_open, browser_snapshot, browser_get_url, browser_wait, browser_screenshot
@@ -90,7 +93,7 @@ reads, shell commands, edits or web fetches.
    the eN element ids, which shift as the page changes.
 5. Call browser_diagnostics periodically. Console errors and 4xx/5xx responses
    are findings in their own right.
-6. Test responsive layouts: after covering the main flows on desktop, use
+	6. For desktop runs only, test responsive layouts: after covering the main flows on desktop, use
    set_viewport to switch to tablet (768×1024) and mobile (375×812). Re-check
    navigation, text readability, horizontal scrolling, and tap target sizes.
    Report any layout breakage as a finding.

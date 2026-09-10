@@ -12,12 +12,16 @@
  */
 
 import { el, state, api, toast, fail, CRON_PRESETS, hostOf, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
+import { parseMetricCollection, parseRegressionTrend } from './metricResponses.js';
 
 /* ── State ───────────────────────────────────────────────────────── */
 
 const schedState = {
 	schedules: [],
 	trend: [],
+	metrics: null,
+	trendMetrics: null,
+	trendError: null,
 	showForm: false
 };
 
@@ -31,20 +35,33 @@ async function loadSchedulesPage() {
 	const pq = projectId ? `?projectId=${projectId}` : '';
 	let failed = null;
 	try {
-		schedState.schedules = await api(`/schedules${pq}`);
+		const data = parseMetricCollection(
+			await api('/schedules' + (pq ? pq + '&includeMetrics=1' : '?includeMetrics=1')),
+			'schedule'
+		);
+		schedState.schedules = data.items;
+		schedState.metrics = data.metrics;
 	} catch (error) {
 		schedState.schedules = [];
+		schedState.metrics = null;
 		failed = error;
 	}
 	try {
-		schedState.trend = await api(`/regression/trend?limit=15${projectId ? `&projectId=${projectId}` : ''}`);
-	} catch {
+		const trend = parseRegressionTrend(
+			await api('/regression/trend?limit=15&includeMetrics=1' + (projectId ? '&projectId=' + encodeURIComponent(projectId) : ''))
+		);
+		schedState.trend = trend.items;
+		schedState.trendMetrics = trend.metrics;
+		schedState.trendError = null;
+	} catch (error) {
 		schedState.trend = [];
+		schedState.trendMetrics = null;
+		schedState.trendError = error;
 	}
 	schedState.loaded = true;
-	if (failed && firstLoad) {
+	if (failed) {
 		// BUILD 1: a failed load must not look like "No schedules yet".
-		showPageError(container, loadSchedulesPage, `Could not load schedules — ${failed?.message ?? 'server unreachable'}.`);
+		showPageError(container, loadSchedulesPage, 'Could not load schedules — ' + (failed?.message ?? 'server unreachable') + '.');
 		return;
 	}
 	clearPageState(container);
@@ -60,14 +77,16 @@ function renderSchedulesPage() {
 }
 
 function renderSchedulesStats() {
-	const total = schedState.schedules.length;
-	const active = schedState.schedules.filter(s => s.enabled).length;
-	const totalTests = schedState.schedules.reduce((sum, s) => sum + (s.testCaseIds?.length || 0), 0);
+	const total = schedState.metrics?.total ?? schedState.schedules.length;
+	const active = schedState.metrics?.active ?? schedState.schedules.filter(s => s.enabled).length;
+	const totalTests = schedState.metrics?.testAssignments ?? schedState.schedules.reduce((sum, s) => sum + (s.testCaseIds?.length || 0), 0);
+	const passRate = schedState.trendMetrics?.passRate;
 	el.schedulesStats.replaceChildren();
 	const chips = [
 		{ label: 'Schedules', value: total },
 		{ label: 'Active', value: active },
-		{ label: 'Test cases', value: totalTests }
+		{ label: 'Test cases', value: totalTests },
+		{ label: 'Pass rate (trend)', value: passRate == null ? '—' : passRate + '%' }
 	];
 	for (const chip of chips) {
 		const span = document.createElement('span');
@@ -80,14 +99,26 @@ function renderSchedulesStats() {
 function renderTrendSection() {
 	el.schedulesTrend.replaceChildren();
 
-	if (schedState.trend.length === 0) {
-		return;
-	}
-
 	const heading = document.createElement('div');
 	heading.className = 'schedules-section-title';
 	heading.textContent = 'Pass Rate Trend';
 	el.schedulesTrend.append(heading);
+
+	if (schedState.trendError) {
+		const unavailable = document.createElement('div');
+		unavailable.className = 'sched-empty';
+		unavailable.textContent = 'Pass-rate history unavailable.';
+		el.schedulesTrend.append(unavailable);
+		return;
+	}
+
+	if (schedState.trend.length === 0) {
+		const empty = document.createElement('div');
+		empty.className = 'sched-empty';
+		empty.textContent = 'No completed regression executions yet.';
+		el.schedulesTrend.append(empty);
+		return;
+	}
 
 	const chart = document.createElement('div');
 	chart.className = 'sched-chart';
@@ -96,7 +127,7 @@ function renderTrendSection() {
 		const bar = document.createElement('div');
 		bar.className = 'sched-chart-bar';
 
-		const noTests = !point.total;
+		const noTests = !point.completed;
 		const pct = point.passRate;
 		const color = noTests ? '#5e5e6a' /* stale / no tests recorded */
 			: pct >= 80 ? '#30d158'
@@ -115,14 +146,14 @@ function renderTrendSection() {
 
 		bar.append(fill, label);
 		bar.title = noTests
-			? `${new Date(point.ts).toLocaleString()}\nno tests recorded (stale run against an unreachable target — excluded from pass rate)`
-			: `${new Date(point.ts).toLocaleString()}\n${point.passed}/${point.total} passed (${pct}%)${point.flaky ? `\n${point.flaky} flaky` : ''}`;
+			? new Date(point.ts).toLocaleString() + '\nno completed executions (excluded from pass rate)'
+			: new Date(point.ts).toLocaleString() + '\n' + point.passed + '/' + point.completed + ' passed (' + pct + '%)' + (point.flaky ? '\n' + point.flaky + ' flaky' : '');
 		chart.append(bar);
 	}
 
 	const legend = document.createElement('div');
 	legend.className = 'sched-chart-legend';
-	legend.innerHTML = '<span style="color:#30d158">■ ≥80%</span> <span style="color:#ff9f0a">■ ≥50%</span> <span style="color:#ff453a">■ <50%</span> <span style="color:#8e8e99">■ no tests recorded (stale)</span>';
+	legend.innerHTML = '<span style="color:#30d158">■ ≥80%</span> <span style="color:#ff9f0a">■ ≥50%</span> <span style="color:#ff453a">■ <50%</span> <span style="color:#8e8e99">■ no completed executions</span>';
 
 	el.schedulesTrend.append(chart, legend);
 }
@@ -167,6 +198,7 @@ function renderScheduleCard(sched) {
 	const name = document.createElement('span');
 	name.className = 'sched-card-name';
 	name.textContent = sched.name;
+	name.title = sched.name;
 
 	// Enable/disable toggle
 	const toggleLabel = document.createElement('label');
@@ -174,14 +206,14 @@ function renderScheduleCard(sched) {
 	const checkbox = document.createElement('input');
 	checkbox.type = 'checkbox';
 	checkbox.checked = sched.enabled;
+	checkbox.setAttribute('aria-label', `${sched.enabled ? 'Disable' : 'Enable'} schedule ${sched.name}`);
 	checkbox.onchange = async () => {
 		try {
 			await api(`/schedules/${sched.id}`, {
 				method: 'PUT',
 				body: JSON.stringify({ enabled: checkbox.checked })
 			});
-			card.classList.toggle('is-disabled', !checkbox.checked);
-			renderSchedulesStats();
+			await loadSchedulesPage();
 			toast(`Schedule ${checkbox.checked ? 'enabled' : 'disabled'}.`, 'good');
 		} catch (error) {
 			fail(error);
@@ -216,6 +248,7 @@ function renderScheduleCard(sched) {
 		parts.push(`next: ${relativeTime(sched.nextRun)}`);
 	}
 	meta.textContent = parts.join(' · ');
+	if (sched.targetUrl) meta.title = sched.targetUrl;
 	card.append(meta);
 
 	// Actions
@@ -247,11 +280,11 @@ function renderScheduleCard(sched) {
 	delBtn.className = 'btn btn-ghost btn-sm sched-card-del';
 	delBtn.textContent = '🗑';
 	delBtn.title = 'Delete schedule';
+	delBtn.setAttribute('aria-label', `Delete schedule ${sched.name}`);
 	delBtn.onclick = async () => {
 		try {
 			await api(`/schedules/${sched.id}`, { method: 'DELETE' });
-			schedState.schedules = schedState.schedules.filter(s => s.id !== sched.id);
-			renderSchedulesPage();
+			await loadSchedulesPage();
 			toast(`Deleted "${sched.name}".`, 'good');
 		} catch (error) {
 			fail(error);

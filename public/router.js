@@ -1,91 +1,93 @@
 /**
- * Hash-based router for the Qase multi-page shell (Phase 15A).
- *
- * Pages:
- *   #/runs   — Agent workspace (chat, browser, activity)
- *   #/tests  — Test case management (grid, suites, runs)
- *   #/bugs   — Bugs Hub (board, detail, export)
- *
- * The router:
- *   - Listens to `hashchange`
- *   - Swaps the visible page container
- *   - Highlights the active nav item
- *   - Exposes a simple `navigate(path)` for programmatic jumps
- *   - Fires a `routechange` event on `window` so modules can react
- *
- * No deep-linking into sub-views yet (e.g. #/bugs/:id). That comes later.
+ * Client-side router for QASE. It supports path-based URLs while continuing
+ * to understand legacy #/ URLs users may have bookmarked.
  */
-
 export const PAGES = ['runs', 'tests', 'workflows', 'schedules', 'bugs'];
 
-let current = null;
+let current = 'runs';
 let initialized = false;
 
-/** Navigate to a page programmatically. */
 export function navigate(page) {
-	if (!PAGES.includes(page)) return;
-	if (location.hash !== `#/${page}`) {
-		location.hash = `#/${page}`;
-	} else {
-		// Same hash — force render (e.g. clicking the active tab to refresh).
-		render(page);
-	}
+  if (!PAGES.includes(page)) return;
+
+  if (usesHashRoute()) {
+    const wanted = '#/' + page;
+    if (location.hash !== wanted) location.hash = wanted;
+    else render(page);
+    return;
+  }
+
+  history.pushState(null, '', '/' + page);
+  render(page);
 }
 
-/** Return the current page key. */
 export function currentPage() {
-	return current;
+  return current;
 }
 
-/** Initialise the router: reads hash on load, listens for changes. */
 export function initRouter() {
-	if (initialized) return;
-	initialized = true;
+  if (initialized) return;
+  initialized = true;
 
-	window.addEventListener('hashchange', () => {
-		const page = parseHash();
-		render(page);
-	});
+  window.addEventListener('hashchange', () => render(parseRoute().page));
+  window.addEventListener('popstate', () => render(parseRoute().page));
 
-	// Render the initial page.
-	const page = parseHash();
-	render(page);
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('a[data-nav]');
+    if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(link.dataset.nav);
+  });
+
+  render(parseRoute().page);
 }
 
-/** Parse `location.hash` → page key. Falls back to 'runs'. */
-function parseHash() {
-	const raw = location.hash.replace(/^#\/?/, '').split('/')[0].toLowerCase();
-	return PAGES.includes(raw) ? raw : 'runs';
+function partsFromHash() {
+  const raw = location.hash.replace(/^#\/?/, '').trim();
+  return raw ? raw.split('/').filter(Boolean) : [];
 }
 
-/**
- * Deep-link target for the runs page: `#/runs/<sessionId>` selects that
- * session on load. Returns null when no id is present.
- */
+function partsFromPathname() {
+  return location.pathname.split('/').filter(Boolean);
+}
+
+function usesHashRoute() {
+  return PAGES.includes((partsFromHash()[0] || '').toLowerCase());
+}
+
+function parseRoute() {
+  const parts = usesHashRoute() ? partsFromHash() : partsFromPathname();
+  const page = (parts[0] || '').toLowerCase();
+  return { page: PAGES.includes(page) ? page : 'runs', parts };
+}
+
+// Retained for callers and legacy links; it reads both URL schemes.
 export function runIdFromHash() {
-	const parts = location.hash.replace(/^#\/?/, '').split('/');
-	if (parts[0].toLowerCase() === 'runs' && parts[1]) return parts[1];
-	return null;
+  const { parts } = parseRoute();
+  return (parts[0] || '').toLowerCase() === 'runs' && parts[1] ? parts[1] : null;
 }
 
-/** Swap visible page container + update nav state. */
+export function setRunRoute(id, { replace = true } = {}) {
+  if (!id || current !== 'runs') return;
+
+  if (usesHashRoute()) {
+    const wanted = '#/runs/' + encodeURIComponent(id);
+    if (location.hash !== wanted) history.replaceState(null, '', wanted);
+    return;
+  }
+
+  const wanted = '/runs/' + encodeURIComponent(id);
+  if (location.pathname !== wanted) {
+    history[replace ? 'replaceState' : 'pushState'](null, '', wanted);
+  }
+}
+
 function render(page) {
-	if (page === current && initialized) return; // no-op if same page
-	current = page;
-
-	// Toggle page containers.
-	for (const p of PAGES) {
-		const container = document.getElementById(`page-${p}`);
-		if (container) {
-			container.hidden = p !== page;
-		}
-	}
-
-	// Update nav links.
-	document.querySelectorAll('[data-nav]').forEach(link => {
-		link.classList.toggle('active', link.dataset.nav === page);
-	});
-
-	// Notify modules.
-	window.dispatchEvent(new CustomEvent('routechange', { detail: { page } }));
+  current = page;
+  for (const name of PAGES) {
+    const container = document.getElementById('page-' + name);
+    if (container) container.hidden = name !== page;
+    document.querySelector('[data-nav="' + name + '"]')?.classList.toggle('active', name === page);
+  }
+  window.dispatchEvent(new CustomEvent('routechange', { detail: { page } }));
 }

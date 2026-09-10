@@ -72,12 +72,24 @@ let users = [];            // [{ id, email, name, role, passwordHash, createdAt,
 let sessions = [];         // [{ tokenHash, userId, createdAt, expiresAt, lastSeenAt }]
 let loaded = false;
 let saveDebounce = null;
+// An unreadable users store must never be treated as an unclaimed workspace.
+// That would let a corrupt file turn into a first-admin takeover. Sessions can
+// safely degrade to a login prompt, but bootstrap needs a trustworthy user
+// inventory and therefore fails closed when users.json cannot be read.
+let usersStoreHealthy = true;
 
 function loadSync() {
 	if (loaded) return;
 	try {
-		if (existsSync(usersFile())) users = JSON.parse(readFileSync(usersFile(), 'utf8'));
-	} catch { /* unreadable → start empty; register-admin re-bootstraps */ }
+		if (existsSync(usersFile())) {
+			const parsed = JSON.parse(readFileSync(usersFile(), 'utf8'));
+			if (!Array.isArray(parsed)) throw new Error('users store is not an array');
+			users = parsed;
+		}
+	} catch {
+		users = [];
+		usersStoreHealthy = false;
+	}
 	try {
 		if (existsSync(sessionsFile())) sessions = JSON.parse(readFileSync(sessionsFile(), 'utf8'));
 	} catch { /* unreadable → everyone re-logs-in (safe degradation) */ }
@@ -169,6 +181,12 @@ export function hasUsers() {
 	return users.length > 0;
 }
 
+/** Public bootstrap discovery; no user details or secrets are exposed. */
+export function canBootstrapAdmin() {
+	loadSync();
+	return usersStoreHealthy && users.length === 0;
+}
+
 export function listUsers() {
 	loadSync();
 	return users.map(({ passwordHash, ...rest }) => rest); // never expose hashes
@@ -213,6 +231,28 @@ export function createUser({ email, name, password, role, createdBy = 'bootstrap
 	persistUsers();
 	audit('user_created', { userId: user.id, email: user.email, role: user.role, createdBy });
 	return { ...user, passwordHash: undefined };
+}
+
+/**
+ * Claim the one-time first administrator role. This is deliberately separate
+ * from createUser so callers cannot choose a role and the zero-user check and
+ * creation happen synchronously in the same in-process critical section.
+ */
+export function createBootstrapAdmin({ email, name, password }) {
+	loadSync();
+	if (!usersStoreHealthy) {
+		throw badRequest(503, 'auth_store_unavailable', 'User account storage is unavailable; bootstrap is disabled.');
+	}
+	if (users.length > 0) {
+		throw badRequest(403, 'bootstrap_claimed', 'An admin account already exists. Sign in instead.');
+	}
+	const user = createUser({ email, name, password, role: 'admin', createdBy: 'bootstrap' });
+	// A successful bootstrap must survive immediately; a delayed write could
+	// otherwise reopen an empty workspace after a restart.
+	if (!flushUsers()) {
+		throw badRequest(503, 'auth_store_unavailable', 'User account storage is unavailable; bootstrap was not completed.');
+	}
+	return user;
 }
 
 export function updateUser(id, patch, actor = {}) {
@@ -420,6 +460,7 @@ export function __resetForTests({ dataDir } = {}) {
 	if (saveDebounce) clearTimeout(saveDebounce);
 	users = [];
 	sessions = [];
+	usersStoreHealthy = true;
 	loginFails.clear();
 	loaded = false;
 	// Re-resolve paths for the redirected dir on next loadSync().

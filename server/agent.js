@@ -21,6 +21,11 @@ import { attachBrowserBridge } from './browserBridge.js';
 import { planSessionExecution, attachBrowserstackRuntime, BrowserStackMissionError } from './browserstackAgentRuntime.js';
 import { resolveDeviceContext } from './deviceContext.js';
 import { validateTargetUrl, classifyUrlFast, installPageBoundary } from './targetGuard.js';
+import {
+	createExecutionHealth, markExecutionComponent, completeExecutionHealth,
+	classifyExecutionFailure, applyExecutionFailure, shouldRetryExecutionFailure,
+	EXECUTION_RETRY_LIMIT, EXECUTION_RETRY_DELAY_MS
+} from './executionHealth.js';
 import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration } from '@cleanslate/sdk';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -29,8 +34,8 @@ import * as os from 'node:os';
 /** Keep the browser alive indefinitely between turns. */
 const BROWSER_IDLE_MS = 0;
 /** How many times to retry on a model timeout. */
-const MODEL_TIMEOUT_RETRIES = 2;
-const MODEL_TIMEOUT_RETRY_DELAY_MS = 2000;
+const MODEL_TIMEOUT_RETRIES = EXECUTION_RETRY_LIMIT;
+const MODEL_TIMEOUT_RETRY_DELAY_MS = EXECUTION_RETRY_DELAY_MS;
 /**
  * Maximum wall-clock time a single session turn is allowed to run.
  * After this the turn is aborted and retried or marked as 'error'.
@@ -581,6 +586,14 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 	record.idleTimer = undefined;
 	session.pendingQuestion = undefined;
 	setStatus(session, 'running');
+	if (!session.executionHealth || session.executionHealth.overall === 'failed') {
+		const settings = getConfig();
+		session.executionHealth = createExecutionHealth({
+			provider: settings.provider,
+			executionProvider: session.executionProvider ?? 'local'
+		});
+		emit(session, 'execution_health', { health: session.executionHealth });
+	}
 
 	// A turn that paused for credentials or a question stops its frame timer in
 	// finally. Resuming continues on the existing page and may never call
@@ -758,6 +771,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 		for await (const part of stream) {
 			switch (part.type) {
 				case 'chat_text':
+					session.executionHealth = markExecutionComponent(session.executionHealth, 'provider', 'healthy');
 					// Anything it says out loud ends the thought that preceded it.
 					closeThinking();
 					appendText(part.content, part.kind);
@@ -846,6 +860,21 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 					const id = openActivities.get(part.toolCallId) ?? part.toolCallId;
 					const result = redact(session.id, part.result);
 					const ok = result?.success !== false;
+					if (part.toolName?.startsWith('browser_')) {
+						if (ok) {
+							session.executionHealth = markExecutionComponent(session.executionHealth, 'browser', 'healthy');
+							if (part.toolName === 'browser_open') {
+								session.executionHealth = markExecutionComponent(session.executionHealth, 'target', 'healthy');
+							}
+						} else {
+							const issue = classifyExecutionFailure(result?.error ?? result?.message ?? 'Browser action failed', {
+								stage: 'browser_tool', toolName: part.toolName,
+								executionProvider: session.executionProvider ?? 'local'
+							});
+							session.executionHealth = applyExecutionFailure(session.executionHealth, issue, { terminal: false });
+						}
+						emit(session, 'execution_health', { health: session.executionHealth });
+					}
 					updateActivity(session, id, {
 						status: ok ? 'done' : 'failed',
 						error: ok ? undefined : (result?.error ?? result?.message),
@@ -937,6 +966,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 			emit(session, 'question', { question: session.pendingQuestion });
 			setStatus(session, 'awaiting_input');
 		} else if (session.report) {
+			session.executionHealth = completeExecutionHealth(session.executionHealth);
+			emit(session, 'execution_health', { health: session.executionHealth });
 			setStatus(session, 'done');
 			// Phase 1: Dispose browser resources when the session is done.
 			// The conversation and report survive on disk; the Chromium
@@ -950,6 +981,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 			// is settled 'done' immediately and finalizeTurnLimitedRun()
 			// compiles the honest report DETERMINISTICALLY from the evidence
 			// already collected (zero model turns). Budget N ⇒ ≤ N turns.
+			session.executionHealth = completeExecutionHealth(session.executionHealth);
+			emit(session, 'execution_health', { health: session.executionHealth });
 			setStatus(session, 'done');
 			void closeBrowser(session.id);
 			record.dispose?.();
@@ -1016,17 +1049,29 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 			record?.dispose?.();
 		} else if (controller.signal.aborted) {
 			setStatus(session, 'idle', 'Stopped by user.');
-		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModelTimeout(error)) {
+		} else if (shouldRetryExecutionFailure(
+			classifyExecutionFailure(error, { stage: 'agent_turn', executionProvider: session.executionProvider ?? 'local' }),
+			retryAttempt, MODEL_TIMEOUT_RETRIES
+		)) {
+			const issue = classifyExecutionFailure(error, { stage: 'agent_turn', executionProvider: session.executionProvider ?? 'local' });
 			retryAfterTimeout = true;
+			session.executionHealth = applyExecutionFailure(session.executionHealth, issue, {
+				terminal: false, retryAttempt, maxRetries: MODEL_TIMEOUT_RETRIES
+			});
+			emit(session, 'execution_health', { health: session.executionHealth });
 			setStatus(
 				session,
 				'running',
-				`The model response timed out. Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
+				`${issue.summary} Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
 			);
 		} else {
-			const message = error instanceof Error ? error.message : String(error);
-			addMessage(session, { role: 'system', text: message, kind: 'error' });
-			setStatus(session, 'error', message);
+			const issue = classifyExecutionFailure(error, { stage: 'agent_turn', executionProvider: session.executionProvider ?? 'local' });
+			session.executionHealth = applyExecutionFailure(session.executionHealth, issue, {
+				terminal: true, retryAttempt, maxRetries: MODEL_TIMEOUT_RETRIES
+			});
+			emit(session, 'execution_health', { health: session.executionHealth });
+			addMessage(session, { role: 'system', text: `${issue.summary} ${issue.nextAction}`, kind: 'error', failureCode: issue.code });
+			setStatus(session, 'error', issue.summary);
 		}
 	} finally {
 		clearTimeout(turnTimeoutTimer);
@@ -1057,7 +1102,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, h
 			await new Promise(resolve => setTimeout(resolve, MODEL_TIMEOUT_RETRY_DELAY_MS));
 		}
 		return runTurn(session, {
-			task: 'Continue from the latest transcript and browser state. The previous model request timed out after the last successful step. Inspect the current state before acting, do not repeat completed or irreversible actions, and finish the remaining test plan.',
+			task: 'Continue from the latest transcript and browser state. The previous model request failed temporarily after the last successful step. Inspect the current state before acting, do not repeat completed or irreversible actions, and finish the remaining test plan.',
 			retryAttempt: retryAttempt + 1,
 			hooks
 		});

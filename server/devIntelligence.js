@@ -1,4 +1,9 @@
-import { computeEvidenceCoverage } from './evidenceGraph.js';
+import { computeEvidenceCoverage, getFindingEvidence } from './evidenceGraph.js';
+import { evaluateCoverageSufficiency, findingHasReproduction, relevantBrowserEvidence } from './coverageSafety.js';
+
+export function isConfirmedFinding(finding) {
+	return findingHasReproduction(finding) && getFindingEvidence(finding.id).some(e => relevantBrowserEvidence(finding,e));
+}
 
 /**
  * Developer Intelligence (Phase 13)
@@ -265,10 +270,16 @@ export function scoreFindingQuality(finding, allFindings = []) {
  * @returns {{ score, verdict, releaseReady, confidence, risk, criticalIssues, recommendations, breakdown }}
  */
 export function calculateMissionQuality(findings = [], context = {}) {
+	const coverage = evaluateCoverageSufficiency(context);
+	const suggestions = findings.filter(f => !isConfirmedFinding(f));
+	findings = findings.filter(isConfirmedFinding);
+	const common = { coverage, confirmedFindings: findings.length, speculativeFindings: suggestions.length };
+	if (!coverage.sufficient) return { ...common, score:null, verdict:coverage.verdict, releaseReady:false, confidence:0, risk:'unknown', criticalIssues:[], recommendations:[], breakdown:{}, scoringModel:'v3-coverage' };
 	if (!findings.length) {
 		return {
+			...common,
 			score: 100, verdict: 'pass', releaseReady: true,
-			confidence: 1.0, risk: 'low',
+			confidence: null, risk: 'low',
 			criticalIssues: [], recommendations: [],
 			breakdown: {}, scoringModel: 'v2'
 		};
@@ -317,10 +328,10 @@ export function calculateMissionQuality(findings = [], context = {}) {
 	const score = Math.max(0, Math.round(100 - totalDeduction));
 
 	let verdict, releaseReady;
-	if (score >= 85 && !breakdown.critical) {
+	if (score >= 85 && !breakdown.critical && !breakdown.high) {
 		verdict = 'pass';
 		releaseReady = true;
-	} else if (score >= 60 && !breakdown.critical) {
+	} else if (score >= 60 && !breakdown.critical && !breakdown.high) {
 		verdict = 'pass_with_issues';
 		releaseReady = true;
 	} else {
@@ -376,6 +387,7 @@ export function calculateMissionQuality(findings = [], context = {}) {
 	}
 
 	return {
+		...common,
 		score,
 		verdict,
 		releaseReady,
@@ -503,10 +515,15 @@ export function compareIterations(prevFindings = [], currentFindings = []) {
  * @returns {{ verdict, qualityScore, findings: [], improvementPrompt, regressionReady }}
  */
 export function buildImprovementPrompt(mission, findings = [], qualityResult = null) {
-	const quality = qualityResult || calculateMissionQuality(findings);
+	const quality = qualityResult || mission.quality || calculateMissionQuality(findings,{mission});
+	const suggestions = findings.filter(f => !isConfirmedFinding(f));
+	findings = findings.filter(isConfirmedFinding);
 
 	// Per-finding structured output with fix prompts.
 	const structuredFindings = findings.map(f => ({
+		id: f.id,
+		confirmation: 'confirmed',
+		evidenceIds: getFindingEvidence(f.id).map(e => e.id),
 		title: f.title,
 		severity: f.severity,
 		category: f.category,
@@ -525,6 +542,12 @@ export function buildImprovementPrompt(mission, findings = [], qualityResult = n
 	const improvementPrompt = buildAggregateImprovementPrompt(mission, structuredFindings, quality);
 
 	return {
+		executionStatus: mission.status,
+		qualityVerdict: quality.verdict,
+		coverage: quality.coverage,
+		confirmedFindings: findings.length,
+		speculativeFindings: suggestions.length,
+		suggestions: suggestions.map(f => ({ id:f.id,title:f.title,confirmation:'suggestion',reason:'Not supported by reproduction and linked browser evidence.' })),
 		verdict: quality.verdict,
 		qualityScore: quality.score,
 		findings: structuredFindings,

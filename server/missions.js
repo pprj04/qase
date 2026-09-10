@@ -23,6 +23,7 @@ import { atomicWrite } from './atomicWrite.js';
 import { attemptMissionTransition } from './stateTransitions.js';
 // R6-T5 — store-integrity visibility (corrupt loads + write failures).
 import { recordCorruptLoad, recordWriteFailure } from './storeHealth.js';
+import { prepareMissionOutcome } from './missionOutcome.js';
 
 /* ── Constants ──────────────────────────────────────────────────── */
 
@@ -253,6 +254,8 @@ export function listMissions({ projectId, status, type, source, workspaceId, cor
 export function updateMission(id, patch = {}) {
 	const mission = store.get(id);
 	if (!mission) return null;
+	const beforeStatus = mission.status;
+	if (patch.status && !attemptMissionTransition(beforeStatus,patch.status,{actor:patch.__actor ?? 'system'}).ok) patch = {...patch,status:beforeStatus};
 
 	const allowed = [
 		'name', 'type', 'targetUrl', 'objectives', 'capabilities',
@@ -276,21 +279,15 @@ export function updateMission(id, patch = {}) {
 		if (key in patch) mission[key] = patch[key];
 	}
 
-	// M1-P4.3 — status is transition-validated for EVERY writer (routes,
-	// governor pump/sweep, reaper, pipelines, PATCH). Illegal transitions are
-	// dropped (only the status field), other fields still apply. The original
-	// in-object write above is reverted if the transition is illegal.
-	if ('status' in patch && patch.status != null && patch.status !== mission.status) {
-		const before = mission.status;
-		const verdict = attemptMissionTransition(before, patch.status, { actor: patch.__actor ?? 'system' });
-		if (!verdict.ok) {
-			mission.status = before; // revert the field write from the loop above
-		}
-	}
+	// Validate against the original status BEFORE applying the patch above.
 	delete mission.__actor;
+	if (patch.status && (TERMINAL_STATUSES.has(patch.status) || patch.status === 'interrupted')) {
+		Object.assign(mission, prepareMissionOutcome(mission, patch));
+	}
 
 	mission.updatedAt = Date.now();
 	scheduleSave();
+	if (patch.status && (TERMINAL_STATUSES.has(patch.status) || patch.status === 'interrupted')) flushMissionsForShutdown();
 	bus.emit('mission:updated', mission);
 	return mission;
 }
@@ -348,8 +345,10 @@ export function finalizeMission(id, results = {}) {
 	if (results.failureReason) mission.failureReason = String(results.failureReason).slice(0, 500);
 	mission.completedAt = Date.now();
 	mission.updatedAt = Date.now();
+	Object.assign(mission, prepareMissionOutcome(mission, {...results,status:verdict.status}));
 
 	scheduleSave();
+	flushMissionsForShutdown();
 	bus.emit('mission:finalized', mission);
 	return mission;
 }
@@ -531,6 +530,7 @@ export function recoverInterruptedMissions(getSession) {
 		if (session) continue; // resolvable — lazy finalize will settle it
 		mission.status = 'interrupted';
 		mission.interruptedReason = 'session_lost_before_finalization';
+		Object.assign(mission, prepareMissionOutcome(mission));
 		// Preserve the original updatedAt: reaping is a bookkeeping repair, not
 		// a user-visible change. Re-stamping hundreds of missions at boot would
 		// drown recent activity out of recency-ordered lists (phase17 regression).

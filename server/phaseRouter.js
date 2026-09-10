@@ -25,7 +25,7 @@ import {
 	exportFindingsBulkMarkdown, exportFindingsBulkGitHub, exportFindingsBulkJira, exportFindingsBulkLinear,
 } from './bugExporters.js';
 import {
-	getFinding, updateFinding, setReviewStatus, markDuplicate,
+	getFinding, updateFinding, setReviewStatus, markDuplicate, listFindings,
 	getAllFindings, transitionFindingStatus,
 } from './findings.js';
 import { getFindingEvidence } from './evidenceGraph.js';
@@ -86,8 +86,15 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// always gated.
 	router.get('/findings/export', auth || ((req, res, next) => next()), (req, res) => {
 		const { format = 'markdown' } = req.query;
-		const visible = isUserScoped(req) ? getAllFindings().filter(f => canAccessResource(req, f)) : getAllFindings();
-		const all = visible.filter(f => !f.isDuplicate);
+		const all = listFindings({
+			projectId: req.query.projectId,
+			severity: req.query.severity,
+			status: req.query.status,
+			category: req.query.category,
+			fixStatus: req.query.fixStatus,
+			q: req.query.q,
+			ownerFilter: isUserScoped(req) ? f => canAccessResource(req, f) : null,
+		}).filter(f => !f.isDuplicate);
 		if (format === 'markdown') {
 			res.type('text/markdown').send(exportFindingsBulkMarkdown(all));
 			return;
@@ -118,6 +125,9 @@ export function phaseRouter(auth, publicReadGet = []) {
 		// requireIntegrationAuth on its own routes; the legacy bearer gate
 		// must not intercept it (its Authorization header is not a Bearer).
 		if (req.path.startsWith('/v1/integration/')) return next();
+		// Canonical artifact reads authenticate at their own handler (session
+		// or HMAC plus mission/evidence ownership). Never pre-gate with bearer.
+		if (req.method === 'GET' && /^\/v1\/artifacts\/(?!stats(?:\/|$))[^/]+(?:\/content)?\/?$/i.test(req.path)) return next();
 		// C1 — the /api/v2 Pulse read surface mounts its own router (with the
 		// same requireApiToken) at app level; phaseRouter must not pre-gate
 		// its routes — including the deliberately-public /api/v2/health.

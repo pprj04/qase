@@ -29,6 +29,7 @@ import { runTestSuite } from './replay.js';
 import { analyzeSessionFindings, scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt } from './devIntelligence.js';
 import { listMissions, finalizeMission, recordIteration } from './missions.js';
 import { autonomyGateForCapabilities } from './autonomyBridge.js';
+import { prepareMissionOutcome } from './missionOutcome.js';
 import { missionBus } from './missions.js';
 import { analyzeFeatureGaps, enhanceGapsWithLLM, gapsToFindings } from './featureGap.js';
 import { syncSessionFinding } from './findings.js';
@@ -542,7 +543,8 @@ function createDefaultRegistry() {
 				if (f.reproducibility == null) f.reproducibility = scored.reproducibility;
 			}
 
-			const quality = calculateMissionQuality(findings);
+			for (const mission of linkedMissions) prepareMissionOutcome(mission,{status:'completed'});
+			const quality = calculateMissionQuality(findings,{session,executionStatus:'completed'});
 			let finalizedCount = 0;
 
 			for (const mission of linkedMissions) {

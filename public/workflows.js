@@ -14,6 +14,7 @@
  */
 
 import { el, state, api, toast, fail, STEP_ICONS, hostOf, relativeTime, showPageLoading, showPageError, clearPageState } from './shared.js';
+import { parseMetricCollection } from './metricResponses.js';
 
 /* ── State ───────────────────────────────────────────────────────── */
 
@@ -25,17 +26,17 @@ async function loadWorkflowsPage() {
 	const container = el.workflowsList;
 	const firstLoad = !workflowState.loaded;
 	if (firstLoad) showPageLoading(container);
-	const query = state.projectId ? `?projectId=${state.projectId}` : '';
+	const query = '?includeMetrics=1' + (state.projectId ? '&projectId=' + encodeURIComponent(state.projectId) : '');
 	try {
-		const data = await api(`/workflows${query}`);
-		workflowState.workflows = Array.isArray(data) ? data : [];
+		const data = parseMetricCollection(await api('/workflows' + query), 'workflow');
+		workflowState.workflows = data.items;
+		workflowState.metrics = data.metrics;
 	} catch (error) {
 		workflowState.workflows = [];
+		workflowState.metrics = null;
 		workflowState.loaded = true;
-		if (firstLoad) {
-			showPageError(container, loadWorkflowsPage, `Could not load workflows — ${error?.message ?? 'server unreachable'}.`);
-			return;
-		}
+		showPageError(container, loadWorkflowsPage, 'Could not load workflows — ' + (error?.message ?? 'server unreachable') + '.');
+		return;
 	}
 	workflowState.loaded = true;
 	clearPageState(container);
@@ -49,13 +50,27 @@ function renderWorkflowsPage() {
 	renderWorkflowsList();
 }
 
+function filteredWorkflows() {
+	const q = workflowState.search.toLowerCase().trim();
+	return q
+		? workflowState.workflows.filter(wf => {
+				const name = (wf.name || '').toLowerCase();
+				const url = (wf.targetUrl || '').toLowerCase();
+				const tags = (wf.tags || []).join(' ').toLowerCase();
+				return name.includes(q) || url.includes(q) || tags.includes(q);
+			})
+		: workflowState.workflows;
+}
+
 function renderWorkflowsStats() {
-	const total = workflowState.workflows.length;
-	const totalSteps = workflowState.workflows.reduce((sum, wf) => sum + (wf.stepCount || 0), 0);
-	const hosts = new Set(workflowState.workflows.map(wf => wf.targetUrl ? hostOf(wf.targetUrl) : 'unknown'));
+	const scoped = filteredWorkflows();
+	const total = scoped.length;
+	const totalSteps = scoped.reduce((sum, wf) => sum + (wf.stepCount || 0), 0);
+	const hosts = new Set(scoped.map(wf => wf.targetUrl ? hostOf(wf.targetUrl) : '').filter(Boolean));
+	const suffix = workflowState.search.trim() ? ' (filtered)' : '';
 	el.workflowsStats.replaceChildren();
 	const chips = [
-		{ label: 'Workflows', value: total },
+		{ label: 'Workflows' + suffix, value: total },
 		{ label: 'Steps', value: totalSteps },
 		{ label: 'Targets', value: hosts.size }
 	];
@@ -71,16 +86,7 @@ function renderWorkflowsList() {
 	const container = el.workflowsList;
 	container.replaceChildren();
 
-	// Filter
-	const q = workflowState.search.toLowerCase().trim();
-	const filtered = q
-		? workflowState.workflows.filter(wf => {
-				const name = (wf.name || '').toLowerCase();
-				const url = (wf.targetUrl || '').toLowerCase();
-				const tags = (wf.tags || []).join(' ').toLowerCase();
-				return name.includes(q) || url.includes(q) || tags.includes(q);
-			})
-		: workflowState.workflows;
+	const filtered = filteredWorkflows();
 
 	if (filtered.length === 0) {
 		const empty = document.createElement('div');
@@ -93,6 +99,13 @@ function renderWorkflowsList() {
 		container.append(empty);
 		return;
 	}
+
+	const scope = document.createElement('div');
+	scope.className = 'schedules-section-title';
+	scope.textContent = workflowState.search.trim()
+		? 'Showing ' + filtered.length + ' of ' + (workflowState.metrics?.total ?? workflowState.workflows.length) + ' workflows'
+		: 'Workflows (' + (workflowState.metrics?.total ?? filtered.length) + ')';
+	container.append(scope);
 
 	for (const wf of filtered) {
 		container.append(renderWorkflowCard(wf));
@@ -113,6 +126,7 @@ function renderWorkflowCard(wf) {
 	const name = document.createElement('span');
 	name.className = 'wf-card-name';
 	name.textContent = wf.name;
+	name.title = wf.name;
 
 	const meta = document.createElement('span');
 	meta.className = 'wf-card-meta';
@@ -121,6 +135,7 @@ function renderWorkflowCard(wf) {
 	if (wf.targetUrl) parts.push(hostOf(wf.targetUrl));
 	parts.push(relativeTime(wf.updatedAt ?? wf.createdAt));
 	meta.textContent = parts.join(' · ');
+	if (wf.targetUrl) meta.title = wf.targetUrl;
 
 	left.append(name, meta);
 
@@ -169,6 +184,7 @@ function renderWorkflowCard(wf) {
 	delBtn.className = 'btn btn-ghost btn-sm wf-card-del';
 	delBtn.textContent = '🗑';
 	delBtn.title = 'Delete workflow';
+	delBtn.setAttribute('aria-label', `Delete workflow ${wf.name}`);
 	delBtn.onclick = async () => {
 		try {
 			await api(`/workflows/${wf.id}`, { method: 'DELETE' });
@@ -294,7 +310,7 @@ function initWorkflowsWiring() {
 	if (el.workflowsSearch) {
 		el.workflowsSearch.addEventListener('input', () => {
 			workflowState.search = el.workflowsSearch.value;
-			renderWorkflowsList();
+			renderWorkflowsPage();
 		});
 	}
 }

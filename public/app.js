@@ -8,14 +8,16 @@
  */
 
 import { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
-import { initRouter, navigate, currentPage, runIdFromHash } from './router.js';
+import { initRouter, navigate, currentPage, runIdFromHash, setRunRoute } from './router.js';
 import { loadTestCases, initTestsWiring } from './tests.js';
 import { loadBugs, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 import { classifyViewport } from './deviceClassify.js';
-import { renderExecMeta, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
+import { resolveLiveDevicePresentation } from './deviceLiveView.js';
+import { buildIntentMissionPayload } from './missionIntent.js';
+import { renderExecMeta, renderExecutionHealth, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
 
 /* P0-F3 — human labels for the truthful interruptedReason a session carries.
  * Keys match server/store.js INTERRUPT_REASONS. A session with a reason we
@@ -41,9 +43,20 @@ async function refreshRuns() {
 }
 
 function renderRun(run) {
-	const node = document.createElement('button');
+	const node = document.createElement('div');
 	node.className = `run${run.id === state.sessionId ? ' is-active' : ''}`;
-	node.onclick = () => selectSession(run.id);
+	node.setAttribute('role', 'button');
+	node.tabIndex = 0;
+	node.setAttribute('aria-label', `Open ${run.targetUrl ? hostOf(run.targetUrl) : run.title || 'run'}, status ${run.status || 'idle'}`);
+	node.onclick = () => {
+		closeMobileRunsDrawer();
+		selectSession(run.id);
+	};
+	node.onkeydown = event => {
+		if (event.target !== node || (event.key !== 'Enter' && event.key !== ' ')) return;
+		event.preventDefault();
+		selectSession(run.id);
+	};
 
 	const title = document.createElement('div');
 	title.className = 'run-title';
@@ -54,7 +67,11 @@ function renderRun(run) {
 	const dot = document.createElement('span');
 	dot.className = 'run-status-dot';
 	dot.dataset.status = run.status || 'idle';
-	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
+	dot.setAttribute('aria-hidden', 'true');
+	const statusLabel = document.createElement('span');
+	statusLabel.className = 'run-status-label';
+	statusLabel.textContent = String(run.status || 'idle').replaceAll('_', ' ');
+	meta.append(dot, statusLabel, document.createTextNode(relativeTime(run.updatedAt)));
 	if (run.findingCount > 0) {
 		const badge = document.createElement('span');
 		badge.className = 'run-badge';
@@ -66,6 +83,7 @@ function renderRun(run) {
 	remove.className = 'run-del';
 	remove.textContent = '×';
 	remove.title = 'Delete this run';
+	remove.setAttribute('aria-label', `Delete ${run.targetUrl ? hostOf(run.targetUrl) : run.title || 'run'}`);
 	remove.onclick = async event => {
 		event.stopPropagation();
 		await api(`/sessions/${run.id}`, { method: 'DELETE' }).catch(fail);
@@ -88,6 +106,12 @@ function renderRun(run) {
 	return node;
 }
 
+function closeMobileRunsDrawer() {
+	document.querySelector('.panel.runs')?.classList.remove('mobile-open');
+	const toggle = document.getElementById('mobile-runs-toggle');
+	if (toggle) toggle.setAttribute('aria-expanded', 'false');
+}
+
 /* ── Session loading ─────────────────────────────────────────────── */
 
 async function selectSession(id) {
@@ -97,13 +121,8 @@ async function selectSession(id) {
 	// inherits the previous device session's frame dimensions.
 	state.viewport = null;
 	localStorage.setItem('qase.session', id);
-	// Keep the URL shareable: #/runs/<sessionId> deep-links to this run.
-	if (currentPage() === 'runs') {
-		const wanted = `#/runs/${id}`;
-		if (location.hash !== wanted && !location.hash.startsWith(`#/runs/${id}`)) {
-			history.replaceState(null, '', wanted);
-		}
-	}
+	// Keep the URL shareable in either the path-based or legacy hash scheme.
+	setRunRoute(id);
 
 	const session = await api(`/sessions/${id}`).catch(err => {
 		fail(err);
@@ -146,6 +165,7 @@ async function selectSession(id) {
 	// Render everything synchronously first — this is instant.
 	renderHeader();
 	renderExecMeta(session);
+	renderExecutionHealth(session);
 	renderTranscript();
 	resetThinking();
 	renderQuestion();
@@ -716,12 +736,17 @@ function applyCursor(cursor) {
 /** Applies / removes the device frame classes on the stage. */
 function applyDeviceFrameClass() {
 	const device = state.device;
-	const kind = device?.deviceType
-		|| classifyViewport(state.viewport ?? device?.viewport);
-	const landscape = (device?.viewport ?? state.viewport)?.width > (device?.viewport ?? state.viewport)?.height;
+	const presentation = resolveLiveDevicePresentation({
+		device,
+		capturedViewport: state.viewport
+	});
+	const { kind, viewport } = presentation;
+	const landscape = viewport?.width > viewport?.height;
 	el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
+	el.stageInner.style.removeProperty('--device-frame-aspect');
 	if (kind === 'desktop' || !el.frame.src) return;
 	el.stageInner.classList.add(kind === 'phone' ? 'device-phone' : 'device-tablet');
+	el.stageInner.style.setProperty('--device-frame-aspect', presentation.frameAspect);
 	if (landscape) el.stageInner.classList.add('device-landscape');
 }
 
@@ -733,8 +758,11 @@ function renderDeviceStrip() {
 	const strip = document.getElementById('device-strip');
 	const device = state.device;
 	if (!strip) return;
-	const viewport = device?.viewport ?? state.viewport;
-	const kind = device?.deviceType || classifyViewport(viewport);
+	const presentation = resolveLiveDevicePresentation({
+		device,
+		capturedViewport: state.viewport
+	});
+	const { viewport, kind } = presentation;
 	if (kind === 'desktop') {
 		strip.hidden = true;
 		strip.replaceChildren();
@@ -747,7 +775,7 @@ function renderDeviceStrip() {
 	if (device?.os) parts.push(['OS', `<b>${escapeHtml(device.os)}</b>`]);
 	if (device?.browser) parts.push(['Browser', `<b>${escapeHtml(device.browser)}</b>`]);
 	if (viewport?.width && viewport?.height) {
-		parts.push(['Viewport', `<b>${viewport.width}×${viewport.height}</b>`]);
+		parts.push([presentation.captured ? 'Captured viewport' : 'Viewport', `<b>${viewport.width}×${viewport.height}</b>`]);
 	}
 	parts.push(['Mode', `<b>${kind === 'phone' ? 'Mobile' : 'Tablet'}</b>`]);
 	strip.innerHTML = parts
@@ -1671,6 +1699,11 @@ function handleEvent(event) {
 			}
 			break;
 
+		case 'execution_health':
+			session.executionHealth = event.health;
+			renderExecutionHealth(session);
+			break;
+
 		case 'browser':
 			// P0-F5 — a resumed session whose browser was closed emits a
 			// truthful reconnecting state: the agent is working, the browser
@@ -1710,6 +1743,7 @@ const cfg = {
 	provider: $('cfg-provider'),
 	providerNote: $('cfg-provider-note'),
 	key: $('cfg-key'),
+	keyClear: $('cfg-key-clear'),
 	keyNote: $('cfg-key-note'),
 	baseUrlField: $('cfg-baseurl-field'),
 	baseUrl: $('cfg-baseurl'),
@@ -1821,15 +1855,9 @@ function fillSettings(config) {
 	cfg.selfHealEnabled.checked = config.selfHealEnabled !== false;
 	cfg.selfHealThreshold.value = config.selfHealThreshold ?? 0.8;
 
-	// API token — D2: humans sign in with accounts; the token is a server-side
-	// machine credential (env / .qase) used by CI and integration tests. The UI
-	// no longer edits it. Surface a hint so admins know it exists.
-	if (config.hasApiToken) {
-		cfg.keyNote.textContent = `Server API token is configured (${config.apiTokenHint}) for CI/machine access — not needed for signed-in users.`;
-	}
-
 	// The stored key is never sent to the browser; leaving the box empty keeps it.
 	cfg.key.value = '';
+	delete cfg.key.dataset.cleared;
 	cfg.key.placeholder = config.hasApiKey ? `${config.apiKeyHint} — leave blank to keep` : 'sk-…';
 	cfg.keyNote.textContent = config.hasApiKey
 		? (config.apiKeyFromEnv ? 'Currently coming from .env. Saving one here overrides it.' : 'Stored on this machine, in .qase/config.json.')
@@ -1878,7 +1906,10 @@ function readSettings() {
 	};
 	if (cfg.key.value.trim()) {
 		patch.apiKey = cfg.key.value.trim();
+	} else if (cfg.key.dataset.cleared === '1') {
+		patch.clearApiKey = true;
 	}
+	delete cfg.key.dataset.cleared;
 	if (cfg.browserstackKey.value.trim()) {
 		patch.browserstackKey = cfg.browserstackKey.value.trim();
 	} else if (cfg.browserstackKey.dataset.cleared === '1') {
@@ -1889,6 +1920,12 @@ function readSettings() {
 }
 
 cfg.provider.onchange = syncProviderFields;
+
+cfg.keyClear.onclick = () => {
+	cfg.key.value = '';
+	cfg.key.dataset.cleared = '1';
+	cfg.key.placeholder = 'API key will be cleared on Save.';
+};
 
 cfg.browserstackKeyClear.onclick = () => {
 	cfg.browserstackKey.value = ' ';
@@ -1969,7 +2006,10 @@ cfg.testBtn.onclick = async () => {
 
 	cfg.test.className = `test-result ${result.ok ? 'ok' : 'bad'}`;
 	if (!result.ok) {
-		cfg.test.textContent = result.error;
+		const detail = result.diagnostic?.category
+			? ` [${result.diagnostic.category}${result.diagnostic.causeCode ? `: ${result.diagnostic.causeCode}` : ''}]`
+			: '';
+		cfg.test.textContent = `${result.error ?? 'Provider test failed.'}${detail}`;
 		return;
 	}
 	cfg.modelList.replaceChildren(...(result.models ?? []).map(id => {
@@ -2057,47 +2097,58 @@ el.composer.onsubmit = async event => {
 	if (!text) {
 		return;
 	}
-	// No session yet (fresh project / all runs deleted) — create one on the
-	// fly rather than silently ignoring the send. (Build 4)
-	if (!state.sessionId) {
-		try {
-			await startRun();
-		} catch (err) {
-			fail(err);
+
+	// Intent fields belong to a NEW mission, never to whichever session happens
+	// to be selected. Read them before creating a fallback session; previously a
+	// selected device or requirements could be silently ignored and a desktop
+	// session started first.
+	const intent = buildIntentMissionPayload({
+		targetUrl: text,
+		buildPrompt: intentBuildPrompt?.value,
+		requirementsText: intentRequirements?.value,
+		device: document.getElementById('intent-device')?.value
+	});
+
+	if (intent.requested) {
+		if (intent.error) {
+			toast(intent.error, 'bad');
 			return;
 		}
-	}
-
-	// Check if intent fields are provided — if so, create a mission via the API
-	const bp = intentBuildPrompt?.value.trim() || '';
-	const reqs = intentRequirements?.value.trim() || '';
-	const isUrl = /^https?:\/\//.test(text);
-
-	if (bp && isUrl) {
-		// Create a mission with Phase 8 intent
-		const reqList = reqs ? reqs.split(',').map(r => r.trim()).filter(Boolean) : undefined;
-		const device = document.getElementById('intent-device')?.value || '';
+		// A device, build prompt, or requirements all create a mission. This
+		// preserves the selected execution environment and persists the intent
+		// for application understanding and generated tests.
 		try {
 			const mission = await api('/v1/missions', {
 				method: 'POST',
-				body: JSON.stringify({
-					name: bp.slice(0, 50),
-					type: 'full_audit',
-					targetUrl: text,
-					buildPrompt: bp,
-					requirements: reqList,
-					...(device ? { constraints: { device } } : {}),
-				})
+				body: JSON.stringify(intent.payload)
 			});
 			if (mission?.sessionId) {
 				await selectSession(mission.sessionId);
 			}
 			el.composerInput.value = '';
 			el.composerInput.style.height = 'auto';
+			if (intentBuildPrompt) intentBuildPrompt.value = '';
+			if (intentRequirements) intentRequirements.value = '';
+			const deviceSelect = document.getElementById('intent-device');
+			if (deviceSelect) deviceSelect.value = '';
 			el.questionSlot.replaceChildren();
 			return;
 		} catch (err) {
-			toast('Mission creation failed — falling back to standard run', 'bad');
+			// Never downgrade an explicitly selected device/intent to a desktop
+			// session. Keep the fields intact so the user can correct the error.
+			toast(`Mission creation failed: ${err instanceof Error ? err.message : String(err)}`, 'bad');
+			return;
+		}
+	}
+
+	// No mission-specific controls: standard session messaging keeps its
+	// existing behavior.
+	if (!state.sessionId) {
+		try {
+			await startRun();
+		} catch (err) {
+			fail(err);
+			return;
 		}
 	}
 
@@ -2187,14 +2238,19 @@ async function selectProject(id) {
 	localStorage.setItem('qase.project', id || '');
 	renderProjectSelect();
 	await refreshRuns();
-	// If there's no session yet for this project, show the empty hero —
-	// the user starts a run explicitly with "New run" or the composer.
-	// (Build 4: no silent auto-create — it polluted the run list.)
+	let selectedSession = false;
+	// If there is a run in the selected project, selectSession refreshes all
+	// project-scoped data. Otherwise refresh it explicitly to prevent stale
+	// counts from the previously selected project.
 	if (state.session?.projectId !== id) {
 		const runs = await api(`/sessions${id ? `?projectId=${id}` : ''}`).catch(err => { fail(err); return []; });
 		if (runs.length > 0) {
 			await selectSession(runs[0].id);
+			selectedSession = true;
 		}
+	}
+	if (!selectedSession) {
+		await Promise.allSettled([loadWorkflowsPage(), loadTestCases(), loadSchedulesPage(), loadMetrics()]);
 	}
 }
 
@@ -2227,10 +2283,16 @@ async function loadMetrics() {
 		const projectId = state.session?.projectId ?? state.projectId;
 		const query = projectId ? `?projectId=${projectId}` : '';
 		const metrics = await api(`/metrics/dashboard${query}`);
+		if (!metrics?.sessions || !metrics?.findings || !metrics?.testCases || !metrics?.regression) {
+			throw new Error('invalid dashboard metrics response');
+		}
 		renderMetricsOverview(metrics);
 	} catch {
-		// Non-critical: metrics are supplementary data.
-		// Leave existing metrics in place rather than blanking.
+		el.metricsOverview.replaceChildren();
+		const unavailable = document.createElement('div');
+		unavailable.className = 'metric-card';
+		unavailable.textContent = 'Dashboard metrics unavailable.';
+		el.metricsOverview.append(unavailable);
 	}
 }
 
@@ -2267,18 +2329,22 @@ function renderMetricsOverview(metrics) {
 
 	// Findings card with severity dots
 	const findingsCard = metricCard('Findings', String(metrics.findings.total),
-		renderSeveritySummary(metrics.findings.bySeverity)
+		renderMetricSummary(
+			metrics.findings.bySeverity,
+			(metrics.findings.canonical ?? metrics.findings.total) + ' canonical · ' + (metrics.findings.duplicates ?? 0) + ' duplicates'
+		)
 	);
 
 	// Test cases card
 	const tcCard = metricCard('Test Cases', String(metrics.testCases.total),
-		renderSeveritySummary(metrics.testCases.bySeverity)
+		renderMetricSummary(metrics.testCases.bySeverity, (metrics.testCases.suites ?? 0) + ' referenced suites')
 	);
 
 	// Regression card
 	const regCard = metricCard('Regression Pass Rate',
-		`${metrics.regression.overallPassRate}%`,
-		`${metrics.regression.totalRuns} run${metrics.regression.totalRuns === 1 ? '' : 's'} · ${metrics.regression.totalTests} test${metrics.regression.totalTests === 1 ? '' : 's'}`
+		metrics.regression.overallPassRate == null ? '—' : metrics.regression.overallPassRate + '%',
+		metrics.regression.completedRuns + ' completed of ' + metrics.regression.totalRuns + ' recorded runs · '
+			+ metrics.regression.totalTests + ' completed test executions'
 	);
 
 	cards.append(sessionsCard, findingsCard, tcCard, regCard);
@@ -2320,6 +2386,15 @@ function renderSeveritySummary(bySeverity) {
 		frag.append(dot);
 	}
 	return frag;
+}
+
+function renderMetricSummary(bySeverity, note) {
+	const wrap = document.createDocumentFragment();
+	wrap.append(renderSeveritySummary(bySeverity));
+	const detail = document.createElement('span');
+	detail.textContent = note;
+	wrap.append(detail);
+	return wrap;
 }
 
 /* ── Conversation-Driven AI: pipeline milestones inject agent messages ── */
@@ -2616,14 +2691,16 @@ document.addEventListener('click', event => {
 		if (page === 'workflows') loadWorkflowsPage();
 		if (page === 'schedules') loadSchedulesPage();
 	});
-	// Deep link #/runs/<sessionId> — select the run when the hash changes
-	// (works from cold load too via boot()).
-	window.addEventListener('hashchange', () => {
+	// Deep links select a run when the browser moves through either URL scheme.
+	// Cold-load selection remains in boot(), after authentication is established.
+	const followRunRoute = () => {
 		const id = runIdFromHash();
 		if (id && id !== state.sessionId) {
 			void selectSession(id);
 		}
-	});
+	};
+	window.addEventListener('hashchange', followRunRoute);
+	window.addEventListener('popstate', followRunRoute);
 	initRouter();
 
 	// Wire up event listeners.
@@ -2635,18 +2712,14 @@ document.addEventListener('click', event => {
 	initThemeToggle();
 
 	// Fire independent boot requests in parallel (config + projects).
-	// A 401 here is the normal unauthenticated path (the sign-in gate below
-	// handles it) — log it quietly, not as console.error noise on every
-	// anonymous first load.
 	const [config, projects] = await Promise.all([
 		api('/config').catch(err => { console.info('[boot] config needs sign-in:', err.message); return undefined; }),
 		api('/projects').catch(err => { console.info('[boot] projects needs sign-in:', err.message); return []; })
 	]);
 
-	// B1 W3 — the API is token-gated now. If the very first boot request was
-	// rejected as unauthenticated, show the one-field token gate instead of
-	// booting into a silently broken dashboard. This triggers both when no
-	// token exists AND when a stored token is stale/wrong (config===undefined).
+	// B1 W3 — workspace APIs are authenticated. If the first boot request is
+	// rejected, show the QASE account gate rather than booting a broken
+	// dashboard. This covers no session and an expired/stale session alike.
 	if (config === undefined) {
 		const gate = document.getElementById('auth-gate');
 		const rest = document.getElementById('auth-gate-rest');
@@ -2667,15 +2740,43 @@ document.addEventListener('click', event => {
 			// D2 Stage 3 — single login path: user accounts. No code/token tabs.
 			const title = document.getElementById('auth-gate-title');
 
-			// ── D2 bootstrap: zero users → offer the one-time admin claim ──
+			// P0 — the only unauthenticated mutation is the atomic, one-time first
+			// QASE account initialization. It creates a server-assigned admin and
+			// closes permanently; normal workspace APIs remain session-or-token
+			// protected.
 			try {
 				const boot = await fetch('/api/auth/bootstrap').then(r => r.ok ? r.json() : null);
-				const register = document.getElementById('auth-gate-register');
-				if (boot && boot.needsAdmin && register) {
-					if (title) title.textContent = 'Set up your workspace';
-					register.style.display = 'flex';
+				const bootstrap = document.getElementById('auth-gate-bootstrap');
+				const login = document.getElementById('auth-gate-login');
+				if (boot && boot.needsAdmin) {
+					if (title) title.textContent = 'Workspace setup required';
+					if (login) login.style.display = 'none';
+					if (bootstrap) bootstrap.style.display = 'flex';
+					if (!boot.canBootstrap) showError('Administrator setup is unavailable because the account store cannot be verified.');
 				}
 			} catch { /* default: login form stays visible */ }
+
+			const submitBootstrap = async () => {
+				const email = document.getElementById('auth-gate-bootstrap-email')?.value?.trim();
+				const name = document.getElementById('auth-gate-bootstrap-name')?.value?.trim();
+				const password = document.getElementById('auth-gate-bootstrap-password')?.value;
+				if (!email || !password) return showError('Enter an administrator email and password.');
+				const btn = document.getElementById('auth-gate-bootstrap-submit');
+				busy(btn, true, 'Creating…');
+				try {
+					const res = await fetch('/api/auth/register-admin', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ email, name, password })
+					});
+					if (res.ok) { location.reload(); return; }
+					const body = await res.json().catch(() => ({}));
+					showError(body.error || 'Unable to create the administrator account.');
+				} catch { showError('Network error — try again.'); }
+				busy(btn, false);
+			};
+			document.getElementById('auth-gate-bootstrap-submit')?.addEventListener('click', submitBootstrap);
+			document.getElementById('auth-gate-bootstrap-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitBootstrap(); });
 
 			// ── Primary: email + password login ──
 			const submitLogin = async () => {
@@ -2698,29 +2799,6 @@ document.addEventListener('click', event => {
 			};
 			document.getElementById('auth-gate-signin')?.addEventListener('click', submitLogin);
 			document.getElementById('auth-gate-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitLogin(); });
-
-			// ── One-time admin bootstrap ──
-			const submitRegister = async () => {
-				const email = document.getElementById('auth-gate-reg-email')?.value?.trim();
-				const name = document.getElementById('auth-gate-reg-name')?.value?.trim();
-				const password = document.getElementById('auth-gate-reg-password')?.value;
-				if (!email || !password) return showError('Enter your email and a password.');
-				const btn = document.getElementById('auth-gate-reg-save');
-				busy(btn, true, 'Creating…');
-				try {
-					const res = await fetch('/api/auth/register-admin', {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ email, name, password })
-					});
-					if (res.ok) { location.reload(); return; }
-					const body = await res.json().catch(() => ({}));
-					showError(body.error || 'Could not create the admin account.');
-				} catch { showError('Network error — try again.'); }
-				busy(btn, false);
-			};
-			document.getElementById('auth-gate-reg-save')?.addEventListener('click', submitRegister);
-			document.getElementById('auth-gate-reg-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitRegister(); });
 
 			return; // skip the rest of boot — the page is a gate until auth exists
 		}
@@ -2869,6 +2947,19 @@ document.addEventListener('click', event => {
 			viewerClose.hidden = true;
 		});
 	}
+
+	// Phase 2 — the run list is an on-demand drawer below the desktop
+	// breakpoint. It reuses the existing list and actions; selection closes it.
+	const mobileRunsToggle = document.getElementById('mobile-runs-toggle');
+	const closeRunsDrawer = document.getElementById('close-runs-drawer');
+	const runsPanel = document.querySelector('.panel.runs');
+	if (mobileRunsToggle && runsPanel) {
+		mobileRunsToggle.addEventListener('click', () => {
+			const open = runsPanel.classList.toggle('mobile-open');
+			mobileRunsToggle.setAttribute('aria-expanded', String(open));
+		});
+	}
+	closeRunsDrawer?.addEventListener('click', closeMobileRunsDrawer);
 })();
 
 /* ── Phase 17: Application Quality / UX Intelligence panel ──────── */
@@ -3091,6 +3182,7 @@ async function reviewUxIssue(issue, reviewState, btn) {
 		btn.disabled = false;
 		btn.textContent = `Failed: ${err.message}`;
 	}
+
 }
 
 // Severity filter buttons

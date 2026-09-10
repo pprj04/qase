@@ -660,6 +660,26 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	padding: 13px;
 	overflow: hidden;
 }
+
+.execution-health {
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--hair-soft);
+	background: rgba(88, 156, 255, .07);
+	font-size: 11px;
+}
+.execution-health[hidden] { display: none; }
+.execution-health[data-status="failed"] { background: rgba(255, 69, 58, .09); border-color: rgba(255, 69, 58, .28); }
+.execution-health[data-status="retrying"], .execution-health[data-status="degraded"] { background: rgba(255, 159, 10, .09); border-color: rgba(255, 159, 10, .28); }
+.execution-health-main { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.execution-health-main strong { color: var(--text-bright); text-transform: uppercase; letter-spacing: .06em; }
+.execution-health-main span { color: var(--text-dim); }
+.execution-health-components { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.execution-health-component { padding: 2px 7px; border: 1px solid var(--hair); border-radius: 999px; color: var(--text-dim); text-transform: uppercase; font-size: 9px; }
+.execution-health-component[data-status="healthy"] { color: #4cd964; border-color: rgba(76, 217, 100, .35); }
+.execution-health-component[data-status="failed"] { color: #ff6b63; border-color: rgba(255, 107, 99, .4); }
+.execution-health-component[data-status="blocked"] { color: #ff6b63; border-color: rgba(255, 107, 99, .4); }
+.execution-health-component[data-status="degraded"] { color: #ffb340; border-color: rgba(255, 179, 64, .4); }
+.execution-health p { margin: 7px 0 0; color: var(--text-dim); line-height: 1.45; }
 .stage-inner {
 	position: relative;
 	max-width: 100%;
@@ -710,7 +730,13 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
    height:100% gives the frame a definite height so the screen image
    inside can scale down to fit (percentage max-height needs it). */
 .stage-inner.device-phone {
+	box-sizing: border-box;
+	display: grid;
+	place-items: center;
+	width: auto;
 	height: 100%;
+	max-width: 100%;
+	aspect-ratio: var(--device-frame-aspect, 9 / 19.5);
 	border-radius: 30px;
 	padding: 10px 8px 18px;
 	background: linear-gradient(160deg, #2a2d35, #171920 60%, #23262e);
@@ -743,17 +769,22 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 }
 .stage-inner.device-phone #frame {
 	border-radius: 18px;
-	/* Fit the phone screen inside the stage: scale by the stage's height,
-	   and let width follow the aspect ratio. The old calc(100vh - 320px)
-	   guessed the stage height and clipped tall phones to half. */
-	max-height: 100%;
-	max-width: min(100%, calc((100vh - 340px) * 0.462));
-	width: auto;
+	/* The content box preserves the real capture's viewport ratio. */
+	width: 100%;
+	height: 100%;
+	max-width: none;
+	max-height: none;
 }
 
 /* Tablet frame: camera dot, wider bezel. */
 .stage-inner.device-tablet {
+	box-sizing: border-box;
+	display: grid;
+	place-items: center;
+	width: auto;
 	height: 100%;
+	max-width: 100%;
+	aspect-ratio: var(--device-frame-aspect, 4 / 3);
 	border-radius: 22px;
 	padding: 14px 12px 16px;
 	background: linear-gradient(160deg, #2a2d35, #171920 60%, #23262e);
@@ -772,7 +803,13 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	box-shadow: inset 0 0 2px rgba(255, 255, 255, .25);
 	z-index: 3;
 }
-.stage-inner.device-tablet #frame { border-radius: 12px; max-height: 100%; width: auto; }
+.stage-inner.device-tablet #frame {
+	border-radius: 12px;
+	width: 100%;
+	height: 100%;
+	max-width: none;
+	max-height: none;
+}
 
 /* Landscape device (viewport wider than tall) gets landscape bezels. */
 .stage-inner.device-landscape { padding: 8px 18px 10px; }
@@ -3723,6 +3760,18 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	padding: 16px 24px;
 }
 
+.bugs-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 0 2px;
+	font-size: 12px;
+	color: rgba(255,255,255,0.65);
+}
+
+.bugs-pagination-actions { display: flex; gap: 8px; }
+
 /* Grid view (default) */
 .bugs-hub-board.bugs-view-grid {
 	display: grid;
@@ -3927,6 +3976,179 @@ h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 	.bugs-hub-board.bugs-view-grid {
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
 	}
+}
+
+/* ═══ PHASE 2 — responsive product UX hardening ════════════════════
+ * Keeps content and actions readable without changing route, store,
+ * authentication, execution, evidence, or metrics behavior. */
+
+/* Test cases: reserve a real title row and let secondary controls wrap. */
+.tc-header {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: 8px 12px;
+}
+.tc-title-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.tc-name {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	line-height: 1.35;
+}
+.tc-card-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 4px;
+	flex-wrap: wrap;
+}
+.tc-meta-row,
+.tc-source-row,
+.tc-bug-badges {
+	grid-column: 1 / -1;
+	min-width: 0;
+}
+.tc-move-suite { max-width: min(240px, 100%); }
+
+/* Status is now communicated by text as well as color. */
+.run-status-label {
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 1;
+	text-transform: uppercase;
+	letter-spacing: .035em;
+	color: var(--text-dim);
+}
+
+/* Long product data remains inspectable instead of disappearing at edges. */
+#chat-target,
+.wf-card-name,
+.sched-card-name,
+.sched-card-meta,
+.bug-card-title,
+.bug-card-url,
+.bug-detail-section,
+.bug-detail-section a,
+.bug-detail-section pre,
+.ev-card-foot,
+.ev-stepref,
+.ev-integrity,
+.ev-findingref {
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+.wf-card-name,
+.sched-card-name {
+	white-space: normal;
+	overflow: visible;
+	text-overflow: clip;
+	line-height: 1.35;
+}
+#chat-target {
+	white-space: normal;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.wf-card-left,
+.sched-card-left,
+.bug-card-title { min-width: 0; }
+.wf-card-left,
+.wf-card-name { max-width: 100%; }
+.wf-card-left { width: 100%; }
+.wf-card-actions,
+.sched-card-actions,
+.sched-chart-legend,
+.bugs-stats-row { flex-wrap: wrap; }
+.bug-card-url { min-width: 0; }
+.bug-detail-section pre { max-width: 100%; }
+.ev-card-foot > * { min-width: 0; }
+
+@media (max-width: 768px) {
+	.workflows-body,
+	.schedules-body { padding: 10px 12px; }
+	.workflows-header,
+	.schedules-header { padding: 10px 12px; }
+	.workflows-header-left,
+	.schedules-header-left,
+	.bugs-header-left {
+		width: 100%;
+		min-width: 0;
+		flex-wrap: wrap;
+	}
+	.wf-card-actions,
+	.sched-card-actions {
+		align-self: stretch;
+		justify-content: flex-end;
+	}
+	.sched-card-left {
+		align-items: flex-start;
+		width: 100%;
+	}
+	.sched-card-name { flex: 1; }
+}
+
+@media (max-width: 480px) {
+	.tc-header { grid-template-columns: 1fr; }
+	.tc-card-actions {
+		grid-column: 1;
+		justify-content: flex-start;
+	}
+	.tc-step-count {
+		white-space: normal;
+		text-align: right;
+	}
+	.tc-meta-row,
+	.tc-source-row,
+	.tc-bug-badges { grid-column: 1; }
+	.tc-card-actions button,
+	.wf-card-actions button,
+	.sched-card-actions button,
+	.bugs-pagination button {
+		min-height: 32px;
+	}
+
+	.bugs-header-left { gap: 8px; }
+	.bugs-stats-row {
+		width: 100%;
+		gap: 6px 12px;
+	}
+	.bugs-stats-row .bug-stat { min-width: calc(50% - 6px); }
+	.bug-card-head {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	.bug-badges { align-self: flex-start; flex-wrap: wrap; }
+	.bugs-pagination { align-items: flex-start; flex-direction: column; }
+
+	.modal { width: min(96vw, 520px); }
+	.modal-inner { max-height: 94vh; }
+	.modal-body { padding: 12px; }
+	.modal-head,
+	.modal-foot { padding-left: 12px; padding-right: 12px; }
+	.modal-foot { flex-wrap: wrap; }
+	.field-row { flex-direction: column; }
+	.cred-actions { flex-wrap: wrap; }
+	.toasts { left: 10px; right: 10px; bottom: 10px; }
+	.toast { max-width: 100%; }
+
+	/* The floating viewer control must not cover the run composer. */
+	.viewer-toggle { bottom: 84px; }
+
+	/* Four evidence tabs stay readable through deliberate horizontal scroll. */
+	.tabs { overflow-x: auto; scrollbar-width: thin; }
+	.tabs .tab { flex: 0 0 auto; min-width: max-content; }
+	.ev-grid { grid-template-columns: minmax(0, 1fr); }
+	.ev-card { min-width: 0; }
 }
 
 /* Mobile: single column, tabs stack vertically */
@@ -7679,4 +7901,50 @@ a.tc-source-link {
 
 a.tc-source-link:hover {
 	text-decoration: underline;
+}
+
+/* Phase 2 final cascade guard: workflow/schedule and evidence component
+ * blocks are declared after the main responsive hardening above. */
+.wf-card-name,
+.sched-card-name {
+	white-space: normal;
+	overflow: hidden;
+	text-overflow: clip;
+	overflow-wrap: anywhere;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	line-height: 1.35;
+}
+
+@media (max-width: 480px) {
+	.composer { padding-bottom: 72px; }
+	.viewer-toggle { bottom: 16px; }
+	.tabs { overflow-x: auto; scrollbar-width: thin; }
+	.tabs .tab { flex: 0 0 auto; min-width: max-content; }
+	.ev-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* The same run-history list remains reachable when the desktop side panel is
+ * collapsed. It opens as a bounded drawer and does not alter run selection. */
+#mobile-runs-toggle,
+#close-runs-drawer { display: none; }
+
+@media (max-width: 1024px) {
+	#mobile-runs-toggle { display: inline-flex; }
+	.panel.runs.mobile-open {
+		display: flex;
+		position: fixed;
+		top: 52px;
+		bottom: 0;
+		left: 0;
+		width: min(340px, calc(100vw - 36px));
+		height: auto;
+		z-index: 120;
+		border-right: 1px solid var(--hair);
+		box-shadow: 18px 0 48px rgba(0, 0, 0, .5);
+	}
+	.panel.runs.mobile-open #close-runs-drawer { display: inline-flex; }
+	.panel.runs.mobile-open .panel-head { justify-content: space-between; }
+	.panel.runs.mobile-open .run-del { opacity: 1; }
 }

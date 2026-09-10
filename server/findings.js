@@ -371,10 +371,14 @@ export function listFindings({
 	// Phase 16 filters
 	primaryCategory, priority, findingStatus, reviewStatus, workflowId, featureId,
 	reproducibility, minConfidence, missionId, includeDuplicates = true,
+	// Bugs hub query options. Sorting occurs before pagination so every page
+	// remains deterministic. Omitted sort preserves the legacy severity-first
+	// ordering for existing API callers.
+	fixStatus, sort,
 	// P0-F4 — server-side owner scoping (predicate from ownership.js)
 	ownerFilter,
 } = {}) {
-	return findings
+	const rows = findings
 		.filter(f => {
 			if (ownerFilter && !ownerFilter(f)) return false;
 			if (projectId && f.projectId !== projectId) return false;
@@ -397,19 +401,29 @@ export function listFindings({
 			if (reproducibility && f.reproducibility !== reproducibility) return false;
 			if (typeof minConfidence === 'number' && ((f.confidence ?? 0) < minConfidence)) return false;
 			if (!includeDuplicates && f.isDuplicate) return false;
+			if (fixStatus && f.fixStatus !== fixStatus) return false;
 			if (q) {
 				const lower = q.toLowerCase();
 				const haystack = `${f.title} ${f.category} ${f.url} ${f.expected} ${f.actual}`.toLowerCase();
 				if (!haystack.includes(lower)) return false;
 			}
 			return true;
-		})
-		.sort((a, b) => {
-			// Sort by severity first, then newest.
-			const sevDiff = SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
-			if (sevDiff !== 0) return sevDiff;
-			return b.ts - a.ts;
 		});
+
+	const byId = (a, b) => String(a.id).localeCompare(String(b.id));
+	return rows.sort((a, b) => {
+		switch (sort) {
+			case 'newest': return (b.ts - a.ts) || byId(a, b);
+			case 'oldest': return (a.ts - b.ts) || byId(a, b);
+			case 'confidence': return ((b.confidence ?? 0) - (a.confidence ?? 0)) || (b.ts - a.ts) || byId(a, b);
+			case 'evidence': return ((b.evidenceIds?.length ?? 0) - (a.evidenceIds?.length ?? 0)) || (b.ts - a.ts) || byId(a, b);
+			case 'severity':
+			default: {
+				const sevDiff = SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
+				return sevDiff || (b.ts - a.ts) || byId(a, b);
+			}
+		}
+	});
 }
 
 export function getFinding(id) {
@@ -440,6 +454,12 @@ export function appendEvidenceIdsToFinding(id, evidenceIds = []) {
 	finding.evidenceIds = [...existing, ...fresh];
 	persistSoon();
 	return finding;
+}
+
+/** Internal derived classification, deliberately not writable through generic PUT. */
+export function setFindingConfirmation(id, confirmation) {
+	const finding = findings.find(f => f.id === id);
+	if (finding) { finding.confirmation = confirmation; persistSoon(); }
 }
 
 export function updateFinding(id, patch) {
@@ -803,8 +823,10 @@ export function syncSessionFinding(session, finding) {
 
 export function getFindingStats({ projectId } = {}) {
 	const filtered = projectId ? findings.filter(f => f.projectId === projectId) : findings;
+	const duplicates = filtered.filter(f => f.isDuplicate === true || Boolean(f.duplicateOf)).length;
 	return {
 		total: filtered.length,
+		canonical: filtered.length - duplicates,
 		byStatus: VALID_STATUSES.reduce((acc, s) => {
 			acc[s] = filtered.filter(f => f.status === s).length;
 			return acc;
@@ -826,7 +848,7 @@ export function getFindingStats({ projectId } = {}) {
 			acc[p] = filtered.filter(f => f.priority === p).length;
 			return acc;
 		}, {}),
-		duplicates: filtered.filter(f => f.isDuplicate).length
+		duplicates
 	};
 }
 

@@ -1,0 +1,35 @@
+{
+  "summary": "The Qase agent runtime was failing with 'ENOSPC: no space left on device' because the project's storage volume had completely filled up (0 bytes free). I freed roughly 750 MB so agent workspaces can be created again, and diagnosed a deeper disk corruption problem that needs a support-side repair.",
+  "what_was_done": [
+    "Deleted leftover build archives, comparison folders and stray screenshots from the project directory (~260 MB)",
+    "Deleted duplicate browser caches and unused tool caches that were silently eating the same disk as the project (~370 MB)",
+    "Moved the browser binaries and agent runtime dependencies to the container's separate large scratch disk so they stop consuming project disk permanently (~700 MB redirected)",
+    "Verified the agent can now create its workspace folders again — the exact operation that was failing now succeeds",
+    "Confirmed the Qase web app still loads normally in the browser"
+  ],
+  "what_was_tested": [
+    "Creating the exact agent workspace folder that previously failed with ENOSPC — now succeeds",
+    "Playwright browser launches from its new location — Chrome 151 starts fine",
+    "The agent CLI binary still runs from its relocated dependencies — version check passes",
+    "The Qase preview site responds with HTTP 200"
+  ],
+  "test_results": [
+    {"name": "Agent workspace folder creation (.qase/workspaces/...)", "status": "pass", "note": "The exact path from the error message now creates successfully"},
+    {"name": "Browser runtime after relocation", "status": "pass", "note": "Chrome for Testing 151 launches from the new cache location"},
+    {"name": "Agent CLI after relocation", "status": "pass", "note": "codex-cli 0.153.4 responds to --version"},
+    {"name": "Qase preview site", "status": "pass", "note": "HTTP 200 at the preview URL"},
+    {"name": "Free disk space", "status": "warn", "note": "745 MB free (~93% used). Enough to run, but low; see notes"}
+  ],
+  "notes": [
+    "IMPORTANT: the storage volume has filesystem corruption — the kernel logged 200+ disk errors during diagnosis. Some damaged folders cannot be deleted at all, and about 6 GB of disk is 'used' but belongs to no readable file. That space can only be reclaimed by running a disk check from the host side, which I cannot do from inside the container. Please contact support to schedule a volume repair (fsck) or volume replacement.",
+    "The corruption is likely what caused the disk to fill in the first place — space from deleted files was never returned.",
+    "Disk usage is still high (~93%). If it fills again, the same agent error will return until the volume is repaired.",
+    "The MySQL service is currently stopped. Qase stores its data in files, so the app works, but anything needing the database will fail until it is started again."
+  ],
+  "review_checklist": [
+    "Start a new agent run in Qase — it should now launch instead of failing with the 'no space left on device' error",
+    "Confirm the app's pages (runs, findings, bugs) still load normally",
+    "Watch disk usage; if the agent error returns, the volume repair becomes urgent"
+  ],
+  "preview_url": "https://pulse-review-workspa-6grhjr.drytis.dev/"
+}

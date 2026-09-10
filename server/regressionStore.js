@@ -13,6 +13,7 @@ import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from './atomicWrite.js';
+import { regressionMetrics, regressionTrendPoints } from './dataMetrics.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNS_FILE = join(__dirname, '..', '.qase', 'regression-runs.json');
@@ -148,7 +149,7 @@ export function addRegressionRun(summary) {
 }
 
 export function listRegressionRuns({ projectId, scheduleId, targetUrl, limit } = {}) {
-	let filtered = runs;
+	let filtered = [...runs];
 	if (projectId) filtered = filtered.filter(r => r.projectId === projectId);
 	if (scheduleId) filtered = filtered.filter(r => r.scheduleId === scheduleId);
 	if (targetUrl) filtered = filtered.filter(r => r.targetUrl === targetUrl);
@@ -168,15 +169,14 @@ export function getRegressionRun(id) {
  */
 export function getTrend({ projectId, scheduleId, targetUrl, limit = 20 } = {}) {
 	const history = listRegressionRuns({ projectId, scheduleId, targetUrl, limit });
-	return history
-		.reverse() // chronological for the chart
-		.map(r => ({
-			ts: r.ts,
-			passed: r.passed,
-			failed: r.failed,
-			errored: r.errored,
-			flaky: r.flaky ?? 0,
-			total: r.total,
-			passRate: r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0
-		}));
+	return regressionTrendPoints(history.reverse());
+}
+
+/** Trend rows and their matching aggregate, calculated from one snapshot. */
+export function getTrendSnapshot({ projectId, scheduleId, targetUrl, limit = 20 } = {}) {
+	const history = listRegressionRuns({ projectId, scheduleId, targetUrl, limit });
+	return {
+		items: regressionTrendPoints([...history].reverse()),
+		metrics: regressionMetrics(history)
+	};
 }

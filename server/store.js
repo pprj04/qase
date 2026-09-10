@@ -152,6 +152,8 @@ export function createSession(title = 'New test run', projectId = undefined, opt
 		executionProvider: options.executionProvider ?? undefined,
 		/** C4 — truthful execution provenance once the runtime has launched (agent path). */
 		execution: undefined,
+		/** Persisted, secret-safe health/failure state for this execution. */
+		executionHealth: undefined,
 		/** Resolved device context (set by the agent runtime once applied). */
 		device: undefined,
 		/**
@@ -277,6 +279,7 @@ export function listSessions({ projectId, ownerFilter } = {}) {
 			updatedAt: session.updatedAt,
 			findingCount: session.findings.length,
 			messageCount: session.messages.length,
+			executionHealth: session.executionHealth ?? null,
 			ownerUserId: session.ownerUserId ?? null
 		}));
 }
@@ -560,4 +563,3 @@ export function stopWatchdog() {
 
 /** R2-A/G3 — test seam: run one watchdog sweep immediately (fake-clock tests). */
 export function __runWatchdogOnce() { runWatchdog(); }
-

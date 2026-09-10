@@ -244,6 +244,20 @@ function freePort() {
 	});
 }
 
+async function stopChild(child) {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	const exited = new Promise(resolve => child.once('exit', resolve));
+	child.kill('SIGTERM');
+	const stopped = await Promise.race([
+		exited.then(() => true),
+		new Promise(resolve => setTimeout(() => resolve(false), 5_000))
+	]);
+	if (!stopped) {
+		child.kill('SIGKILL');
+		await exited;
+	}
+}
+
 test('F5-M4 · live API: GET /api/sessions/:id frame field is truthful across browser close', async () => {
 	const port = await freePort();
 	const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p0f5-srv-'));
@@ -286,7 +300,9 @@ test('F5-M4 · live API: GET /api/sessions/:id frame field is truthful across br
 		assert.equal(typeof got.status, 'string');
 		assert.equal(typeof got.running, 'boolean');
 	} finally {
-		child.kill('SIGTERM');
+		// Let the child complete shutdown before deleting its data root. Removing
+		// it immediately after SIGTERM races its persistence cleanup.
+		await stopChild(child);
 		fs.rmSync(dataDir, { recursive: true, force: true });
 	}
 });

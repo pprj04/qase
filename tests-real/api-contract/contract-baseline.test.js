@@ -86,13 +86,13 @@ describe('API contract — health & config', () => {
 });
 
 describe('API contract — findings (bugs hub)', () => {
-	it('GET /api/findings filters by severity (server-side filter contract); no pagination exists yet (documented gap)', async () => {
+	it('GET /api/findings filters by severity (server-side filter contract); no-limit reads retain the legacy array shape', async () => {
 		const r = await GET('/api/findings?severity=critical');
 		assert.equal(r.status, 200);
 		assert.ok(Array.isArray(r.json));
-		// The only server-side filters today: severity/status/category/projectId/
-		// sessionId/assignee/q. `limit` is NOT honored (M1-P1 gap — no
-		// pagination). Freeze that so adding pagination is a visible change.
+		// Legacy callers without `limit` still receive an array. The canonical
+		// paginated contract is `limit` + `offset` → envelope and is covered by
+		// the pagination suite and the Bugs-page regression test.
 		if (r.json.length) assert.ok(r.json.every(f => f.severity === 'critical'));
 	});
 	it('severity filter works and is validated by behavior (critical → only critical)', async () => {

@@ -3,7 +3,15 @@ import { el, state, api, apiRaw, toast, fail, escapeHtml, markdown, relativeTime
 const bugState = {
 	findings: [],
 	detailId: null,
-	view: 'grid'  // 'grid' or 'list'
+	view: 'grid', // 'grid' or 'list'
+	loaded: false,
+	loading: false,
+	total: 0,
+	limit: 50,
+	offset: 0,
+	requestId: 0,
+	controller: null,
+	searchTimer: null
 };
 
 const SEV_LABELS = {
@@ -26,61 +34,95 @@ function timeAgo(ts) {
 	return 'just now';
 }
 
-async function loadBugs() {
-	const container = el.bugsBoard;
-	const firstLoad = !bugState.loaded;
-	if (firstLoad) showPageLoading(container);
-	const projectId = state.projectId ?? '';
-	const params = new URLSearchParams();
-	if (projectId) params.set('projectId', projectId);
-	const query = params.toString() ? `?${params.toString()}` : '';
-	try {
-		bugState.findings = await api(`/findings${query}`);
-	} catch (error) {
-		bugState.findings = [];
-		bugState.loaded = true;
-		// BUILD 1: server failure ≠ "No bugs". Show the error with Retry.
-		if (firstLoad) {
-			el.navCountBugs.textContent = '';
-			showPageError(container, loadBugs, `Could not load findings — ${error?.message ?? 'server unreachable'}.`);
-			return;
-		}
-		throw error;
+function selectedFilters() {
+	return {
+		projectId: state.projectId ?? '', severity: el.bugFilterSeverity?.value ?? '',
+		status: el.bugFilterStatus?.value ?? '', category: el.bugFilterCategory?.value ?? '',
+		fixStatus: document.getElementById('bug-filter-fix-status')?.value ?? '',
+		q: el.bugSearch?.value?.trim() ?? '', sort: el.bugFilterSort?.value ?? 'newest'
+	};
+}
+
+function findingsQuery() {
+	const params = new URLSearchParams({ limit: String(bugState.limit), offset: String(bugState.offset) });
+	for (const [key, value] of Object.entries(selectedFilters())) if (value) params.set(key, value);
+	return params;
+}
+
+function parseFindingsPage(payload) {
+	if (!payload || !Array.isArray(payload.items) || !Number.isFinite(payload.total) || payload.total < 0) {
+		throw new Error('Findings response was not a valid paginated result.');
 	}
-	bugState.loaded = true;
-	clearPageState(container);
+	return payload;
+}
 
-	// Populate category dropdown from data.
-	const cats = [...new Set(bugState.findings.map(f => f.category).filter(Boolean))].sort();
-	el.bugFilterCategory.innerHTML = '<option value="">All categories</option>' +
-		cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+function setPagination() {
+	if (!el.bugsPagination || !el.bugsPageSummary) return;
+	const from = bugState.total === 0 ? 0 : bugState.offset + 1;
+	const to = Math.min(bugState.offset + bugState.findings.length, bugState.total);
+	el.bugsPageSummary.textContent = `Showing ${from}–${to} of ${bugState.total} findings`;
+	el.bugsPagination.hidden = false;
+	if (el.bugsPagePrev) el.bugsPagePrev.disabled = bugState.loading || bugState.offset === 0;
+	if (el.bugsPageNext) el.bugsPageNext.disabled = bugState.loading || bugState.offset + bugState.findings.length >= bugState.total;
+}
 
-	// Update badge count.
-	const openCount = bugState.findings.filter(f => f.status === 'open').length;
-	el.navCountBugs.textContent = openCount > 0 ? openCount : '';
+function populateCategoryFilter() {
+	if (!el.bugFilterCategory) return;
+	const selected = el.bugFilterCategory.value;
+	const cats = [...new Set([...bugState.findings.map(f => f.category).filter(Boolean), selected].filter(Boolean))].sort();
+	el.bugFilterCategory.innerHTML = '<option value="">All categories</option>' + cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+	el.bugFilterCategory.value = selected;
+}
 
-	renderBugsBoard();
-	renderBugsStats();
+async function loadBugs({ reset = false } = {}) {
+	const container = el.bugsBoard;
+	if (!container) return;
+	if (reset) bugState.offset = 0;
+	bugState.controller?.abort();
+	const controller = new AbortController();
+	bugState.controller = controller;
+	const requestId = ++bugState.requestId;
+	const timeout = setTimeout(() => controller.abort(), 15_000);
+	bugState.loading = true;
+	showPageLoading(container);
+	setPagination();
+	try {
+		const page = parseFindingsPage(await api(`/findings?${findingsQuery().toString()}`, { signal: controller.signal }));
+		if (requestId !== bugState.requestId) return;
+		bugState.findings = page.items;
+		bugState.total = page.total;
+		bugState.limit = Number.isFinite(page.limit) && page.limit > 0 ? page.limit : bugState.limit;
+		bugState.offset = Number.isFinite(page.offset) && page.offset >= 0 ? page.offset : bugState.offset;
+		bugState.loaded = true;
+		clearPageState(container);
+		populateCategoryFilter();
+		el.navCountBugs.textContent = bugState.total > 0 ? String(bugState.total) : '';
+		renderBugsBoard();
+		renderBugsStats();
+		setPagination();
+	} catch (error) {
+		if (requestId !== bugState.requestId) return;
+		bugState.findings = [];
+		bugState.total = 0;
+		bugState.loaded = true;
+		el.navCountBugs.textContent = '';
+		const message = controller.signal.aborted
+			? 'Findings request timed out. Check your connection and retry.'
+			: `Could not load findings — ${error?.message ?? 'server unreachable'}.`;
+		showPageError(container, () => loadBugs(), message);
+	} finally {
+		clearTimeout(timeout);
+		if (requestId === bugState.requestId) {
+			bugState.loading = false;
+			bugState.controller = null;
+			setPagination();
+		}
+	}
 }
 
 function getFilteredBugs() {
-	let filtered = bugState.findings;
-	const sev = el.bugFilterSeverity.value;
-	const status = el.bugFilterStatus.value;
-	const cat = el.bugFilterCategory.value;
-	const fix = document.getElementById('bug-filter-fix-status')?.value || '';
-	const q = el.bugSearch.value.trim().toLowerCase();
-	if (sev) filtered = filtered.filter(f => f.severity === sev);
-	if (status) filtered = filtered.filter(f => f.status === status);
-	if (cat) filtered = filtered.filter(f => f.category === cat);
-	if (fix) filtered = filtered.filter(f => f.fixStatus === fix);
-	if (q) {
-		filtered = filtered.filter(f => {
-			const haystack = `${f.title} ${f.category} ${f.url} ${f.expected} ${f.actual}`.toLowerCase();
-			return haystack.includes(q);
-		});
-	}
-	return filtered;
+	// Filters and sort are applied by the API before this bounded page arrives.
+	return bugState.findings;
 }
 
 function renderBugsStats() {
@@ -91,10 +133,10 @@ function renderBugsStats() {
 	const closed = filtered.filter(f => f.status === 'closed').length;
 	el.bugsStats.innerHTML = '';
 	for (const [label, count, cls] of [
-		['Open', open, 'bug-status-open'],
-		['In Testing', testing, 'bug-status-in_testing'],
-		['Resolved', resolved, 'bug-status-resolved'],
-		['Closed', closed, 'bug-status-closed']
+		['Open on page', open, 'bug-status-open'],
+		['In Testing on page', testing, 'bug-status-in_testing'],
+		['Resolved on page', resolved, 'bug-status-resolved'],
+		['Closed on page', closed, 'bug-status-closed']
 	]) {
 		const stat = document.createElement('div');
 		stat.className = 'bug-stat';
@@ -116,17 +158,21 @@ function renderBugsBoard() {
 	for (const bug of bugs) {
 		const card = document.createElement('div');
 		card.className = `bug-card bug-card-${bugState.view}`;
+		card.setAttribute('role', 'button');
+		card.tabIndex = 0;
+		card.setAttribute('aria-label', `Open bug ${bug.title}`);
 		card.innerHTML = `
 			<div class="bug-card-head">
 				<div class="bug-card-title">${escapeHtml(bug.title)}</div>
 				<div class="bug-badges">
+					${bug.confirmation ? `<span class="bug-status-badge">${bug.confirmation === 'confirmed' ? 'Evidence-backed' : 'Suggestion — unconfirmed'}</span>` : ''}
 					<span class="bug-sev-badge bug-sev-${bug.severity}">${bug.severity}</span>
 					<span class="bug-status-badge bug-status-${bug.status}">${STATUS_LABELS[bug.status] ?? bug.status}</span>
 				</div>
 			</div>
 			<div class="bug-card-meta">
 				<span class="cat">📁 ${escapeHtml(bug.category || 'general')}</span>
-				${bug.url ? `<span>🔗 ${escapeHtml(truncateUrl(bug.url))}</span>` : ''}
+				${bug.url ? `<span class="bug-card-url" title="${escapeHtml(bug.url)}">🔗 ${escapeHtml(truncateUrl(bug.url))}</span>` : ''}
 				${bug.assignee ? `<span>👤 ${escapeHtml(bug.assignee)}</span>` : ''}
 				<span>⏱ ${timeAgo(bug.ts)}</span>
 				${(bug.comments?.length ?? 0) > 0 ? `<span>💬 ${bug.comments.length}</span>` : ''}
@@ -134,6 +180,11 @@ function renderBugsBoard() {
 			</div>
 		`;
 		card.addEventListener('click', () => openBugDetail(bug.id));
+		card.addEventListener('keydown', event => {
+			if (event.key !== 'Enter' && event.key !== ' ') return;
+			event.preventDefault();
+			openBugDetail(bug.id);
+		});
 		el.bugsBoard.append(card);
 	}
 }
@@ -498,12 +549,26 @@ function initBugsWiring() {
 	if (el.bugEditorSave) el.bugEditorSave.addEventListener('click', saveNewBug);
 	if (el.bugDetailClose) el.bugDetailClose.addEventListener('click', () => el.bugDetail.close());
 
-	if (el.bugSearch) el.bugSearch.addEventListener('input', () => { renderBugsBoard(); renderBugsStats(); });
-	if (el.bugFilterSeverity) el.bugFilterSeverity.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
-	if (el.bugFilterStatus) el.bugFilterStatus.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
-	if (el.bugFilterCategory) el.bugFilterCategory.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
+	if (el.bugSearch) el.bugSearch.addEventListener('input', () => {
+		clearTimeout(bugState.searchTimer);
+		bugState.searchTimer = setTimeout(() => { void loadBugs({ reset: true }); }, 250);
+	});
+	if (el.bugFilterSeverity) el.bugFilterSeverity.addEventListener('change', () => { void loadBugs({ reset: true }); });
+	if (el.bugFilterStatus) el.bugFilterStatus.addEventListener('change', () => { void loadBugs({ reset: true }); });
+	if (el.bugFilterCategory) el.bugFilterCategory.addEventListener('change', () => { void loadBugs({ reset: true }); });
 	const fixFilter = document.getElementById('bug-filter-fix-status');
-	if (fixFilter) fixFilter.addEventListener('change', () => { renderBugsBoard(); renderBugsStats(); });
+	if (fixFilter) fixFilter.addEventListener('change', () => { void loadBugs({ reset: true }); });
+	if (el.bugFilterSort) el.bugFilterSort.addEventListener('change', () => { void loadBugs({ reset: true }); });
+	if (el.bugsPagePrev) el.bugsPagePrev.addEventListener('click', () => {
+		if (bugState.offset === 0 || bugState.loading) return;
+		bugState.offset = Math.max(0, bugState.offset - bugState.limit);
+		void loadBugs();
+	});
+	if (el.bugsPageNext) el.bugsPageNext.addEventListener('click', () => {
+		if (bugState.loading || bugState.offset + bugState.findings.length >= bugState.total) return;
+		bugState.offset += bugState.limit;
+		void loadBugs();
+	});
 	initFixValidationWiring();
 
 	// View toggle (grid / list).
@@ -529,8 +594,11 @@ function initBugsWiring() {
 		btn.addEventListener('click', async () => {
 			const format = btn.dataset.bugExport;
 			const params = new URLSearchParams();
-			const projectId = state.projectId;
-			if (projectId) params.set('projectId', projectId);
+			for (const [key, value] of Object.entries(selectedFilters())) {
+				// Pagination is intentionally absent: export preserves the product
+				// meaning of "all matching findings", not just this visible page.
+				if (value && key !== 'sort') params.set(key, value);
+			}
 			try {
 				// B1 W3 — authed export via the raw helper (blob body).
 				const res = await apiRaw(`/findings/export?format=${format}&${params}`);

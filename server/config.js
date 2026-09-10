@@ -339,6 +339,13 @@ export function saveConfig(patch) {
 			}
 		}
 	}
+	// Provider-key deletion is deliberately explicit. An empty API-key input
+	// means "leave the existing key alone" so ordinary Settings saves cannot
+	// erase a credential accidentally; the UI sends clearApiKey only after its
+	// explicit Clear action.
+	if (patch.clearApiKey === true) {
+		delete next.apiKey;
+	}
 	if (patch.maxTurns !== undefined) {
 		next.maxTurns = Math.max(10, Math.min(500, Number(patch.maxTurns) || DEFAULTS.maxTurns));
 	}
@@ -448,9 +455,101 @@ export function saveConfig(patch) {
 	return getPublicConfig();
 }
 
-/** Trims a base URL to its origin+path root, so `/models` can be appended. */
-function normaliseBase(baseUrl) {
-	return baseUrl.trim().replace(/\/+$/, '');
+/**
+ * Build the canonical OpenAI-compatible models endpoint. Settings accepts an
+ * origin with or without `/v1` (and with or without a trailing slash), but
+ * the probe must make exactly one `/v1/models` request.
+ */
+export function buildModelsUrl(baseUrl) {
+	const url = new URL(String(baseUrl ?? '').trim());
+	if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+		throw new Error('The provider base URL must use http or https.');
+	}
+	url.search = '';
+	url.hash = '';
+	const segments = url.pathname.split('/').filter(Boolean);
+	if (segments.at(-1)?.toLowerCase() === 'models') segments.pop();
+	if (segments.at(-1)?.toLowerCase() !== 'v1') segments.push('v1');
+	url.pathname = `/${segments.join('/')}/models`;
+	return url.toString();
+}
+
+function safeUrl(value) {
+	try {
+		const url = new URL(value);
+		url.username = '';
+		url.password = '';
+		return url.toString();
+	} catch {
+		return String(value).slice(0, 300);
+	}
+}
+
+function keyState(apiKey) {
+	const key = typeof apiKey === 'string' ? apiKey.trim() : '';
+	return {
+		keyConfigured: key.length > 0,
+		keyLength: key.length,
+		...(key.length >= 4 ? { keyLast4: key.slice(-4) } : {})
+	};
+}
+
+function isMaskedKey(value) {
+	return typeof value === 'string' && /^[•*]{3,}/.test(value.trim());
+}
+
+function providerDiagnostic({ category, provider, url, apiKey, status, error }) {
+	return {
+		category,
+		provider,
+		method: 'GET',
+		url: safeUrl(url),
+		...keyState(apiKey),
+		...(Number.isInteger(status) ? { status } : {}),
+		...(error?.cause?.code ? { causeCode: String(error.cause.code).slice(0, 80) } : {}),
+		...(error?.cause?.errno ? { causeErrno: Number(error.cause.errno) } : {}),
+		...(error?.cause?.message ? { causeMessage: String(error.cause.message).slice(0, 300) } : {})
+	};
+}
+
+function errorCategory(error) {
+	if (error?.name === 'AbortError' || error?.name === 'TimeoutError') return 'TIMEOUT';
+	const code = error?.cause?.code ?? error?.code;
+	if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'DNS_ERROR';
+	if (code === 'ECONNREFUSED') return 'CONNECTION_REFUSED';
+	if (code === 'EACCES' || code === 'EPERM') return 'CONNECTION_BLOCKED';
+	if (code === 'ETIMEDOUT' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'UND_ERR_HEADERS_TIMEOUT') return 'TIMEOUT';
+	return 'NETWORK_ERROR';
+}
+
+function messageForCategory(category) {
+	return {
+		DNS_ERROR: 'DNS lookup failed for the provider endpoint.',
+		CONNECTION_REFUSED: 'The provider endpoint refused the connection.',
+		CONNECTION_BLOCKED: 'The QASE server process is not permitted to open a connection to the provider endpoint.',
+		TIMEOUT: 'The provider endpoint did not respond before the 12 second timeout.',
+		NETWORK_ERROR: 'The provider endpoint could not be reached.'
+	}[category] ?? 'The provider endpoint could not be reached.';
+}
+
+function responseFailure(response, config, url) {
+	const category = response.status === 401 ? 'AUTH_FAILED'
+		: response.status === 403 ? 'AUTHORIZATION_FAILED'
+			: response.status === 404 ? 'BAD_ENDPOINT'
+				: response.status === 429 ? 'RATE_LIMITED'
+					: response.status >= 500 ? 'PROVIDER_ERROR'
+						: 'PROVIDER_ERROR';
+	const message = response.status === 401 ? 'Authentication failed: the provider rejected the API key.'
+		: response.status === 403 ? 'Authorization failed: the provider denied this API key.'
+			: response.status === 404 ? 'Provider endpoint not found. Check the base URL and /v1 path.'
+				: response.status === 429 ? 'Provider rate limit reached. Try again later.'
+					: response.status >= 500 ? `Provider service failed (${response.status}). Try again later.`
+						: `Provider request failed (${response.status}).`;
+	return {
+		ok: false,
+		error: message,
+		diagnostic: providerDiagnostic({ category, provider: config.provider, url, apiKey: config.apiKey, status: response.status })
+	};
 }
 
 /**
@@ -459,28 +558,59 @@ function normaliseBase(baseUrl) {
  * so a failure here is reported as a warning rather than a hard error.
  */
 export async function testConnection(candidate) {
-	const config = { ...getConfig(), ...candidate };
+	const saved = getConfig();
+	if (isMaskedKey(candidate?.apiKey)) {
+		return {
+			ok: false,
+			error: 'A masked API key cannot be tested. Leave the key field blank to use the saved credential, or enter a new key.',
+			diagnostic: providerDiagnostic({ category: 'INVALID_CREDENTIAL_INPUT', provider: candidate?.provider ?? saved.provider, url: candidate?.baseUrl ?? saved.baseUrl, apiKey: saved.apiKey })
+		};
+	}
+	const candidateKey = typeof candidate?.apiKey === 'string' ? candidate.apiKey.trim() : '';
+	const config = {
+		...saved,
+		...candidate,
+		// An omitted or blank test value deliberately means "test the currently
+		// saved credential". This also prevents a password-input placeholder
+		// from ever becoming an Authorization header value.
+		apiKey: candidateKey || saved.apiKey
+	};
 	const problem = describeProblem(config);
 	if (problem) {
-		return { ok: false, error: problem };
+		return { ok: false, error: problem, diagnostic: providerDiagnostic({ category: 'INVALID_CONFIGURATION', provider: config.provider, url: config.baseUrl, apiKey: config.apiKey }) };
 	}
 	if (!config.baseUrl) {
 		return { ok: true, skipped: true, message: `${config.provider} uses its own endpoint; nothing to probe.` };
 	}
 
-	const url = `${normaliseBase(config.baseUrl)}/models`;
+	let url;
+	try {
+		url = buildModelsUrl(config.baseUrl);
+	} catch (error) {
+		return {
+			ok: false,
+			error: error instanceof Error ? error.message : 'Invalid provider base URL.',
+			diagnostic: providerDiagnostic({ category: 'BAD_ENDPOINT', provider: config.provider, url: config.baseUrl, apiKey: config.apiKey, error })
+		};
+	}
 	try {
 		const response = await fetch(url, {
-			headers: { Authorization: `Bearer ${config.apiKey}`, Accept: 'application/json' },
+			headers: { Authorization: `Bearer ${String(config.apiKey).trim()}`, Accept: 'application/json' },
 			signal: AbortSignal.timeout(12_000)
 		});
 		if (!response.ok) {
+			return responseFailure(response, config, url);
+		}
+		let body;
+		try {
+			body = await response.json();
+		} catch (error) {
 			return {
 				ok: false,
-				error: `${url} returned ${response.status}. ${response.status === 401 ? 'The key was rejected.' : 'Check the base URL.'}`
+				error: 'The provider returned an invalid JSON response.',
+				diagnostic: providerDiagnostic({ category: 'INVALID_RESPONSE', provider: config.provider, url, apiKey: config.apiKey, status: response.status, error })
 			};
 		}
-		const body = await response.json().catch(() => ({}));
 		const models = (body.data ?? body.models ?? [])
 			.map(entry => entry?.id ?? entry?.name)
 			.filter(Boolean);
@@ -490,9 +620,15 @@ export async function testConnection(candidate) {
 			matched: models.length === 0 ? undefined : models.includes(config.model),
 			message: models.length > 0
 				? `Reachable — ${models.length} model(s) listed.`
-				: 'Reachable, but the endpoint listed no models.'
+				: 'Reachable, but the endpoint listed no models.',
+			diagnostic: providerDiagnostic({ category: 'SUCCESS', provider: config.provider, url, apiKey: config.apiKey, status: response.status })
 		};
 	} catch (error) {
-		return { ok: false, error: `Could not reach ${url}: ${error instanceof Error ? error.message : String(error)}` };
+		const category = errorCategory(error);
+		return {
+			ok: false,
+			error: messageForCategory(category),
+			diagnostic: providerDiagnostic({ category, provider: config.provider, url, apiKey: config.apiKey, error })
+		};
 	}
 }

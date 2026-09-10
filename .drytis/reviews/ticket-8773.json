@@ -1,0 +1,33 @@
+{
+  "summary": "Test isolation fix for the QA agent's reliability test suites. Previously, running the session-timeout test suite could silently erase the real session history file in the development workspace (the Sessions list in the UI went empty because of it). Both affected suites now run entirely inside their own temporary data folders and provably never touch the real one.",
+  "what_was_done": [
+    "The session-timeout test suite now creates its own temporary workspace folder before doing anything, so any data the test writes lands only in that folder, and the folder is deleted afterwards",
+    "A guard at the end of the suite proves two things every run: the real session history file is byte-for-byte unchanged, and the test actually used its own temporary store (not someone else's directory)",
+    "The resource-lifecycle test's 'Session count is bounded' check (RL-2) was failing because it read the real workspace's session file, which is legitimately empty after the earlier wipe — it now creates 80 test sessions in its own temporary store, prunes them, and verifies the store keeps at most 50. The check now genuinely passes, and it got stricter, not weaker",
+    "No test was deleted or weakened; no product code was changed"
+  ],
+  "what_was_tested": [
+    "Session-timeout suite: 12/12 pass including the new untouched-real-store guard",
+    "Resource-lifecycle suite: 19/19 pass with RL-2 genuinely green (80 seeded sessions pruned to exactly 50)",
+    "Full 11-suite regression battery: 130 tests, 129 pass, 0 fail, 6 expected skips (live-server-gated governor tests)",
+    "Real session history file verified byte-identical before/after each individual suite AND after the whole battery (three independent checksum comparisons)",
+    "Temporary test stores were created, used, and removed — no leftovers"
+  ],
+  "test_results": [
+    {"name": "session-timeout suite (12 tests)", "status": "pass", "note": "includes hermeticity guard"},
+    {"name": "phase9.3 resource-lifecycle suite (19 tests)", "status": "pass", "note": "RL-2 now genuinely passes with a stricter keep-50 assertion"},
+    {"name": "9-suite regression battery (109 tests)", "status": "pass", "note": "108 pass, 0 fail, 6 live-server-gated skips"},
+    {"name": "Real store untouched proof (checksum x3)", "status": "pass", "note": "single suite, second suite, full battery"}
+  ],
+  "notes": [
+    "Commit 54687b6 on main (2 test files changed, +122/−24); parent e0ad149 (R2-B)",
+    "The bug was proven pre-existing (reproduced on a clean copy of the code from before the R2-B work) — this ticket only fixes the test isolation",
+    "The 33 session shells lost in the earlier wipe are not recovered by this fix; findings/missions/evidence were never affected",
+    "Known cosmetic leftover: one test leaks an empty temp folder under /tmp per run (never touches real data) — noted for a future cleanup, out of scope here"
+  ],
+  "review_checklist": [
+    "Open the Sessions screen in the preview — it should be empty (from the earlier incident), and running the reliability tests must not change any other screen's data",
+    "Optionally run: node --test tests-real/session-timeout.test.js — watch it pass while the real .qase/sessions.json stays byte-identical (checksum before/after)"
+  ],
+  "preview_url": "https://pulse-review-workspa-6grhjr.drytis.dev/"
+}

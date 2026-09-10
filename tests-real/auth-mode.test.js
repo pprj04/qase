@@ -12,14 +12,19 @@
  *   6. GET /api/findings     → 200 anonymous
  *   7. GET /api/v2/health    → 200 anonymous
  *
- *  required mode (QASE_AUTH_MODE unset + QASE_API_TOKEN set):
+ *  secure default (QASE_AUTH_MODE unset/empty/invalid):
+ *   - a configured master token enables normal required authentication
+ *   - an absent token still requires a QASE account session; it never opens
+ *     workspace access. The first QASE administrator may initialize the
+ *     account system once without a master token.
+ *
+ *  required mode (QASE_AUTH_MODE=required + QASE_API_TOKEN set):
  *   8. GET /api/config        → 401 anonymous
  *   9. wrong Bearer token     → 401
  *  10. POST /api/v1/missions  → 401 anonymous
  *  11. GET /api/auth/me       → 401 anonymous
  *
- *  legacy mode (QASE_AUTH_MODE unset + no token configured):
- *  12. open access unchanged (GET /api/config → 200 anonymous)
+ *  There is no implicit legacy open mode. Only explicit disabled mode is open.
  *
  * Isolation: each mode boots its own child server on a free port with its
  * own env; nothing touches the dev server on :5173 or its stores.
@@ -64,6 +69,7 @@ async function bootServer(env, label) {
 			...process.env,
 			// Isolate auth + config from the dev shell: each child decides its
 			// own mode; the dev .env token must not leak into any scenario.
+			QASE_DATA_DIR: home,
 			QASE_AUTH_MODE: '',
 			QASE_API_TOKEN: '',
 			QASE_PORT: '',
@@ -77,16 +83,28 @@ async function bootServer(env, label) {
 	let stderr = '';
 	child.stderr.on('data', (d) => { stderr += d.toString(); });
 	const base = `http://127.0.0.1:${port}`;
-	const cleanup = () => { try { child.kill('SIGKILL'); } catch {} try { rmSync(home, { recursive: true, force: true }); } catch {} };
+	const cleanup = async () => {
+		if (child.exitCode === null) {
+			const exited = new Promise(resolve => child.once('exit', resolve));
+			try { child.kill('SIGTERM'); } catch {}
+			await Promise.race([exited, delay(2_000)]);
+			if (child.exitCode === null) {
+				const forced = new Promise(resolve => child.once('exit', resolve));
+				try { child.kill('SIGKILL'); } catch {}
+				await Promise.race([forced, delay(2_000)]);
+			}
+		}
+		try { rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+	};
 	for (let i = 0; i < 60; i += 1) {
-		if (child.exitCode !== null) { cleanup(); throw new Error(`${label} server exited early (${child.exitCode}): ${stderr.slice(0, 500)}`); }
+		if (child.exitCode !== null) { await cleanup(); throw new Error(`${label} server exited early (${child.exitCode}): ${stderr.slice(0, 500)}`); }
 		try {
 			const r = await fetch(`${base}/api/health`);
 			if (r.ok) return { child, base, cleanup };
 		} catch { /* not up yet */ }
 		await delay(500);
 	}
-	cleanup();
+	await cleanup();
 	throw new Error(`${label} server did not become healthy. stderr: ${stderr.slice(0, 800)}`);
 }
 
@@ -115,7 +133,7 @@ async function createMission(base) {
 
 test('disabled mode — UI, config, identity, missions, findings, v2 all open', async (t) => {
 	const srv = await bootServer({ QASE_AUTH_MODE: 'disabled' }, 'disabled');
-	t.after(() => srv.cleanup());
+	t.after(async () => srv.cleanup());
 
 	await t.test('1. GET / serves the SPA', async () => {
 		const r = await fetch(`${srv.base}/`);
@@ -165,7 +183,7 @@ test('disabled mode — UI, config, identity, missions, findings, v2 all open', 
 test('required mode — enforcement unchanged (401 everywhere without credentials)', async (t) => {
 	const TOKEN = 'test-master-token-do-not-use';
 	const srv = await bootServer({ QASE_AUTH_MODE: 'required', QASE_API_TOKEN: TOKEN }, 'required');
-	t.after(() => srv.cleanup());
+	t.after(async () => srv.cleanup());
 
 	await t.test('8. GET /api/config anonymous → 401', async () => {
 		const r = await call(srv.base, '/api/config');
@@ -193,12 +211,32 @@ test('required mode — enforcement unchanged (401 everywhere without credential
 	});
 });
 
-test('legacy mode — no token configured keeps historical open access', async (t) => {
-	const srv = await bootServer({}, 'legacy');
-	t.after(() => srv.cleanup());
+test('secure default — missing or empty mode never opens a workspace without a token', async (t) => {
+	for (const [label, env] of [
+		['missing', {}],
+		['empty', { QASE_AUTH_MODE: '' }]
+	]) {
+		await t.test(label, async (st) => {
+			const srv = await bootServer(env, `secure-${label}`);
+			st.after(async () => srv.cleanup());
+			const config = await call(srv.base, '/api/config');
+			assert.equal(config.status, 401);
+			const me = await call(srv.base, '/api/auth/me');
+			assert.equal(me.status, 401);
+			const boot = await call(srv.base, '/api/auth/bootstrap');
+			assert.equal(boot.status, 200);
+			assert.equal(boot.json.mode, 'required');
+			assert.equal(boot.json.canBootstrap, true);
+		});
+	}
+});
 
-	await t.test('12. GET /api/config anonymous → 200 (pre-existing behavior)', async () => {
-		const r = await call(srv.base, '/api/config');
-		assert.equal(r.status, 200);
-	});
+test('invalid auth mode fails closed as required mode', async (t) => {
+	const TOKEN = 'test-master-token-do-not-use';
+	const srv = await bootServer({ QASE_AUTH_MODE: 'unexpected', QASE_API_TOKEN: TOKEN }, 'invalid');
+	t.after(async () => srv.cleanup());
+	const anonymous = await call(srv.base, '/api/config');
+	assert.equal(anonymous.status, 401);
+	const authenticated = await call(srv.base, '/api/config', { token: TOKEN });
+	assert.equal(authenticated.status, 200);
 });

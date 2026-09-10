@@ -1,0 +1,39 @@
+{
+  "summary": "Evidence counters and finding-to-evidence linkage (R6-T1). Newly collected session evidence now writes typed evidence IDs back onto the finding records themselves (not just graph edges), and every collection run records attempted-vs-persisted evidence counts. Evidence-save failures — previously only visible in the console — are now counted and surfaced through the mission evidence-integrity endpoint. Historical findings without linkage continue to load unchanged.",
+  "what_was_done": [
+    "Findings now carry an evidenceIds array on the record itself. When the evidence graph links a finding to evidence at finalize time, those evidence IDs are mirrored onto the findings-store record (idempotent — re-running collection never duplicates links; only IDs the graph itself resolves are written)",
+    "Every session finalize stamps evidenceStats on the mission: attempted vs persisted evidence counts, observations, links, evidenceIds written back, with a timestamp and the save-health snapshot at stamp time",
+    "Evidence-graph save failures are now counted with the last error and timestamp, exposed as evidenceSaveHealth on the mission evidence-integrity diagnostics endpoint (explicit nulls when never failed — nothing fabricated)",
+    "The evidence-integrity endpoint additionally reports a linkage block: how many of the mission's findings have typed evidence linked vs not",
+    "Historical findings that predate linkage load with an empty evidenceIds array (normalized on load), so no consumer needs a special case",
+    "The scope guard from the R6 spec held: no screenshot artifact persistence, no retention policy, no shell cleanup, no database work"
+  ],
+  "what_was_tested": [
+    "New finding receives the correct evidence IDs; unrelated evidence is not linked (asserted)",
+    "Idempotency: repeated collection does not duplicate links",
+    "Historical findings without evidenceIds normalize to empty array and load safely",
+    "Counters accurate in success path; simulated persistence failure (unwritable data dir) is visible in save health with no silent loss",
+    "Integrity endpoint surfaces counters, save health, and linkage counts; F4 ownership still enforced on the modified route",
+    "F1–F5 regression battery re-run at the T1 commit: all green (BrowserStack validation, browser ownership, interrupted reason, frame recovery, lifecycle, awaiting-input, resource-lifecycle, session-timeout, runtime-kick)"
+  ],
+  "test_results": [
+    {"name": "Dedicated R6-T1 suite (p0f6-r6t1-evidence-linkage)", "status": "pass", "note": "5/5"},
+    {"name": "Evidence & findings suites", "status": "pass", "note": "phase6-evidence-graph 32/32, phase11a-findings-store 27/27, phase11a-v2 6/6 isolated, c3-finding-quality 17/17, b1-session-finding-linkage 4/4 with token"},
+    {"name": "Auth & API (isolated required-auth server)", "status": "pass", "note": "phase16 17/17, phase17 16/16, phase18 13/13, contract-baseline 31/31, auth-mode 16/16, user-auth 22/22, openapi-docs-parity 3/3"},
+    {"name": "F1–F5 regression battery at T1 HEAD", "status": "pass", "note": "97/97 across 9 suites, 0 fail"},
+    {"name": "Ownership isolation (p0f4)", "status": "pass", "note": "3/3 hermetic"}
+  ],
+  "notes": [
+    "Commit 1b29102 on main (5 files, +431/−3): evidenceGraph.js, findings.js, index.js, missions.js, tests-real/p0f6-r6t1-evidence-linkage.test.js",
+    "Deliberately deferred to R6-T2+: screenshot artifact persistence (G2), retention policy (G4), mission-shell TTL (G5), store-integrity visibility + webhook listener fix (G6/G7), meeting media emulation (G8), durable-store decision (spec §2)",
+    "Environmental failures classified per F6 protocol, not product regressions: phase11a-v2/contract-baseline auth-gate checks hit the shared open-mode dev server; b1-session-finding-linkage has the known QASE_TEST_TOKEN/QASE_API_TOKEN env-name bug (passes with token set); re-ran all in correct isolated environments",
+    "A stale git index.lock from the interrupted turn was removed (11 hours old, no live git process) before committing",
+    "The evidence graph remains the source of truth; evidenceIds on findings is a derived mirror"
+  ],
+  "review_checklist": [
+    "Complete a mission with findings that have evidence text — the mission's evidence-integrity endpoint should show findingsWithTypedEvidence > 0 and evidenceStats with matching attempted/persisted counts",
+    "Open a bug in the Bugs hub for a new mission — it should show linked typed evidence instead of 'No typed evidence linked'",
+    "Historical bugs from before this change still open and load normally (evidenceIds shows as none, not an error)"
+  ],
+  "preview_url": "https://pulse-review-workspa-6grhjr.drytis.dev/"
+}

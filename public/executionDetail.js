@@ -82,6 +82,46 @@ export function renderExecMeta(session) {
 		+ (mode === 'BROWSERSTACK_FAILED' ? ' — BrowserStack requested; launch failed, nothing executed' : '');
 }
 
+export function renderExecutionHealth(session) {
+	const panel = document.getElementById('execution-health');
+	const title = document.getElementById('execution-health-title');
+	const summary = document.getElementById('execution-health-summary');
+	const components = document.getElementById('execution-health-components');
+	const action = document.getElementById('execution-health-action');
+	if (!panel || !title || !summary || !components || !action) return;
+	const health = session?.executionHealth;
+	if (!health) {
+		panel.hidden = true;
+		return;
+	}
+	panel.hidden = false;
+	panel.dataset.status = health.overall ?? 'running';
+	const retry = health.lastIssue?.retry;
+	const retrySuffix = health.overall === 'retrying' && retry?.willRetry
+		? ` Retry ${retry.attempt}/${retry.maxAttempts} scheduled.`
+		: health.overall === 'failed' && retry?.exhausted
+			? ` Retries exhausted (${retry.attempt}/${retry.maxAttempts}).`
+			: '';
+	title.textContent = health.overall === 'failed' ? 'Execution failed'
+		: health.overall === 'retrying' ? 'Execution recovering'
+			: health.overall === 'degraded' ? 'Execution warning' : 'Execution health';
+	summary.textContent = (health.overall === 'healthy'
+		? 'Execution completed without an infrastructure failure.'
+		: health.overall === 'running' && health.lastIssue
+			? `Recovered: ${health.lastIssue.summary}`
+			: health.lastIssue?.summary ?? 'QASE is preparing the execution environment.') + retrySuffix;
+	components.replaceChildren(...Object.entries(health.components ?? {}).map(([name, status]) => {
+		const chip = document.createElement('span');
+		chip.className = 'execution-health-component';
+		chip.dataset.status = status;
+		chip.textContent = `${name}: ${String(status).replace('_', ' ')}`;
+		return chip;
+	}));
+	action.textContent = ['failed', 'retrying', 'degraded'].includes(health.overall)
+		? health.lastIssue?.nextAction ?? '' : '';
+	action.hidden = !action.textContent;
+}
+
 /* ── EVIDENCE tab ──────────────────────────────────────────────────── */
 
 const evState = {
@@ -96,6 +136,12 @@ const evState = {
 
 function artifactUrl(artifactPath) {
 	return `/api/artifacts/${artifactPath}`;
+}
+
+function screenshotUrl(item) {
+	const metadata = item.metadata ?? {};
+	if (metadata.artifact?.id && metadata.screenshotPersisted !== false) return `/api/v1/artifacts/${encodeURIComponent(metadata.artifact.id)}/content`;
+	return metadata.artifactPath ? artifactUrl(metadata.artifactPath) : null;
 }
 
 async function artifactExists(artifactPath) {
@@ -149,13 +195,13 @@ function renderEvidenceCard(item) {
 	body.className = 'ev-card-body';
 
 	if (kind === 'screenshot') {
-		const path = item.metadata?.artifactPath;
-		if (path) {
+		const imageUrl = screenshotUrl(item);
+		if (imageUrl) {
 			const img = document.createElement('img');
 			img.className = 'ev-shot';
 			img.loading = 'lazy';
 			img.alt = item.observation ?? 'screenshot';
-			img.src = artifactUrl(path);
+			img.src = imageUrl;
 			img.addEventListener('error', () => {
 				img.replaceWith(Object.assign(document.createElement('div'), {
 					className: 'ev-shot-missing',
@@ -163,7 +209,7 @@ function renderEvidenceCard(item) {
 				}));
 			});
 			const link = document.createElement('a');
-			link.href = artifactUrl(path);
+			link.href = imageUrl;
 			link.target = '_blank';
 			link.rel = 'noopener';
 			link.title = 'Open full artifact';
@@ -172,7 +218,7 @@ function renderEvidenceCard(item) {
 		} else {
 			// step_outcome screenshot action: no artifact file recorded, but
 			// the step card itself carries the info honestly.
-			body.innerHTML = `<div class="ev-shot-missing">📸 screenshot step captured — image file not persisted for agent steps<br>
+			body.innerHTML = `<div class="ev-shot-missing">📸 Screenshot ${item.metadata?.screenshotAttempted ? 'attempted but not persisted' : 'has no persisted artifact reference'}<br>
 				<span class="subtle">${escapeHtml(truncate(item.observation ?? 'screenshot captured', 100))}</span></div>`;
 		}
 	} else if (kind === 'console') {
@@ -225,7 +271,11 @@ function renderEvidenceCard(item) {
 		});
 		foot.append(findingLink);
 	}
-	if (item.integrity) foot.innerHTML += `<span class="ev-integrity" title="evidence integrity id">⛓ ${escapeHtml(item.integrity)}</span>`;
+	if (item.integrity) {
+		const integrity = document.createElement('span');
+		integrity.className = 'ev-integrity'; integrity.title = 'evidence integrity id';
+		integrity.textContent = `⛓ ${item.integrity}`; foot.append(integrity);
+	}
 	if (foot.childElementCount) card.append(foot);
 	return card;
 }
@@ -274,16 +324,16 @@ function renderEvidenceGrid() {
 	if (derived) {
 		const note = document.createElement('div');
 		note.className = 'ev-empty ev-note';
-		note.innerHTML = `👣 Showing the run's <b>captured browser steps</b> as evidence. This session ended at the ${'&lt;'}20-minute watchdog before the mission finalized, so the linked evidence graph was never built — these are the raw recorded actions, exactly what the graph is derived from.`;
+		note.innerHTML = `👣 Showing the run's <b>captured browser steps</b>. No published graph records were returned; these are the recorded actions, not independently published evidence.`;
 		grid.prepend(note);
 	}
 	if (evState.filter === 'screenshots' || evState.filter === 'all') {
-		const hasImage = filtered.some(i => i.metadata?.artifactPath);
+		const hasImage = filtered.some(i => screenshotUrl(i));
 		const hasShotRecords = filtered.some(i => evidenceKind(i) === 'screenshot');
 		if (hasShotRecords && !hasImage) {
 			const note = document.createElement('div');
 			note.className = 'ev-empty ev-note';
-			note.innerHTML = `📷 This agent run recorded <b>screenshot steps</b> as evidence, but still images aren't persisted for agent missions — they stream live to the browser panel during execution. Test-case runs (<a href="#/tests">Tests page</a>) do persist screenshots and traces.`;
+			note.textContent = 'Screenshot actions were recorded, but these records have no persisted image reference. See each capture status for details.';
 			grid.prepend(note);
 		}
 	}
@@ -325,7 +375,7 @@ async function loadSessionEvidence(sessionId, { force = false } = {}) {
 			// captured dozens of structured steps. Fall back to the raw
 			// captured steps (same data the graph itself is derived from)
 			// so the tab reflects what actually happened.
-			items = await deriveEvidenceFromSteps(sessionId, token);
+			items = await deriveEvidenceFromSteps(sessionId);
 		}
 		evState.items = items;
 		evState.sessionId = sessionId;
@@ -347,7 +397,7 @@ async function loadSessionEvidence(sessionId, { force = false } = {}) {
  * watchdog-ended run still shows its real browser actions. No server data
  * is mutated — this mirrors what collectSessionEvidence would have created.
  */
-async function deriveEvidenceFromSteps(sessionId, token) {
+async function deriveEvidenceFromSteps(sessionId) {
 	try {
 		// B1 W3 — authed read via the raw helper.
 		const res = await apiRaw(`/sessions/${sessionId}/detail?field=capturedSteps`);
@@ -375,7 +425,9 @@ async function deriveEvidenceFromSteps(sessionId, token) {
 						consoleErrors: step.outcome.consoleErrors,
 						networkErrors: step.outcome.networkErrors
 					} : {},
-					metadata: { stepId: step.id, toolCallId: step.toolCallId, derivedFromSteps: true }
+					metadata: { stepId: step.id, toolCallId: step.toolCallId, derivedFromSteps: true,
+						...(step.screenshot ? { artifact:step.screenshot.artifactId ? {id:step.screenshot.artifactId} : null,
+							screenshotAttempted:step.screenshot.captureAttempted, screenshotPersisted:step.screenshot.persisted, screenshotStatus:step.screenshot.status } : {}) }
 				};
 			});
 	} catch {

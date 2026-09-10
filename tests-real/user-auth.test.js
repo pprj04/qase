@@ -17,9 +17,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.QASE_BASE_URL ?? 'http://127.0.0.1:5173';
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function masterToken() {
 	if (process.env.QASE_API_TOKEN) return process.env.QASE_API_TOKEN;
@@ -80,7 +82,7 @@ function probe(script, { env = {} } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'd2-auth-'));
 	const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
 		env: { ...process.env, QASE_DATA_DIR: dir, ...env },
-		cwd: new URL('..', import.meta.url).pathname,
+		cwd: ROOT,
 		encoding: 'utf8',
 		timeout: 30_000
 	});
@@ -107,7 +109,7 @@ test('D2-01: bootstrap endpoint reports one-time admin claim state', async () =>
 	const { status, json } = await call('/api/auth/bootstrap');
 	assert.equal(status, 200);
 	assert.equal(typeof json.needsAdmin, 'boolean');
-	assert.equal(json.version, 2);
+	assert.equal(json.version, 4);
 });
 
 test('D2-02: unauthenticated API access is 401 (B1 unchanged)', async () => {
@@ -121,7 +123,7 @@ test('D2-03: register-admin is permanently closed once claimed', async () => {
 	const boot = await call('/api/auth/bootstrap');
 	if (boot.json.needsAdmin) return; // fresh workspace: claim tested in subprocess
 	const { status, json } = await call('/api/auth/register-admin', {
-		method: 'POST', body: { email: `late-${RUN}@t.local`, password: 'late-admin-pass' }
+		method: 'POST', token: true, body: { email: `late-${RUN}@t.local`, password: 'late-admin-pass' }
 	});
 	assert.equal(status, 403);
 	assert.match(json.error, /already exists/i);
@@ -396,7 +398,7 @@ console.log(JSON.stringify({ resolved: Boolean(s.resolveSession(t)) }));
 	assert.equal(JSON.parse(outLine(result)).resolved, false, 'expired session must not resolve');
 });
 
-test('D2-22: master-only surfaces unreachable for every role — including case-varied paths (behavioral)', async () => {
+test('D2-22: machine-only surfaces stay unreachable for non-admin roles; Admin sessions manage config', async () => {
 	if (!hasServer) return;
 	const cookie = await ensureAdmin();
 	const email = `d2-mx-${RUN}@t.local`, password = 'matrix-pass-123';
@@ -427,13 +429,13 @@ test('D2-22: master-only surfaces unreachable for every role — including case-
 		assert.ok(get.status === 403 || get.status === 404, `operator GET ${p} must be 403/404, got ${get.status}`);
 	}
 
-	// Admin USERS are blocked from credential-bearing config too — with the
-	// same case-hardening.
+	// Admin USERS can manage credential Settings without possessing the
+	// master machine token, including case-varied Express paths.
 	const adminLogin = await call('/api/auth/login', { method: 'POST', body: { email: `d2-admin-${RUN}@test.local`, password: 'd2-admin-password' } });
 	const ac = cookieOf(adminLogin.headers);
 	for (const p of ['/api/config', '/API/CONFIG']) {
 		const put = await call(p, { method: 'PUT', cookie: ac, body: {} });
-		assert.equal(put.status, 403, `admin-user PUT ${p} must be 403 (master-only), got ${put.status}`);
+		assert.equal(put.status, 200, `admin-user PUT ${p} must be 200, got ${put.status}`);
 	}
 	const diag = await call('/API/V1/DIAGNOSTICS/store-hygiene', { cookie: ac });
 	assert.equal(diag.status, 403, 'admin-user must not read diagnostics');

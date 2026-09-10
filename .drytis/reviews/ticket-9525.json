@@ -1,0 +1,38 @@
+{
+  "ticket": 9525,
+  "title": "Phase 2 \u00b7 R6-T5 \u2014 Store-integrity visibility (G6) + dead mission.failed webhook listener (G7)",
+  "committed_at": "2026-09-08T08:05:00Z",
+  "commit": "023f279 \u2014 R6-T5: store-integrity visibility + dead webhook listener fix",
+  "head_before": "a03719e (R6-T4)",
+  "state_at_start": "Interrupted prior turn left the full implementation uncommitted in the tree; this pass verified it at HEAD rather than rebuilding. Focused suite passed 11/11 on first run.",
+  "changes": {
+    "server/storeHealth.js (NEW, 101 lines)": "Per-store health registry: recordCorruptLoad/recordWriteFailure/getStoreHealthSnapshot/_clearForTesting. Basename-only backup ids, sanitized errors (<=300 chars, paths stripped), explicit null = never failed, recoveredAsEmpty flag. Four stores: sessions/missions/findings/evidence.",
+    "server/store.js": "Records corrupt-load quarantine + write failures (debounced save + shutdown flush). FIX: STATE_DIR now honors QASE_DATA_DIR (was cwd/.qase \u2014 isolation-contract violation; isolated children silently read the DEV sessions store).",
+    "server/missions.js": "Records corrupt-load quarantine + save failures for missions.json.",
+    "server/findings.js": "Records load failure (no quarantine by design \u2014 documented) + persist failures.",
+    "server/evidenceGraph.js": "Records corrupt quarantine + save failures.",
+    "server/index.js": "G7 fix: failure-webhook listener 'updated' -> 'mission:updated' (was dead; updateMission-path mission failures fired NO mission.failed webhook). G6: GET /api/v1/diagnostics/state-integrity now returns result.storeHealth.",
+    "server/webhookDelivery.js": "verify-only touch-ups from the prior turn (delivery pump/ledger used by tests).",
+    "tests-real/p0f6-r6t5-store-integrity-webhook.test.js (NEW, 11 tests)": "Hermetic: real corrupt-load quarantine via child boot on corrupted sessions.json; write-failure injection; snapshot shape/sanitization/null semantics; state-integrity route + auth gating (401 anon / 200 token); webhook fix end-to-end via signed delivery ledger (exactly ONE mission.failed, HMAC verified, no finalized duplicate, unrelated untouched).",
+    "tests-real/phase11a-findings-store-v2.test.js": "Test-defect fix: metrics assertion was absolute (total >= 1) and only held via the store.js isolation leak; now asserts self-consistency (metrics.total == sum(session.findingCount)) \u2014 correct in any environment."
+  },
+  "verification": {
+    "focused_t5": "11 pass / 0 fail / 0 skip",
+    "r6_family": "T1 5/5, T2 10/10, T3 11/11, T4 12/12",
+    "p0_battery": "F1 12/12, F2 6/6, F3 10/10, F5 4/4, ownership 3/3",
+    "auth": "auth-mode 16/16, user-auth 22/22",
+    "lifecycle": "reliability-lifecycle 13/13, awaiting-input 16/16, resource-lifecycle 20/20, runtime-kick 4/4, session-timeout 12/12, phase9.4 37/37, phase9.3-v2 19/19, phase1-mission 5/5, phase1-watchdog 5/5, m1-p4.3 24/24",
+    "api": "phase6 32/32, phase11a 27/27, c3 17/17, openapi-parity 3/3, phase16 17/17, phase5 13/13, pulse-openapi-api 13/13, pulse-openapi-doc 18/18, b0 1/1, b1-crash 1/1, b1-integration 20/20",
+    "isolated_env_suites": "phase11a-findings-store-v2 6/6 (after consistency-assertion fix), phase18-api 13/13, contract-baseline 31/31, phase17-api 16/16 (with completed-mission fixture seeded)",
+    "environmental_failures": "None unexplained. v2's metrics test failure was a TEST DEFECT exposed by the store.js isolation fix (fixed on the test side). phase17 0/0 was fixture absence (seeded, then 16/16)."
+  },
+  "incidents": [
+    "WORKSPACE DISK FULL (100%) mid-ticket: 9.8G device shared by /workspace + /home/coder + /var/lib/mysql + /var/logs. Root cause of the gap: multi-GB of blocks leaked by the ext4 corruption itself (visible files sum ~1.9G vs 9.6G used; no deleted-but-open files). Mitigated: cleared regenerable caches (npm _cacache/_npx ~450M, code-server VSIX .trash 101M, codex cache 131M), moved .qase/artifacts (325M) + .drytis/backup-0816 (185M) to /tmp/qase-freed/ (copy+verify+remove, 8361 files; 15 corrupted entries left behind \u2014 they cannot be stat'd). Now ~322M free. PLAYWRIGHT BROWSERS (705M) KEPT \u2014 tests need them. The leaked blocks are not recoverable on a live mount; noted for ops."
+  ],
+  "reviewer_notes": [
+    "G7 is a one-line event-name alignment; guard/dedup/signing semantics untouched.",
+    "G6 counters are process-scoped by design (documented in code); quarantine files persist on disk.",
+    "store.js QASE_DATA_DIR fix is intentional product scope (isolation contract) with a regression test updated accordingly \u2014 flag if you disagree with the test-side fix.",
+    "The disk incident delayed but did not alter the change set."
+  ]
+}

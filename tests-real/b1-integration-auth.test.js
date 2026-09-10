@@ -7,15 +7,9 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 
 const BASE = process.env.QASE_TEST_BASE_URL || `http://localhost:${process.env.PORT || 5173}`;
-const SECRET = (() => {
-	try {
-		const env = readFileSync('/workspace/.env', 'utf8');
-		return env.match(/^QASE_INTEGRATION_SECRET=(.+)$/m)[1].trim();
-	} catch { return process.env.QASE_INTEGRATION_SECRET || ''; }
-})();
+const SECRET = process.env.QASE_INTEGRATION_SECRET || '';
 
 function sign(keyId, method, path, body = '') {
 	const ts = String(Date.now());

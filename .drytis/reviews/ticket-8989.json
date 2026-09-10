@@ -1,0 +1,32 @@
+{
+  "summary": "Read-only forensic investigation of six production complaints about the QA agent: two were confirmed P0 security/execution-trust issues (any logged-in user can see everyone's runs; every scheduled BrowserStack run fails on invalid credentials), plus confirmed browser-kill and interrupted-state explainability defects. Evidence was gathered with controlled probes on the live store, and no production behavior was changed.",
+  "what_was_done": [
+    "Verified the cross-user visibility complaint: mission, session, finding and evidence records carry no owner identity, and every read endpoint returns the whole workspace to any authenticated caller — anyone can open another user's run, report and live session stream",
+    "Traced the 'runs freeze' complaint to four independent causes, the main one being that starting a new mission's turn closes the browser of any run currently waiting at a question, so when it resumes the browser panel is permanently stuck while activity continues",
+    "Verified the 'unexpected INTERRUPTED' complaint on a live session: a server restart immediately after the agent asked a question flipped the session to interrupted with its pending question dropped and no reason exposed by the API",
+    "Proved the scheduler itself works — all 11 daily schedules fired, plus a controlled every-minute schedule — while discovering that every scheduled run fails at browser launch because BrowserStack is enabled with invalid credentials and strict mode correctly refuses local fallback",
+    "Traced the evidence-collection opacity and 'No browser yet' panel complaints to their exact code paths, and classified the meeting-audio failures as an environment limitation (no audio device in the container, no fake-device launch flags)",
+    "Produced an ordered minimal-fix action list that the P0 fix pack (tickets #9035–#9041) now implements"
+  ],
+  "what_was_tested": [
+    "Anonymous and authenticated API reads against the live server confirming the isolation gap",
+    "Controlled probe schedule (every minute) proving the scheduler fires, persists its run, and rolls nextRun",
+    "Store inspection: 51,262 evidence nodes, 2,833 never-started mission shells, 109 interrupted missions, live interrupted session specimen 396edfcf",
+    "Runtime profiling: Node 292MB RSS at 0.7% CPU, all API latencies under 175ms — backend not the freeze bottleneck"
+  ],
+  "test_results": [
+    {"name": "Scheduler fire mechanism (11 daily + 1 controlled probe)", "status": "pass"},
+    {"name": "Scheduled executions (BrowserStack launch)", "status": "fail", "note": "20/20 scheduled rows errored on invalid credentials — the execution defect this fix pack addresses"},
+    {"name": "Cross-user read isolation", "status": "fail", "note": "confirmed absent — P0 security gap, fixed in #9038"},
+    {"name": "Restart-during-awaiting_input specimen", "status": "fail", "note": "question dropped, no reason exposed — fixed in #9037"}
+  ],
+  "notes": [
+    "Investigation was read-only; probe artifacts (schedule faa16685, test case 55d4b2e1, regression run 053b0523) were created and deleted; baseline HEAD 54687b6 untouched",
+    "Full findings live in /workspace/.drytis/notes/forensics-prod-complaints-2026-09-03.md"
+  ],
+  "review_checklist": [
+    "Read the forensic note at .drytis/notes/forensics-prod-complaints-2026-09-03.md and confirm the six verdicts and the ordered fix list",
+    "Spot-check the claimed store states (interrupted mission count, evidence node totals) against .qase data"
+  ],
+  "preview_url": "https://pulse-review-workspa-6grhjr.drytis.dev/"
+}

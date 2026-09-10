@@ -8,6 +8,7 @@
  */
 
 import { deepIsoTimestamps, deepSnakeKeys } from './pulseHelpers.js';
+import { regressionExecutionCounts } from './dataMetrics.js';
 
 const ms = (v) => (typeof v === 'number' && Number.isFinite(v) ? new Date(v).toISOString() : null);
 /** Omit-if-absent timestamp spread — never emits null (guide rule 5). */
@@ -229,6 +230,7 @@ export function projectSchedule(sc, names) {
 }
 
 export function projectRegressionRun(r, names) {
+	const execution = regressionExecutionCounts(r);
 	return {
 		id: r.id,
 		schedule_id: r.scheduleId ?? null,
@@ -242,7 +244,8 @@ export function projectRegressionRun(r, names) {
 		failed: r.failed ?? 0,
 		errored: r.errored ?? 0,
 		flaky: r.flaky ?? 0,
-		pass_rate: r.total > 0 ? Math.round((r.passed / r.total) * 100) : 0,
+		completed: execution.completed,
+		pass_rate: execution.completed > 0 ? Math.round((execution.passed / execution.completed) * 100) : null,
 		duration_ms: r.durationMs ?? 0,
 		ts: ms(r.ts),
 	};
@@ -305,6 +308,10 @@ export function projectKnowledgePattern(p) {
 }
 
 export function projectTrendPoint(point) {
+	const passed = Number(point.passed) || 0;
+	const failed = Number(point.failed) || 0;
+	const errored = Number(point.errored) || 0;
+	const completed = Number.isFinite(point.completed) ? point.completed : passed + failed + errored;
 	return {
 		ts: ms(point.ts),
 		total: point.total ?? 0,
@@ -312,7 +319,10 @@ export function projectTrendPoint(point) {
 		failed: point.failed ?? 0,
 		errored: point.errored ?? 0,
 		flaky: point.flaky ?? 0,
-		pass_rate: point.passRate ?? (point.total > 0 ? Math.round((point.passed / point.total) * 100) : 0),
+		completed,
+		pass_rate: point.passRate !== undefined
+			? point.passRate
+			: (completed > 0 ? Math.round((passed / completed) * 100) : null),
 	};
 }
 

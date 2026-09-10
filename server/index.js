@@ -3,11 +3,11 @@ import * as path from 'node:path';
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { closeBrowser, ensureRuntime, runTurn, finalizeTurnLimitedRun, disposeSessionResources, settleThenDispose } from './agent.js';
+import { closeBrowser, runTurn, finalizeTurnLimitedRun, disposeSessionResources, settleThenDispose } from './agent.js';
 import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
 import {
-	hasUsers, listUsers, createUser, findUserById, updateUser, setPassword,
+	hasUsers, canBootstrapAdmin, createBootstrapAdmin, listUsers, createUser, findUserById, updateUser, setPassword,
 	login as userLogin, createSession as createUserSession, resolveSession as resolveUserSession,
 	revokeSession as revokeUserSession, getAuditTrail, loginRateLimited as userLoginRateLimited,
 	resetLoginFails, flushUsers, __resetForTests as resetUserStoreForTests
@@ -35,8 +35,9 @@ import {
 	createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule,
 	executeSchedule, validateCron, startScheduler
 } from './scheduler.js';
-import { addRegressionRun, listRegressionRuns, getRegressionRun, getTrend } from './regressionStore.js';
+import { addRegressionRun, listRegressionRuns, getRegressionRun, getTrend, getTrendSnapshot } from './regressionStore.js';
 import { getDashboardMetrics } from './metrics.js';
+import { scheduleMetrics, testCaseMetrics, workflowMetrics } from './dataMetrics.js';
 import {
 	createProject, getProject, listProjects, updateProject, deleteProject,
 	ensureDefaultProject, getDefaultProjectId, assignOrphanedEntities
@@ -60,7 +61,7 @@ import { runAutonomyPipeline } from './pipeline.js';
 import {
 	analyzeFinding, analyzeSessionFindings,
 	buildAppImprovementReport, buildFixPrompt, buildAppImprovementPromptText,
-	scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt,
+	scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt, isConfirmedFinding,
 	compareIterations
 } from './devIntelligence.js';
 import {
@@ -97,6 +98,10 @@ import { flushReplayRunsForShutdown, pruneRunsByIds } from './replayStore.js';
 import { flushUxAssessmentsForShutdown, pruneAssessmentsByIds } from './uxAssessment.js';
 import { flushRegressionRunsForShutdown } from './regressionStore.js';
 import { flushTestCasesForShutdown } from './testCases.js';
+import {
+	createExecutionHealth, runWithBoundedExecutionRetries,
+	EXECUTION_RETRY_LIMIT, EXECUTION_RETRY_DELAY_MS
+} from './executionHealth.js';
 import { flushWorkflowsForShutdown } from './workflows.js';
 import { flushKnowledgeForShutdown } from './knowledge.js';
 import { flushBaselinesForShutdown } from './baselines.js';
@@ -319,9 +324,8 @@ function safeEqual(a, b) {
 }
 
 /**
- * When QASE_API_TOKEN is set (via env or config file), protects mutating
- * endpoints from unauthenticated access. When not set, all routes are open
- * (backwards-compatible for single-user local usage).
+ * QASE is secure by default. Only QASE_AUTH_MODE=disabled permits anonymous
+ * access; a missing master token never downgrades a required workspace.
  *
  * Authentication methods:
  *   1. Bearer token via Authorization header (for external API / CI-CD)
@@ -353,38 +357,37 @@ function correlationIdMiddleware(request, response, next) {
 	request.log = (...args) => console.log(`[${cid}]`, ...args);
 	next();
 }
-const AUTH_MODE_DISABLED = process.env.QASE_AUTH_MODE === 'disabled';
+const AUTH_MODE_DISABLED = String(process.env.QASE_AUTH_MODE ?? '').trim().toLowerCase() === 'disabled';
+
+function configuredMasterToken() {
+	const token = getConfig().apiToken;
+	return typeof token === 'string' && token.length > 0 ? token : null;
+}
 
 function requireApiToken(request, response, next) {
 	// QASE_AUTH_MODE=disabled — development/integration mode. EVERY request
 	// passes (tagged kind:'open'); no session cookie or master token is
 	// required, the UI boots without a login gate, and /api/v1 + /api/v2
-	// serve anonymous callers. Default (QASE_AUTH_MODE unset or 'required')
-	// keeps the full enforcement below byte-identical — flip the env var to
-	// restore it. Env-only: never persisted in the settings store.
+	// serve anonymous callers. Every other value, including unset, empty, and
+	// invalid values, is secure required mode. Env-only: never persisted in
+	// the settings store.
 	if (AUTH_MODE_DISABLED) {
 		request.auth = { kind: 'open' };
 		return next();
 	}
-	const token = getConfig().apiToken;
-	if (!token) {
-		// No token configured — open access. Tag the principal explicitly so
-		// P0-F4 ownership scoping sees a defined identity (single-tenant).
-		request.auth = { kind: 'open' };
-		return next();
-	}
+	const token = configuredMasterToken();
 
 	// Method 1: Bearer header (external API / CI-CD).
 	const auth = request.headers.authorization ?? '';
 	const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-	if (bearer && safeEqual(bearer, token)) {
+	if (token && bearer && safeEqual(bearer, token)) {
 		request.auth = { kind: 'master' };
 		return next();
 	}
 
 	// Method 2: Cookie (same-origin browser UI).
 	const cookieMatch = /(?:^|;\s*)qase_token=([^;]+)/.exec(request.headers.cookie ?? '');
-	if (cookieMatch && safeEqual(cookieMatch[1], token)) {
+	if (token && cookieMatch && safeEqual(cookieMatch[1], token)) {
 		request.auth = { kind: 'master' };
 		return next();
 	}
@@ -395,7 +398,7 @@ function requireApiToken(request, response, next) {
 	// (Express does not log query strings by default) and the SPA strips it
 	// from the visible URL.
 	const queryToken = request.query?.token;
-	if (typeof queryToken === 'string' && queryToken && safeEqual(queryToken, token)) {
+	if (token && typeof queryToken === 'string' && queryToken && safeEqual(queryToken, token)) {
 		request.auth = { kind: 'master' };
 		return next();
 	}
@@ -403,15 +406,14 @@ function requireApiToken(request, response, next) {
 	// Method 4 (D2): qase_session cookie from a USER account login
 	// (email+password). Durable — the token hash lives in
 	// .qase/auth-sessions.json, so sessions survive restarts. Role comes
-	// from the user record (admin|operator|viewer). ADMIN users get broad
-	// access except credential-bearing config, which requires the master
-	// token itself — humans should not hold the machine token.
+	// from the user record (admin|operator|viewer). Credential-admin routes
+	// explicitly accept an Admin session or the master bearer token; humans do
+	// not need to possess the machine credential to manage QASE Settings.
 	const userSession = resolveUserSession(userSessionFromCookieHeader(request.headers.cookie));
 	if (userSession && userSession.user.disabledAt == null) {
 		request.auth = { kind: 'user', role: userSession.user.role, userId: userSession.user.id, email: userSession.user.email, name: userSession.user.name, sessionId: userSession.session.tokenHash.slice(0, 12) };
 		return enforceRole(request, response, next);
 	}
-
 	response.status(401).json({ error: 'Authentication required. Sign in at the login screen (session cookie), or use Authorization: Bearer <token> for API/CI access.' });
 }
 
@@ -425,77 +427,56 @@ function userSessionFromCookieHeader(cookieHeader) {
  * Session-authenticated requests (qase_session cookie) carry a role:
  *   viewer   — read-only
  *   operator — read + mission/test execution operations
- * Anything NOT in these two grants — credential-bearing config, LLM config,
- * BrowserStack config, the API token itself, admin team-access management,
- * webhooks, destructive diagnostics — requires the MASTER token. Master
- * requests bypass this gate entirely (request.auth.kind === 'master').
- *
- * The check happens at this single choke point, before any route handler,
- * on method + path prefix — so a session role cannot bypass it by picking a
- * different URL or verb for the same operation.
+ * Credential-bearing Settings are controlled by one shared rule: a
+ * server-validated Admin session OR a valid master API token. The master
+ * token itself, webhooks, and destructive diagnostics remain machine-only.
  */
 
-/** Credential/security-bearing surfaces that NEVER open up to UI sessions. */
-const MASTER_ONLY_PREFIXES = [
-	'/api/config',
+/** Security-sensitive surfaces that remain machine-only. */
+const MACHINE_ONLY_PREFIXES = [
 	'/api/auth/admin',
 	'/api/v1/webhooks',
 	'/api/v1/diagnostics'
 ];
 
+function isCredentialAdmin(request) {
+	return request.auth?.kind === 'master'
+		|| (request.auth?.kind === 'user' && request.auth?.role === 'admin');
+}
+
+/** Shared guard for provider, BrowserStack, and model credential settings. */
+function requireCredentialAdmin(request, response, next) {
+	if (AUTH_MODE_DISABLED || isCredentialAdmin(request)) return next();
+	if (request.auth?.kind === 'user') {
+		return response.status(403).json({ error: 'Credential settings require a signed-in Admin account.' });
+	}
+	return response.status(401).json({ error: 'Authentication required.' });
+}
+
+function isConfigPath(pathLower) {
+	return pathLower === '/api/config' || pathLower.startsWith('/api/config/');
+}
+
 function enforceRole(request, response, next) {
 	const { kind, role } = request.auth ?? {};
 	// Express matches routes CASE-INSENSITIVELY but req.path preserves the
-	// caller's case — normalize before every prefix check or /API/CONFIG
-	// walks straight past the master-only gate (D2 review finding #1).
+	// caller's case — normalize before every prefix check.
 	const pathLower = request.path.toLowerCase();
-	if (kind === 'user' && role === 'admin') {
-		// D2.3 (#7702) — EXACT-PATH diagnostic exception: ADMIN user sessions
-		// may run the BrowserStack connection probe. This route accepts
-		// unsaved form values and returns ONLY a redacted verdict
-		// (ok/code/maskedUser) — it never reads back or returns credential
-		// material, so the master-only rule for /api/config writes does not
-		// apply to it. Exact path + method only: every other /api/config
-		// surface (PUT/GET config, auth/admin, webhooks, diagnostics) stays
-		// master-token-only.
-		if (request.method === 'POST' && pathLower === '/api/config/test-browserstack') {
-			return next();
-		}
-		// D2 admin users: full access EXCEPT credential-bearing config
-		// surfaces (/api/config, /api/auth/admin, webhooks, diagnostics),
-		// which stay master-token-only — the machine token is not shared
-		// with humans, and admin humans manage users via /api/auth/users.
-		if (request.method !== 'GET' && MASTER_ONLY_PREFIXES.some((prefix) => pathLower.startsWith(prefix))) {
-			return response.status(403).json({ error: 'This credential-bearing surface requires the master API token.' });
-		}
-		if (request.method === 'GET' && (pathLower.startsWith('/api/auth/admin') || pathLower.startsWith('/api/v1/webhooks') || pathLower.startsWith('/api/v1/diagnostics'))) {
-			// Read-side of credential-bearing admin surfaces stays master-only.
-			return response.status(403).json({ error: 'This credential-bearing surface requires the master API token.' });
-		}
-		// Admin users may READ /api/config (sanitized in the route itself).
-		return next();
-	}
-	if (kind !== 'user') return next(); // master / open access — unchanged (code sessions removed in D2 Stage 3)
+	if (kind !== 'user') return next(); // master / explicit open mode
 
-	// Credential-bearing surfaces stay master-only for session + operator/viewer users.
-	// EXCEPTION: GET /api/config is allowed through to the route, which returns
-	// a SANITIZED projection for session/user kinds (no provider/model/token
-	// hints) — the SPA must boot for team roles. All other methods and all
-	// other master-only prefixes remain 403.
-	if (pathLower === '/api/config' && (request.method === 'GET' || request.method === 'HEAD')) {
-		return next();
+	// Non-admin users may receive the sanitized bootstrap projection from GET
+	// /api/config, but cannot reach any credential Settings write/test route.
+	if (isConfigPath(pathLower)) {
+		if (request.method === 'GET' || request.method === 'HEAD') return next();
+		if (role === 'admin') return next();
+		return response.status(403).json({ error: 'Credential settings require a signed-in Admin account.' });
 	}
-	if (MASTER_ONLY_PREFIXES.some((prefix) => pathLower.startsWith(prefix))) {
-		return response.status(403).json({ error: 'This operation requires the admin API token.' });
+	if (MACHINE_ONLY_PREFIXES.some((prefix) => pathLower.startsWith(prefix))) {
+		return response.status(403).json({ error: 'This operation requires the master API token.' });
 	}
 
-	if (request.method === 'GET' || request.method === 'HEAD') {
-		// VIEWER and OPERATOR both read. Master-only READs (config, admin)
-		// are handled above via prefix, before this early return.
-		return next();
-	}
-
-	if (role === 'operator' || (kind === 'user' && role === 'admin')) return next(); // missions/tests/workflows/etc.
+	if (request.method === 'GET' || request.method === 'HEAD') return next();
+	if (role === 'operator' || role === 'admin') return next(); // missions/tests/workflows/etc.
 	return response.status(403).json({ error: 'Viewer access is read-only.' });
 }
 
@@ -592,10 +573,38 @@ function startTurn(session, options) {
 			}
 		}
 		: null;
-	runTurn(session, hooks ? { ...options, hooks } : options).catch(error => {
-		const message = error instanceof Error ? error.message : String(error);
-		addMessage(session, { role: 'system', text: message, kind: 'error' });
-		setStatus(session, 'error', message);
+	const turnOptions = hooks ? { ...options, hooks } : options;
+	session.executionHealth ??= createExecutionHealth({
+		provider: getConfig().provider,
+		executionProvider: session.executionProvider ?? 'local'
+	});
+	void runWithBoundedExecutionRetries(
+		() => runTurn(session, turnOptions),
+		{
+			health: session.executionHealth,
+			context: { stage: 'runtime_start', executionProvider: session.executionProvider ?? 'local' },
+			maxRetries: EXECUTION_RETRY_LIMIT,
+			retryDelayMs: EXECUTION_RETRY_DELAY_MS,
+			onTransition: ({ health, issue, willRetry, retryAttempt, maxRetries }) => {
+				session.executionHealth = health;
+				emit(session, 'execution_health', { health });
+				if (willRetry) {
+					setStatus(session, 'running', `${issue.summary} Retrying automatically (${retryAttempt + 1}/${maxRetries})…`);
+				}
+			}
+		}
+	).then(outcome => {
+		if (outcome.ok) return;
+		const { issue, health } = outcome;
+		session.executionHealth = health;
+		addMessage(session, { role: 'system', text: `${issue.summary} ${issue.nextAction}`, kind: 'error', failureCode: issue.code });
+		setStatus(session, 'error', issue.summary);
+		if (session.missionId) {
+			updateMission(session.missionId, {
+				status: 'failed',
+				failureReason: `${issue.code}: ${issue.summary}`
+			});
+		}
 	});
 }
 
@@ -637,8 +646,9 @@ function startMissionExecution(mission, begin) {
 
 /* ═════════════ D2 — user account authentication ══════════════════════
  *
- * POST   /api/auth/register-admin   ONE-TIME claim when zero users exist
- *                                   (permanently 403 afterwards)
+ * POST   /api/auth/register-admin   ONE-TIME local account initialization
+ *                                   when zero users exist (permanently 403
+ *                                   afterwards); this is not generic signup
  * POST   /api/auth/login            { email, password } → qase_session
  *                                   (durable; generic failure message)
  * POST   /api/auth/logout           destroy the current user session
@@ -669,11 +679,11 @@ function requireUserAdmin(request, response, next) {
 
 app.post('/api/auth/register-admin', (request, response) => {
 	try {
-		if (hasUsers()) {
-			return response.status(403).json({ error: 'An admin account already exists. Sign in instead.' });
+		if (Object.hasOwn(request.body ?? {}, 'role')) {
+			return response.status(400).json({ error: 'Bootstrap role is assigned by the server.' });
 		}
 		const { email, name, password } = request.body ?? {};
-		const user = createUser({ email, name, password, role: 'admin', createdBy: 'bootstrap' });
+		const user = createBootstrapAdmin({ email, name, password });
 		const token = createUserSession(user.id);
 		response.setHeader('Set-Cookie', userCookieString(token, request, 7 * 24 * 3600));
 		response.json({ ok: true, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
@@ -683,9 +693,19 @@ app.post('/api/auth/register-admin', (request, response) => {
 });
 
 // Public bootstrap probe for the login screen (no secrets; tells the UI
-// whether to offer the one-time admin claim). Never requires auth.
+// whether the one-time *account initialization* is still available). This is
+// deliberately the sole unauthenticated mutation: it atomically creates the
+// first server-assigned admin and closes forever. It never opens workspace
+// data or enables general self-registration.
 app.get('/api/auth/bootstrap', (request, response) => {
-	response.json({ needsAdmin: !hasUsers(), version: 2 });
+	const needsAdmin = !hasUsers();
+	response.json({
+		needsAdmin,
+		canBootstrap: canBootstrapAdmin(),
+		mode: AUTH_MODE_DISABLED ? 'disabled' : 'required',
+		requiresMasterToken: false,
+		version: 4
+	});
 });
 
 app.post('/api/auth/login', (request, response) => {
@@ -730,7 +750,7 @@ app.get('/api/auth/me', (request, response) => {
 	}
 	// This route is outside requireApiToken, so resolve identity manually —
 	// same order: master token (header), then user session.
-	const token = getConfig().apiToken;
+	const token = configuredMasterToken();
 	if (token) {
 		const auth = request.headers.authorization ?? '';
 		const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -794,18 +814,11 @@ app.get('/api/config', requireApiToken, (request, response) => {
 		const isAdminUser = request.auth?.kind === 'user' && request.auth?.role === 'admin';
 		const c = getPublicConfig();
 		if (isAdminUser) {
-			// D2 admin users may read config (without token/credential hints).
+			// Settings needs masked provider/BrowserStack state for Admin users,
+			// but the machine master-token state and all secrets stay server-side.
 			delete c.apiTokenHint;
 			delete c.apiTokenFromEnv;
 			delete c.hasApiToken;
-			delete c.browserstackKeyEncrypted;
-			delete c.browserstackNeedsReentry;
-			delete c.browserstackKeyLength;
-			delete c.browserstackKeyFromEnv;
-			delete c.browserstackCredentialSource;
-			delete c.hasBrowserstackKey;
-			delete c.problem;
-			delete c.ready;
 			response.json(c);
 			return;
 		}
@@ -818,6 +831,7 @@ app.get('/api/config', requireApiToken, (request, response) => {
 		delete c.discoveryModel;
 		delete c.executionModel;
 		delete c.reasoning;
+		delete c.hasApiKey;
 		delete c.apiKeyHint;
 		delete c.apiKeyFromEnv;
 		delete c.apiTokenHint;
@@ -847,7 +861,12 @@ app.get('/api/config', requireApiToken, (request, response) => {
  * so idle sessions are torn down and rebuilt on their next turn; a session
  * mid-run keeps the settings it started with.
  */
-app.put('/api/config', requireApiToken, (request, response) => {
+app.put('/api/config', requireApiToken, requireCredentialAdmin, (request, response) => {
+	// QASE_API_TOKEN is intentionally machine-managed. It must never be set,
+	// cleared, or replaced from a browser Admin session.
+	if (request.auth?.kind === 'user' && Object.hasOwn(request.body ?? {}, 'apiToken')) {
+		return response.status(403).json({ error: 'The master API token is machine-managed and cannot be changed from a QASE session.' });
+	}
 	try {
 		const config = saveConfig(request.body ?? {});
 		let kept = 0;
@@ -872,7 +891,7 @@ app.put('/api/config', requireApiToken, (request, response) => {
 });
 
 /** Probes the configured endpoint so a wrong URL or key surfaces before a run. */
-app.post('/api/config/test', requireApiToken, async (request, response) => {
+app.post('/api/config/test', requireApiToken, requireCredentialAdmin, async (request, response) => {
 	response.json(await testConnection(request.body ?? {}));
 });
 
@@ -882,7 +901,7 @@ app.post('/api/config/test', requireApiToken, async (request, response) => {
  * body); falls back to the effective config when they are blank. The access
  * key is used for the probe and never echoed back or logged.
  */
-app.post('/api/config/test-browserstack', requireApiToken, async (request, response) => {
+app.post('/api/config/test-browserstack', requireApiToken, requireCredentialAdmin, async (request, response) => {
 	try {
 		const body = request.body ?? {};
 		const effective = getConfig();
@@ -981,6 +1000,7 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 		// C4 — explicit execution provider + truthful provenance once launched.
 		executionProvider: session.executionProvider ?? null,
 		execution: session.execution ?? null,
+		executionHealth: session.executionHealth ?? null,
 		// P0-F4 — owning user (null = master/open/legacy shared record).
 		ownerUserId: session.ownerUserId ?? null,
 		viewportsExplored: session.viewportsExplored ?? [],
@@ -1060,16 +1080,6 @@ app.post('/api/sessions/:id/message', requireApiToken, async (request, response)
 		session.targetUrl = url;
 		session.title = new URL(url).host;
 		emit(session, 'session', { targetUrl: url, title: session.title });
-	}
-
-	try {
-		await ensureRuntime(session);
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		addMessage(session, { role: 'system', text: message, kind: 'error' });
-		setStatus(session, 'error', message);
-		response.status(500).json({ error: message });
-		return;
 	}
 
 	// A pending question means the user typed instead of using the answer form.
@@ -1490,7 +1500,12 @@ app.post('/api/sessions/:id/workflow', requireApiToken, (request, response) => {
 
 app.get('/api/workflows', requireApiToken, (request, response) => {
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
-	const { body } = paginateList(listWorkflows({ projectId: request.query.projectId, targetUrl: request.query.targetUrl }), request.query);
+	const workflows = listWorkflows({ projectId: request.query.projectId, targetUrl: request.query.targetUrl });
+	const { body } = paginateList(workflows, request.query);
+	if (request.query.includeMetrics) {
+		const items = Array.isArray(body) ? body : body.items;
+		return response.json({ ...(Array.isArray(body) ? {} : body), items, total: workflows.length, metrics: workflowMetrics(workflows) });
+	}
 	response.json(body);
 });
 
@@ -1553,6 +1568,15 @@ app.get('/api/test-cases', requireApiToken, (request, response) => {
 	}
 	// M1-P4.3 — optional pagination: no ?limit → full array (backward compat).
 	const { body } = paginateList(cases, request.query);
+	if (request.query.includeMetrics) {
+		const items = Array.isArray(body) ? body : body.items;
+		return response.json({
+			...(Array.isArray(body) ? {} : body),
+			items,
+			total: cases.length,
+			metrics: testCaseMetrics(cases, listSuites({ projectId: request.query.projectId }))
+		});
+	}
 	response.json(body);
 });
 
@@ -1683,6 +1707,11 @@ app.put('/api/suites/:id', requireApiToken, (request, response) => {
 
 app.delete('/api/suites/:id', requireApiToken, (request, response) => {
 	const deleted = deleteSuite(request.params.id);
+	if (deleted) {
+		for (const testCase of listTestCases({ suiteId: request.params.id })) {
+			updateTestCase(testCase.id, { suiteId: null });
+		}
+	}
 	response.status(deleted ? 204 : 404).end();
 });
 
@@ -1852,7 +1881,11 @@ app.delete('/api/test-cases/:id/baselines', requireApiToken, (request, response)
 /* ── Schedule routes ────────────────────────────────────────────── */
 
 app.get('/api/schedules', requireApiToken, (request, response) => {
-	response.json(listSchedules({ projectId: request.query.projectId }));
+	const schedules = listSchedules({ projectId: request.query.projectId });
+	if (request.query.includeMetrics) {
+		return response.json({ items: schedules, total: schedules.length, metrics: scheduleMetrics(schedules) });
+	}
+	response.json(schedules);
 });
 
 app.post('/api/schedules', requireApiToken, (request, response) => {
@@ -1903,12 +1936,13 @@ app.get('/api/schedules/:id/runs', requireApiToken, (request, response) => {
 /* ── Regression trends ──────────────────────────────────────────── */
 
 app.get('/api/regression/trend', requireApiToken, (request, response) => {
-	response.json(getTrend({
+	const options = {
 		projectId: request.query.projectId,
 		scheduleId: request.query.scheduleId,
 		targetUrl: request.query.targetUrl,
 		limit: Number(request.query.limit) || 20
-	}));
+	};
+	response.json(request.query.includeMetrics ? getTrendSnapshot(options) : getTrend(options));
 });
 
 app.get('/api/regression/runs', requireApiToken, (request, response) => {
@@ -1976,7 +2010,12 @@ app.get('/api/sessions/:id/events', requireApiToken, (request, response) => {
 /* ── Metrics dashboard ──────────────────────────────────────────── */
 
 app.get('/api/metrics/dashboard', requireApiToken, (request, response) => {
-	response.json(getDashboardMetrics({ projectId: request.query.projectId }));
+	const ownerFilter = isUserScoped(request) ? item => canAccessResource(request, item) : null;
+	response.json(getDashboardMetrics({
+		projectId: request.query.projectId,
+		sessionOwnerFilter: ownerFilter,
+		findingOwnerFilter: ownerFilter
+	}));
 });
 
 /* M1-P3 P0-5 follow-up: the projects LIST and findings LIST are public reads
@@ -2003,6 +2042,8 @@ app.get('/api/findings', requireApiToken, (request, response) => {
 		assignee: request.query.assignee,
 		sessionId: request.query.sessionId,
 		q: request.query.q,
+		fixStatus: request.query.fixStatus,
+		sort: request.query.sort,
 		ownerFilter
 	}), request.query);
 	response.json(body);
@@ -2276,13 +2317,7 @@ app.post('/api/v1/integration/missions', requireIntegrationAuth, async (request,
 			updateMission(mission.id, { sessionId: session.id, status: 'running', startedAt: Date.now() });
 			buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
 			const taskPrompt = buildMissionPrompt(mission);
-			ensureRuntime(session).then(() => {
-				startTurn(session, { task: taskPrompt });
-			}).catch(startError => {
-				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
-				setStatus(session, 'error', startError.message);
-				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
-			});
+			startTurn(session, { task: taskPrompt });
 		});
 		if (outcome === 'queued') {
 			updateMission(mission.id, { status: 'queued', queuedAt: Date.now() });
@@ -2313,6 +2348,11 @@ app.get('/api/v1/integration/missions/:id', requireIntegrationAuth, (request, re
 	response.json({
 		id: mission.id,
 		status: mission.status,
+		executionStatus: mission.status,
+		qualityVerdict: mission.verdict,
+		coverage: mission.coverage ?? null,
+		confirmedFindings: (mission.findings ?? []).filter(isConfirmedFinding).length,
+		speculativeFindings: (mission.findings ?? []).filter(f => !isConfirmedFinding(f)).length,
 		type: mission.type,
 		targetUrl: mission.targetUrl,
 		qualityScore: mission.qualityScore,
@@ -2334,7 +2374,7 @@ app.get('/api/v1/integration/missions/:id/report', requireIntegrationAuth, (requ
 	const mission = requireMissionForIntegration(request, response);
 	if (!mission) return;
 	const findings = mission.findings ?? [];
-	const quality = calculateMissionQuality(findings);
+	const quality = mission.quality || calculateMissionQuality(findings,{mission,session:getSession(mission.sessionId)});
 	const report = buildImprovementPrompt(mission, findings, quality);
 	if (request.query.format === 'markdown' || request.query.format === 'md') {
 		response.type('text/markdown').send(buildMissionReportMarkdown(mission, report));
@@ -2368,8 +2408,12 @@ app.get('/api/v1/integration/missions/:id/findings', requireIntegrationAuth, (re
 	];
 	const dedup = new Map();
 	for (const f of all) dedup.set(f.id, f);
-	const items = [...dedup.values()].slice(offset, offset + limit);
-	response.json({ missionId: mission.id, findings: items, total: dedup.size, limit, offset });
+	const allItems = [...dedup.values()];
+	const confirmed = allItems.filter(isConfirmedFinding);
+	const suggestions = allItems.filter(f => !isConfirmedFinding(f));
+	const selected = request.query.confirmedOnly === 'true' ? confirmed : allItems;
+	const items = selected.slice(offset, offset + limit).map(f => ({...f,confirmation:isConfirmedFinding(f)?'confirmed':'suggestion'}));
+	response.json({ missionId: mission.id, findings: items, total: selected.length, confirmedTotal:confirmed.length, speculativeTotal:suggestions.length, actionableFindings:confirmed.slice(offset,offset+limit), limit, offset });
 });
 
 /* ── Integration: evidence (mission-scoped, paginated) ── */
@@ -2568,6 +2612,7 @@ app.get('/api/findings/export', requireApiToken, (request, response) => {
 		severity: request.query.severity,
 		status: request.query.status,
 		category: request.query.category,
+		fixStatus: request.query.fixStatus,
 		q: request.query.q
 	});
 
@@ -3136,13 +3181,7 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
 
 			// Start the agent (async — returns immediately)
-			ensureRuntime(session).then(() => {
-				startTurn(session, { task: taskPrompt });
-			}).catch(startError => {
-				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
-				setStatus(session, 'error', startError.message);
-				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
-			});
+			startTurn(session, { task: taskPrompt });
 		});
 
 		if (outcome === 'queued') {
@@ -3240,13 +3279,7 @@ async function startMissionByIdHandler(request, response, mission) {
 			buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
 
 			const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
-			ensureRuntime(session).then(() => {
-				startTurn(session, { task: taskPrompt });
-			}).catch(startError => {
-				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
-				setStatus(session, 'error', startError.message);
-				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
-			});
+			startTurn(session, { task: taskPrompt });
 		} catch (error) {
 			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
 			throw error; // let the governor release the slot
@@ -3451,13 +3484,7 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 			// Build prompt — includes awareness of previous iterations
 			const taskPrompt = buildMissionPrompt(mission);
 
-			ensureRuntime(session).then(() => {
-				startTurn(session, { task: taskPrompt });
-			}).catch(startError => {
-				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
-				setStatus(session, 'error', startError.message);
-				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
-			});
+			startTurn(session, { task: taskPrompt });
 		} catch (error) {
 			updateMission(mission.id, { status: 'failed', failureReason: error instanceof Error ? error.message : String(error) });
 			throw error;
@@ -3730,14 +3757,8 @@ async function revalidateMissionByIdHandlerInner(request, response, mission) {
 			// Start the agent
 			const injectedPatterns = knowledgeData.patternIds.length;
 			const previousFindings = lastIteration?.findings?.length ?? 0;
-			ensureRuntime(session).then(() => {
-				startTurn(session, { task: taskPrompt });
-				console.log(`[validation-loop] Started revalidation iteration ${iterationNumber} for mission ${mission.id} (session ${session.id})`);
-			}).catch(startError => {
-				addMessage(session, { role: 'system', text: `Agent runtime failed to start: ${startError.message}`, kind: 'error' });
-				setStatus(session, 'error', startError.message);
-				updateMission(mission.id, { status: 'failed', failureReason: `runtime start: ${startError.message}` });
-			});
+			startTurn(session, { task: taskPrompt });
+			console.log(`[validation-loop] Started revalidation iteration ${iterationNumber} for mission ${mission.id} (session ${session.id})`);
 			return { injectedPatterns, previousFindings };
 		} catch (error) {
 			// B2 — a CONTRACT refusal (budget exhausted) must not corrupt the
@@ -3914,7 +3935,7 @@ app.get('/api/v1/missions/:id/report', requireApiToken, (request, response) => {
 	}
 
 	const findings = mission.findings ?? [];
-	const quality = calculateMissionQuality(findings);
+	const quality = mission.quality || calculateMissionQuality(findings,{mission,session:getSession(mission.sessionId)});
 	const report = buildImprovementPrompt(mission, findings, quality);
 
 	const format = request.query.format || 'json';
@@ -3969,7 +3990,7 @@ app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiTok
 
 	const findingId = request.params.findingId;
 	const allFindings = mission.findings ?? [];
-	const quality = calculateMissionQuality(allFindings);
+	const quality = mission.quality || calculateMissionQuality(allFindings,{mission,session:getSession(mission.sessionId)});
 	const decision = mission.iterationMetadata?.[mission.iterationMetadata.length - 1]?.decision ?? null;
 	const latestSession = mission.sessionId;
 	const latestIteration = mission.iterations?.[mission.iterations.length - 1];
@@ -4054,25 +4075,37 @@ app.get('/api/v1/artifacts/stats', requireApiToken, (request, response) => {
 	response.json({ ...artifactStoreStats(), saveHealth: getArtifactSaveHealth() });
 });
 
-app.get('/api/v1/artifacts/:artifactId', requireApiToken, (request, response) => {
+function requireArtifactAuth(request,response,next) {
+	return (request.headers.authorization ?? '').startsWith('QASE-HMAC-SHA256')
+		? requireIntegrationAuth(request,response,next) : requireApiToken(request,response,next);
+}
+function canReadArtifact(request,art) {
+	if (!request.integration) return canAccessResource(request,art);
+	const mission = art.missionId ? getMission(art.missionId) : null;
+	if (!mission || !hasScope(request.integration,'evidence:read') || !workspaceMatches(request.integration,workspaceOfMission(mission))) return false;
+	const sessionLinked = mission.sessionId === art.sessionId || (mission.iterations ?? []).some(i => i.sessionId === art.sessionId) || getSession(art.sessionId)?.missionId === mission.id;
+	if (!sessionLinked) return false;
+	return getMissionEvidencePage(mission.id,{limit:Number.MAX_SAFE_INTEGER}).items.some(e => e.sessionId === art.sessionId && e.metadata?.artifact?.id === art.id);
+}
+app.get('/api/v1/artifacts/:artifactId', requireArtifactAuth, (request, response) => {
 	const art = getArtifact(request.params.artifactId);
 	if (!art) {
 		// Unknown id, write-failed row, missing bytes, or size-mismatch
 		// (corrupt) — one honest 404, no existence leak.
 		return response.status(404).json({ error: 'Artifact not found.' });
 	}
-	if (!canAccessResource(request, art)) {
+	if (!canReadArtifact(request, art)) {
 		return response.status(404).json({ error: 'Artifact not found.' });
 	}
 	response.json(artifactRef(art));
 });
 
-app.get('/api/v1/artifacts/:artifactId/content', requireApiToken, (request, response) => {
+app.get('/api/v1/artifacts/:artifactId/content', requireArtifactAuth, (request, response) => {
 	const art = getArtifact(request.params.artifactId);
 	if (!art) {
 		return response.status(404).json({ error: 'Artifact not found.' });
 	}
-	if (!canAccessResource(request, art)) {
+	if (!canReadArtifact(request, art)) {
 		return response.status(404).json({ error: 'Artifact not found.' });
 	}
 	response.set('Content-Type', art.mimeType || 'image/jpeg');
@@ -4082,8 +4115,8 @@ app.get('/api/v1/artifacts/:artifactId/content', requireApiToken, (request, resp
 });
 
 /**
- * R6-T2 — artifact-store health/facts (diagnostics surface, master-gated by
- * the MASTER_ONLY_PREFIXES convention? No: kept under /api/v1 read with
+ * R6-T2 — artifact-store health/facts (diagnostics surface, machine-gated by
+ * the MACHINE_ONLY_PREFIXES convention? No: kept under /api/v1 read with
  * requireApiToken like the evidence stats route above; it exposes counts
  * only, never paths or owner identities).
  */
@@ -4479,8 +4512,8 @@ async function attemptAutonomyBeforeFinalize(mission, session) {
 			// other terminal session.
 			collectEvidenceForSession(mission, session);
 			finalizeMission(mission.id, {
-				status: 'failed',
-				failureReason: action.reason ?? `Autonomy decision: ${action.stopReason}`,
+				status: action.stopReason === STOP_REASONS.FAILED && session.report && !['error','interrupted'].includes(session.status) ? 'completed' : 'failed',
+				failureReason: action.stopReason === STOP_REASONS.FAILED && session.report ? null : action.reason ?? `Autonomy decision: ${action.stopReason}`,
 				findings: preservedFindings,
 				summary: null
 			});
@@ -4602,7 +4635,7 @@ async function finalizeMissionFromSession(mission, session) {
 		if (f.reproducibility == null) f.reproducibility = scored.reproducibility;
 	}
 
-	const quality = calculateMissionQuality(findings);
+	const quality = calculateMissionQuality(findings,{session,mission,executionStatus:'completed'});
 	const report = buildImprovementPrompt(mission, findings, quality);
 
 	// Record this run as a new iteration (enables the validation loop).
@@ -5065,7 +5098,6 @@ async function startQueuedMission(mission) {
 		buildTestContext(session, mission); // B2 W1 — risk/priority context for the per-turn prompt
 
 		const taskPrompt = buildMissionPrompt(mission) + knowledgeHints;
-		await ensureRuntime(session);
 		startTurn(session, { task: taskPrompt });
 		console.log(`[governor] mission ${mission.id} started from queue`);
 	} catch (error) {
@@ -5243,6 +5275,17 @@ validationBus.on('run:completed', ({ runId, findingId, fixStatus, validationConf
 		missionId: finding?.missionId ?? null,
 		correlationId: mission?.correlationId ?? null
 	});
+});
+
+// P1 — serve the SPA shell only for known browser routes, after every API and
+// static route has had a chance to handle the request. Unknown API paths keep
+// their JSON 404 contract, and missing assets remain ordinary static 404s.
+app.use('/api', (_req, res) => {
+	res.status(404).json({ error: 'API route not found.' });
+});
+
+app.get(['/', '/runs', '/runs/:id', '/tests', '/bugs', '/workflows', '/schedules'], (_req, res) => {
+	res.sendFile(path.join(here, '..', 'public', 'index.html'));
 });
 
 const port = Number(process.env.PORT ?? 5173);

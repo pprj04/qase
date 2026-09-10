@@ -2,6 +2,7 @@
  * Tests module — test case management, suites, test editor, and test execution.
  */
 import { el, state, api, toast, fail, escapeHtml, hostOf, relativeTime, truncate, STEP_ICONS, showPageLoading, showPageError, clearPageState } from './shared.js';
+import { parseMetricCollection } from './metricResponses.js';
 
 /* ── Tests page search/filter wiring ──────────────────────────────── */
 function initTestsWiring() {
@@ -29,15 +30,39 @@ function initTestsWiring() {
 }
 
 /* ── Stats bar ────────────────────────────────────────────────────── */
+function testCasesForCurrentScope() {
+	let scoped = state.testCases;
+	if (state.tagFilter) scoped = scoped.filter(tc => (tc.tags ?? []).includes(state.tagFilter));
+	if (state.suiteFilter) scoped = scoped.filter(tc => tc.suiteId === state.suiteFilter);
+	if (state.testsSearch) {
+		const q = state.testsSearch;
+		scoped = scoped.filter(tc =>
+			tc.name?.toLowerCase().includes(q)
+			|| tc.url?.toLowerCase().includes(q)
+			|| (tc.tags ?? []).some(tag => tag.toLowerCase().includes(q))
+		);
+	}
+	if (state.testsSeverityFilter) scoped = scoped.filter(tc => tc.severity === state.testsSeverityFilter);
+	if (state.testsViewportFilter) {
+		scoped = scoped.filter(tc =>
+			tc.viewport === state.testsViewportFilter
+			|| (tc.viewports ?? []).includes(state.testsViewportFilter)
+		);
+	}
+	return scoped;
+}
+
 function renderTestsStats() {
 	if (!el.testsStats) return;
-	const total = state.testCases.length;
+	const scoped = testCasesForCurrentScope();
+	const total = scoped.length;
 	const bySev = {};
-	for (const tc of state.testCases) bySev[tc.severity] = (bySev[tc.severity] || 0) + 1;
-	const suites = state.suites.length;
+	for (const tc of scoped) bySev[tc.severity] = (bySev[tc.severity] || 0) + 1;
+	const suiteNames = new Map(state.suites.map(suite => [suite.id, String(suite.name ?? '').trim().replace(/\s+/g, ' ').toLowerCase()]));
+	const suites = state.suitesUnavailable ? null : new Set(scoped.map(tc => suiteNames.get(tc.suiteId)).filter(Boolean)).size;
 	const chips = [
 		`<span class="ts-chip"><strong>${total}</strong> tests</span>`,
-		`<span class="ts-chip"><strong>${suites}</strong> suites</span>`,
+		`<span class="ts-chip"><strong>${suites ?? '—'}</strong> suites</span>`,
 	];
 	if (bySev.critical) chips.push(`<span class="ts-chip ts-crit"><strong>${bySev.critical}</strong> critical</span>`);
 	if (bySev.high) chips.push(`<span class="ts-chip ts-high"><strong>${bySev.high}</strong> high</span>`);
@@ -73,22 +98,28 @@ async function loadTestCases() {
 	if (projectId) params.set('projectId', projectId);
 	const query = params.toString() ? `?${params.toString()}` : '';
 	try {
-		state.testCases = await api(`/test-cases${query}`);
+		const data = parseMetricCollection(
+			await api('/test-cases' + (query ? query + '&includeMetrics=1' : '?includeMetrics=1')),
+			'test'
+		);
+		state.testCases = data.items;
+		state.testMetrics = data.metrics;
 	} catch (error) {
 		state.testCases = [];
+		state.testMetrics = null;
 		state.testCasesLoaded = true;
-		// BUILD 1: a load failure must not masquerade as an empty project.
-		if (firstLoad || !state.suites?.length) {
-			showPageError(el.testcasePane, loadTestCases, `Could not load test cases — ${error?.message ?? 'server unreachable'}.`);
-			return;
-		}
+		showPageError(el.testcasePane, loadTestCases, 'Could not load test cases — ' + (error?.message ?? 'server unreachable') + '.');
+		return;
 	}
 
 	// Load suites for the project.
 	try {
 		state.suites = await api(`/suites${query}`);
+		if (!Array.isArray(state.suites)) throw new Error('invalid suites response');
+		state.suitesUnavailable = false;
 	} catch {
 		state.suites = [];
+		state.suitesUnavailable = true;
 	}
 	state.testCasesLoaded = true;
 	clearPageState(el.testcasePane);
@@ -130,6 +161,7 @@ async function ensureProvenanceCache() {
 }
 
 function renderTestCases() {
+	renderTestsStats();
 	el.testcasePane.replaceChildren();
 
 	// Apply filters: tag, suite, search, severity, viewport.
@@ -252,10 +284,13 @@ function renderTestCaseCard(tc) {
 	const sevDot = document.createElement('span');
 	sevDot.className = 'tc-sev-dot';
 	sevDot.style.background = SEVERITY_COLORS[tc.severity] ?? SEVERITY_COLORS.medium;
+	sevDot.title = `${tc.severity ?? 'medium'} severity`;
+	sevDot.setAttribute('aria-label', `${tc.severity ?? 'medium'} severity`);
 
 	const name = document.createElement('span');
 	name.className = 'tc-name';
 	name.textContent = tc.name;
+	name.title = tc.name;
 
 	const stepCount = document.createElement('span');
 	stepCount.className = 'tc-step-count';
@@ -265,12 +300,14 @@ function renderTestCaseCard(tc) {
 	delBtn.className = 'tc-delete';
 	delBtn.textContent = '✕';
 	delBtn.title = 'Delete test case';
+	delBtn.setAttribute('aria-label', `Delete test case ${tc.name}`);
 	delBtn.onclick = async (e) => {
 		e.stopPropagation();
 		try {
 			await api(`/test-cases/${tc.id}`, { method: 'DELETE' });
 			state.testCases = state.testCases.filter(t => t.id !== tc.id);
-			card.remove();
+			renderSuiteTree();
+			renderTestCases();
 					toast(`Deleted "${tc.name}".`, 'good');
 		} catch (error) {
 			fail(error);
@@ -281,12 +318,14 @@ function renderTestCaseCard(tc) {
 	cloneBtn.className = 'tc-clone';
 	cloneBtn.textContent = '⧉';
 	cloneBtn.title = 'Clone test case';
+	cloneBtn.setAttribute('aria-label', `Clone test case ${tc.name}`);
 	cloneBtn.onclick = async (e) => {
 		e.stopPropagation();
 		try {
 			const clone = await api(`/test-cases/${tc.id}/clone`, { method: 'POST' });
 			state.testCases.unshift(clone);
-			el.testcasePane.insertBefore(renderTestCaseCard(clone), card.nextSibling);
+			renderSuiteTree();
+			renderTestCases();
 					toast(`Cloned "${tc.name}".`, 'good');
 		} catch (error) {
 			fail(error);
@@ -297,6 +336,7 @@ function renderTestCaseCard(tc) {
 	editBtn.className = 'tc-edit';
 	editBtn.textContent = '✎';
 	editBtn.title = 'Edit test case';
+	editBtn.setAttribute('aria-label', `Edit test case ${tc.name}`);
 	editBtn.onclick = (e) => {
 		e.stopPropagation();
 		openTcEditor(tc);
@@ -306,6 +346,7 @@ function renderTestCaseCard(tc) {
 	runBtn.className = 'tc-run';
 	runBtn.textContent = 'Run';
 	runBtn.title = 'Run this test case';
+	runBtn.setAttribute('aria-label', `Run test case ${tc.name}`);
 	runBtn.onclick = async (e) => {
 		e.stopPropagation();
 		await runSingleTest(tc, card, runBtn);
@@ -332,7 +373,15 @@ function renderTestCaseCard(tc) {
 		}
 	};
 
-	header.append(sevDot, name, stepCount, runBtn, approveBtn, editBtn, cloneBtn, delBtn);
+	const titleRow = document.createElement('div');
+	titleRow.className = 'tc-title-row';
+	titleRow.append(sevDot, name, stepCount);
+
+	const actions = document.createElement('div');
+	actions.className = 'tc-card-actions';
+	actions.append(runBtn, approveBtn, editBtn, cloneBtn, delBtn);
+
+	header.append(titleRow, actions);
 
 	// Use server-provided hasBaselines flag instead of N+1 API calls.
 	approveBtn.style.display = tc.hasBaselines ? '' : 'none';
@@ -403,6 +452,7 @@ function renderTestCaseCard(tc) {
 					t.id === tc.id ? { ...t, suiteId: newSuiteId } : t
 				);
 				renderSuiteTree();
+				renderTestCases();
 				toast(`Moved to ${newSuiteId ? state.suites.find(s => s.id === newSuiteId)?.name : 'no suite'}.`, 'good');
 			} catch (error) {
 				fail(error);
@@ -1163,7 +1213,9 @@ function renderSuiteNode(suite, depth) {
 		try {
 			await api(`/suites/${suite.id}`, { method: 'DELETE' });
 			state.suites = state.suites.filter(s => s.id !== suite.id);
+			state.testCases = state.testCases.map(tc => tc.suiteId === suite.id ? { ...tc, suiteId: null } : tc);
 			renderSuiteTree();
+			renderTestCases();
 			toast(`Deleted suite "${suite.name}".`, 'good');
 		} catch (error) {
 			fail(error);
@@ -1401,7 +1453,10 @@ el.btnNewSuite.onclick = async () => {
 		const params = new URLSearchParams();
 		if (projectId) params.set('projectId', projectId);
 		state.suites = await api(`/suites${params.toString() ? `?${params}` : ''}`);
+		if (!Array.isArray(state.suites)) throw new Error('invalid suites response');
+		state.suitesUnavailable = false;
 		renderSuiteTree();
+		renderTestCases();
 		toast(`Suite "${name.trim()}" created.`, 'good');
 	} catch (error) {
 		fail(error);

@@ -87,7 +87,12 @@ components:
         type: { type: string }
         targetUrl: { type: string }
         qualityScore: { type: [number, 'null'] }
-        verdict: { type: [string, 'null'] }
+        verdict: { type: [string, 'null'], description: 'Coverage-aware verdict: pass, pass_with_issues, fail, not_tested, inconclusive, blocked. Independent of execution status.' }
+        executionStatus: { type: string }
+        qualityVerdict: { type: [string, 'null'] }
+        coverage: { type: [object, 'null'], additionalProperties: true, description: 'Recorded execution sufficiency; broader coverage is unknown.' }
+        confirmedFindings: { type: integer }
+        speculativeFindings: { type: integer }
         findingsCount: { type: integer }
         sessionId: { type: [string, 'null'] }
         turnCount: { type: [integer, 'null'], description: 'Actual assistant turns executed (from assistant_turn_start stream events).' }

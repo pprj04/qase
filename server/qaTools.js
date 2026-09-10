@@ -184,6 +184,12 @@ const reportFinding = {
 			}
 		},
 		async run(input) {
+			if (session.device?.viewport) {
+				return {
+					success: false,
+					error: `Viewport is locked to the selected ${session.device.deviceName ?? 'device'} (${session.device.viewport.width}×${session.device.viewport.height}). Start a separate run to test another viewport.`
+				};
+			}
 			const config = getConfig();
 			if (config.exploreViewports === false) {
 				return { success: false, error: 'Viewport exploration is disabled in settings.' };

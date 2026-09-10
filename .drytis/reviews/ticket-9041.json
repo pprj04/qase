@@ -1,0 +1,35 @@
+{
+  "summary": "Final end-to-end regression and security sweep of the P0 reliability fix pack (F1–F5). Every suite in the battery passed; every failure that appeared along the way was reproduced in the correct isolated environment and classified as environment or test-setup noise, not a product regression. No code was changed and no commit was needed — the sweep proved the five fixes safe rather than adding anything.",
+  "what_was_done": [
+    "Ran the full battery: the five P0 fix suites, the lifecycle/reliability suites, the auth and API contract suites, the BrowserStack truthfulness and execution-provenance suites, and the security negative tests",
+    "Re-ran every failing suite in its correct isolated environment (its own data folder and required-auth server) before classifying it — for example phase17/phase18 and the API contract suite fail on the shared dev server only because it runs in open mode",
+    "Confirmed the git tree was clean before and after the sweep: no unrelated changes, all five fix commits (F1–F5) intact, HEAD 4ce0803",
+    "Recorded the full pass/fail/skip matrix with commands and totals in the ticket description"
+  ],
+  "what_was_tested": [
+    "All five fixes hold at HEAD: BrowserStack config validation, browser ownership during awaiting_input, interrupted-state reasons, cross-user isolation, and browser frame recovery after resume",
+    "Earlier R1/R2 lifecycle guarantees still hold (awaiting_input expiry, mission stop, timeouts, cancellation, cleanup, boot orphan sweep, runtime kick protection)",
+    "Cross-user isolation verified end-to-end against a required-auth server with two real operator accounts: listing, detail, mutation, stop, answer, live stream, and evidence access are all denied cross-owner",
+    "Auth semantics: open mode for local dev unchanged, required mode enforced, integration-auth workspace scoping intact"
+  ],
+  "test_results": [
+    {"name": "P0 fix suites (p0f1–p0f5)", "status": "pass", "note": "12+6+10+3+4 = 35/35"},
+    {"name": "Lifecycle & reliability battery", "status": "pass", "note": "~120 tests incl. session-timeout 12, awaiting-input 16, resource-lifecycle 20, watchdog 5, crash-restore 1"},
+    {"name": "Auth & API contract suites (isolated required-auth servers)", "status": "pass", "note": "auth-mode 16, user-auth 22, integration-auth 20, phase16/17/18 46, contract-baseline 31"},
+    {"name": "BrowserStack truthfulness & execution provenance (isolated)", "status": "pass", "note": "browserstack-trust 51/51, execution-provenance 65/65, c4-agent-browserstack 24/24"},
+    {"name": "Sweep-total regression count", "status": "pass", "note": "0 genuine F1–F5 regressions; all observed failures reproduced as environment/test-setup artifacts"}
+  ],
+  "notes": [
+    "BrowserStack was config-validated and its failure paths tested with stubbed CDP — real cloud execution still awaits valid credentials from the user",
+    "Some suites legitimately self-skip on the shared dev server (live-token-gated) — counted as skips, not failures",
+    "Two board tickets (#8773 test isolation, #8989 forensics) were found already satisfied and are being closed as verified rather than rebuilt",
+    "Engineer-review handoff of this ticket is currently on hold: an earlier review for this project is still in flight"
+  ],
+  "review_checklist": [
+    "Spot-check one behavior you care about: pause a run at a question, start another mission, resume the first — the browser panel should reconnect and stream again (F5) and both runs keep their own browsers (F2)",
+    "Open a session that was interrupted by a server restart — it should say why (e.g. 'interrupted — server restart') and keep its pending question (F3)",
+    "With two user accounts, confirm one user cannot see or open the other's runs, bugs, or live streams (F4)",
+    "In Settings, enter invalid BrowserStack credentials and run a scheduled test — it should fail loudly as a provider error, never silently run locally (F1)"
+  ],
+  "preview_url": "https://pulse-review-workspa-6grhjr.drytis.dev/"
+}
