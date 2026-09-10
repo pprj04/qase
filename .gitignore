@@ -26,3 +26,7 @@ artifacts/
 Thumbs.db
 .idea/
 .vscode/
+
+# Dev agent state
+.playwright-mcp/
+.ka-sid
