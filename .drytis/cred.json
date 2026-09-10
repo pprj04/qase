@@ -1,0 +1,22 @@
+{
+  "preview_url": "https://qase-2-1-jywqe4.drytis.dev/",
+  "notes": "Qase dashboard has its own account system (QASE_AUTH_REQUIRED=true). demo@qase.dev/demo1234 is only for the /demo practice site, NOT the dashboard. Since #10338, new registrations inherit the env gateway key (custom / llm.drytis.ai) automatically.",
+  "accounts": [
+    {
+      "role": "developer",
+      "email": "mishal@qase.local",
+      "password": "QaseTest!2026",
+      "verified_at": "2026-09-10T13:32:30Z",
+      "verified_by": "leader",
+      "notes": "Primary account. Has user-scope settings set (custom gateway, key ••••l8nw)."
+    },
+    {
+      "role": "fresh-user",
+      "email": "newuser-test@qase.local",
+      "password": "FreshUser!2026",
+      "verified_at": "2026-09-10T14:02:00Z",
+      "verified_by": "leader",
+      "notes": "Fresh account created AFTER the env-inheritance change — for verifying new users get the key automatically. Empty settings store by design."
+    }
+  ]
+}
