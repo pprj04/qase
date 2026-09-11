@@ -44,9 +44,15 @@ let saveTimer;
 function persistNow() {
 	try {
 		fs.mkdirSync(STATE_DIR, { recursive: true });
-		fs.writeFileSync(STATE_FILE, JSON.stringify([...sessions.values()], undefined, '\t'));
-	} catch {
-		// A dashboard that cannot write its history is still a usable dashboard.
+		// Atomic-write pattern: write to a temp file then rename, so a crash
+		// mid-write can never leave a truncated sessions.json behind.
+		const tmp = `${STATE_FILE}.tmp-${process.pid}`;
+		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'));
+		fs.renameSync(tmp, STATE_FILE);
+	} catch (error) {
+		// A dashboard that cannot write its history is still a usable dashboard,
+		// but surface it loudly so the operator notices data loss risk.
+		console.error(`[qase-store] failed to persist sessions: ${error?.code ?? error?.message ?? 'unknown'}`);
 	}
 }
 
