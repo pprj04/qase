@@ -339,6 +339,9 @@ export function finalizeMission(id, results = {}) {
 	mission.verdict = results.verdict || null;
 	mission.improvementPrompt = results.improvementPrompt || null;
 	mission.releaseReady = results.releaseReady ?? null;
+	mission.executionOutcome = results.executionOutcome ?? mission.executionOutcome ?? null;
+	mission.outcomeReason = results.outcomeReason ?? mission.outcomeReason ?? null;
+	mission.reportAvailable = results.reportAvailable ?? mission.reportAvailable ?? false;
 	mission.summary = results.summary || mission.summary;
 	// M1-P4.2: failureReason was historically dropped here — persist it so
 	// failed missions are explainable without reconstructing from sessions.

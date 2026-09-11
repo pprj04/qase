@@ -10,6 +10,7 @@ const getSchedule = ownedRead(unscoped_getSchedule);
 const listRegressionRuns = ownedList(unscoped_listRegressionRuns);
 const getRegressionRun = ownedRead(unscoped_getRegressionRun);
 import 'dotenv/config';
+import { canonicalFindingCount, deriveRunOutcome } from './runOutcome.js';
 import * as path from 'node:path';
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -612,6 +613,50 @@ function requireMission(request, response) {
 	return requireOwnedResource(request, response, 'mission', request.params.id, getMission);
 }
 
+function currentLinkedFindings(mission, session, request) {
+	const ownerFilter = request && isUserScoped(request)
+		? finding => canAccessResource(request, finding)
+		: null;
+	return [
+		...(mission?.id ? listFindings({ missionId: mission.id, ownerFilter }) : []),
+		...(session?.id ? listFindings({ sessionId: session.id, ownerFilter }) : [])
+	];
+}
+
+/** Additive API projection for historical and current mission records. */
+function missionConsistency(mission, request) {
+	const linkedSession = mission?.sessionId ? getSession(mission.sessionId) : null;
+	const session = linkedSession && (!request || canAccessResource(request, linkedSession)) ? linkedSession : null;
+	const outcome = deriveRunOutcome({ mission: mission ?? {}, session: session ?? {} });
+	return {
+		...mission,
+		findingsCount: canonicalFindingCount(mission?.findings, session?.findings, currentLinkedFindings(mission, session, request)),
+		findingsSnapshotCount: canonicalFindingCount(mission?.findings, session?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable
+	};
+}
+
+/** Keep run-list count/outcome aligned with the run detail response. */
+function sessionSummaryConsistency(summary, request) {
+	const session = getSession(summary.id) ?? summary;
+	const linkedMissionRecord = session.missionId ? getMission(session.missionId) : null;
+	const linkedMission = linkedMissionRecord && canAccessResource(request, linkedMissionRecord) ? linkedMissionRecord : null;
+	const mission = linkedMission && (!request || canAccessResource(request, linkedMission)) ? linkedMission : null;
+	const outcome = deriveRunOutcome({ mission: mission ?? {}, session });
+	return {
+		...summary,
+		findingCount: canonicalFindingCount(session.findings, mission?.findings, currentLinkedFindings(mission, session, request)),
+		findingSnapshotCount: canonicalFindingCount(session.findings, mission?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable
+	};
+}
+
 /**
  * P0-F4 — finding lookup WITH ownership enforcement.
  */
@@ -1039,6 +1084,7 @@ app.get('/api/sessions', requireApiToken, (request, response) => {
 		? s => canAccessResource(request, s)
 		: null;
 	const list = listSessions({ projectId: request.query.projectId, ownerFilter })
+		.map(summary => sessionSummaryConsistency(summary, request))
 		.slice()
 		.sort((a, b) => (b.lastActivity ?? b.createdAt ?? 0) - (a.lastActivity ?? a.createdAt ?? 0));
 	const { body } = paginateList(list, request.query);
@@ -1137,6 +1183,14 @@ app.get('/api/sessions/:id', requireApiToken, (request, response) => {
 		});
 	}
 
+	const linkedMission = session.missionId ? getMission(session.missionId) : null;
+	payload.outcome = deriveRunOutcome({ mission: linkedMission ?? {}, session });
+	payload.findingCount = canonicalFindingCount(session.findings, linkedMission?.findings, currentLinkedFindings(linkedMission, session, request));
+	payload.findingSnapshotCount = canonicalFindingCount(session.findings, linkedMission?.findings);
+	payload.findingCountSemantics = 'canonical_current';
+	payload.executionOutcome = payload.outcome.outcome;
+	payload.outcomeReason = payload.outcome.reason;
+	payload.reportAvailable = payload.outcome.reportAvailable;
 	response.json(payload);
 });
 
@@ -1312,7 +1366,13 @@ app.get('/api/sessions/:id/report.md', requireApiToken, (request, response) => {
 	if (!session) {
 		return;
 	}
-	response.type('text/markdown').send(buildReportMarkdown(session));
+	const linkedMission = session.missionId ? getMission(session.missionId) : null;
+	const mission = linkedMission && canAccessResource(request, linkedMission) ? linkedMission : null;
+	response.type('text/markdown').send(buildReportMarkdown(
+		session,
+		mission?.findings,
+		currentLinkedFindings(mission, session, request)
+	));
 });
 
 /* ── Pipeline routes (Phase 12) ──────────────────────────────────── */
@@ -2146,7 +2206,7 @@ app.get('/api/findings', requireApiToken, (request, response) => {
 	const ownerFilter = isUserScoped(request)
 		? f => canAccessResource(request, f)
 		: null;
-	const { body } = paginateList(listFindings({
+	const findings = listFindings({
 		projectId: request.query.projectId,
 		severity: request.query.severity,
 		status: request.query.status,
@@ -2157,8 +2217,14 @@ app.get('/api/findings', requireApiToken, (request, response) => {
 		fixStatus: request.query.fixStatus,
 		sort: request.query.sort,
 		ownerFilter
-	}), request.query);
-	response.json(body);
+	});
+	const { body, paginated } = paginateList(findings, request.query);
+	response.json(paginated ? {
+		...body,
+		canonicalTotal: canonicalFindingCount(findings),
+		totalSemantics: 'stored_records_including_duplicates',
+		canonicalTotalSemantics: 'canonical_current'
+	} : body);
 });
 
 app.get('/api/missions', requireApiToken, (request, response) => {
@@ -2173,7 +2239,7 @@ app.get('/api/missions', requireApiToken, (request, response) => {
 		type: request.query.type,
 		source: request.query.source,
 		ownerFilter
-	}), request.query);
+	}).map(mission => missionConsistency(mission, request)), request.query);
 	response.json(body);
 });
 
@@ -2457,6 +2523,7 @@ app.get('/api/v1/integration/missions/:id', requireIntegrationAuth, (request, re
 	const mission = requireMissionForIntegration(request, response);
 	if (!mission) return;
 	const session = mission.sessionId ? getSession(mission.sessionId) : null;
+	const outcome = deriveRunOutcome({ mission, session: session ?? {} });
 	response.json({
 		id: mission.id,
 		status: mission.status,
@@ -2470,7 +2537,12 @@ app.get('/api/v1/integration/missions/:id', requireIntegrationAuth, (request, re
 		qualityScore: mission.qualityScore,
 		verdict: mission.verdict,
 		releaseReady: mission.releaseReady,
-		findingsCount: (mission.findings ?? []).length,
+		findingsCount: canonicalFindingCount(mission.findings, session?.findings, currentLinkedFindings(mission, session, request)),
+		findingsSnapshotCount: canonicalFindingCount(mission.findings, session?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable,
 		sessionId: mission.sessionId,
 		turnCount: session?.turnCount ?? null,
 		maxTurns: mission.context?.maxTurns ?? null,
@@ -2487,7 +2559,17 @@ app.get('/api/v1/integration/missions/:id/report', requireIntegrationAuth, (requ
 	if (!mission) return;
 	const findings = mission.findings ?? [];
 	const quality = mission.quality || calculateMissionQuality(findings,{mission,session:getSession(mission.sessionId)});
-	const report = buildImprovementPrompt(mission, findings, quality);
+	const session = mission.sessionId ? getSession(mission.sessionId) : null;
+	const outcome = deriveRunOutcome({ mission, session: session ?? {} });
+	const report = {
+		...buildImprovementPrompt(mission, findings, quality),
+		findingsCount: canonicalFindingCount(findings, session?.findings, currentLinkedFindings(mission, session, request)),
+		findingsSnapshotCount: canonicalFindingCount(findings, session?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable
+	};
 	if (request.query.format === 'markdown' || request.query.format === 'md') {
 		response.type('text/markdown').send(buildMissionReportMarkdown(mission, report));
 		return;
@@ -2525,7 +2607,19 @@ app.get('/api/v1/integration/missions/:id/findings', requireIntegrationAuth, (re
 	const suggestions = allItems.filter(f => !isConfirmedFinding(f));
 	const selected = request.query.confirmedOnly === 'true' ? confirmed : allItems;
 	const items = selected.slice(offset, offset + limit).map(f => ({...f,confirmation:isConfirmedFinding(f)?'confirmed':'suggestion'}));
-	response.json({ missionId: mission.id, findings: items, total: selected.length, confirmedTotal:confirmed.length, speculativeTotal:suggestions.length, actionableFindings:confirmed.slice(offset,offset+limit), limit, offset });
+	response.json({
+		missionId: mission.id,
+		findings: items,
+		total: selected.length,
+		canonicalTotal: canonicalFindingCount(selected),
+		totalSemantics: 'stored_records_including_duplicates',
+		canonicalTotalSemantics: 'canonical_current',
+		confirmedTotal:confirmed.length,
+		speculativeTotal:suggestions.length,
+		actionableFindings:confirmed.slice(offset,offset+limit),
+		limit,
+		offset
+	});
 });
 
 /* ── Integration: evidence (mission-scoped, paginated) ── */
@@ -2966,7 +3060,7 @@ app.get('/api/missions/:id', requireApiToken, (request, response) => {
 	if (!mission) {
 		return;
 	}
-	response.json(mission);
+	response.json(missionConsistency(mission, request));
 });
 
 app.put('/api/missions/:id', requireApiToken, async (request, response) => {
@@ -3466,6 +3560,7 @@ app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
 			}
 		}
 	}
+	const consistentMission = missionConsistency(mission, request);
 
 	response.json({
 		id: mission.id,
@@ -3476,7 +3571,11 @@ app.get('/api/v1/missions/:id', requireApiToken, async (request, response) => {
 		verdict: mission.verdict,
 		releaseReady: mission.releaseReady,
 		improvementPrompt: mission.improvementPrompt ? true : false,
-		findingsCount: (mission.findings ?? []).length,
+		findingsCount: consistentMission.findingsCount,
+		findingCountSemantics: consistentMission.findingCountSemantics,
+		executionOutcome: consistentMission.executionOutcome,
+		outcomeReason: consistentMission.outcomeReason,
+		reportAvailable: consistentMission.reportAvailable,
 		findings: mission.findings ?? [],
 		sessionId: mission.sessionId,
 		pipelineStages,
@@ -4718,6 +4817,7 @@ async function finalizeMissionFromSession(mission, session) {
 	// success. Route dead sessions to mission status 'failed' with a minimal
 	// report instead of a quality score.
 	if (session.status === 'error' || session.status === 'interrupted') {
+		const failedFindings = session.findings ?? [];
 		// R1-G12 — the session store records its transcript in `messages`
 		// (store.js addMessage); the old `session.transcript` read never
 		// existed, so firstErr was ALWAYS undefined and every dead-session
@@ -4728,13 +4828,17 @@ async function finalizeMissionFromSession(mission, session) {
 		// are the mission's evidence. Previously this path returned before
 		// Phase 6, so honest-failure runs recorded ZERO evidence nodes.
 		collectEvidenceForSession(mission, session);
+		const failedOutcome = deriveRunOutcome({ mission: { ...mission, status: 'failed' }, session });
 		finalizeMission(mission.id, {
 			status: 'failed',
 			failureReason: firstErr ? String(firstErr.text).slice(0, 300)
 				: session.status === 'interrupted'
 					? 'Session interrupted (watchdog limit or manual stop) before the mission could finish its report.'
 					: `Session ended ${session.status} before the agent could run.`,
-			findings: [],
+			findings: failedFindings,
+			executionOutcome: failedOutcome.outcome,
+			outcomeReason: failedOutcome.reason,
+			reportAvailable: failedOutcome.reportAvailable,
 			summary: null
 		});
 		return getMission(mission.id);
@@ -4802,6 +4906,10 @@ async function finalizeMissionFromSession(mission, session) {
 	const budgetExhausted = session.report?.executionOutcome === 'incomplete'
 		|| session.report?.outcomeReason === 'turn_budget_exhausted'
 		|| session.report?.outcomeReason === 'session_wall_clock_timeout';
+	const canonicalOutcome = deriveRunOutcome({
+		mission: { ...mission, status: budgetExhausted ? 'timeout' : 'completed' },
+		session
+	});
 	finalizeMission(mission.id, {
 		status: budgetExhausted ? 'timeout' : 'completed',
 		failureReason: budgetExhausted
@@ -4813,6 +4921,9 @@ async function finalizeMissionFromSession(mission, session) {
 		verdict: quality.verdict,
 		improvementPrompt: report.improvementPrompt,
 		releaseReady: quality.releaseReady,
+		executionOutcome: canonicalOutcome.outcome,
+		outcomeReason: canonicalOutcome.reason,
+		reportAvailable: canonicalOutcome.reportAvailable,
 		findings,
 		summary: session.report?.summary || session.pipeline?.summary || null
 	});
@@ -4920,6 +5031,13 @@ function buildMissionReportMarkdown(mission, report) {
 		'',
 		`**Type:** ${mission.type}  `,
 		`**Target:** ${mission.targetUrl || 'N/A'}  `,
+		`**Execution Outcome:** ${report.executionOutcome ?? mission.executionOutcome ?? 'unknown'}  `,
+		`**Outcome Reason:** ${report.outcomeReason ?? mission.outcomeReason ?? 'unknown'}  `,
+		`**Report Available:** ${report.reportAvailable ? 'Yes' : 'No'}  `,
+		`**Findings:** ${report.findingsCount ?? canonicalFindingCount(report.findings)} (canonical current)  `,
+		...(report.findingsSnapshotCount != null && report.findingsSnapshotCount !== report.findingsCount
+			? [`**Embedded report snapshot:** ${report.findingsSnapshotCount} canonical findings  `]
+			: []),
 		`**Verdict:** ${report.verdict}  `,
 		`**Quality Score:** ${report.qualityScore}/100  `,
 		`**Release Ready:** ${report.regressionReady ? 'Yes' : 'No'}`,

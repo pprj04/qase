@@ -1,7 +1,8 @@
 import { getSession, listSessions, saveSessions, flushSessionsForShutdown } from './store.js';
 import { collectSessionEvidence, flushEvidenceGraphForShutdown, getFindingEvidence, getMissionEvidencePage } from './evidenceGraph.js';
-import { syncSessionFinding, flushFindingsForShutdown, setFindingConfirmation } from './findings.js';
+import { syncSessionFinding, flushFindingsForShutdown, setFindingConfirmation, listFindings } from './findings.js';
 import { calculateMissionQuality, isConfirmedFinding } from './devIntelligence.js';
+import { canonicalFindingCount, deriveRunOutcome, syncReportFindingCount } from './runOutcome.js';
 
 /** Shared by every terminal writer, before the terminal mission is persisted. */
 export function prepareMissionOutcome(mission, patch = {}) {
@@ -11,7 +12,11 @@ export function prepareMissionOutcome(mission, patch = {}) {
  // Preserve every server-linked session, including the initial observation.
  const linkedIds = new Set([session?.id,...(current.iterations ?? []).map(i=>i.sessionId),...(current.iterationMetadata ?? []).map(i=>i.sessionId),...listSessions().filter(s=>s.missionId===mission.id).map(s=>s.id)]);
  const linkedSessions = [...linkedIds].map(getSession).filter(Boolean);
- const all = new Map([...(mission.findings ?? []),...(patch.findings ?? []),...linkedSessions.flatMap(s=>s.findings ?? [])].map(f=>[f.id,f]));
+ const canonicalStoreFindings = [
+  ...listFindings({missionId:mission.id}),
+  ...linkedSessions.flatMap(s=>listFindings({sessionId:s.id}))
+ ];
+ const all = new Map([...(mission.findings ?? []),...(patch.findings ?? []),...linkedSessions.flatMap(s=>s.findings ?? []),...canonicalStoreFindings].map(f=>[f.id,f]));
  const findings = [...all.values()];
  let evidenceStats = mission.evidenceStats;
  let publicationFailed = false;
@@ -32,8 +37,10 @@ export function prepareMissionOutcome(mission, patch = {}) {
  }
  const coverageSession = session && {...session,capturedSteps:linkedSessions.flatMap(s=>s.capturedSteps ?? []),report:{...session.report,covered:linkedSessions.flatMap(s=>s.report?.covered ?? [])}};
  const quality = calculateMissionQuality(findings,{session:coverageSession,mission:current,executionStatus:current.status});
+ const canonical = deriveRunOutcome({mission:current,session:session ?? {}});
+ syncReportFindingCount(session?.report, findings);
  if (linkedSessions.length) { saveSessions(); publicationFailed = !flushSessionsForShutdown().ok || publicationFailed; }
  publicationFailed = !flushFindingsForShutdown().ok || publicationFailed;
  if (publicationFailed) Object.assign(quality,{verdict:'inconclusive',releaseReady:false,confidence:0,score:null,reason:'Evidence or execution persistence failed.'});
- return {findings,findingsCount:findings.length,evidenceStats,quality,coverage:quality.coverage,qualityScore:quality.score,verdict:quality.verdict,releaseReady:quality.releaseReady};
+ return {findings,findingsCount:canonicalFindingCount(findings),findingCountSemantics:'canonical_current',evidenceStats,quality,coverage:quality.coverage,qualityScore:quality.score,verdict:quality.verdict,releaseReady:quality.releaseReady,executionOutcome:canonical.outcome,outcomeReason:canonical.reason,reportAvailable:canonical.reportAvailable};
 }

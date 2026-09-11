@@ -1036,12 +1036,18 @@ async function renderReport() {
 	sub.className = 'verdict-sub';
 	// HOTFIX B — surface the execution outcome next to the verdict so a
 	// blocked/incomplete run can never read as a normal completed test.
-	const outcomeNote = report.executionOutcome === 'blocked'
+	const executionOutcome = session.executionOutcome ?? session.outcome?.outcome ?? report.executionOutcome;
+	const findingCount = session.findingCount ?? report.findingCountCurrent ?? report.findings;
+	const outcomeNote = executionOutcome === 'blocked'
 		? ' · BLOCKED — testing could not run'
-		: report.executionOutcome === 'incomplete'
+		: ['partial', 'incomplete'].includes(executionOutcome)
 			? ' · INCOMPLETE — budget/timeout reached'
+			: executionOutcome === 'failed'
+				? ' · FAILED — execution did not complete successfully'
+				: executionOutcome === 'cancelled'
+					? ' · CANCELLED — execution was stopped'
 			: '';
-	sub.textContent = `${report.findings} finding${report.findings === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}${outcomeNote}`;
+	sub.textContent = `${findingCount} finding${findingCount === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}${outcomeNote}`;
 	text.append(label, sub);
 	banner.append(mark, text);
 	el.reportView.append(banner);
@@ -1630,10 +1636,18 @@ function handleEvent(event) {
 			// HOTFIX B — the toast must reflect the OUTCOME, not just the fact
 			// that a report exists. A blocked/failed run producing a report is
 			// not a success story.
-			if (event.report?.executionOutcome === 'blocked' || event.report?.verdict === 'blocked') {
+			const apiOutcome = session.executionOutcome ?? session.outcome?.outcome;
+			const executionOutcome = ['failed', 'blocked', 'partial', 'cancelled'].includes(apiOutcome)
+				? apiOutcome
+				: event.report?.executionOutcome ?? apiOutcome;
+			if (executionOutcome === 'blocked' || event.report?.verdict === 'blocked') {
 				toast('Blocked report generated — browser/testing could not run.', 'bad');
-			} else if (event.report?.executionOutcome === 'incomplete') {
+			} else if (['partial', 'incomplete'].includes(executionOutcome)) {
 				toast('Report published — testing incomplete (budget or timeout reached).', 'warn' );
+			} else if (executionOutcome === 'failed') {
+				toast('Report available — execution failed.', 'bad');
+			} else if (executionOutcome === 'cancelled') {
+				toast('Report available — execution was cancelled.', 'warn');
 			} else if (event.report?.verdict === 'fail') {
 				toast('Report published — verdict: fail.', 'bad');
 			} else {

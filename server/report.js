@@ -1,3 +1,5 @@
+import { canonicalFindingCount, deriveRunOutcome } from './runOutcome.js';
+
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
 const VERDICT_LABELS = {
@@ -62,15 +64,24 @@ function appendGroupedOverview(lines, findings) {
 }
 
 /** Renders the session as a QA report a human can file or paste into a ticket. */
-export function buildReportMarkdown(session) {
+export function buildReportMarkdown(session, ...currentFindingCollections) {
 	const report = session.report;
+	const outcome = deriveRunOutcome({ session });
+	const currentFindingCount = canonicalFindingCount(session.findings, ...currentFindingCollections);
+	const snapshotFindingCount = canonicalFindingCount(session.findings);
 	const lines = [];
 
 	lines.push(`# QA report — ${session.targetUrl ?? session.title}`);
 	lines.push('');
 	lines.push(`- **Run:** ${new Date(session.createdAt).toLocaleString()}`);
+	lines.push(`- **Execution outcome:** ${outcome.outcome}`);
+	lines.push(`- **Outcome reason:** ${outcome.reason ?? 'none recorded'}`);
+	lines.push(`- **Report available:** ${outcome.reportAvailable ? 'Yes' : 'No'}`);
 	lines.push(`- **Verdict:** ${report ? VERDICT_LABELS[report.verdict] ?? report.verdict : 'Run not finished'}`);
-	lines.push(`- **Findings:** ${session.findings.length}`);
+	lines.push(`- **Findings:** ${currentFindingCount} (canonical current)`);
+	if (snapshotFindingCount !== currentFindingCount) {
+		lines.push(`- **Embedded run snapshot:** ${snapshotFindingCount} canonical findings`);
+	}
 	lines.push('');
 
 	if (report?.summary) {

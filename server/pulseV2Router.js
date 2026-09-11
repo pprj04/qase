@@ -50,6 +50,7 @@ import {
 } from './knowledge.js';
 import { getDashboardMetrics } from './metrics.js';
 import { getUxMetrics } from './uxAssessment.js';
+import { canonicalFindingCount, deriveRunOutcome } from './runOutcome.js';
 import { getTestCaseIdsWithBaselines as hasBaselines } from './baselines.js';
 import { groupFindings } from './findingIntelligence.js';
 import { getApiUsage, initApiUsageTracker, apiUsageCounter } from './apiUsage.js';
@@ -66,6 +67,46 @@ function denyResource(req, res, kind, record) {
 		return true;
 	}
 	return false;
+}
+
+function missionConsistency(mission, req) {
+	const linkedSession = mission?.sessionId ? getSession(mission.sessionId) : null;
+	const session = linkedSession && (!req || canAccessResource(req, linkedSession)) ? linkedSession : null;
+	const outcome = deriveRunOutcome({ mission: mission ?? {}, session: session ?? {} });
+	const ownerFilter = req && isUserScoped(req) ? finding => canAccessResource(req, finding) : null;
+	const current = [
+		...(mission?.id ? listFindings({ missionId: mission.id, ownerFilter }) : []),
+		...(session?.id ? listFindings({ sessionId: session.id, ownerFilter }) : [])
+	];
+	return {
+		...mission,
+		findingsCount: canonicalFindingCount(mission?.findings, session?.findings, current),
+		findingsSnapshotCount: canonicalFindingCount(mission?.findings, session?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable
+	};
+}
+
+function sessionConsistency(session, req) {
+	const linkedMission = session?.missionId ? getMission(session.missionId) : null;
+	const mission = linkedMission && (!req || canAccessResource(req, linkedMission)) ? linkedMission : null;
+	const outcome = deriveRunOutcome({ mission: mission ?? {}, session: session ?? {} });
+	const ownerFilter = req && isUserScoped(req) ? finding => canAccessResource(req, finding) : null;
+	const current = [
+		...(mission?.id ? listFindings({ missionId: mission.id, ownerFilter }) : []),
+		...(session?.id ? listFindings({ sessionId: session.id, ownerFilter }) : [])
+	];
+	return {
+		...session,
+		findingCount: canonicalFindingCount(session?.findings, mission?.findings, current),
+		findingSnapshotCount: canonicalFindingCount(session?.findings, mission?.findings),
+		findingCountSemantics: 'canonical_current',
+		executionOutcome: outcome.outcome,
+		outcomeReason: outcome.reason,
+		reportAvailable: outcome.reportAvailable
+	};
 }
 
 export function pulseV2Router(requireApiToken, usageCounter = null) {
@@ -156,13 +197,13 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			// P0-F4 — user-kind callers see own + legacy only.
 			ownerFilter: isUserScoped(req) ? m => canAccessResource(req, m) : null,
 		}), range, 'createdAt');
-		sendList(res, req.query, raw.map(m => projectMission(m, names)), {});
+		sendList(res, req.query, raw.map(m => projectMission(missionConsistency(m, req), names)), {});
 	});
 
 	router.get('/missions/:id', (req, res) => {
 		const mission = getMission(req.params.id);
 		if (denyResource(req, res, 'Mission', mission)) return; // P0-F4
-		res.json(projectMission(mission, names));
+		res.json(projectMission(missionConsistency(mission, req), names));
 	});
 
 	router.get('/mission-summaries', (req, res) => {
@@ -177,7 +218,7 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 		if (range?.error) return res.status(400).json({ error: range.error });
 		const filtered = applyDateRange(list, range, 'createdAt');
 		const paging = parsePulsePaging(req.query) ?? pageDefaults;
-		const projected = filtered.map(m => projectMission(m, names));
+		const projected = filtered.map(m => projectMission(missionConsistency(m, req), names));
 		res.json({
 			data: projected.slice((paging.page - 1) * paging.pageSize, paging.page * paging.pageSize),
 			total: projected.length,
@@ -189,7 +230,7 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 	router.get('/mission-status/:id', (req, res) => {
 		const mission = getMission(req.params.id);
 		if (denyResource(req, res, 'Mission', mission)) return; // P0-F4
-		res.json(projectMission(mission, names));
+		res.json(projectMission(missionConsistency(mission, req), names));
 	});
 
 	/* ── Sessions ── */
@@ -202,14 +243,14 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			// P0-F4 — user-kind callers see own + legacy only.
 			ownerFilter: isUserScoped(req) ? s => canAccessResource(req, s) : null,
 		}), range, 'createdAt');
-		sendList(res, req.query, raw.map(s => projectSessionSummary(s, names)), {});
+		sendList(res, req.query, raw.map(s => projectSessionSummary(sessionConsistency(getSession(s.id) ?? s, req), names)), {});
 	});
 
 	router.get('/sessions/:id', (req, res) => {
 		const session = getSession(req.params.id);
 		if (denyResource(req, res, 'Session', session)) return; // P0-F4
 		const record = liveFor(session.id);
-		res.json(projectSessionDetail(session, names, record));
+		res.json(projectSessionDetail(sessionConsistency(session, req), names, record));
 	});
 
 	/* ── Findings ── */
@@ -234,7 +275,13 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			// P0-F4 — user-kind callers see own + legacy only.
 			ownerFilter: isUserScoped(req) ? f => canAccessResource(req, f) : null,
 		}), range, 'ts');
-		sendList(res, req.query, raw.map(f => projectFinding(f, names)), {});
+		sendList(res, req.query, raw.map(f => projectFinding(f, names)), {
+			extras: {
+				canonical_total: canonicalFindingCount(raw),
+				total_semantics: 'stored_records_including_duplicates',
+				canonical_total_semantics: 'canonical_current'
+			}
+		});
 	});
 
 	router.get('/findings/stats', (req, res) => {
