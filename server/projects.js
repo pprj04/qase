@@ -10,6 +10,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { accessContext, visibleRecord } from './requestAccess.js';
+import { isUserScoped } from './ownership.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +58,7 @@ load();
 export function createProject(data) {
 	const project = {
 		id: data.id ?? randomUUID(),
+		ownerUserId: data.ownerUserId ?? null,
 		name: data.name?.trim() || DEFAULT_PROJECT_NAME,
 		baseUrl: data.baseUrl?.trim() || '',
 		// Phase 10: workspace ownership for integration authorization
@@ -69,11 +72,19 @@ export function createProject(data) {
 }
 
 export function getProject(id) {
-	return projects.find(p => p.id === id);
+	return projectView(projects.find(p => p.id === id));
+}
+
+function projectView(project) {
+	if (!project || !isUserScoped(accessContext.getStore())) return project;
+	// The default bucket is shared infrastructure, not inherited ownership.
+	// Never expose its administrator-configured URL or workspace metadata.
+	if (project.id === getDefaultProjectId()) return { id: project.id, name: 'Default', baseUrl: '' };
+	return visibleRecord(project);
 }
 
 export function listProjects() {
-	return [...projects].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+	return projects.map(projectView).filter(Boolean).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
 }
 
 export function updateProject(id, patch) {

@@ -1,3 +1,13 @@
+import { ownedRead, ownedList } from './requestAccess.js';
+const listWorkflows = ownedList(unscoped_listWorkflows);
+const getWorkflow = ownedRead(unscoped_getWorkflow);
+const listTestCases = ownedList(unscoped_listTestCases);
+const getTestCase = ownedRead(unscoped_getTestCase);
+const listSuites = ownedList(unscoped_listSuites);
+const listSchedules = ownedList(unscoped_listSchedules);
+const getSchedule = ownedRead(unscoped_getSchedule);
+const listRegressionRuns = ownedList(unscoped_listRegressionRuns);
+const getRegressionRun = ownedRead(unscoped_getRegressionRun);
 /**
  * Pulse v2 read router — implements every operation declared in
  * server/openapiDocument.js under /api/v2.
@@ -27,12 +37,12 @@ import { listProjects, getProject } from './projects.js';
 import { listMissions, getMission } from './missions.js';
 import { listSessions, getSession, liveFor } from './store.js';
 import { listFindings, getFinding, getFindingStats, getAllFindings } from './findings.js';
-import { listTestCases, getTestCase, listTags } from './testCases.js';
-import { listWorkflows, getWorkflow } from './workflows.js';
-import { listSuites } from './suites.js';
-import { listSchedules, getSchedule } from './scheduler.js';
+import { listTestCases as unscoped_listTestCases, getTestCase as unscoped_getTestCase, listTags } from './testCases.js';
+import { listWorkflows as unscoped_listWorkflows, getWorkflow as unscoped_getWorkflow } from './workflows.js';
+import { listSuites as unscoped_listSuites } from './suites.js';
+import { listSchedules as unscoped_listSchedules, getSchedule as unscoped_getSchedule } from './scheduler.js';
 import {
-	listRegressionRuns, getRegressionRun, getTrend,
+	listRegressionRuns as unscoped_listRegressionRuns, getRegressionRun as unscoped_getRegressionRun, getTrend,
 } from './regressionStore.js';
 import { listValidations, getRunsForFinding, getFixValidationMetrics } from './fixValidation.js';
 import {
@@ -390,7 +400,7 @@ export function pulseV2Router(requireApiToken, usageCounter = null) {
 			.map(run => projectFixValidationRun(run, names));
 		if (runs.length === 0) return notFound(res, 'Validation runs');
 		const [latest, ...history] = runs;
-		res.json({ latest, history, metrics: deepSnakeKeys(getFixValidationMetrics()) });
+		res.json({ latest, history, metrics: isUserScoped(req) ? {} : deepSnakeKeys(getFixValidationMetrics()) });
 	});
 
 	/* ── Knowledge ── */

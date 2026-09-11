@@ -18,6 +18,7 @@ import { getTestCase } from './testCases.js';
 import { runTestSuite } from './replay.js';
 import { getConfig } from './config.js';
 import { addRegressionRun } from './regressionStore.js';
+import { resolvedOwner } from './requestAccess.js';
 import { notifyTestFailure } from './webhooks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -144,6 +145,7 @@ export function createSchedule(data) {
 	}
 	const schedule = {
 		id: randomUUID(),
+		ownerUserId: data.ownerUserId ?? null,
 		projectId: data.projectId ?? undefined,
 		name: data.name ?? 'Untitled schedule',
 		targetUrl: data.targetUrl ?? '',
@@ -218,10 +220,13 @@ export async function executeSchedule(schedule) {
 	const cases = schedule.testCaseIds
 		.map(id => getTestCase(id))
 		.filter(Boolean);
+	// Background execution has no HTTP context: enforce the stored owner too.
+	if (schedule.ownerUserId && cases.some(tc => resolvedOwner(tc) !== schedule.ownerUserId)) throw new Error('Schedule references a test case owned by another user.');
 
 	if (cases.length === 0) {
 		const summary = {
 			id: randomUUID(),
+			ownerUserId: schedule.ownerUserId ?? null,
 			scheduleId: schedule.id,
 			ts: Date.now(),
 			targetUrl: schedule.targetUrl,
@@ -244,6 +249,7 @@ export async function executeSchedule(schedule) {
 	});
 
 	summary.scheduleId = schedule.id;
+	summary.ownerUserId = schedule.ownerUserId ?? null;
 	summary.projectId = schedule.projectId;
 	summary.targetUrl = schedule.targetUrl;
 	summary.trigger = 'scheduled';

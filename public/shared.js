@@ -165,6 +165,7 @@ async function api(path, options) {
 	// built headers never reached fetch).
 	const { headers: _callerHeaders, ...rest } = options ?? {};
 	const response = await fetch(`/api${path}`, { ...rest, headers });
+	if (response.status === 401) { state.stream?.close(); location.replace('/login'); }
 	if (!response.ok) {
 		const body = await response.json().catch(() => ({}));
 		throw new Error(body.error ?? `Request failed (${response.status})`);
@@ -182,6 +183,7 @@ async function apiRaw(path, options) {
 	const headers = { ...(options?.headers ?? {}) };
 	const { headers: _callerHeaders, ...rest } = options ?? {};
 	const response = await fetch(`/api${path}`, { ...rest, headers });
+	if (response.status === 401) { state.stream?.close(); location.replace('/login'); }
 	if (!response.ok) throw new Error(`Request failed (${response.status})`);
 	return response;
 }

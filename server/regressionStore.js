@@ -9,6 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { visibleList } from './requestAccess.js';
 import { existsSync, readFileSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,6 +116,7 @@ export function reassignProjectId(fromProjectId, toProjectId) {
 export function addRegressionRun(summary) {
 	const entry = {
 		id: summary.id ?? randomUUID(),
+		ownerUserId: summary.ownerUserId ?? null,
 		scheduleId: summary.scheduleId ?? null,
 		projectId: summary.projectId ?? undefined,
 		ts: summary.ts ?? Date.now(),
@@ -149,7 +151,7 @@ export function addRegressionRun(summary) {
 }
 
 export function listRegressionRuns({ projectId, scheduleId, targetUrl, limit } = {}) {
-	let filtered = [...runs];
+	let filtered = visibleList([...runs]);
 	if (projectId) filtered = filtered.filter(r => r.projectId === projectId);
 	if (scheduleId) filtered = filtered.filter(r => r.scheduleId === scheduleId);
 	if (targetUrl) filtered = filtered.filter(r => r.targetUrl === targetUrl);

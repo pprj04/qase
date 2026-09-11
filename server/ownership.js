@@ -20,16 +20,16 @@
  *         enforcing its own boundary, including admin-'*' principals.
  *
  * Legacy records created before this field existed carry ownerUserId == null.
- * They remain visible to every authenticated user (they predate ownership;
- * hiding them would orphan the shared single-tenant history the product was
- * built on). New records created by a user-kind principal are stamped with
- * that user's id and are invisible to other users from then on.
+ * They are administrator-only unless a trusted parent resolves their owner.
+ * No record is assigned to a user as a side effect of login.
  *
  * Never rely on the frontend for any of this — the checks below are the
  * enforcement point; UI filtering is cosmetic.
  */
 
 const LEGACY_OWNER = null;
+let resolveOwner = record => record?.ownerUserId ?? null;
+export function configureOwnershipResolver(resolver) { resolveOwner = resolver; }
 
 /** True when the request carries a user identity that must be isolated. */
 export function isUserScoped(request) {
@@ -38,7 +38,7 @@ export function isUserScoped(request) {
 
 /** The principal that newly created records are stamped with (or LEGACY_OWNER). */
 export function ownerOfRequest(request) {
-	if (isUserScoped(request)) {
+	if (request?.auth?.kind === 'user') {
 		return request.auth.userId;
 	}
 	return LEGACY_OWNER;
@@ -46,15 +46,14 @@ export function ownerOfRequest(request) {
 
 /** True when the authenticated user may access the given resource record. */
 export function canAccessResource(request, resource) {
+	if (!resource) return false;
 	// Integration principals are authenticated by requireIntegrationAuth and
 	// checked against the mission's workspace there. Requests that arrive
 	// without integration identity fall through to the rules below.
 	const auth = request?.auth ?? {};
 	if (!auth.kind) {
-		// No principal attached (e.g. a surface that bypassed requireApiToken
-		// tagging): treat as the existing single-tenant open posture rather
-		// than denying — the auth middleware is the gate, not this helper.
-		return true;
+		// Missing authentication must never be treated as development mode.
+		return false;
 	}
 	if (auth.kind === 'open' || auth.kind === 'master') {
 		return true; // dev mode / machine credential — unchanged
@@ -63,9 +62,9 @@ export function canAccessResource(request, resource) {
 		return true; // documented admin capability — workspace-level access
 	}
 	if (auth.kind === 'user') {
-		const owner = resource?.ownerUserId ?? LEGACY_OWNER;
+		const owner = resolveOwner(resource) ?? LEGACY_OWNER;
 		if (owner === LEGACY_OWNER) {
-			return true; // legacy pre-ownership record: shared history
+			return false; // Unclaimed legacy history is administrator-only.
 		}
 		return owner === auth.userId;
 	}
@@ -95,8 +94,5 @@ export function requireOwnedResource(request, response, kind, id, resolver) {
 
 /** List filter — keep only records the authenticated user may see. */
 export function scopeList(request, records) {
-	if (!isUserScoped(request)) {
-		return records;
-	}
 	return records.filter(record => canAccessResource(request, record));
 }

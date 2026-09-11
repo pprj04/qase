@@ -83,6 +83,7 @@ export function createSuite(data) {
 
 	const suite = {
 		id: randomUUID(),
+		ownerUserId: data.ownerUserId ?? null,
 		projectId: data.projectId ?? undefined,
 		parentId,
 		name: data.name?.trim() || 'Untitled suite',

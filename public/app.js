@@ -7,7 +7,7 @@
  * Bugs, Tests, and Pipeline logic live in their respective modules.
  */
 
-import { $, el, state, api, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
+import { $, el, state, api, apiRaw, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
 import { initRouter, navigate, currentPage, runIdFromHash, setRunRoute } from './router.js';
 import { loadTestCases, initTestsWiring } from './tests.js';
 import { loadBugs, initBugsWiring } from './bugs.js';
@@ -1526,6 +1526,9 @@ function connect(id) {
 		el.connLabel.textContent = 'connected';
 	};
 	stream.onerror = () => {
+		void fetch('/api/auth/me', { cache: 'no-store' }).then(response => {
+			if (response.status === 401) { stream.close(); location.replace('/login'); }
+		}).catch(() => {});
 		el.connDot.className = 'dot';
 		// Debounce the "reconnecting…" label — EventSource auto-reconnects
 		// and brief drops are normal. Only show the label if the connection
@@ -2687,6 +2690,11 @@ document.addEventListener('click', event => {
 /* ── Boot ────────────────────────────────────────────────────────── */
 
 (async function boot() {
+	try {
+		const identity = await fetch('/api/auth/me', { cache: 'no-store' });
+		if (identity.status === 401) { location.replace('/login'); return; }
+		if (!identity.ok) throw new Error('Authentication unavailable');
+	} catch { document.body.textContent = 'QASE is unavailable. Reload to try again.'; return; }
 	// ── Prompt chips (empty state suggested prompts) ──────────────────
 	// Attach early — before any async calls — so chips work immediately.
 	document.querySelectorAll('.prompt-chip').forEach(chip => {
@@ -2731,96 +2739,9 @@ document.addEventListener('click', event => {
 
 	// Fire independent boot requests in parallel (config + projects).
 	const [config, projects] = await Promise.all([
-		api('/config').catch(err => { console.info('[boot] config needs sign-in:', err.message); return undefined; }),
-		api('/projects').catch(err => { console.info('[boot] projects needs sign-in:', err.message); return []; })
+		api('/config').catch(err => { console.error('[boot] config fetch failed:', err.message); return undefined; }),
+		api('/projects').catch(err => { console.error('[boot] projects fetch failed:', err.message); return []; })
 	]);
-
-	// B1 W3 — workspace APIs are authenticated. If the first boot request is
-	// rejected, show the QASE account gate rather than booting a broken
-	// dashboard. This covers no session and an expired/stale session alike.
-	if (config === undefined) {
-		const gate = document.getElementById('auth-gate');
-		const rest = document.getElementById('auth-gate-rest');
-		if (gate && rest) {
-			gate.hidden = false;
-			rest.hidden = true;
-			const showError = (msg) => {
-				const errEl = document.getElementById('auth-gate-error');
-				if (errEl) errEl.textContent = msg;
-				else alert(msg);
-			};
-			const busy = (btn, on, label = 'Checking…') => {
-				if (!btn) return;
-				if (on) { btn.dataset.label = btn.textContent; btn.disabled = true; btn.textContent = label; }
-				else { btn.disabled = false; btn.textContent = btn.dataset.label || btn.textContent; }
-			};
-
-			// D2 Stage 3 — single login path: user accounts. No code/token tabs.
-			const title = document.getElementById('auth-gate-title');
-
-			// P0 — the only unauthenticated mutation is the atomic, one-time first
-			// QASE account initialization. It creates a server-assigned admin and
-			// closes permanently; normal workspace APIs remain session-or-token
-			// protected.
-			try {
-				const boot = await fetch('/api/auth/bootstrap').then(r => r.ok ? r.json() : null);
-				const bootstrap = document.getElementById('auth-gate-bootstrap');
-				const login = document.getElementById('auth-gate-login');
-				if (boot && boot.needsAdmin) {
-					if (title) title.textContent = 'Workspace setup required';
-					if (login) login.style.display = 'none';
-					if (bootstrap) bootstrap.style.display = 'flex';
-					if (!boot.canBootstrap) showError('Administrator setup is unavailable because the account store cannot be verified.');
-				}
-			} catch { /* default: login form stays visible */ }
-
-			const submitBootstrap = async () => {
-				const email = document.getElementById('auth-gate-bootstrap-email')?.value?.trim();
-				const name = document.getElementById('auth-gate-bootstrap-name')?.value?.trim();
-				const password = document.getElementById('auth-gate-bootstrap-password')?.value;
-				if (!email || !password) return showError('Enter an administrator email and password.');
-				const btn = document.getElementById('auth-gate-bootstrap-submit');
-				busy(btn, true, 'Creating…');
-				try {
-					const res = await fetch('/api/auth/register-admin', {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ email, name, password })
-					});
-					if (res.ok) { location.reload(); return; }
-					const body = await res.json().catch(() => ({}));
-					showError(body.error || 'Unable to create the administrator account.');
-				} catch { showError('Network error — try again.'); }
-				busy(btn, false);
-			};
-			document.getElementById('auth-gate-bootstrap-submit')?.addEventListener('click', submitBootstrap);
-			document.getElementById('auth-gate-bootstrap-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitBootstrap(); });
-
-			// ── Primary: email + password login ──
-			const submitLogin = async () => {
-				const email = document.getElementById('auth-gate-email')?.value?.trim();
-				const password = document.getElementById('auth-gate-password')?.value;
-				if (!email || !password) return showError('Enter your email and password.');
-				const btn = document.getElementById('auth-gate-signin');
-				busy(btn, true);
-				try {
-					const res = await fetch('/api/auth/login', {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ email, password })
-					});
-					if (res.ok) { location.reload(); return; }
-					const body = await res.json().catch(() => ({}));
-					showError(body.error || (res.status === 429 ? 'Too many attempts — wait a few minutes.' : 'Invalid email or password.'));
-				} catch { showError('Network error — try again.'); }
-				busy(btn, false);
-			};
-			document.getElementById('auth-gate-signin')?.addEventListener('click', submitLogin);
-			document.getElementById('auth-gate-password')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitLogin(); });
-
-			return; // skip the rest of boot — the page is a gate until auth exists
-		}
-	}
 
 	if (config) {
 		paintConfig(config);
@@ -2851,10 +2772,14 @@ document.addEventListener('click', event => {
 				`<span id="auth-identity" title="Signed in" style="display:inline-flex;align-items:center;gap:4px;font-size:12px;opacity:.75;padding:0 6px;">👤 ${escapeHtml(who.name || who.email || '')} <span style="text-transform:capitalize;">${escapeHtml(who.role ?? '')}</span></span>
 				 <button id="auth-signout" class="btn btn-ghost btn-sm" title="Sign out" style="display:inline-flex;align-items:center;gap:4px;">⎋ Sign out</button>`);
 			document.getElementById('auth-signout')?.addEventListener('click', async () => {
-				try { await fetch('/api/auth/logout', { method: 'POST' }); } catch { /* best effort */ }
+				try {
+					const result = await fetch('/api/auth/logout', { method: 'POST' });
+					if (!result.ok) throw new Error('Sign out failed');
+				} catch { toast('Unable to sign out. Please try again.', 'bad'); return; }
 				// Clear any pre-D2 token a browser may still hold.
 				localStorage.removeItem('qase_token');
-				location.reload();
+				state.stream?.close();
+				location.replace('/login');
 			});
 		}
 	} catch { /* whoami is advisory — UI still works if it fails */ }

@@ -239,7 +239,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	router.get('/findings/:id/duplicates', (req, res) => {
 		const f = getFinding(req.params.id);
 		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
-		const others = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate);
+		const others = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate && canAccessResource(req, x));
 		const { candidates, duplicate_of, canonicalId } = detectDuplicates(f, others);
 		res.json({ candidates, duplicate_of, canonicalId, isDuplicate: Boolean(f.isDuplicate), duplicateOf: f.duplicateOf ?? null });
 	});
@@ -249,7 +249,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
 		const { canonicalId } = req.body ?? {};
 		const canonical = getFinding(String(canonicalId));
-		if (!canonical || canonical.id === f.id || canonical.isDuplicate) {
+		if (!canonical || !canAccessResource(req, canonical) || canonical.id === f.id || canonical.isDuplicate) {
 			return res.status(400).json({ error: 'Invalid canonical finding' });
 		}
 		const updated = markDuplicate(f.id, canonical.id, { method: 'manual', by: 'user', ts: Date.now() });
@@ -259,7 +259,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	router.get('/findings/:id/related', (req, res) => {
 		const f = getFinding(req.params.id);
 		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
-		const all = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate);
+		const all = getAllFindings().filter(x => x.id !== f.id && !x.isDuplicate && canAccessResource(req, x));
 		const related = all.map(x => {
 			const cmp = compareForDuplicates(f, x);
 			return { id: x.id, title: x.title, severity: x.severity, similarity: cmp?.similarity ?? 0, basis: cmp?.basis ?? [] };
@@ -289,7 +289,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	router.get('/findings/:id/evidence', (req, res) => {
 		const f = getFinding(req.params.id);
 		if (denyFinding(req, res, f)) return; // P0-F4 — ownership-scoped 404
-		const evidence = getFindingEvidence(f.id) ?? [];
+		const evidence = (getFindingEvidence(f.id) ?? []).filter(e => canAccessResource(req, e));
 		res.json(evidence.map(e => redactEvidenceItem(e)));
 	});
 
@@ -317,7 +317,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 	// UI helpers: session → mission resolution + aggregate panel payload.
 	router.get('/missions/:id/mission-for-session', (req, res) => {
 		const sessionId = req.params.id;
-		const all = listMissions({});
+		const all = listMissions({}).filter(m => canAccessResource(req, m));
 		const mission = [...all].reverse().find(m => m.sessionId === sessionId);
 		res.json({ missionId: mission?.id ?? null });
 	});
@@ -463,7 +463,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 		const idemKey = req.headers['idempotency-key'] || null;
 		if (idemKey) {
 			const existing = findByIdempotencyKey(idemKey);
-			if (existing) {
+			if (existing && existing.findingId === finding.id) {
 				return res.status(200).json({ duplicate: true, validationId: existing.id, status: existing.status });
 			}
 		}
@@ -493,7 +493,7 @@ export function phaseRouter(auth, publicReadGet = []) {
 		res.json({
 			latest: runs[0],
 			history: runs.slice(1),
-			metrics: getFixValidationMetrics(),
+			metrics: isUserScoped(req) ? {} : getFixValidationMetrics(),
 		});
 	});
 

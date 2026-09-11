@@ -141,6 +141,7 @@ export function validateTestCase(tc) {
 export function createTestCase(data) {
 	const tc = {
 		id: randomUUID(),
+		ownerUserId: data.ownerUserId ?? null,
 		projectId: data.projectId ?? undefined,
 		workflowId: data.workflowId ?? null,
 		// D1 — origin provenance (mission/session that produced the workflow
@@ -233,6 +234,7 @@ export function cloneTestCase(id) {
 	if (!original) return undefined;
 
 	const clone = createTestCase({
+		ownerUserId: original.ownerUserId ?? null,
 		projectId: original.projectId,
 		workflowId: null,
 		suiteId: original.suiteId ?? null,
@@ -255,7 +257,7 @@ export function cloneTestCase(id) {
  */
 export function listTags({ projectId } = {}) {
 	const tags = new Set();
-	for (const tc of testCases) {
+	for (const tc of visibleList(testCases)) {
 		if (projectId && tc.projectId !== projectId) continue;
 		for (const tag of tc.tags ?? []) {
 			tags.add(tag);
@@ -282,3 +284,4 @@ export function deleteTestCasesByWorkflow(workflowId) {
 	if (testCases.length !== before) persistSoon();
 	return before - testCases.length;
 }
+import { visibleList } from './requestAccess.js';

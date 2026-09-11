@@ -142,6 +142,7 @@ function persistSessions() {
 		atomicWrite(sessionsFile(), JSON.stringify(sessions, null, 2) + '\n', mode600());
 	} catch (error) {
 		console.error('[userStore] failed to persist sessions:', error?.message ?? error);
+		throw badRequest(503, 'auth_store_unavailable', 'Session storage is unavailable.');
 	}
 }
 
@@ -209,6 +210,8 @@ export function findUserById(id) {
  */
 export function createUser({ email, name, password, role, createdBy = 'bootstrap' }) {
 	loadSync();
+	if (!usersStoreHealthy) throw badRequest(503, 'auth_store_unavailable', 'User account storage is unavailable.');
+	if (typeof password !== 'string' || password.length > 256) throw badRequest(400, 'invalid_password', 'Password must be a string of at most 256 characters.');
 	const cleanEmail = String(email ?? '').trim().toLowerCase();
 	if (!EMAIL_RE.test(cleanEmail)) throw badRequest(400, 'invalid_email', 'Enter a valid email address.');
 	if (String(password ?? '').length < MIN_PASSWORD_LENGTH)
@@ -257,8 +260,9 @@ export function createBootstrapAdmin({ email, name, password }) {
 
 export function updateUser(id, patch, actor = {}) {
 	loadSync();
-	const user = users.find(u => u.id === id);
-	if (!user) throw badRequest(404, 'no_user', 'No such user.');
+	const current = users.find(u => u.id === id);
+	if (!current) throw badRequest(404, 'no_user', 'No such user.');
+	const user = { ...current };
 	if (patch.role !== undefined) {
 		if (!VALID_ROLES.has(patch.role)) throw badRequest(400, 'invalid_role', 'Role must be admin, operator or viewer.');
 		user.role = patch.role;
@@ -266,33 +270,33 @@ export function updateUser(id, patch, actor = {}) {
 	if (patch.name !== undefined) user.name = String(patch.name ?? '').trim() || user.name;
 	if (patch.disabled === true) {
 		user.disabledAt = Date.now();
-		revokeUserSessions(id);
 	} else if (patch.disabled === false) {
 		user.disabledAt = null;
 	}
 	// Last-admin guard: never let the workspace end with zero ENABLED admins
 	// (self-demotion / self-disable would lock everyone out of user admin).
-	const enabledAdmins = users.filter(u => u.role === 'admin' && !u.disabledAt).length;
+	const enabledAdmins = users.map(u => u.id === id ? user : u).filter(u => u.role === 'admin' && !u.disabledAt).length;
 	if (enabledAdmins === 0) {
-		// Roll this patch back before persisting.
-		if (patch.role !== undefined) user.role = 'admin';
-		if (patch.name !== undefined) user.name = String(patch.name ?? '').trim() || user.name;
-		if (patch.disabled === true) { user.disabledAt = null; }
 		throw badRequest(409, 'last_admin', 'At least one enabled admin account must remain.');
 	}
+	Object.assign(current, user);
+	if (patch.disabled === true) revokeUserSessions(id);
 	persistUsers();
+	if (!flushUsers()) throw badRequest(503, 'auth_store_unavailable', 'User account storage is unavailable.');
 	audit('user_updated', { userId: id, fields: Object.keys(patch).sort().join(','), actorId: actor.id ?? null });
 	return { ...user, passwordHash: undefined };
 }
 
 export function setPassword(id, newPassword, actor = {}) {
 	loadSync();
+	if (typeof newPassword !== 'string' || newPassword.length > 256) throw badRequest(400, 'invalid_password', 'Password must be a string of at most 256 characters.');
 	const user = users.find(u => u.id === id);
 	if (!user) throw badRequest(404, 'no_user', 'No such user.');
 	if (String(newPassword ?? '').length < MIN_PASSWORD_LENGTH)
 		throw badRequest(400, 'weak_password', `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
 	user.passwordHash = hashPassword(newPassword);
 	persistUsers();
+	if (!flushUsers()) throw badRequest(503, 'auth_store_unavailable', 'User account storage is unavailable.');
 	revokeUserSessions(id); // reset revokes the user's other sessions
 	audit('password_reset', { userId: id, actorId: actor.id ?? null });
 	return { ...user, passwordHash: undefined };

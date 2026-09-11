@@ -1,3 +1,14 @@
+import { ownedRead, ownedList, accessContext, configureAccessResolvers } from './requestAccess.js';
+const listWorkflows = ownedList(unscoped_listWorkflows);
+const getWorkflow = ownedRead(unscoped_getWorkflow);
+const listTestCases = ownedList(unscoped_listTestCases);
+const getTestCase = ownedRead(unscoped_getTestCase);
+const listSuites = ownedList(unscoped_listSuites);
+const getSuite = ownedRead(unscoped_getSuite);
+const listSchedules = ownedList(unscoped_listSchedules);
+const getSchedule = ownedRead(unscoped_getSchedule);
+const listRegressionRuns = ownedList(unscoped_listRegressionRuns);
+const getRegressionRun = ownedRead(unscoped_getRegressionRun);
 import 'dotenv/config';
 import * as path from 'node:path';
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
@@ -22,20 +33,20 @@ import {
 	flushSessionsForShutdown, setAwaitingInputExpiryHandler
 } from './store.js';
 import {
-	saveWorkflow, listWorkflows, getWorkflow, deleteWorkflow, updateWorkflow
+	saveWorkflow, listWorkflows as unscoped_listWorkflows, getWorkflow as unscoped_getWorkflow, deleteWorkflow, updateWorkflow
 } from './workflows.js';
 import {
 	createTestCases, createTestCase, cloneTestCase, listTags,
-	listTestCases, getTestCase, updateTestCase, deleteTestCase
+	listTestCases as unscoped_listTestCases, getTestCase as unscoped_getTestCase, updateTestCase, deleteTestCase
 } from './testCases.js';
 import { generateTestCasesFromWorkflow } from './testGen.js';
 import { runTestCase, runTestSuite } from './replay.js';
-import { addRun, listRuns } from './replayStore.js';
+import { addRun, listRuns, getRun as getReplayRun } from './replayStore.js';
 import {
-	createSchedule, getSchedule, listSchedules, updateSchedule, deleteSchedule,
+	createSchedule, getSchedule as unscoped_getSchedule, listSchedules as unscoped_listSchedules, updateSchedule, deleteSchedule,
 	executeSchedule, validateCron, startScheduler
 } from './scheduler.js';
-import { addRegressionRun, listRegressionRuns, getRegressionRun, getTrend, getTrendSnapshot } from './regressionStore.js';
+import { addRegressionRun, listRegressionRuns as unscoped_listRegressionRuns, getRegressionRun as unscoped_getRegressionRun, getTrend, getTrendSnapshot } from './regressionStore.js';
 import { getDashboardMetrics } from './metrics.js';
 import { scheduleMetrics, testCaseMetrics, workflowMetrics } from './dataMetrics.js';
 import {
@@ -117,7 +128,7 @@ import { analyzeArtifactRetention, applyArtifactRetention } from './artifactRete
 import { analyzeArtifacts, applyArtifactsCleanup } from './artifactLifecycle.js';
 import { buildDevReportMarkdown } from './devReport.js';
 import {
-	createSuite, listSuites, getSuite, updateSuite, deleteSuite
+	createSuite, listSuites as unscoped_listSuites, getSuite as unscoped_getSuite, updateSuite, deleteSuite
 } from './suites.js';
 import { buildJUnitXml } from './junit.js';
 import {
@@ -154,6 +165,8 @@ import * as decisionEngineNs from './decisionEngine.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+configureAccessResolvers({ sessionId: getSession, missionId: getMission, workflowId: unscoped_getWorkflow,
+	testCaseId: unscoped_getTestCase, scheduleId: unscoped_getSchedule, findingId: getFinding });
 // B1 W1 — capture the raw body BEFORE json parsing so HMAC signature
 // verification signs the exact bytes that were sent (not a re-serialization).
 app.use(express.json({
@@ -164,14 +177,36 @@ app.use(express.json({
 }));
 app.use(setAuthCookie);
 app.use(correlationIdMiddleware); // B1 W4 — every response carries X-Correlation-Id
+// Gate the document before serving the application shell (including index.html).
+app.use((request, response, next) => {
+	if (!['GET', 'HEAD'].includes(request.method)) return next();
+	const loginPage = /^\/login\/?$/i.test(request.path);
+	const shell = /^\/(?:index\.html|runs(?:\/[^/]+)?|tests|bugs|workflows|schedules)?\/?$/i.test(request.path);
+	if (!loginPage && !shell) return next();
+	response.setHeader('Cache-Control', 'no-store');
+	const authenticated = String(process.env.QASE_AUTH_MODE ?? '').toLowerCase() === 'disabled'
+		|| Boolean(resolveUserSession(userSessionFromCookieHeader(request.headers.cookie)));
+	if (loginPage) {
+		if (authenticated) return response.redirect('/runs');
+		return response.sendFile(path.join(here, '..', 'public', 'login.html'));
+	}
+	if (!authenticated) return response.redirect('/login');
+	next();
+});
 app.use(express.static(path.join(here, '..', 'public')));
+app.use('/api', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
 
 // Serve persisted run artifacts (screenshots, traces) from .qase/artifacts/
 const artifactsRoot = path.join(here, '..', '.qase', 'artifacts');
 app.get('/api/artifacts/:runId/:filename', requireApiToken, (request, response) => {
 	const { runId, filename } = request.params;
+	if (isUserScoped(request)) {
+		const replay = getReplayRun(runId);
+		const parent = getSession(runId) ?? (replay ? getTestCase(replay.testCaseId) : null);
+		if (!parent || !canAccessResource(request, parent)) return response.status(404).json({ error: 'Artifact not found' });
+	}
 	// Prevent path traversal — only allow alphanumeric, dash, underscore, dot.
-	if (!/^[\w.\-]+$/.test(runId) || !/^[\w.\-]+$/.test(filename)) {
+	if (!/^[\w.\-]+$/.test(runId) || !/^[\w.\-]+$/.test(filename) || ['.', '..'].includes(runId) || ['.', '..'].includes(filename)) {
 		return response.status(400).json({ error: 'Invalid artifact path' });
 	}
 	const filePath = path.join(artifactsRoot, runId, filename);
@@ -412,14 +447,59 @@ function requireApiToken(request, response, next) {
 	const userSession = resolveUserSession(userSessionFromCookieHeader(request.headers.cookie));
 	if (userSession && userSession.user.disabledAt == null) {
 		request.auth = { kind: 'user', role: userSession.user.role, userId: userSession.user.id, email: userSession.user.email, name: userSession.user.name, sessionId: userSession.session.tokenHash.slice(0, 12) };
-		return enforceRole(request, response, next);
+		return accessContext.run(request, () => enforceRole(request, response, () => enforceResourceReferences(request, response, next)));
 	}
 	response.status(401).json({ error: 'Authentication required. Sign in at the login screen (session cookie), or use Authorization: Bearer <token> for API/CI access.' });
 }
 
 function userSessionFromCookieHeader(cookieHeader) {
 	const match = /(?:^|;\s*)qase_session=([^;]+)/.exec(cookieHeader ?? '');
-	return match ? decodeURIComponent(match[1]) : null;
+	try { return match ? decodeURIComponent(match[1]) : null; } catch { return null; }
+}
+
+function enforceResourceReferences(request, response, next) {
+	if (!isUserScoped(request)) return next();
+	const route = request.originalUrl.split('?')[0];
+	if (/\/evidence-integrity\/?$/i.test(route)) return response.status(403).json({ error: 'Administrator access required for global graph diagnostics.' });
+	if (/^\/api\/v1\/(?:artifacts\/stats|evidence\/(?:stats|validate))\/?$/i.test(route) || /\/knowledge\/?$/i.test(route)) return response.status(403).json({ error: 'Administrator access required.' });
+	if (/\/metrics\/dashboard\/ux\/?$/i.test(route)) return response.status(403).json({ error: 'Administrator access required.' });
+	if (/^\/api\/(?:v[12]\/)?(?:knowledge(?:\/|-|$)|.*metrics\/ux|bug-intelligence\/metrics|fix-validations|usage\/|metrics\/api-usage|test-support\/)/i.test(route)) {
+		return response.status(403).json({ error: 'Administrator access required.' });
+	}
+	const resolverByType = { projects: getProject, missions: getMission, sessions: getSession, workflows: getWorkflow, 'test-cases': getTestCase, suites: getSuite, schedules: getSchedule, findings: getFinding };
+	const match = /^\/api\/(?:v[12]\/)?(projects|missions|sessions|workflows|test-cases|suites|schedules|findings)\/([^/]+)/i.exec(route);
+	if (match && !/\/mission-for-session\/?$/i.test(route) && !['run','tags','export','stats','grouped'].includes(match[2].toLowerCase())) {
+		const record = resolverByType[match[1].toLowerCase()](decodeURIComponent(match[2]));
+		if (!record || !canAccessResource(request, record)) return response.status(404).json({ error: 'Resource not found.' });
+	}
+	const refs = { projectId: getProject, sessionId: getSession, missionId: getMission, findingId: getFinding,
+		workflowId: getWorkflow, testCaseId: getTestCase, suiteId: getSuite, parentId: getSuite, scheduleId: getSchedule,
+		canonicalId: getFinding, duplicateOf: getFinding, evidenceId: getEvidence, evidenceRefs: getEvidence };
+	const check = value => {
+		if (!value || typeof value !== 'object') return true;
+		for (const [key, entry] of Object.entries(value)) {
+			const camel = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+			const singular = camel.endsWith('Ids') ? camel.slice(0, -1) : camel;
+			if (refs[singular] && entry != null && entry !== '') {
+				for (const id of (Array.isArray(entry) ? entry : [entry])) {
+					if (singular === 'projectId' && id === getDefaultProjectId()) continue;
+					const record = refs[singular](id);
+					if (!record || !canAccessResource(request, record)) return false;
+				}
+			} else if (entry && typeof entry === 'object' && !check(entry)) return false;
+		}
+		return true;
+	};
+	if (!check(request.body)) return response.status(404).json({ error: 'Referenced resource not found.' });
+	const linkedCase = /\/link\/([^/]+)$/.exec(route);
+	if (linkedCase && !getTestCase(decodeURIComponent(linkedCase[1]))) return response.status(404).json({ error: 'Test case not found.' });
+	const strip = value => {
+		if (!value || typeof value !== 'object') return;
+		delete value.ownerUserId; delete value.ownerId; delete value.userId;
+		Object.values(value).forEach(strip);
+	};
+	strip(request.body);
+	next();
 }
 
 /* ═════════════ D0.5 — scoped team access (roles) ═══════════════════
@@ -708,6 +788,22 @@ app.get('/api/auth/bootstrap', (request, response) => {
 	});
 });
 
+app.post('/api/auth/signup', (request, response) => {
+	try {
+		const { email, password, confirmPassword } = request.body ?? {};
+		if (!hasUsers()) return response.status(409).json({ error: 'An administrator must initialize QASE before signup.' });
+		if (typeof password !== 'string' || password !== confirmPassword) {
+			return response.status(400).json({ error: 'Passwords must match.' });
+		}
+		if (Object.hasOwn(request.body, 'role')) return response.status(400).json({ error: 'Account role is assigned by the server.' });
+		const user = createUser({ email, password, role: 'operator', createdBy: 'signup' });
+		if (!flushUsers()) return response.status(503).json({ error: 'Account storage is unavailable.' });
+		response.status(201).json({ ok: true, user: { id: user.id, email: user.email, role: user.role } });
+	} catch (error) {
+		response.status(error.status ?? 400).json({ error: error.message });
+	}
+});
+
 app.post('/api/auth/login', (request, response) => {
 	// Behind Caddy the socket address is the proxy — prefer the first
 	// X-Forwarded-For hop so per-IP lockout buckets separate attackers.
@@ -715,7 +811,11 @@ app.post('/api/auth/login', (request, response) => {
 		|| (request.socket.remoteAddress ?? 'unknown');
 	try {
 		const { email, password } = request.body ?? {};
+		const previousToken = userSessionFromCookieHeader(request.headers.cookie);
 		const { user, token } = userLogin(email, password, ip);
+		// Rotate an existing browser session: the newly generated token becomes
+		// authoritative and a copied pre-login cookie cannot remain usable.
+		if (previousToken) revokeUserSession(previousToken);
 		// R6-T2 — flush the debounced users.json write before returning:
 		// lastLoginAt just mutated; a crash must not orphan the fresh
 		// session row (auth-sessions.json is already written synchronously).
@@ -1616,6 +1716,7 @@ app.post('/api/test-cases', requireApiToken, async (request, response) => {
 		}
 	}
 	const tc = createTestCase({
+		ownerUserId: ownerOfRequest(request),
 		projectId: data.projectId ?? getDefaultProjectId(),
 		suiteId: data.suiteId ?? null,
 		name: data.name,
@@ -1683,6 +1784,7 @@ app.get('/api/suites', requireApiToken, (request, response) => {
 app.post('/api/suites', requireApiToken, (request, response) => {
 	try {
 		const suite = createSuite({
+			ownerUserId: ownerOfRequest(request),
 			projectId: request.body?.projectId ?? getDefaultProjectId(),
 			parentId: request.body?.parentId,
 			name: request.body?.name
@@ -1890,7 +1992,7 @@ app.get('/api/schedules', requireApiToken, (request, response) => {
 
 app.post('/api/schedules', requireApiToken, (request, response) => {
 	try {
-		const body = { ...request.body };
+		const body = { ...request.body, ownerUserId: ownerOfRequest(request) };
 		if (!body.projectId) body.projectId = getDefaultProjectId();
 		const sched = createSchedule(body);
 		response.status(201).json(sched);
@@ -1990,6 +2092,10 @@ app.get('/api/sessions/:id/events', requireApiToken, (request, response) => {
 	response.write(': connected\n\n');
 
 	const send = event => {
+		if (request.auth?.kind === 'user') {
+			const current = resolveUserSession(userSessionFromCookieHeader(request.headers.cookie));
+			if (!current || !canAccessResource({ auth: { kind: 'user', userId: current.user.id, role: current.user.role } }, session)) { response.end(); return; }
+		}
 		response.write(`data: ${JSON.stringify(event)}\n\n`);
 	};
 	bus.on(session.id, send);
@@ -2000,7 +2106,13 @@ app.get('/api/sessions/:id/events', requireApiToken, (request, response) => {
 		send({ type: 'frame', sessionId: session.id, frame });
 	}
 
-	const heartbeat = setInterval(() => response.write(': ping\n\n'), 15_000);
+	const heartbeat = setInterval(() => {
+		if (request.auth?.kind === 'user' && !resolveUserSession(userSessionFromCookieHeader(request.headers.cookie))) {
+			response.end();
+			return;
+		}
+		response.write(': ping\n\n');
+	}, 15_000);
 	request.on('close', () => {
 		clearInterval(heartbeat);
 		bus.off(session.id, send);
@@ -2657,6 +2769,7 @@ app.post('/api/findings', requireApiToken, (request, response) => {
 	const data = request.body ?? {};
 	const finding = addFinding({
 		...data,
+		id: randomUUID(),
 		projectId: data.projectId ?? getDefaultProjectId(),
 		createdBy: 'user',
 		// P0-F4 — stamp the creating user; body-supplied value is overwritten.
@@ -2813,7 +2926,7 @@ app.get('/api/sessions/:id/export/findings', requireApiToken, (request, response
 /* ── Project routes ─────────────────────────────────────────────── */
 
 app.post('/api/projects', requireApiToken, (request, response) => {
-	const project = createProject(request.body ?? {});
+	const project = createProject({ ...request.body, id: randomUUID(), ownerUserId: ownerOfRequest(request) });
 	response.status(201).json(project);
 });
 
@@ -2844,7 +2957,7 @@ app.post('/api/missions', requireApiToken, async (request, response) => {
 	}
 	// P0-F4 — stamp the creating user (server-side; body-supplied value is
 	// overwritten, callers cannot claim someone else's identity).
-	const mission = createMission({ ...request.body, ownerUserId: ownerOfRequest(request) });
+	const mission = createMission({ ...request.body, id: randomUUID(), idempotencyKey: undefined, ownerUserId: ownerOfRequest(request) });
 	response.status(201).json(mission);
 });
 
@@ -3005,10 +3118,11 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		? request.headers['idempotency-key'].trim().slice(0, 200)
 		: null;
 	if (idempotencyKey) {
-		const callerWorkspace = request.integration?.workspaceId ?? '__ui__';
+		const callerWorkspace = request.auth?.kind === 'user' ? `user:${request.auth.userId}` : request.integration?.workspaceId ?? '__ui__';
 		const compositeKey = `${callerWorkspace}:${idempotencyKey}`;
 		const existing = findByIdempotencyKey(compositeKey);
 		if (existing) {
+			if (!canAccessResource(request, existing)) return response.status(404).json({ error: 'Mission not found.' });
 			response.setHeader('X-Correlation-Id', request.correlationId);
 			return response.status(200).json({
 				missionId: existing.id,
@@ -3106,8 +3220,8 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 			: (body.workspaceId || undefined),
 		correlationId: request.correlationId,
 		idempotencyKey: idempotencyKey
-			? `${request.integration?.workspaceId ?? '__ui__'}:${idempotencyKey}`
-			: (body.idempotencyKey || undefined),
+			? `${request.auth?.kind === 'user' ? `user:${request.auth.userId}` : request.integration?.workspaceId ?? '__ui__'}:${idempotencyKey}`
+			: undefined,
 		// P0-F4 — a signed-in UI user owns the mission they create; integration
 		// principals keep workspace scoping (owner stays null there).
 		ownerUserId: ownerOfRequest(request)
@@ -3989,6 +4103,8 @@ app.get('/api/v1/missions/:id/findings/:findingId/evidence-chain', requireApiTok
 	}
 
 	const findingId = request.params.findingId;
+	const chainFinding = getFinding(findingId);
+	if (!chainFinding || !canAccessResource(request, chainFinding)) return response.status(404).json({ error: 'Finding not found.' });
 	const allFindings = mission.findings ?? [];
 	const quality = mission.quality || calculateMissionQuality(allFindings,{mission,session:getSession(mission.sessionId)});
 	const decision = mission.iterationMetadata?.[mission.iterationMetadata.length - 1]?.decision ?? null;
@@ -4110,7 +4226,7 @@ app.get('/api/v1/artifacts/:artifactId/content', requireArtifactAuth, (request, 
 	}
 	response.set('Content-Type', art.mimeType || 'image/jpeg');
 	response.set('Content-Length', String(art.byteLength));
-	response.set('Cache-Control', 'private, max-age=3600');
+	response.set('Cache-Control', 'no-store');
 	response.send(art.data);
 });
 

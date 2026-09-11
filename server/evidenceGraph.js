@@ -1,3 +1,4 @@
+import { visibleRecord, visibleList } from './requestAccess.js';
 /**
  * server/evidenceGraph.js — Phase 6: Evidence Graph & Causal Quality Model
  *
@@ -434,7 +435,7 @@ export function getEvidence(id) {
 export function getMissionEvidence(missionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const ev of evidenceStore.values()) {
-    if (ev.missionId === missionId) results.push(ev);
+    if (ev.missionId === missionId && visibleRecord(ev)) results.push(ev);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
@@ -450,7 +451,7 @@ export function getMissionEvidence(missionId, { limit = 100, offset = 0 } = {}) 
 export function getMissionEvidencePage(missionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const ev of evidenceStore.values()) {
-    if (ev.missionId === missionId) results.push(ev);
+    if (ev.missionId === missionId && visibleRecord(ev)) results.push(ev);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return { items: results.slice(offset, offset + limit), total: results.length };
@@ -462,7 +463,7 @@ export function getMissionEvidencePage(missionId, { limit = 100, offset = 0 } = 
 export function getSessionEvidence(sessionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const ev of evidenceStore.values()) {
-    if (ev.sessionId === sessionId) results.push(ev);
+    if (ev.sessionId === sessionId && visibleRecord(ev)) results.push(ev);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
@@ -472,7 +473,7 @@ export function getSessionEvidence(sessionId, { limit = 100, offset = 0 } = {}) 
 export function getSessionEvidencePage(sessionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const ev of evidenceStore.values()) {
-    if (ev.sessionId === sessionId) results.push(ev);
+    if (ev.sessionId === sessionId && visibleRecord(ev)) results.push(ev);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return { items: results.slice(offset, offset + limit), total: results.length };
@@ -484,7 +485,7 @@ export function getSessionEvidencePage(sessionId, { limit = 100, offset = 0 } = 
 export function getIterationEvidence(missionId, iterationNumber, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const ev of evidenceStore.values()) {
-    if (ev.missionId === missionId && ev.iterationId === iterationNumber) results.push(ev);
+    if (ev.missionId === missionId && ev.iterationId === iterationNumber && visibleRecord(ev)) results.push(ev);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
@@ -497,7 +498,7 @@ export function getFindingEvidence(findingId) {
   const linkedIds = edges
     .filter(e => e.type === EDGE_TYPES.SUPPORTS && e.to === findingId)
     .map(e => e.from);
-  return linkedIds.map(id => evidenceStore.get(id)).filter(Boolean);
+  return visibleList(linkedIds.map(id => evidenceStore.get(id)).filter(Boolean));
 }
 
 /* ── Observation Layer (Step 5) ──────────────────────────────────── */
@@ -555,7 +556,7 @@ export function getObservation(id) {
 export function getSessionObservations(sessionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const obs of observationStore.values()) {
-    if (obs.sessionId === sessionId) results.push(obs);
+    if (obs.sessionId === sessionId && visibleRecord(obs)) results.push(obs);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return results.slice(offset, offset + limit);
@@ -565,7 +566,7 @@ export function getSessionObservations(sessionId, { limit = 100, offset = 0 } = 
 export function getSessionObservationsPage(sessionId, { limit = 100, offset = 0 } = {}) {
   const results = [];
   for (const obs of observationStore.values()) {
-    if (obs.sessionId === sessionId) results.push(obs);
+    if (obs.sessionId === sessionId && visibleRecord(obs)) results.push(obs);
   }
   results.sort((a, b) => a.timestamp - b.timestamp);
   return { items: results.slice(offset, offset + limit), total: results.length };

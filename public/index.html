@@ -104,27 +104,6 @@
             <span class="ai-cursor-blink">_</span>
           </div>
           <h2>Autonomous Software Quality Engineer</h2>
-          <!-- B1 W3 — anonymous API reads are closed. Humans sign in with a
-               QASE account (email+password). D2 Stage 3: access codes and
-               the admin-token field are removed from the UI; the machine
-               token is a server-side env credential for CI/tests only. -->
-          <div id="auth-gate" hidden>
-            <p><strong id="auth-gate-title">Sign in to QASE</strong></p>
-            <div id="auth-gate-login" style="display:flex;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
-              <input id="auth-gate-email" type="email" placeholder="Email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <input id="auth-gate-password" type="password" placeholder="Password" autocomplete="current-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-              <button id="auth-gate-signin" class="btn" style="padding:8px 14px;">Sign in</button>
-            </div>
-			<div id="auth-gate-bootstrap" style="display:none;flex-direction:column;gap:8px;max-width:340px;margin:12px auto;">
-			  <p class="subtle" style="font-size:13px;opacity:.8;margin:0;">Create the first QASE administrator to initialize this workspace. This one-time setup closes as soon as the account is created.</p>
-			  <input id="auth-gate-bootstrap-email" type="email" placeholder="Administrator email" autocomplete="username" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-			  <input id="auth-gate-bootstrap-name" type="text" placeholder="Name (optional)" autocomplete="name" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-			  <input id="auth-gate-bootstrap-password" type="password" placeholder="Password" autocomplete="new-password" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#333);background:var(--bg,#1b1b1f);color:inherit;font:inherit;">
-			  <button id="auth-gate-bootstrap-submit" class="btn" style="padding:8px 14px;">Create administrator</button>
-			</div>
-            <p class="subtle" style="font-size:12px;opacity:.7;" id="auth-gate-hint">Passwords are never shown again. Session stored in a cookie only.</p>
-            <p id="auth-gate-error" role="alert" style="color:#f66;font-size:13px;min-height:1em;"></p>
-          </div>
           <div id="auth-gate-rest">
           <p>Validate any web application. Understand its purpose.<br>
              Discover bugs, missing features and UX issues.<br>

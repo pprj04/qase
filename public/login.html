@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — QASE</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0c1117; color: #e6edf3; font: 16px system-ui, sans-serif; padding: 24px; }
+    main { width: min(100%, 420px); padding: 32px; border: 1px solid #303943; border-radius: 16px; background: #151b23; }
+    h1 { margin-top: 0; } label { display: block; margin: 20px 0 8px; }
+    input, button { width: 100%; padding: 12px; border-radius: 8px; font: inherit; }
+    input { background: #0c1117; color: inherit; border: 1px solid #536170; }
+    button { margin-top: 24px; background: #58a6ff; border: 0; cursor: pointer; }
+    button:disabled { opacity: .6; } a { color: #8cc4ff; } #message { min-height: 24px; } [hidden] { display: none !important; }
+  </style>
+  <script type="module" src="/login.js"></script>
+</head>
+<body><main>
+  <h1 id="heading">Sign in to QASE</h1>
+  <form id="auth-form">
+    <label for="email">Email</label><input id="email" type="email" autocomplete="username" required maxlength="254">
+    <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required maxlength="256">
+    <div id="confirmation" hidden><label for="confirm-password">Confirm password</label><input id="confirm-password" type="password" autocomplete="new-password" maxlength="256"></div>
+    <button id="submit" type="submit">Login</button>
+  </form>
+  <p id="message" role="status" aria-live="polite"></p>
+  <a id="switch" href="/login?signup=1">Create Account</a>
+</main></body></html>

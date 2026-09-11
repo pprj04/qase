@@ -822,7 +822,7 @@ export function syncSessionFinding(session, finding) {
 /* ── Stats ───────────────────────────────────────────────────────── */
 
 export function getFindingStats({ projectId } = {}) {
-	const filtered = projectId ? findings.filter(f => f.projectId === projectId) : findings;
+	const filtered = visibleList(projectId ? findings.filter(f => f.projectId === projectId) : findings);
 	const duplicates = filtered.filter(f => f.isDuplicate === true || Boolean(f.duplicateOf)).length;
 	return {
 		total: filtered.length,
@@ -858,3 +858,4 @@ export function getFindingStats({ projectId } = {}) {
 export function getAllFindings() {
 	return findings;
 }
+import { visibleList } from './requestAccess.js';

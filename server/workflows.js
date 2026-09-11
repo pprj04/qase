@@ -354,6 +354,7 @@ export function saveWorkflow(session, { name, tags }) {
 		id: randomUUID(),
 		sessionId: session.id,
 		projectId: session.projectId,
+		ownerUserId: session.ownerUserId ?? null,
 		name: String(name ?? '').trim() || 'Untitled workflow',
 		targetUrl: session.targetUrl ?? '',
 		steps: steps.map(step => ({
@@ -384,6 +385,8 @@ export function listWorkflows({ projectId, targetUrl } = {}) {
 		.sort((a, b) => b.updatedAt - a.updatedAt)
 		.map(wf => ({
 			id: wf.id,
+			ownerUserId: wf.ownerUserId ?? null,
+			sessionId: wf.sessionId,
 			projectId: wf.projectId,
 			name: wf.name,
 			targetUrl: wf.targetUrl,
