@@ -20,16 +20,19 @@ import { getConfig } from './config.js';
 import { addRegressionRun } from './regressionStore.js';
 import { resolvedOwner } from './requestAccess.js';
 import { notifyTestFailure } from './webhooks.js';
+import { governorStats } from './missionGovernor.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEDULES_FILE = join(__dirname, '..', '.qase', 'schedules.json');
 
 let schedules = [];
 let saveTimer = null;
+let testHooks = null;
 
 /* ── Persistence ────────────────────────────────────────────────── */
 
 function load() {
+	let changed = false;
 	try {
 		if (existsSync(SCHEDULES_FILE)) {
 			schedules = JSON.parse(readFileSync(SCHEDULES_FILE, 'utf-8'));
@@ -44,12 +47,45 @@ function load() {
 		}
 		schedules = [];
 	}
-	// Backfill nextRun for any schedule missing it.
+	const now = Date.now();
+	// A process restart can leave a persisted dispatch marked running. The
+	// occurrence was claimed and nextRun advanced before execution began, so
+	// never replay it. Record the interruption truthfully and retain the next
+	// future occurrence.
 	for (const sched of schedules) {
+		if (sched.schedulerState?.status === 'running') {
+			sched.schedulerState = {
+				...sched.schedulerState,
+				status: 'failed',
+				reason: 'scheduler_restart_interrupted',
+				finishedAt: now
+			};
+			sched.lastRun = {
+				ts: now,
+				occurrenceAt: sched.schedulerState.occurrenceAt ?? null,
+				result: 'failed',
+				reason: 'scheduler_restart_interrupted'
+			};
+			sched.updatedAt = now;
+			changed = true;
+		}
+		if (sched.manualExecutionState?.status === 'running') {
+			sched.manualExecutionState = {
+				...sched.manualExecutionState,
+				status: 'failed',
+				reason: 'scheduler_restart_interrupted',
+				finishedAt: now
+			};
+			sched.updatedAt = now;
+			changed = true;
+		}
+		// Backfill nextRun for any enabled schedule missing it.
 		if (sched.enabled && !sched.nextRun) {
-			sched.nextRun = computeNextRun(sched.cronExpr);
+			sched.nextRun = computeNextRun(sched.cronExpr, new Date(now));
+			changed = true;
 		}
 	}
+	if (changed) saveSchedulesRaw();
 }
 
 function persistSoon() {
@@ -69,9 +105,12 @@ load();
 /** Immediately persist the in-memory schedules array to disk. */
 export function saveSchedulesRaw() {
 	try {
+		if (testHooks?.persistSchedules) return testHooks.persistSchedules(schedules) !== false;
 		atomicWrite(SCHEDULES_FILE, JSON.stringify(schedules, null, '\t'));
+		return true;
 	} catch (error) {
 		console.error('Failed to persist schedules:', error.message);
+		return false;
 	}
 }
 
@@ -196,6 +235,7 @@ export function updateSchedule(id, patch) {
 	} else {
 		sched.nextRun = undefined;
 	}
+	if (sched.schedulerState?.status === 'deferred') sched.schedulerState = undefined;
 
 	sched.updatedAt = Date.now();
 	persistSoon();
@@ -216,7 +256,12 @@ export function deleteSchedule(id) {
  * Runs a schedule's test cases and stores the result.
  * Called from the tick loop (scheduled) or the API (manual trigger).
  */
-export async function executeSchedule(schedule) {
+async function executeScheduleCore(schedule, options = {}) {
+	const trigger = options.trigger ?? 'manual';
+	const dispatchToken = options.dispatchToken ?? null;
+	const stateField = options.stateField ?? 'schedulerState';
+	const mayFinalize = () => !dispatchToken
+		|| (schedule[stateField]?.dispatchToken === dispatchToken && schedule[stateField]?.status === 'running');
 	const cases = schedule.testCaseIds
 		.map(id => getTestCase(id))
 		.filter(Boolean);
@@ -230,21 +275,26 @@ export async function executeSchedule(schedule) {
 			scheduleId: schedule.id,
 			ts: Date.now(),
 			targetUrl: schedule.targetUrl,
-			trigger: 'scheduled',
+			trigger,
 			total: 0, passed: 0, failed: 0, errored: 0,
 			durationMs: 0,
 			results: []
 		};
-		const stored = addRegressionRun(summary);
-		schedule.lastRun = { ts: summary.ts, result: 'no-test-cases', summary: stored };
-		persistSoon();
+		if (mayFinalize()) {
+			const stored = addRegressionRun(summary);
+			schedule.lastRun = { ts: summary.ts, result: 'no-test-cases', summary: stored };
+			persistSoon();
+		}
 		return summary;
 	}
 
 	const config = getConfig();
 	const summary = await runTestSuite(cases, {
 		credentials: schedule.credentials,
-		concurrency: config.concurrentRuns,
+		// Every schedule execution represents one bounded browser-load slot.
+		// Cases run serially so schedulerConcurrency remains a hard bound even
+		// for an explicit POST /schedules/:id/run.
+		concurrency: 1,
 		retries: config.retriesCount
 	});
 
@@ -252,58 +302,276 @@ export async function executeSchedule(schedule) {
 	summary.ownerUserId = schedule.ownerUserId ?? null;
 	summary.projectId = schedule.projectId;
 	summary.targetUrl = schedule.targetUrl;
-	summary.trigger = 'scheduled';
+	summary.trigger = trigger;
 
-	addRegressionRun(summary);
-
-	// Fire webhook if there are failures (fire-and-forget).
-	notifyTestFailure(schedule.id, summary);
-
-	schedule.lastRun = {
-		ts: Date.now(),
-		result: summary.failed + summary.errored === 0 ? 'pass' : 'fail',
-		summary: { total: summary.total, passed: summary.passed, failed: summary.failed, errored: summary.errored, flaky: summary.flaky ?? 0 }
-	};
-
-	// Schedule the next run.
-	schedule.nextRun = computeNextRun(schedule.cronExpr);
-	persistSoon();
+	if (mayFinalize()) {
+		addRegressionRun(summary);
+		// Fire webhook if there are failures (fire-and-forget).
+		notifyTestFailure(schedule.id, summary);
+		schedule.lastRun = {
+			ts: Date.now(),
+			result: summary.failed + summary.errored === 0 ? 'pass' : 'fail',
+			summary: { total: summary.total, passed: summary.passed, failed: summary.failed, errored: summary.errored, flaky: summary.flaky ?? 0 }
+		};
+		persistSoon();
+	}
 
 	return summary;
+}
+
+/**
+ * Explicit/manual schedule execution uses the same admission bound as cron
+ * dispatch. It fails fast with a truthful deferred state when interactive
+ * missions or other schedule runs already consume the safe capacity.
+ */
+export async function executeSchedule(schedule, options = {}) {
+	if (options.admitted === true) return executeScheduleCore(schedule, options);
+	const requestedAt = nowMs();
+	const missionLoad = activeMissionCount();
+	const atCapacity = runningScheduleIds.size >= schedulerConcurrencyLimit();
+	if (missionLoad > 0 || atCapacity || runningScheduleIds.has(schedule.id)) {
+		const reason = missionLoad > 0 ? 'active_interactive_execution' : 'scheduler_concurrency_limit';
+		schedule.manualExecutionState = { status: 'deferred', reason, requestedAt };
+		schedule.updatedAt = requestedAt;
+		saveSchedulesRaw();
+		const error = new Error('Schedule execution deferred because safe execution capacity is unavailable.');
+		error.code = 'SCHEDULE_EXECUTION_DEFERRED';
+		throw error;
+	}
+
+	const dispatchToken = `manual:${schedule.id}:${randomUUID()}`;
+	schedule.manualExecutionState = { status: 'running', dispatchToken, startedAt: requestedAt };
+	schedule.updatedAt = requestedAt;
+	runningScheduleIds.add(schedule.id);
+	if (!saveSchedulesRaw()) {
+		runningScheduleIds.delete(schedule.id);
+		schedule.manualExecutionState = {
+			...schedule.manualExecutionState,
+			status: 'failed',
+			reason: 'scheduler_persistence_failed',
+			finishedAt: requestedAt
+		};
+		const error = new Error('Schedule execution was not started because its running state could not be persisted.');
+		error.code = 'SCHEDULER_PERSISTENCE_FAILED';
+		throw error;
+	}
+	try {
+		const summary = await withExecutionTimeout(
+			executeScheduleCore(schedule, { trigger: 'manual', dispatchToken, stateField: 'manualExecutionState' }),
+			schedulerTimeoutMs()
+		);
+		if (schedule.manualExecutionState?.dispatchToken === dispatchToken) {
+			const succeeded = summary.total > 0 && summary.failed + summary.errored === 0;
+			schedule.manualExecutionState = {
+				...schedule.manualExecutionState,
+				status: succeeded ? 'completed' : 'failed',
+				finishedAt: nowMs(),
+				result: succeeded ? 'pass' : 'failed',
+				...(succeeded ? {} : { reason: summary.total > 0 ? 'scheduled_execution_failed' : 'no_test_cases' })
+			};
+			saveSchedulesRaw();
+		}
+		return summary;
+	} catch (error) {
+		if (schedule.manualExecutionState?.dispatchToken === dispatchToken) {
+			const finishedAt = nowMs();
+			schedule.manualExecutionState = {
+				...schedule.manualExecutionState,
+				status: 'failed',
+				finishedAt,
+				reason: error?.code === 'SCHEDULER_EXECUTION_TIMEOUT'
+					? 'scheduler_execution_timeout'
+					: 'scheduled_execution_failed'
+			};
+			schedule.lastRun = { ts: finishedAt, result: 'failed', reason: schedule.manualExecutionState.reason };
+			saveSchedulesRaw();
+		}
+		throw error;
+	} finally {
+		runningScheduleIds.delete(schedule.id);
+	}
 }
 
 /* ── Tick loop ──────────────────────────────────────────────────── */
 
 const runningScheduleIds = new Set();
+const runningPromises = new Map();
+const executionTimeouts = new Set();
 
-function tick() {
-	const now = Date.now();
-	for (const sched of schedules) {
-		if (!sched.enabled || !sched.nextRun) continue;
-		if (sched.nextRun > now) continue;
-		if (runningScheduleIds.has(sched.id)) continue;
+function schedulerConfig() {
+	return testHooks?.config ?? getConfig();
+}
 
-		console.log(`[scheduler] Triggering schedule "${sched.name}" (${sched.id})`);
-		runningScheduleIds.add(sched.id);
+function schedulerConcurrencyLimit() {
+	const value = Number(schedulerConfig().schedulerConcurrency);
+	return Number.isFinite(value) && value >= 1 ? Math.min(10, Math.floor(value)) : 1;
+}
 
-		executeSchedule(sched)
-			.then(summary => {
-				console.log(`[scheduler] Schedule "${sched.name}" complete: ${summary.passed}/${summary.total} passed`);
-			})
-			.catch(error => {
-				console.error(`[scheduler] Schedule "${sched.name}" failed:`, error.message);
-			})
-			.finally(() => {
-				runningScheduleIds.delete(sched.id);
-			});
+function schedulerTimeoutMs() {
+	if (Number.isFinite(testHooks?.timeoutMs) && testHooks.timeoutMs > 0) return testHooks.timeoutMs;
+	const minutes = Number(schedulerConfig().schedulerExecutionTimeoutMinutes);
+	return (Number.isFinite(minutes) && minutes >= 1 ? minutes : 60) * 60_000;
+}
+
+function nowMs() {
+	return testHooks?.now?.() ?? Date.now();
+}
+
+function activeMissionCount() {
+	if (testHooks?.activeMissionCount) return Math.max(0, Number(testHooks.activeMissionCount()) || 0);
+	try {
+		return Math.max(0, Number(governorStats().activeCount) || 0);
+	} catch {
+		return 0;
 	}
+}
+
+function markDeferred(schedule, occurrenceAt, now, reason) {
+	if (schedule.schedulerState?.status === 'deferred'
+		&& schedule.schedulerState?.occurrenceAt === occurrenceAt
+		&& schedule.schedulerState?.reason === reason) return false;
+	schedule.schedulerState = {
+		status: 'deferred',
+		occurrenceAt,
+		reason,
+		deferredAt: now
+	};
+	schedule.updatedAt = now;
+	return true;
+}
+
+function withExecutionTimeout(promise, timeoutMs) {
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			executionTimeouts.delete(timer);
+			const error = new Error(`Scheduled execution exceeded ${timeoutMs}ms`);
+			error.code = 'SCHEDULER_EXECUTION_TIMEOUT';
+			reject(error);
+		}, timeoutMs);
+		executionTimeouts.add(timer);
+	});
+	return Promise.race([promise, timeout]).finally(() => {
+		clearTimeout(timer);
+		executionTimeouts.delete(timer);
+	});
+}
+
+function dispatchSchedule(schedule, occurrenceAt, now) {
+	const dispatchToken = `${schedule.id}:${occurrenceAt}:${randomUUID()}`;
+	// Claim the occurrence and advance directly to the first future cron time
+	// before launching any browser. The synchronous atomic write prevents the
+	// same occurrence from being dispatched again after a restart.
+	schedule.nextRun = computeNextRun(schedule.cronExpr, new Date(now));
+	schedule.schedulerState = {
+		status: 'running',
+		occurrenceAt,
+		dispatchToken,
+		startedAt: now
+	};
+	schedule.updatedAt = now;
+	runningScheduleIds.add(schedule.id);
+	if (!saveSchedulesRaw()) {
+		// Never launch browser work without a durable occurrence claim. Keep the
+		// in-memory nextRun advanced to avoid a tight retry loop in this process;
+		// after restart the last durable file remains authoritative and due.
+		runningScheduleIds.delete(schedule.id);
+		schedule.schedulerState = {
+			...schedule.schedulerState,
+			status: 'failed',
+			reason: 'scheduler_persistence_failed',
+			finishedAt: now
+		};
+		const error = new Error('Scheduled execution was not started because its occurrence claim could not be persisted.');
+		error.code = 'SCHEDULER_PERSISTENCE_FAILED';
+		throw error;
+	}
+
+	const executor = testHooks?.execute ?? executeSchedule;
+	const work = withExecutionTimeout(
+		Promise.resolve().then(() => executor(schedule, { trigger: 'scheduled', occurrenceAt, dispatchToken, admitted: true })),
+		schedulerTimeoutMs()
+	)
+		.then(summary => {
+			if (schedule.schedulerState?.dispatchToken !== dispatchToken) return summary;
+			const succeeded = summary.total > 0 && summary.failed + summary.errored === 0;
+			schedule.schedulerState = {
+				...schedule.schedulerState,
+				status: succeeded ? 'completed' : 'failed',
+				finishedAt: nowMs(),
+				result: succeeded ? 'pass' : 'failed',
+				...(succeeded ? {} : { reason: summary.total > 0 ? 'scheduled_execution_failed' : 'no_test_cases' })
+			};
+			saveSchedulesRaw();
+			if (succeeded) {
+				console.log(`[scheduler] Schedule "${schedule.name}" complete: ${summary.passed}/${summary.total} passed`);
+			} else {
+				console.error(`[scheduler] Schedule "${schedule.name}" failed: ${summary.failed} failed, ${summary.errored} errored of ${summary.total}`);
+			}
+			return summary;
+		})
+		.catch(error => {
+			if (schedule.schedulerState?.dispatchToken === dispatchToken) {
+				const finishedAt = nowMs();
+				schedule.schedulerState = {
+					...schedule.schedulerState,
+					status: 'failed',
+					finishedAt,
+					reason: error?.code === 'SCHEDULER_EXECUTION_TIMEOUT'
+						? 'scheduler_execution_timeout'
+						: 'scheduled_execution_failed'
+				};
+				schedule.lastRun = {
+					ts: finishedAt,
+					occurrenceAt,
+					result: 'failed',
+					reason: schedule.schedulerState.reason
+				};
+				saveSchedulesRaw();
+			}
+			console.error(`[scheduler] Schedule "${schedule.name}" failed:`, error?.message ?? error);
+		})
+		.finally(() => {
+			runningScheduleIds.delete(schedule.id);
+			runningPromises.delete(schedule.id);
+		});
+	runningPromises.set(schedule.id, work);
+}
+
+export function runSchedulerTick() {
+	const now = nowMs();
+	const due = schedules
+		.filter(schedule => schedule.enabled && Number.isFinite(Number(schedule.nextRun)) && Number(schedule.nextRun) <= now)
+		.sort((a, b) => Number(a.nextRun) - Number(b.nextRun) || String(a.id).localeCompare(String(b.id)));
+	const missionLoad = activeMissionCount();
+	let slots = missionLoad > 0 ? 0 : Math.max(0, schedulerConcurrencyLimit() - runningScheduleIds.size);
+	let started = 0;
+	let deferred = 0;
+	let dirty = false;
+
+	for (const schedule of due) {
+		if (runningScheduleIds.has(schedule.id)) continue;
+		const occurrenceAt = Number(schedule.nextRun);
+		if (slots <= 0) {
+			const reason = missionLoad > 0 ? 'active_interactive_execution' : 'scheduler_concurrency_limit';
+			dirty = markDeferred(schedule, occurrenceAt, now, reason) || dirty;
+			deferred++;
+			continue;
+		}
+		console.log(`[scheduler] Triggering schedule "${schedule.name}" (${schedule.id}) occurrence ${occurrenceAt}`);
+		dispatchSchedule(schedule, occurrenceAt, now);
+		slots--;
+		started++;
+	}
+	if (dirty) saveSchedulesRaw();
+	return { due: due.length, started, deferred, active: runningScheduleIds.size, missionLoad };
 }
 
 let tickInterval = null;
 
 export function startScheduler(intervalMs = 60_000) {
 	if (tickInterval) return;
-	tickInterval = setInterval(tick, intervalMs);
+	tickInterval = setInterval(runSchedulerTick, intervalMs);
 	tickInterval.unref?.();
 	console.log(`[scheduler] Started, checking every ${Math.round(intervalMs / 1000)}s`);
 }
@@ -313,4 +581,30 @@ export function stopScheduler() {
 		clearInterval(tickInterval);
 		tickInterval = null;
 	}
+}
+
+export function schedulerStats() {
+	return {
+		concurrency: schedulerConcurrencyLimit(),
+		active: runningScheduleIds.size,
+		deferred: schedules.filter(schedule => schedule.schedulerState?.status === 'deferred').length,
+		running: [...runningScheduleIds]
+	};
+}
+
+/** Test-only hooks. Tests run this module from an isolated source copy. */
+export function __configureSchedulerForTests(options = null) {
+	stopScheduler();
+	if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+	for (const timer of executionTimeouts) clearTimeout(timer);
+	executionTimeouts.clear();
+	runningScheduleIds.clear();
+	runningPromises.clear();
+	testHooks = options;
+	if (Array.isArray(options?.schedules)) schedules = structuredClone(options.schedules);
+	if (options?.persist) saveSchedulesRaw();
+}
+
+export async function __waitForSchedulerIdleForTests() {
+	await Promise.allSettled([...runningPromises.values()]);
 }

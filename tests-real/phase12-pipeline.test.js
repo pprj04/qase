@@ -29,7 +29,7 @@ describe('Phase 12 — Autonomy Pipeline', () => {
 			assert.equal(data.autoSaveWorkflow, true);
 			assert.equal(data.autoGenerateTests, true);
 			assert.equal(data.autoSmokeRun, false);
-			assert.equal(data.autoCreateSchedule, true);
+			assert.equal(data.autoCreateSchedule, false);
 			assert.equal(data.defaultScheduleCron, '0 9 * * *');
 		});
 
@@ -126,7 +126,7 @@ describe('Phase 12 — Autonomy Pipeline', () => {
 				autoSaveWorkflow: true,
 				autoGenerateTests: true,
 				autoSmokeRun: false,
-				autoCreateSchedule: true
+				autoCreateSchedule: false
 			});
 		});
 	});

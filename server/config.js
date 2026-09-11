@@ -98,6 +98,8 @@ function fromEnv() {
 		headless: process.env.QASE_HEADLESS === undefined ? undefined : process.env.QASE_HEADLESS !== 'false',
 		apiToken: process.env.QASE_API_TOKEN,
 		concurrentRuns: process.env.QASE_PARALLEL ? Number(process.env.QASE_PARALLEL) : undefined,
+		schedulerConcurrency: process.env.QASE_SCHEDULER_CONCURRENCY ? Number(process.env.QASE_SCHEDULER_CONCURRENCY) : undefined,
+		schedulerExecutionTimeoutMinutes: process.env.QASE_SCHEDULER_TIMEOUT_MINUTES ? Number(process.env.QASE_SCHEDULER_TIMEOUT_MINUTES) : undefined,
 		retriesCount: process.env.QASE_RETRIES ? Number(process.env.QASE_RETRIES) : undefined,
 		maxConcurrentMissions: process.env.QASE_MAX_MISSIONS ? Number(process.env.QASE_MAX_MISSIONS) : undefined,
 		missionTimeoutMinutes: process.env.QASE_MISSION_TIMEOUT_MIN ? Number(process.env.QASE_MISSION_TIMEOUT_MIN) : undefined,
@@ -137,6 +139,10 @@ const DEFAULTS = {
 	headless: true,
 	concurrentRuns: 3,
 	retriesCount: 1,
+	// Scheduled replay dispatch is intentionally more conservative than
+	// interactive/manual replay. Each active schedule runs its cases serially.
+	schedulerConcurrency: 1,
+	schedulerExecutionTimeoutMinutes: 60,
 	// M1-P4.2 — execution governor bounds for AGENT missions (a slot = one
 	// session + Chromium + LLM conversation). Replay suites keep their own
 	// concurrentRuns pool; these bound the mission layer only.
@@ -147,7 +153,9 @@ const DEFAULTS = {
 	autoSaveWorkflow: true,
 	autoGenerateTests: true,
 	autoSmokeRun: false,
-	autoCreateSchedule: true,
+	// Retained for stored-config compatibility only. Mission pipelines no
+	// longer create recurring schedules; creation is explicit via /schedules.
+	autoCreateSchedule: false,
 	autoDevReport: true,
 	exploreViewports: true,
 	defaultScheduleCron: '0 9 * * *',
@@ -196,6 +204,9 @@ export function getConfig() {
 	if (storedBs.browserstackEnabled !== undefined) {
 		merged.browserstackEnabled = storedBs.browserstackEnabled === true;
 	}
+	// P0 scheduler reliability: preserve legacy stored input without allowing
+	// it to re-enable implicit mission-to-schedule creation.
+	merged.autoCreateSchedule = false;
 	// BUILD B0.2 — strict mode: default TRUE (never silently fall back to
 	// local Chromium when BrowserStack was explicitly selected). Only an
 	// explicit stored/browserstackStrict=false turns the loud-but-permissive

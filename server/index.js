@@ -2087,6 +2087,13 @@ app.post('/api/schedules/:id/run', requireApiToken, async (request, response) =>
 		const summary = await executeSchedule(sched);
 		response.json(summary);
 	} catch (error) {
+		if (error?.code === 'SCHEDULE_EXECUTION_DEFERRED') {
+			return response.status(429).json({
+				status: 'deferred',
+				code: error.code,
+				reason: sched.manualExecutionState?.reason ?? 'scheduler_concurrency_limit'
+			});
+		}
 		response.status(500).json({ error: error.message });
 	}
 });

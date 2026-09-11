@@ -25,6 +25,7 @@ npm-debug.log*
 # Build/test artifacts
 .playwright-mcp/
 /artifacts/auth-phase1-*/
+/artifacts/scheduler-reliability-*/
 
 # Test screenshots (root)
 /*.png

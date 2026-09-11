@@ -24,7 +24,6 @@ import { getConfig } from './config.js';
 import { saveWorkflow } from './workflows.js';
 import { createTestCases } from './testCases.js';
 import { generateTestCasesFromWorkflow } from './testGen.js';
-import { createSchedule } from './scheduler.js';
 import { runTestSuite } from './replay.js';
 import { analyzeSessionFindings, scoreFindingQuality, calculateMissionQuality, buildImprovementPrompt } from './devIntelligence.js';
 import { listMissions, finalizeMission, recordIteration } from './missions.js';
@@ -340,31 +339,20 @@ function createDefaultRegistry() {
 	// Capability 4: Schedule Create
 	registry.register({
 		id: 'schedule_create',
-		name: 'Create Regression Schedule',
+		name: 'Create Regression Schedule (explicit only)',
 		category: 'generation',
 		dependsOn: ['test_generation'],
 		requiredEvidence: ['testCases'],
 		producesEvidence: ['schedule'],
-		enabled: (config) => config.autoCreateSchedule !== false,
+		// P0 scheduler reliability: recurring schedules are an explicit user
+		// resource. A normal mission, retry, browser run, or close-out pipeline
+		// must never create one, regardless of legacy stored configuration.
+		enabled: () => false,
 		confidence: 0.9,
 		cost: 'low',
-		async execute(session, evidence, config) {
-			const testCases = evidence.testCases ?? [];
-			if (testCases.length === 0) {
-				emitProgress(session, 'schedule_create', 'skipped', 'No test cases');
-				return { schedule: null };
-			}
-			const cron = config.defaultScheduleCron || '0 9 * * *';
-			const schedule = createSchedule({
-				name: `Auto: ${session.targetUrl || 'Regression'}`,
-				cronExpr: cron,
-				testCaseIds: testCases.map(tc => tc.id),
-				targetUrl: session.targetUrl,
-				projectId: session.projectId
-			});
-			const nextStr = schedule.nextRun ? new Date(schedule.nextRun).toLocaleString() : 'unknown';
-			emitProgress(session, 'schedule_create', 'done', `Created "${schedule.name}" — next run: ${nextStr}`, { scheduleId: schedule.id, nextRun: schedule.nextRun });
-			return { schedule, scheduleId: schedule.id, nextRun: schedule.nextRun };
+		async execute(session) {
+			emitProgress(session, 'schedule_create', 'skipped', 'Schedules are created only through the scheduling API or UI');
+			return { schedule: null, scheduleId: null, nextRun: null };
 		}
 	});
 
