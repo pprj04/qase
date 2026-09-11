@@ -23,8 +23,13 @@ const access = createInstanceAccess({ tenantContext });
 // Inbound-traffic keepalive: workspace containers pause after an idle window.
 // During an agent run the server is busy but receives almost no inbound HTTP,
 // so the container can be paused mid-run and the run dies on the next resume.
-// While runs are active the keepalive self-pings /healthz over loopback.
-const keepalive = createRunKeepalive({ getUrl: () => `http://127.0.0.1:${port}/healthz`, logger });
+// Loopback self-pings do NOT count as edge traffic, so the keepalive must
+// target the PUBLIC site URL (QASE_PUBLIC_URL) when available; loopback is
+// only a fallback for local development.
+const keepaliveUrl = process.env.QASE_PUBLIC_URL
+	? `${process.env.QASE_PUBLIC_URL.replace(/\/+$/, '')}/healthz`
+	: `http://127.0.0.1:${port}/healthz`;
+const keepalive = createRunKeepalive({ getUrl: () => keepaliveUrl, logger });
 if (typeof services.runs.setStatus === 'function') {
 	const setStatus = services.runs.setStatus.bind(services.runs);
 	services.runs.setStatus = async (session, status, detail) => {

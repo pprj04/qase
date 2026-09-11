@@ -39,10 +39,13 @@ export function createRunKeepalive(options = {}) {
 		const url = getUrl();
 		if (!url) return;
 		fetchImpl(url, { headers: { 'user-agent': 'qase-keepalive' } })
+			.then(response => {
+				logger.info('keepalive.ping.ok', { status: response?.status ?? 'unknown', url });
+			})
 			.catch(error => {
 				// The keepalive must never take the process down; a failed
 				// self-ping is retried on the next tick.
-				logger.warn('keepalive.ping.failed', { errorName: error?.name ?? 'UnknownError' });
+				logger.warn('keepalive.ping.failed', { errorName: error?.name ?? 'UnknownError', url });
 			});
 	}
 
@@ -50,11 +53,24 @@ export function createRunKeepalive(options = {}) {
 		/** Call whenever a run is (or may be) active. */
 		noteActive() {
 			if (stopped) return;
+			const starting = !timer;
 			lastActiveAt = Date.now();
 			if (!timer) {
 				timer = setInterval(tick, intervalMs);
 				timer.unref?.();
 			}
+			if (starting) {
+				// Observable proof in the service log that the keepalive armed.
+				logger.info('keepalive.started', {
+					intervalMs,
+					quietAfterMs,
+					url: getUrl()
+				});
+			}
+		},
+		/** True while pings are being sent (for diagnostics). */
+		isPinging() {
+			return Boolean(timer);
 		},
 		/** Stop permanently and clear the timer. */
 		stop() {
