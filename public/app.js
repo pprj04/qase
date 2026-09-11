@@ -9,6 +9,7 @@
 
 import { $, el, state, api, apiRaw, toast, fail, escapeHtml, markdown, hostOf, relativeTime, truncate, STEP_ICONS, CRON_PRESETS, initThemeToggle } from './shared.js';
 import { initRouter, navigate, currentPage, runIdFromHash, setRunRoute } from './router.js';
+import { initShell, setProjectSwitching, setShellAuth } from './shell.js';
 import { loadTestCases, initTestsWiring } from './tests.js';
 import { loadBugs, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
@@ -29,17 +30,23 @@ const INTERRUPT_REASON_LABELS = {
 	max_running_duration: 'run limit'
 };
 
-async function refreshRuns() {
-	const query = state.projectId ? `?projectId=${state.projectId}` : '';
-	const runs = await api(`/sessions${query}`).catch(err => {
+async function refreshRuns(projectId = state.projectId, projectVersion = state.projectVersion) {
+	const query = projectId ? `?projectId=${projectId}` : '';
+	let runs;
+	try {
+		runs = await api(`/sessions${query}`);
+	} catch (err) {
+		if (projectVersion !== state.projectVersion || projectId !== state.projectId) return false;
 		el.runList.innerHTML = '<div class="feed-empty">Unable to load runs. <a href="#" onclick="location.reload();return false;">Retry</a></div>';
-		return [];
-	});
+		return false;
+	}
+	if (projectVersion !== state.projectVersion || projectId !== state.projectId) return false;
 	if (runs.length === 0) {
 		el.runList.innerHTML = '<div class="feed-empty">No runs yet</div>';
-		return;
+		return true;
 	}
 	el.runList.replaceChildren(...runs.map(renderRun));
+	return true;
 }
 
 function renderRun(run) {
@@ -114,7 +121,7 @@ function closeMobileRunsDrawer() {
 
 /* ── Session loading ─────────────────────────────────────────────── */
 
-async function selectSession(id) {
+async function selectSession(id, projectVersion = state.projectVersion) {
 	state.sessionId = id;
 	state.bubbles.clear();
 	// Viewport is per-session live state: reset it so a desktop session never
@@ -129,6 +136,7 @@ async function selectSession(id) {
 		return null;
 	});
 	if (!session) return;
+	if (projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
 	state.session = session;
 
 	// Lazy-load heavy arrays if stripped (large sessions).
@@ -138,6 +146,7 @@ async function selectSession(id) {
 			api(`/sessions/${id}/detail?field=capturedSteps`).catch(() => []),
 			api(`/sessions/${id}/detail?field=findings`).catch(() => [])
 		]);
+		if (projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
 		session.messages = messages;
 		session.capturedSteps = steps;
 		session.findings = findings;
@@ -1238,16 +1247,22 @@ function renderWorkflowStep(step) {
 
 
 async function loadRegression() {
+	const projectId = state.session?.projectId ?? state.projectId;
+	const projectVersion = state.projectVersion;
 	state.schedules = [];
 	state.regressionTrend = [];
-	const projectId = state.session?.projectId ?? state.projectId;
 	const pq = projectId ? `?projectId=${projectId}` : '';
 	try {
-		state.schedules = await api(`/schedules${pq}`);
+		const schedules = await api(`/schedules${pq}`);
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
+		state.schedules = schedules;
 	} catch { /* empty */ }
 	try {
-		state.regressionTrend = await api(`/regression/trend?limit=15${projectId ? `&projectId=${projectId}` : ''}`);
+		const trend = await api(`/regression/trend?limit=15${projectId ? `&projectId=${projectId}` : ''}`);
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
+		state.regressionTrend = trend;
 	} catch { /* empty */ }
+	if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 	renderRegression();
 }
 
@@ -2269,23 +2284,47 @@ function renderProjectSelect() {
 }
 
 async function selectProject(id) {
-	state.projectId = id || undefined;
-	localStorage.setItem('qase.project', id || '');
+	const projectId = id || undefined;
+	const projectVersion = ++state.projectVersion;
+	setProjectSwitching(true);
+	state.stream?.close();
+	state.stream = undefined;
+	state.session = undefined;
+	state.sessionId = undefined;
+	state.projectId = projectId;
+	localStorage.setItem('qase.project', projectId || '');
 	renderProjectSelect();
-	await refreshRuns();
+	try {
+	await refreshRuns(projectId, projectVersion);
+	if (projectVersion !== state.projectVersion) return;
 	let selectedSession = false;
 	// If there is a run in the selected project, selectSession refreshes all
 	// project-scoped data. Otherwise refresh it explicitly to prevent stale
 	// counts from the previously selected project.
-	if (state.session?.projectId !== id) {
-		const runs = await api(`/sessions${id ? `?projectId=${id}` : ''}`).catch(err => { fail(err); return []; });
+	if (state.session?.projectId !== projectId) {
+		const runs = await api(`/sessions${projectId ? `?projectId=${projectId}` : ''}`).catch(err => { fail(err); return []; });
+		if (projectVersion !== state.projectVersion) return;
 		if (runs.length > 0) {
-			await selectSession(runs[0].id);
+			await selectSession(runs[0].id, projectVersion);
+			if (projectVersion !== state.projectVersion) return;
 			selectedSession = true;
 		}
 	}
 	if (!selectedSession) {
+		el.chatTitle.textContent = 'No run selected';
+		el.chatTarget.textContent = 'Start a run in this project to begin testing';
+		el.statusChip.textContent = 'idle';
+		el.statusChip.dataset.status = 'idle';
+		el.stopRun.hidden = true;
+		el.chatEmpty.hidden = false;
+		el.transcript.replaceChildren(el.chatEmpty);
+		el.reportView.replaceChildren();
+		el.activityFeed.replaceChildren();
 		await Promise.allSettled([loadWorkflowsPage(), loadTestCases(), loadSchedulesPage(), loadMetrics()]);
+	}
+	if (currentPage() === 'findings') await loadBugs({ reset: true });
+	} finally {
+		if (projectVersion === state.projectVersion) setProjectSwitching(false);
 	}
 }
 
@@ -2314,15 +2353,18 @@ el.newProjectBtn.onclick = async () => {
 
 async function loadMetrics() {
 	if (!el.metricsOverview) return;
+	const projectId = state.session?.projectId ?? state.projectId;
+	const projectVersion = state.projectVersion;
 	try {
-		const projectId = state.session?.projectId ?? state.projectId;
 		const query = projectId ? `?projectId=${projectId}` : '';
 		const metrics = await api(`/metrics/dashboard${query}`);
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 		if (!metrics?.sessions || !metrics?.findings || !metrics?.testCases || !metrics?.regression) {
 			throw new Error('invalid dashboard metrics response');
 		}
 		renderMetricsOverview(metrics);
 	} catch {
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 		el.metricsOverview.replaceChildren();
 		const unavailable = document.createElement('div');
 		unavailable.className = 'metric-card';
@@ -2334,11 +2376,13 @@ async function loadMetrics() {
 /** Loads the mission linked to the current session (if any) so the
  *  FINDINGS tab can offer Revalidate and mission context. */
 async function loadSessionMission(sessionId) {
+	const projectVersion = state.projectVersion;
 	state.missionId = null;
 	try {
 		// B1 W3 — the API requires auth; use the shared helper so the token
 		// from Settings (localStorage) is attached.
 		const mission = await api(`/missions/${sessionId}/mission-for-session`).catch(() => null);
+		if (projectVersion !== state.projectVersion || sessionId !== state.sessionId) return;
 		if (mission && mission.missionId) {
 			state.missionId = mission.missionId;
 			// Findings already rendered — re-render with mission context.
@@ -2726,8 +2770,8 @@ document.addEventListener('click', event => {
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
-		if (page === 'bugs') loadBugs();
-		if (page === 'tests') loadTestCases();
+		if (page === 'findings') loadBugs();
+		if (page === 'test-cases') loadTestCases();
 		if (page === 'workflows') loadWorkflowsPage();
 		if (page === 'schedules') loadSchedulesPage();
 	});
@@ -2741,6 +2785,7 @@ document.addEventListener('click', event => {
 	};
 	window.addEventListener('hashchange', followRunRoute);
 	window.addEventListener('popstate', followRunRoute);
+	initShell();
 	initRouter();
 
 	// Wire up event listeners.
@@ -2771,31 +2816,11 @@ document.addEventListener('click', event => {
 		const who = await fetch('/api/auth/me').then(r => (r.ok ? r.json() : null));
 		state.auth = who ?? { kind: 'anonymous' };
 		if (who && who.kind === 'user' && who.role !== 'admin') {
-			const settingsBtn = document.getElementById('open-settings');
-			if (settingsBtn) settingsBtn.style.display = 'none';
-			const menuSettings = document.getElementById('menu-open-settings');
-			if (menuSettings) menuSettings.style.display = 'none';
 			toast(`Signed in as ${who.name || who.email} (${who.role})`, 'good');
 		} else if (who && who.kind === 'user' && who.role === 'admin') {
 			toast(`Signed in as ${who.name || who.email} (admin)`, 'good');
 		}
-		// Identity chip + sign-out for user sessions.
-		const settingsBtn = document.getElementById('open-settings');
-		if (settingsBtn && who && who.kind === 'user') {
-			settingsBtn.insertAdjacentHTML('afterend',
-				`<span id="auth-identity" title="Signed in" style="display:inline-flex;align-items:center;gap:4px;font-size:12px;opacity:.75;padding:0 6px;">👤 ${escapeHtml(who.name || who.email || '')} <span style="text-transform:capitalize;">${escapeHtml(who.role ?? '')}</span></span>
-				 <button id="auth-signout" class="btn btn-ghost btn-sm" title="Sign out" style="display:inline-flex;align-items:center;gap:4px;">⎋ Sign out</button>`);
-			document.getElementById('auth-signout')?.addEventListener('click', async () => {
-				try {
-					const result = await fetch('/api/auth/logout', { method: 'POST' });
-					if (!result.ok) throw new Error('Sign out failed');
-				} catch { toast('Unable to sign out. Please try again.', 'bad'); return; }
-				// Clear any pre-D2 token a browser may still hold.
-				localStorage.removeItem('qase_token');
-				state.stream?.close();
-				location.replace('/login');
-			});
-		}
+		setShellAuth();
 	} catch { /* whoami is advisory — UI still works if it fails */ }
 
 	// Resolve project selection from parallel-fetched data.
@@ -2836,55 +2861,6 @@ document.addEventListener('click', event => {
 	}
 	el.composerInput.focus();
 
-	// ── Mobile topnav overflow menu (Build 4) ────────────────────────
-	// On phones the right cluster (project select / new project / settings)
-	// doesn't fit and .topnav hides overflow — collapse it behind ⋯.
-	const moreBtn = document.getElementById('topnav-more');
-	const moreMenu = document.getElementById('topnav-menu');
-	if (moreBtn && moreMenu) {
-		const projectSelect = document.getElementById('project-select');
-		const projectPlus = document.getElementById('new-project');
-		const menuSlot = document.getElementById('menu-project-slot');
-		const homeProject = projectSelect?.parentElement;
-
-		const syncMenuPlacement = () => {
-			const narrow = window.matchMedia('(max-width: 480px)').matches;
-			if (narrow && menuSlot && projectSelect) {
-				// Move the LIVE elements (same nodes, no duplicated ids/state).
-				menuSlot.append(projectSelect);
-				if (projectPlus) menuSlot.append(projectPlus);
-			} else if (homeProject) {
-				homeProject.append(projectSelect);
-				if (projectPlus) homeProject.append(projectPlus);
-			}
-		};
-		syncMenuPlacement();
-		window.addEventListener('resize', () => { syncMenuPlacement(); if (!moreMenu.hidden) moreMenu.hidden = true; });
-
-		moreBtn.addEventListener('click', event => {
-			event.stopPropagation();
-			syncMenuPlacement();
-			moreMenu.hidden = !moreMenu.hidden;
-			// Clicking a partially-offscreen ⋯ makes the browser auto-scroll
-			// the overflow-clipped topnav (scrollLeft ≠ 0), shifting the brand
-			// left on close. Snap it back so the bar never looks displaced.
-			if (moreMenu.hidden) {
-				const bar = moreBtn.closest('.topnav');
-				if (bar && bar.scrollLeft !== 0) bar.scrollLeft = 0;
-			}
-		});
-		document.addEventListener('click', event => {
-			if (!moreMenu.hidden && !moreMenu.contains(event.target)) moreMenu.hidden = true;
-		});
-		document.getElementById('menu-open-settings')?.addEventListener('click', () => {
-			moreMenu.hidden = true;
-			$('open-settings').click();
-		});
-		document.getElementById('menu-new-project')?.addEventListener('click', () => {
-			moreMenu.hidden = true;
-			el.newProjectBtn?.click();
-		});
-	}
 
 	// ── Mobile viewer toggle ─────────────────────────────────────────
 	const viewerToggle = document.getElementById('viewer-toggle');

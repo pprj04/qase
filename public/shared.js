@@ -139,6 +139,10 @@ const state = {
 	schedules: [],
 	regressionTrend: [],
 	projectId: undefined,
+	// Incremented whenever the active project changes. Project-scoped views
+	// capture it before fetching so a late response cannot repaint another
+	// project's data after a switch.
+	projectVersion: 0,
 	projects: [],
 	suites: [],
 	tagFilter: null,

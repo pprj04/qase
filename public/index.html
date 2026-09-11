@@ -19,40 +19,42 @@
 </head>
 <body>
 
-<!-- ── Top Navigation Bar ─────────────────────────────────────── -->
-<nav class="topnav">
-  <div class="topnav-left">
-    <a class="topnav-brand" href="/runs">
-      <span class="brand-mark">Qase</span>
-    </a>
-    <a class="topnav-link" data-nav="runs" href="/runs">Runs</a>
-    <a class="topnav-link" data-nav="tests" href="/tests">Tests</a>
-    <a class="topnav-link" data-nav="workflows" href="/workflows">Workflows</a>
-    <a class="topnav-link" data-nav="schedules" href="/schedules">Schedules</a>
-    <a class="topnav-link" data-nav="bugs" href="/bugs">
-      Bugs <span class="count" id="nav-count-bugs"></span>
-    </a>
-  </div>
-  <div class="topnav-spacer"></div>
-  <button class="btn btn-ghost btn-sm topnav-more" id="topnav-more" title="More options" hidden>⋯</button>
-  <div class="topnav-right">
-    <div class="topnav-project">
-      <select id="project-select" class="project-select" title="Active project"></select>
-      <button id="new-project" class="btn btn-ghost btn-sm" title="New project">+</button>
-    </div>
-    <button class="theme-toggle" id="theme-toggle" title="Toggle theme">🌙</button>
-    <button class="btn btn-ghost btn-sm" id="open-settings" title="Settings">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-    </button>
-  </div>
-</nav>
-<!-- Mobile overflow menu — the real topnav-right controls get moved into it
-     by app.js when the viewport is narrow, so no duplicated IDs / state. -->
-<div class="topnav-menu" id="topnav-menu" hidden>
-  <div class="topnav-menu-item topnav-menu-project" id="menu-project-slot"></div>
-  <button class="topnav-menu-item" id="menu-new-project">＋ New project</button>
-  <button class="topnav-menu-item" id="menu-open-settings">⚙ Settings</button>
-</div>
+<div class="qase-shell">
+  <button class="shell-drawer-backdrop" id="shell-drawer-backdrop" type="button" aria-label="Close navigation" hidden></button>
+  <aside class="shell-sidebar" id="shell-sidebar" aria-label="QASE navigation">
+    <a class="shell-brand" href="/runs" data-nav="runs"><span class="shell-brand-mark">Q</span><span>QASE</span></a>
+    <nav class="shell-nav" aria-label="Primary navigation">
+      <a data-nav="overview" href="/overview">Overview</a>
+      <a data-nav="runs" href="/runs">Runs</a>
+      <a data-nav="test-cases" href="/test-cases">Test Cases</a>
+      <a data-nav="workflows" href="/workflows">Workflows</a>
+      <a data-nav="findings" href="/findings">Findings <span class="count" id="nav-count-bugs"></span></a>
+      <a data-nav="schedules" href="/schedules">Schedules</a>
+      <a data-nav="reports" href="/reports">Reports</a>
+    </nav>
+    <nav class="shell-nav shell-nav-lower" aria-label="Product controls">
+      <a data-nav="integrations" href="/integrations">Integrations</a>
+      <a data-nav="settings" href="/settings" id="shell-nav-settings" hidden>Settings</a>
+    </nav>
+  </aside>
+  <div class="shell-main">
+    <header class="shell-topbar">
+      <button class="shell-icon-button shell-nav-toggle" id="shell-nav-toggle" type="button" aria-label="Open navigation" aria-controls="shell-sidebar" aria-expanded="false">☰</button>
+      <div class="shell-context"><span class="shell-context-label">Project</span><div class="shell-project-slot"><select id="project-select" class="project-select" title="Active project"></select><button id="new-project" class="btn btn-ghost btn-sm" title="New project">+</button></div><span id="shell-project-status" class="shell-project-status" aria-live="polite" hidden>Loading project…</span></div>
+      <div class="shell-topbar-actions">
+        <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">🌙</button>
+        <button class="shell-account-toggle" id="shell-account-toggle" type="button" aria-label="Open account menu" aria-controls="shell-account-menu" aria-expanded="false" hidden>Account</button>
+        <div class="shell-account-menu" id="shell-account-menu" role="menu" hidden>
+          <div class="shell-account-summary"><strong id="shell-account-identity">QASE session</strong><span id="shell-account-role">authenticated</span></div>
+          <button id="shell-account-theme" type="button" role="menuitem">Toggle theme</button>
+          <a id="shell-account-settings" href="/settings" role="menuitem" data-shell-settings hidden>Settings</a>
+          <button id="shell-account-signout" type="button" role="menuitem">Sign out</button>
+        </div>
+        <button id="open-settings" type="button" hidden aria-hidden="true" tabindex="-1"></button>
+      </div>
+    </header>
+    <main class="shell-content" id="shell-content" tabindex="-1">
+      <div class="page shell-placeholder-page" id="page-overview" hidden><section class="shell-placeholder"><p class="shell-eyebrow">QASE V1</p><h1>Overview</h1><p>Overview — coming in UI-2.</p></section></div>
 
 <!-- ── Page: Runs (agent workspace) ───────────────────────────── -->
 <div class="page" id="page-runs">
@@ -346,7 +348,7 @@
   </div><!-- /.app -->
 </div><!-- /#page-runs -->
 
-<!-- ── Page: Tests ──────────────────────────────────────────────── -->
+<!-- ── Page: Test Cases ─────────────────────────────────────────── -->
 <div class="page" id="page-tests" hidden>
   <div class="tests-page">
     <!-- Header -->
@@ -441,17 +443,17 @@
   </div>
 </div>
 
-<!-- ── Page: Bugs (placeholder — full build in Phase 15E) ─────── -->
+<!-- ── Page: Findings ───────────────────────────────────────────── -->
 <div class="page" id="page-bugs" hidden>
   <div class="bugs-page">
     <!-- Sticky header -->
     <header class="bugs-header">
       <div class="bugs-header-left">
-        <h2>🐛 Bugs</h2>
+        <h2>Findings</h2>
         <div class="bugs-stats-row" id="bugs-stats"></div>
       </div>
       <div class="bugs-header-right">
-        <input type="text" id="bug-search" class="bugs-search-input" placeholder="Search bugs…" autocomplete="off">
+        <input type="text" id="bug-search" class="bugs-search-input" placeholder="Search findings…" autocomplete="off">
         <div id="bug-dimension-bar" class="bugs-dimension-bar" role="group" aria-label="Filter findings by quality dimension"></div>
         <select id="bug-sort" class="bugs-filter-select" title="Sort findings">
           <option value="newest">Newest first</option>
@@ -491,7 +493,7 @@
 
     <!-- Toolbar -->
     <div class="bugs-toolbar">
-      <button class="btn btn-primary btn-sm" id="btn-new-bug">+ New Bug</button>
+      <button class="btn btn-primary btn-sm" id="btn-new-bug">+ New Finding</button>
       <div class="bugs-view-toggle">
         <button class="btn btn-ghost btn-sm bugs-view-btn is-active" data-view="grid" id="bug-view-grid">⊞ Grid</button>
         <button class="btn btn-ghost btn-sm bugs-view-btn" data-view="list" id="bug-view-list">☰ List</button>
@@ -516,6 +518,14 @@
 		</div>
 	  </div>
     </div>
+  </div>
+</div>
+
+<div class="page shell-placeholder-page" id="page-reports" hidden><section class="shell-placeholder"><p class="shell-eyebrow">QASE V1</p><h1>Reports</h1><p>Reports — coming in UI-6.</p></section></div>
+<div class="page shell-placeholder-page" id="page-integrations" hidden><section class="shell-placeholder"><p class="shell-eyebrow">QASE V1</p><h1>Integrations</h1><p>Integrations — coming in UI-8.</p></section></div>
+<div class="page shell-placeholder-page" id="page-settings-route" hidden><section class="shell-placeholder" id="settings-route-placeholder"><p class="shell-eyebrow">QASE V1</p><h1>Settings</h1><p>Settings — coming in UI-8.</p></section></div>
+<div class="page shell-placeholder-page" id="page-not-found" hidden><section class="shell-placeholder"><p class="shell-eyebrow">QASE</p><h1>Page not found</h1><p>This address is not a QASE product route.</p><a class="btn btn-primary" href="/runs" data-nav="runs">Go to Runs</a></section></div>
+    </main>
   </div>
 </div>
 

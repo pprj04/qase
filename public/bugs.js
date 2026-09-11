@@ -82,13 +82,14 @@ async function loadBugs({ reset = false } = {}) {
 	const controller = new AbortController();
 	bugState.controller = controller;
 	const requestId = ++bugState.requestId;
+	const projectVersion = state.projectVersion;
 	const timeout = setTimeout(() => controller.abort(), 15_000);
 	bugState.loading = true;
 	showPageLoading(container);
 	setPagination();
 	try {
 		const page = parseFindingsPage(await api(`/findings?${findingsQuery().toString()}`, { signal: controller.signal }));
-		if (requestId !== bugState.requestId) return;
+		if (requestId !== bugState.requestId || projectVersion !== state.projectVersion) return;
 		bugState.findings = page.items;
 		bugState.total = page.total;
 		bugState.limit = Number.isFinite(page.limit) && page.limit > 0 ? page.limit : bugState.limit;
@@ -101,7 +102,7 @@ async function loadBugs({ reset = false } = {}) {
 		renderBugsStats();
 		setPagination();
 	} catch (error) {
-		if (requestId !== bugState.requestId) return;
+		if (requestId !== bugState.requestId || projectVersion !== state.projectVersion) return;
 		bugState.findings = [];
 		bugState.total = 0;
 		bugState.loaded = true;

@@ -32,6 +32,7 @@ async function loadSchedulesPage() {
 	const firstLoad = !schedState.loaded;
 	if (firstLoad) showPageLoading(container);
 	const projectId = state.projectId;
+	const projectVersion = state.projectVersion;
 	const pq = projectId ? `?projectId=${projectId}` : '';
 	let failed = null;
 	try {
@@ -39,9 +40,11 @@ async function loadSchedulesPage() {
 			await api('/schedules' + (pq ? pq + '&includeMetrics=1' : '?includeMetrics=1')),
 			'schedule'
 		);
+		if (projectVersion !== state.projectVersion || projectId !== state.projectId) return;
 		schedState.schedules = data.items;
 		schedState.metrics = data.metrics;
 	} catch (error) {
+		if (projectVersion !== state.projectVersion) return;
 		schedState.schedules = [];
 		schedState.metrics = null;
 		failed = error;
@@ -50,10 +53,12 @@ async function loadSchedulesPage() {
 		const trend = parseRegressionTrend(
 			await api('/regression/trend?limit=15&includeMetrics=1' + (projectId ? '&projectId=' + encodeURIComponent(projectId) : ''))
 		);
+		if (projectVersion !== state.projectVersion || projectId !== state.projectId) return;
 		schedState.trend = trend.items;
 		schedState.trendMetrics = trend.metrics;
 		schedState.trendError = null;
 	} catch (error) {
+		if (projectVersion !== state.projectVersion) return;
 		schedState.trend = [];
 		schedState.trendMetrics = null;
 		schedState.trendError = error;

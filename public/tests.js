@@ -94,6 +94,7 @@ async function loadTestCases() {
 	const firstLoad = !state.testCasesLoaded;
 	if (firstLoad) showPageLoading(el.testcasePane);
 	const projectId = state.session?.projectId ?? state.projectId;
+	const projectVersion = state.projectVersion;
 	const params = new URLSearchParams();
 	if (projectId) params.set('projectId', projectId);
 	const query = params.toString() ? `?${params.toString()}` : '';
@@ -102,9 +103,11 @@ async function loadTestCases() {
 			await api('/test-cases' + (query ? query + '&includeMetrics=1' : '?includeMetrics=1')),
 			'test'
 		);
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 		state.testCases = data.items;
 		state.testMetrics = data.metrics;
 	} catch (error) {
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 		state.testCases = [];
 		state.testMetrics = null;
 		state.testCasesLoaded = true;
@@ -115,19 +118,23 @@ async function loadTestCases() {
 	// Load suites for the project.
 	try {
 		state.suites = await api(`/suites${query}`);
+		if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 		if (!Array.isArray(state.suites)) throw new Error('invalid suites response');
 		state.suitesUnavailable = false;
 	} catch {
+		if (projectVersion !== state.projectVersion) return;
 		state.suites = [];
 		state.suitesUnavailable = true;
 	}
+	if (projectVersion !== state.projectVersion) return;
 	state.testCasesLoaded = true;
 	clearPageState(el.testcasePane);
 
 	// D1.9 — provenance cache for the Source row on test-case cards:
 	// workflow (sessionId) → session (missionId). Loaded once per page load;
 	// failures degrade silently to showing only the workflow chip.
-	await ensureProvenanceCache();
+	await ensureProvenanceCache(projectId);
+	if (projectVersion !== state.projectVersion || projectId !== (state.session?.projectId ?? state.projectId)) return;
 
 	renderSuiteTree();
 	renderTestsStats();
@@ -136,25 +143,35 @@ async function loadTestCases() {
 
 // D1.9 — provenance lookups for test-case cards. Kept separate from the
 // workflows page state (workflowState) so this page stays self-contained.
-const provenanceCache = { workflows: null, sessions: null };
+const provenanceCache = { projectId: undefined, workflows: null, sessions: null };
 
 // Short ID for provenance chips (e.g. "91c6e23c"), independent of truncate().
 const shortIdLabel = (id) => (typeof id === 'string' ? id.slice(0, 8) : String(id));
 
-async function ensureProvenanceCache() {
+async function ensureProvenanceCache(projectId) {
+	if (provenanceCache.projectId !== projectId) {
+		provenanceCache.projectId = projectId;
+		provenanceCache.workflows = null;
+		provenanceCache.sessions = null;
+	}
+	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
 	if (!provenanceCache.workflows) {
 		try {
-			const data = await api('/workflows');
+			const data = await api('/workflows' + query);
+			if (provenanceCache.projectId !== projectId) return;
 			provenanceCache.workflows = Array.isArray(data) ? data : [];
 		} catch {
+			if (provenanceCache.projectId !== projectId) return;
 			provenanceCache.workflows = [];
 		}
 	}
 	if (!provenanceCache.sessions) {
 		try {
-			const data = await api('/sessions');
+			const data = await api('/sessions' + query);
+			if (provenanceCache.projectId !== projectId) return;
 			provenanceCache.sessions = Array.isArray(data) ? data : [];
 		} catch {
+			if (provenanceCache.projectId !== projectId) return;
 			provenanceCache.sessions = [];
 		}
 	}
@@ -476,7 +493,7 @@ function renderTestCaseCard(tc) {
 			badge.title = `Linked bug: ${fid.slice(0, 8)}…`;
 			badge.onclick = (e) => {
 				e.stopPropagation();
-				navigate('bugs');
+				navigate('findings');
 				openBugDetail(fid);
 			};
 			bugBadges.append(badge);

@@ -26,12 +26,16 @@ async function loadWorkflowsPage() {
 	const container = el.workflowsList;
 	const firstLoad = !workflowState.loaded;
 	if (firstLoad) showPageLoading(container);
-	const query = '?includeMetrics=1' + (state.projectId ? '&projectId=' + encodeURIComponent(state.projectId) : '');
+	const projectId = state.projectId;
+	const projectVersion = state.projectVersion;
+	const query = '?includeMetrics=1' + (projectId ? '&projectId=' + encodeURIComponent(projectId) : '');
 	try {
 		const data = parseMetricCollection(await api('/workflows' + query), 'workflow');
+		if (projectVersion !== state.projectVersion || projectId !== state.projectId) return;
 		workflowState.workflows = data.items;
 		workflowState.metrics = data.metrics;
 	} catch (error) {
+		if (projectVersion !== state.projectVersion) return;
 		workflowState.workflows = [];
 		workflowState.metrics = null;
 		workflowState.loaded = true;

@@ -182,7 +182,7 @@ app.use(correlationIdMiddleware); // B1 W4 — every response carries X-Correlat
 app.use((request, response, next) => {
 	if (!['GET', 'HEAD'].includes(request.method)) return next();
 	const loginPage = /^\/login\/?$/i.test(request.path);
-	const shell = /^\/(?:index\.html|runs(?:\/[^/]+)?|tests|bugs|workflows|schedules)?\/?$/i.test(request.path);
+	const shell = /^\/(?:index\.html|overview|runs(?:\/[^/]+)?|tests|test-cases|bugs|findings|workflows|schedules|reports|integrations|settings)?\/?$/i.test(request.path);
 	if (!loginPage && !shell) return next();
 	response.setHeader('Cache-Control', 'no-store');
 	const authenticated = String(process.env.QASE_AUTH_MODE ?? '').toLowerCase() === 'disabled'
@@ -5536,7 +5536,7 @@ app.use('/api', (_req, res) => {
 	res.status(404).json({ error: 'API route not found.' });
 });
 
-app.get(['/', '/runs', '/runs/:id', '/tests', '/bugs', '/workflows', '/schedules'], (_req, res) => {
+app.get(['/', '/overview', '/runs', '/runs/:id', '/tests', '/test-cases', '/bugs', '/findings', '/workflows', '/schedules', '/reports', '/integrations', '/settings'], (_req, res) => {
 	res.sendFile(path.join(here, '..', 'public', 'index.html'));
 });
 
