@@ -89,6 +89,102 @@ export function allowedToolNames(mode = 'qa') {
 			: ['report_finding', 'finish_qa_report'])]);
 }
 
+/**
+ * Crash-recovery snapshots.
+ *
+ * The SDK conversation state (what the model itself "remembers") dies with the
+ * process. To let a run interrupted by a container pause/restart continue
+ * instead of being stranded as `interrupted`, the runtime's serialisable
+ * session snapshot is mirrored to disk at a throttled cadence during a run and
+ * deleted once the run reaches a terminal state. See server/runResume.js.
+ */
+const SNAPSHOT_DIR = path.join(process.cwd(), '.qase', 'runsnapshots');
+const SNAPSHOT_MIN_INTERVAL_MS = 5_000;
+const MAX_AUTO_RESUME_ATTEMPTS = 3;
+
+function snapshotPathFor(sessionId) {
+	return path.join(SNAPSHOT_DIR, `${sessionId}.json`);
+}
+
+/** Persist the runtime's session snapshot atomically (tmp + rename). */
+export function persistRunSnapshot(sessionId, snapshot, ownerUserId) {
+	try {
+		fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+		const file = snapshotPathFor(sessionId);
+		const tmp = `${file}.tmp-${process.pid}`;
+		// The owner travels with the snapshot so boot-time recovery can restore
+		// the run inside its owner's actor context without needing a listing.
+		fs.writeFileSync(tmp, JSON.stringify({ version: 1, sessionId, ownerUserId, savedAt: Date.now(), snapshot }));
+		fs.renameSync(tmp, file);
+		return true;
+	} catch {
+		// A failed snapshot write must never break the live run.
+		return false;
+	}
+}
+
+export function loadRunSnapshot(sessionId) {
+	try {
+		return JSON.parse(fs.readFileSync(snapshotPathFor(sessionId), 'utf8'))?.snapshot ?? null;
+	} catch {
+		return null;
+	}
+}
+
+/** Index of persisted snapshots: [{ sessionId, ownerUserId, savedAt }]. */
+export function listRunSnapshots() {
+	try {
+		return fs.readdirSync(SNAPSHOT_DIR)
+			.filter(name => name.endsWith('.json'))
+			.map(name => {
+				try {
+					const record = JSON.parse(fs.readFileSync(path.join(SNAPSHOT_DIR, name), 'utf8'));
+					return {
+						sessionId: record.sessionId ?? name.replace(/\.json$/, ''),
+						ownerUserId: typeof record.ownerUserId === 'string' ? record.ownerUserId : undefined,
+						savedAt: Number(record.savedAt) || 0
+					};
+				} catch {
+					return null;
+				}
+			})
+			.filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+
+export function deleteRunSnapshot(sessionId) {
+	try {
+		fs.rmSync(snapshotPathFor(sessionId), { force: true });
+	} catch {
+		// Already gone.
+	}
+}
+
+/** Throttled snapshot writer handed to the turn loop. */
+function snapshotWriter(sessionId, runtime, ownerUserId) {
+	let lastWrite = 0;
+	let writing = false;
+	return {
+		maybePersist() {
+			const now = Date.now();
+			if (writing || now - lastWrite < SNAPSHOT_MIN_INTERVAL_MS) return;
+			lastWrite = now;
+			writing = true;
+			try {
+				persistRunSnapshot(sessionId, runtime.getSessionSnapshot(), ownerUserId);
+			} catch {
+				// Snapshots are best-effort recovery state.
+			} finally {
+				writing = false;
+			}
+		}
+	};
+}
+
+export { MAX_AUTO_RESUME_ATTEMPTS };
+
 function finalArtifact(session) {
 	return session.mode === 'founder' ? session.founder?.finalizedAt
 		: session.mode === 'sqa' ? session.sqa?.finalizedAt : session.report;
@@ -462,6 +558,10 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 
 	record.onToolStart = beginActivity;
 
+	// Crash recovery: mirror the model conversation to disk while the run is in
+	// flight so an interrupted run can be auto-resumed after a restart.
+	const snapshots = snapshotWriter(session.id, runtime, session.ownerUserId);
+
 	try {
 		const stream = resumeAnswer === undefined
 			? runtime.run(task, controller.signal)
@@ -492,6 +592,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 					await finalizeAssistant();
 					closeThinking();
 					runStore.publish(session, 'turn', { turnId: part.turnId, index: part.turnIndex });
+					// Crash recovery: a long text-only generation between tool
+					// results must not lose the conversation state either.
+					snapshots.maybePersist();
 					break;
 
 				case 'context_usage':
@@ -525,6 +628,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 						summary: summariseResult(part.toolName, result)
 					});
 					openActivities.delete(part.toolCallId);
+					snapshots.maybePersist();
 
 					if (part.toolName === 'update_todo' && ok) {
 						session.todos = normaliseTodos(part.result, session.todos);
@@ -563,11 +667,13 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		const pending = runtime.getPendingQuestion();
 		if (controller.signal.aborted) {
 			await runStore.setStatus(session, 'idle', 'Stopped by user.');
+			deleteRunSnapshot(session.id);
 		} else if (successfulFinalizer) {
 			// An idempotent SQA/Founder finalizer can return its durable existing
 			// artifact. Require the actual successful result rather than treating
 			// every later turn with an old report as a completed reassessment.
 			await runStore.setStatus(session, 'done');
+			deleteRunSnapshot(session.id);
 		} else if (handoffToFounderSynthesis) {
 			continueIncompleteRun=true;
 			await runStore.setStatus(session,'running','Evidence collection complete. Preparing the Founder report.');
@@ -601,12 +707,15 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = `The agent paused repeatedly before publishing the final ${artifact}. Send "continue" to resume this run.`;
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			deleteRunSnapshot(session.id);
 		}
 	} catch (error) {
 		if (successfulFinalizer) {
 			await runStore.setStatus(session, 'done');
+			deleteRunSnapshot(session.id);
 		} else if (controller.signal.aborted) {
 			await runStore.setStatus(session, 'idle', 'Stopped by user.');
+			deleteRunSnapshot(session.id);
 		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModelTimeout(error)) {
 			retryAfterTimeout = true;
 			await runStore.setStatus(
@@ -618,6 +727,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = sanitizeErrorDetail(error);
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			deleteRunSnapshot(session.id);
 		}
 	} finally {
 		closeThinking();

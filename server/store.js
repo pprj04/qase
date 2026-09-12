@@ -89,8 +89,14 @@ export function loadSessions() {
 				session.ownerUserId = typeof session.ownerUserId === 'string' ? session.ownerUserId : DEFAULT_ACTOR_USER_ID;
 			// Nothing survives a restart mid-run, so anything that was in flight is stale.
 			if (session.status === 'running' || session.status === 'awaiting_input') {
+				// Only a run that was actively executing qualifies for automatic
+				// resumption (runResume.js); a run waiting on user input stays put.
+				session.interruptedFromRun = session.status === 'running';
 				session.status = 'interrupted';
 				session.pendingQuestion = undefined;
+			}
+			if (typeof session.autoResumeCount !== 'number' || session.autoResumeCount < 0) {
+				session.autoResumeCount = 0;
 			}
 			// Earlier versions stored reasoning as a message; it is live-only now.
 			session.messages = (session.messages ?? []).filter(message => message.role !== 'thinking');
@@ -184,6 +190,9 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			deviceLandscape: session.deviceLandscape === true,
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
+			// Needed by boot-time recovery (runResume), which runs without a
+			// request actor and must see runs owned by any user.
+			ownerUserId: session.ownerUserId,
 			findingCount: session.findings.length,
 			messageCount: session.messages.length
 		}));

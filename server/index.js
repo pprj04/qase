@@ -7,6 +7,9 @@ import { createConfiguredApplicationServices } from './serviceFactory.js';
 import { createConfiguredDrytisIntegration } from './drytisIntegrationFactory.js';
 import { closeApplicationBrowsers, drainHttpServer, installShutdownHandlers } from './processLifecycle.js';
 import { createRunKeepalive, isRunStatusActive } from './keepalive.js';
+import { createRunResume } from './runResume.js';
+import { listRunSnapshots } from './agent.js';
+import { runWithRequestActor } from './requestActor.js';
 
 // Validate process-local operational limits and metrics credentials before
 // opening PostgreSQL or Redis clients.
@@ -29,7 +32,21 @@ const access = createInstanceAccess({ tenantContext });
 const keepaliveUrl = process.env.QASE_PUBLIC_URL
 	? `${process.env.QASE_PUBLIC_URL.replace(/\/+$/, '')}/healthz`
 	: `http://127.0.0.1:${port}/healthz`;
-const keepalive = createRunKeepalive({ getUrl: () => keepaliveUrl, logger });
+const keepalive = createRunKeepalive({
+	getUrl: () => keepaliveUrl,
+	logger,
+	// Ground truth from the live runtime records: a run whose agent loop is
+	// actually in flight keeps the keepalive armed even when the run bus has
+	// been quiet for the whole quiet window (a single long model generation
+	// can stream nothing for minutes).
+	isActive: () => {
+		try {
+			return Boolean(services.runs.listLive?.().some(entry => entry?.record?.running));
+		} catch {
+			return false;
+		}
+	}
+});
 if (typeof services.runs.setStatus === 'function') {
 	const setStatus = services.runs.setStatus.bind(services.runs);
 	services.runs.setStatus = async (session, status, detail) => {
@@ -99,5 +116,29 @@ server = app.listen(port, host, () => {
 	console.log('');
 	if (config.problem) {
 		console.log(`  ! ${config.problem} Set it in the dashboard under Settings, or in .env.\n`);
+	}
+
+	// Boot-time recovery: any run that was actively running when the previous
+	// process died (container pause/restart) resumes automatically instead of
+	// staying `interrupted`. Deferred so the listener is fully up first, and
+	// never blocking — failures are logged inside runResume.
+	if (typeof services.agent?.runTurn === 'function') {
+		const resumeTimer = setTimeout(() => {
+			const runResume = createRunResume({
+				logger,
+				// Session-owner actor context so per-user model configuration,
+				// memory, and run ownership resolve correctly during recovery.
+				withRequestActor: actor => work => runWithRequestActor(actor, work)
+			});
+			void runResume.resumeAll({
+				listSnapshots: listRunSnapshots,
+				get: id => services.runs.get(id),
+				ensureRuntime: session => services.agent.ensureRuntime(session),
+				runTurn: (session, options) => services.agent.runTurn(session, options),
+				addMessage: services.runs.addMessage.bind(services.runs),
+				setStatus: services.runs.setStatus.bind(services.runs)
+			});
+		}, 5_000);
+		resumeTimer.unref?.();
 	}
 });

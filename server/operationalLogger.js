@@ -2,7 +2,10 @@ const LEVELS = Object.freeze({ debug: 10, info: 20, warn: 30, error: 40 });
 const SAFE_FIELDS = new Set([
 	'requestId', 'method', 'route', 'statusCode', 'durationMs', 'workerId',
 	'signal', 'errorName', 'port', 'host', 'executionMode', 'storeMode',
-	'accessMode', 'provider', 'model', 'registered', 'consecutiveFailures'
+	'accessMode', 'provider', 'model', 'registered', 'consecutiveFailures',
+	// keepalive + run-resume diagnostics
+	'url', 'ip', 'status', 'intervalMs', 'quietAfterMs', 'attempt', 'attempts',
+	'resumed', 'runId', 'reason', 'outcome'
 ]);
 
 function safeName(value, label, pattern, maximum) {
