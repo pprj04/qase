@@ -25,3 +25,31 @@ export function buildIntentMissionPayload({ targetUrl, buildPrompt = '', require
 		}
 	};
 }
+
+/**
+ * UI-3 New Run contract. This deliberately contains only fields accepted by
+ * POST /api/v1/missions. Server-side URL and SSRF validation remains
+ * authoritative.
+ */
+export function buildNewRunMissionPayload({ targetUrl, objective = '', requirementsText = '', device = '', projectId } = {}) {
+	const url = String(targetUrl ?? '').trim();
+	const requestedObjective = String(objective ?? '').trim();
+	const requirements = String(requirementsText ?? '').split(',').map(value => value.trim()).filter(Boolean);
+	const requestedDevice = String(device ?? '').trim();
+	if (!url) return { payload: null, error: 'Enter a target URL.' };
+	let parsed;
+	try { parsed = new URL(url); } catch { return { payload: null, error: 'Enter a valid http or https URL.' }; }
+	if (!['http:', 'https:'].includes(parsed.protocol)) return { payload: null, error: 'Use an http or https target URL.' };
+	if (parsed.username || parsed.password) return { payload: null, error: 'Use a target URL without embedded credentials.' };
+	return {
+		payload: {
+			...(projectId ? { projectId } : {}),
+			targetUrl: url,
+			type: 'full_audit',
+			...(requestedObjective ? { objectives: [requestedObjective] } : {}),
+			...(requirements.length ? { requirements } : {}),
+			...(requestedDevice ? { constraints: { device: requestedDevice } } : {})
+		},
+		error: null
+	};
+}

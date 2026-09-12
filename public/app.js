@@ -16,9 +16,9 @@ import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFr
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 import { initOverview, loadOverview, markOverviewStale } from './overview.js';
+import { initNewRun, openNewRun } from './newRun.js';
 import { classifyViewport } from './deviceClassify.js';
 import { resolveLiveDevicePresentation } from './deviceLiveView.js';
-import { buildIntentMissionPayload } from './missionIntent.js';
 import { renderExecMeta, renderExecutionHealth, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
 
 /* P0-F3 — human labels for the truthful interruptedReason a session carries.
@@ -220,17 +220,6 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 		renderDeviceStrip();
 		el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
 	}
-}
-
-async function startRun() {
-	const body = state.projectId ? { projectId: state.projectId } : {};
-	const session = await api('/sessions', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-	await selectSession(session.id);
-	el.composerInput.focus();
 }
 
 function renderHeader() {
@@ -2132,16 +2121,6 @@ cfg.saveBtn.onclick = async () => {
 
 /* ── Wiring ──────────────────────────────────────────────────────── */
 
-// Intent panel toggle
-const intentPanel = document.getElementById('intent-panel');
-const intentToggleDown = document.getElementById('intent-toggle-down');
-const intentToggleUp = document.getElementById('intent-toggle-up');
-const intentBuildPrompt = document.getElementById('intent-build-prompt');
-const intentRequirements = document.getElementById('intent-requirements');
-
-if (intentToggleDown) intentToggleDown.onclick = () => { intentPanel.hidden = false; intentToggleDown.hidden = true; };
-if (intentToggleUp) intentToggleUp.onclick = () => { intentPanel.hidden = true; intentToggleDown.hidden = false; };
-
 el.composer.onsubmit = async event => {
 	event.preventDefault();
 	let text = el.composerInput.value.trim();
@@ -2149,58 +2128,9 @@ el.composer.onsubmit = async event => {
 		return;
 	}
 
-	// Intent fields belong to a NEW mission, never to whichever session happens
-	// to be selected. Read them before creating a fallback session; previously a
-	// selected device or requirements could be silently ignored and a desktop
-	// session started first.
-	const intent = buildIntentMissionPayload({
-		targetUrl: text,
-		buildPrompt: intentBuildPrompt?.value,
-		requirementsText: intentRequirements?.value,
-		device: document.getElementById('intent-device')?.value
-	});
-
-	if (intent.requested) {
-		if (intent.error) {
-			toast(intent.error, 'bad');
-			return;
-		}
-		// A device, build prompt, or requirements all create a mission. This
-		// preserves the selected execution environment and persists the intent
-		// for application understanding and generated tests.
-		try {
-			const mission = await api('/v1/missions', {
-				method: 'POST',
-				body: JSON.stringify(intent.payload)
-			});
-			if (mission?.sessionId) {
-				await selectSession(mission.sessionId);
-			}
-			el.composerInput.value = '';
-			el.composerInput.style.height = 'auto';
-			if (intentBuildPrompt) intentBuildPrompt.value = '';
-			if (intentRequirements) intentRequirements.value = '';
-			const deviceSelect = document.getElementById('intent-device');
-			if (deviceSelect) deviceSelect.value = '';
-			el.questionSlot.replaceChildren();
-			return;
-		} catch (err) {
-			// Never downgrade an explicitly selected device/intent to a desktop
-			// session. Keep the fields intact so the user can correct the error.
-			toast(`Mission creation failed: ${err instanceof Error ? err.message : String(err)}`, 'bad');
-			return;
-		}
-	}
-
-	// No mission-specific controls: standard session messaging keeps its
-	// existing behavior.
 	if (!state.sessionId) {
-		try {
-			await startRun();
-		} catch (err) {
-			fail(err);
-			return;
-		}
+		openNewRun(/^https?:\/\//i.test(text) ? { targetUrl: text } : { objective: text });
+		return;
 	}
 
 	if (!state.config?.ready) {
@@ -2229,9 +2159,10 @@ el.composerInput.addEventListener('keydown', event => {
 	}
 });
 
-el.newRun.onclick = startRun;
+el.newRun.onclick = () => window.dispatchEvent(new CustomEvent('qase:start-run'));
 window.addEventListener('qase:start-run', event => {
-	void startRun().catch(fail).finally(() => event.detail?.done?.());
+	openNewRun(event.detail?.defaults);
+	event.detail?.done?.();
 });
 window.addEventListener('qase:select-run', event => {
 	const id = event.detail?.id;
@@ -2249,7 +2180,7 @@ el.thinkingHead.onclick = () => {
 document.addEventListener('keydown', event => {
 	if ((event.metaKey || event.ctrlKey) && event.key === 'n') {
 		event.preventDefault();
-		void startRun();
+		window.dispatchEvent(new CustomEvent('qase:start-run'));
 	}
 	if ((event.metaKey || event.ctrlKey) && event.key === ',') {
 		event.preventDefault();
@@ -2301,6 +2232,7 @@ async function selectProject(id) {
 	state.session = undefined;
 	state.sessionId = undefined;
 	state.projectId = projectId;
+	window.dispatchEvent(new CustomEvent('qase:project-change'));
 	localStorage.setItem('qase.project', projectId || '');
 	renderProjectSelect();
 	if (currentPage() === 'overview') void loadOverview();
@@ -2798,6 +2730,7 @@ document.addEventListener('click', event => {
 	window.addEventListener('popstate', followRunRoute);
 	initShell();
 	initOverview();
+	initNewRun();
 	initRouter();
 
 	// Wire up event listeners.

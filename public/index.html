@@ -153,6 +153,7 @@
             <button class="prompt-chip" data-prompt="Find UX issues">Find UX Issues</button>
             <button class="prompt-chip" data-prompt="Validate mobile experience">Check Mobile UX</button>
           </div>
+		  <button class="btn btn-primary" type="button" data-open-new-run>Start a Run</button>
           </div>
         </div>
       </div>
@@ -171,33 +172,6 @@
       <div class="question-slot" id="question-slot"></div>
 
       <form class="composer" id="composer">
-        <div id="intent-panel" class="intent-panel" hidden>
-          <label>Build prompt
-            <input type="text" id="intent-build-prompt" placeholder="Describe the application being tested (what it is, who uses it)">
-          </label>
-          <label>Requirements (comma-separated)
-            <input type="text" id="intent-requirements" placeholder="e.g. users can register, checkout works on mobile">
-          </label>
-          <label>Device
-            <select id="intent-device">
-              <option value="">Any (desktop)</option>
-              <option value="desktop">Desktop</option>
-              <option value="mobile">Mobile — iPhone 15 (default)</option>
-              <option value="tablet">Tablet — iPad Pro 11 (default)</option>
-              <option value="iPhone 15 Pro">iPhone 15 Pro</option>
-              <option value="iPhone 15">iPhone 15</option>
-              <option value="iPhone SE">iPhone SE</option>
-              <option value="Pixel 8">Pixel 8</option>
-              <option value="Pixel 7">Pixel 7</option>
-              <option value="Galaxy S9+">Galaxy S9+</option>
-              <option value="iPad Pro 11">iPad Pro 11</option>
-              <option value="iPad Mini">iPad Mini</option>
-            </select>
-          </label>
-          <p class="intent-help">Enter the target URL below, then Send. These fields start a new mission and are saved with its test context.</p>
-          <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-up">Hide</button>
-        </div>
-        <button type="button" class="btn btn-ghost btn-sm" id="intent-toggle-down" hidden>+ Mission intent</button>
         <textarea id="composer-input" rows="1" placeholder="https://example.com — or an instruction for the agent" autocomplete="off"></textarea>
         <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
       </form>
@@ -939,6 +913,66 @@
 
     <footer class="modal-foot">
       <button class="btn btn-primary" type="button" id="tc-editor-save">Save</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog class="new-run-dialog" id="new-run-dialog" aria-labelledby="new-run-title">
+  <form class="new-run-form" id="new-run-form" novalidate>
+    <header class="new-run-header">
+      <div>
+        <p class="shell-eyebrow">CURRENT PROJECT</p>
+        <h2 id="new-run-title">Start a QA run</h2>
+        <p id="new-run-project">Current project</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" data-new-run-close aria-label="Close New Run">Close</button>
+    </header>
+
+    <div class="new-run-fields">
+      <label class="field" for="new-run-target">
+        <span>Target URL <b aria-hidden="true">*</b></span>
+        <input id="new-run-target" name="targetUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com" aria-describedby="new-run-target-help new-run-target-error" required>
+        <small id="new-run-target-help">QASE validates the target again before it creates a mission.</small>
+        <small id="new-run-target-error" class="new-run-error" role="alert"></small>
+      </label>
+      <label class="field" for="new-run-objective">
+        <span>What should QASE test?</span>
+        <textarea id="new-run-objective" name="objective" rows="4" placeholder="Test signup, login, dashboard navigation and error handling."></textarea>
+        <small>Optional plain-language objective for this mission.</small>
+      </label>
+      <label class="field" for="new-run-profile">
+        <span>Testing Profile</span>
+        <input id="new-run-profile" type="text" value="Standard" readonly aria-describedby="new-run-profile-help">
+        <small id="new-run-profile-help">Standard runs a comprehensive full audit using the existing certified defaults.</small>
+      </label>
+    </div>
+
+    <details class="new-run-advanced">
+      <summary>Advanced options</summary>
+      <div class="new-run-fields">
+        <label class="field" for="new-run-device">
+          <span>Device</span>
+          <select id="new-run-device" name="device">
+            <option value="">Existing default (desktop)</option>
+            <option value="desktop">Desktop</option>
+            <option value="mobile">Mobile — existing default device</option>
+            <option value="tablet">Tablet — existing default device</option>
+          </select>
+        </label>
+        <label class="field" for="new-run-requirements">
+          <span>Requirements or build context</span>
+          <textarea id="new-run-requirements" name="requirements" rows="3" placeholder="e.g. users can register, checkout works on mobile"></textarea>
+          <small>Comma-separated requirements saved with the mission context.</small>
+        </label>
+      </div>
+    </details>
+
+    <p class="new-run-progress" id="new-run-progress" aria-live="polite"></p>
+    <p class="new-run-error" id="new-run-error" role="alert"></p>
+	<p class="new-run-security-note">Credentials are requested later only if a running session requires them.</p>
+    <footer class="new-run-actions">
+      <button class="btn btn-ghost" type="button" data-new-run-close>Cancel</button>
+      <button class="btn btn-primary" id="new-run-submit" type="submit">Start QA run</button>
     </footer>
   </form>
 </dialog>

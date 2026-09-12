@@ -7878,6 +7878,58 @@ dialog.modal {
 	background: var(--bg-base);
 }
 
+/* UI-3 — New Run. The dialog is the single standalone mission-creation
+ * surface; active-run steering remains in the existing composer. */
+.new-run-dialog {
+	width: min(680px, calc(100vw - 32px));
+	max-height: min(820px, calc(100vh - 32px));
+	margin: auto;
+	padding: 0;
+	border: 1px solid var(--hair);
+	border-radius: 14px;
+	background: var(--bg, #10141c);
+	color: var(--text);
+	box-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+}
+.new-run-dialog::backdrop { background: rgba(0, 0, 0, .62); }
+.new-run-form { display: grid; gap: 18px; padding: clamp(18px, 4vw, 30px); overflow: auto; }
+.new-run-header, .new-run-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.new-run-header h2 { margin: 4px 0 0; font-size: clamp(22px, 3vw, 28px); }
+.new-run-header p:last-child { margin: 5px 0 0; color: var(--text-dim); }
+.new-run-fields { display: grid; gap: 15px; }
+.new-run-fields .field { display: grid; gap: 7px; min-width: 0; }
+.new-run-fields .field > span { font-weight: 600; }
+.new-run-fields input, .new-run-fields textarea, .new-run-fields select {
+	width: 100%;
+	box-sizing: border-box;
+	border: 1px solid var(--hair);
+	border-radius: 8px;
+	background: var(--input, var(--glass));
+	color: var(--text);
+	font: inherit;
+	padding: 10px 11px;
+}
+.new-run-fields textarea { resize: vertical; min-height: 88px; }
+.new-run-fields input[readonly] { color: var(--text-dim); cursor: default; }
+.new-run-fields small { color: var(--text-dim); line-height: 1.4; }
+.new-run-fields [aria-invalid="true"] { border-color: var(--bad, #ff6961); }
+.new-run-advanced { border-top: 1px solid var(--hair-soft); border-bottom: 1px solid var(--hair-soft); padding: 13px 0; }
+.new-run-advanced summary { cursor: pointer; font-weight: 600; }
+.new-run-advanced[open] summary { margin-bottom: 15px; }
+.new-run-progress, .new-run-error { min-height: 1.35em; margin: 0; line-height: 1.4; }
+.new-run-progress { color: var(--text-dim); }
+.new-run-error { color: var(--bad, #ff6961); }
+.new-run-actions { align-items: center; padding-top: 2px; }
+
+@media (max-width: 600px) {
+	.new-run-dialog { width: 100vw; max-width: 100vw; max-height: 100vh; min-height: 100vh; border-radius: 0; border-left: 0; border-right: 0; }
+	.new-run-form { min-height: 100vh; box-sizing: border-box; padding: 18px 16px max(18px, env(safe-area-inset-bottom)); }
+	.new-run-header { gap: 10px; }
+	.new-run-header .btn { flex: 0 0 auto; }
+	.new-run-actions { position: sticky; bottom: 0; padding: 12px 0 max(4px, env(safe-area-inset-bottom)); background: var(--bg, #10141c); }
+	.new-run-actions .btn { min-height: 44px; }
+}
+
 .shell-sidebar {
 	display: flex;
 	flex-direction: column;
