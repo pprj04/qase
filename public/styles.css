@@ -8085,6 +8085,101 @@ a.tc-source-link:hover {
 	text-decoration: underline;
 }
 
+/* UI-2 — Overview. Scoped to the routed dashboard; no shared page layout changes. */
+.overview-page {
+	max-width: 1440px;
+	margin: 0 auto;
+	padding: clamp(20px, 3vw, 42px);
+	color: var(--text);
+}
+.overview-header, .overview-card > header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+}
+.overview-header { margin-bottom: 24px; }
+.overview-header h1, .overview-card h2 { margin: 0; }
+.overview-header h1 { font-size: clamp(26px, 3vw, 36px); letter-spacing: -.035em; }
+.overview-project { margin: 5px 0 0; color: var(--text-dim); }
+.overview-metrics {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 12px;
+	margin: 0 0 18px;
+}
+.overview-metric, .overview-card {
+	border: 1px solid var(--hair);
+	border-radius: 12px;
+	background: var(--glass);
+}
+.overview-metric { min-width: 0; padding: 16px; }
+.overview-metric dt { color: var(--text-dim); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+.overview-metric dd { margin: 8px 0 5px; font-size: clamp(22px, 2.4vw, 30px); font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; }
+.overview-metric small { display: block; color: var(--text-faint); font-size: 12px; line-height: 1.35; }
+.overview-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(300px, .85fr); gap: 18px; align-items: start; }
+.overview-card { min-width: 0; padding: 18px; }
+.overview-card > header { margin-bottom: 14px; }
+.overview-card h2 { font-size: 17px; }
+.overview-card header p { margin: 5px 0 0; color: var(--text-dim); font-size: 13px; line-height: 1.4; }
+.overview-card header a { color: var(--accent); font-size: 13px; text-decoration: none; white-space: nowrap; }
+.overview-card header a:hover { text-decoration: underline; }
+.overview-runs-card { grid-row: span 2; }
+.overview-table-wrap { width: 100%; }
+.overview-runs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.overview-runs-table th, .overview-runs-table td { padding: 11px 9px; border-top: 1px solid var(--hair-soft); text-align: left; vertical-align: middle; }
+.overview-runs-table thead th { color: var(--text-dim); border-top: 0; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.overview-runs-table tbody th { font-weight: 600; }
+.overview-runs-table a { color: var(--text); text-decoration: none; }
+.overview-runs-table a:hover { color: var(--accent); text-decoration: underline; }
+.overview-status { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hair); border-radius: 999px; color: var(--text-dim); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.overview-status[data-status="queued"], .overview-status[data-status="awaiting_input"] { color: #ffd08a; border-color: rgba(255, 159, 10, .42); }
+.overview-status[data-status="running"] { color: #9fd0ff; border-color: rgba(10, 132, 255, .44); }
+.overview-status[data-status="completed"] { color: #8ce8a6; border-color: rgba(48, 209, 88, .42); }
+.overview-status[data-status="failed"], .overview-status[data-status="blocked"] { color: #ff9a93; border-color: rgba(255, 69, 58, .42); }
+.overview-findings { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.overview-finding-link { width: 100%; padding: 11px; border: 1px solid var(--hair-soft); border-radius: 8px; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.overview-finding-link:hover, .overview-finding-link:focus-visible { border-color: var(--accent); background: var(--glass-2); outline: none; }
+.overview-finding-link strong, .overview-finding-link span { display: block; }
+.overview-finding-link span { margin-top: 5px; color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+.overview-health { display: grid; gap: 0; margin: 0; }
+.overview-health > div { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--hair-soft); font-size: 13px; }
+.overview-health dt { color: var(--text-dim); }
+.overview-health dd { margin: 0; font-weight: 600; text-align: right; }
+.overview-inline-action { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+
+@media (max-width: 1180px) {
+	.overview-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	.overview-grid { grid-template-columns: minmax(0, 1fr); }
+	.overview-runs-card { grid-row: auto; }
+}
+@media (max-width: 700px) {
+	.overview-page { padding: 16px; }
+	.overview-header { align-items: stretch; flex-direction: column; }
+	.overview-header .btn { align-self: flex-start; }
+	.overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+	.overview-metric { padding: 13px; }
+	.overview-metric:last-child { grid-column: span 2; }
+	.overview-card { padding: 15px; }
+	.overview-runs-table, .overview-runs-table tbody, .overview-runs-table tr, .overview-runs-table th, .overview-runs-table td { display: block; }
+	.overview-runs-table thead { display: none; }
+	.overview-runs-table tr { padding: 10px 0; border-top: 1px solid var(--hair-soft); }
+	.overview-runs-table tr:first-child { border-top: 0; }
+	.overview-runs-table th, .overview-runs-table td { display: grid; grid-template-columns: minmax(100px, .85fr) minmax(0, 1.15fr); gap: 10px; padding: 5px 0; border: 0; overflow-wrap: anywhere; }
+	.overview-runs-table td::before { color: var(--text-dim); font-size: 11px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; content: ''; }
+	.overview-runs-table th::before { color: var(--text-dim); content: 'Target'; font-size: 11px; letter-spacing: .03em; text-transform: uppercase; }
+	.overview-runs-table td:nth-child(2)::before { content: 'Status'; }
+	.overview-runs-table td:nth-child(3)::before { content: 'Updated'; }
+	.overview-runs-table td:nth-child(4)::before { content: 'Duration'; }
+	.overview-runs-table td:nth-child(5)::before { content: 'Pages / actions'; }
+	.overview-runs-table td:nth-child(6)::before { content: 'Findings'; }
+	.overview-runs-table td:nth-child(7)::before { content: 'Report'; }
+}
+@media (max-width: 380px) {
+	.overview-metrics { grid-template-columns: 1fr; }
+	.overview-metric:last-child { grid-column: auto; }
+}
+
 /* Phase 2 final cascade guard: workflow/schedule and evidence component
  * blocks are declared after the main responsive hardening above. */
 .wf-card-name,

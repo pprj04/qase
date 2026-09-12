@@ -54,7 +54,43 @@
       </div>
     </header>
     <main class="shell-content" id="shell-content" tabindex="-1">
-      <div class="page shell-placeholder-page" id="page-overview" hidden><section class="shell-placeholder"><p class="shell-eyebrow">QASE V1</p><h1>Overview</h1><p>Overview — coming in UI-2.</p></section></div>
+      <div class="page" id="page-overview" hidden>
+        <section class="overview-page" aria-labelledby="overview-title" aria-busy="true">
+          <header class="overview-header">
+            <div>
+              <p class="shell-eyebrow">CURRENT PROJECT</p>
+              <h1 id="overview-title">Overview</h1>
+              <p class="overview-project" id="overview-project-name">Current project</p>
+            </div>
+            <button class="btn btn-primary" id="overview-new-run" type="button" data-overview-new-run="true">+ New Run</button>
+          </header>
+
+          <dl class="overview-metrics" id="overview-metrics" aria-label="Current project quality metrics"></dl>
+
+          <div class="overview-grid">
+            <section class="overview-card overview-runs-card" aria-labelledby="overview-runs-title">
+              <header><div><h2 id="overview-runs-title">Recent Runs</h2><p id="overview-runs-state" aria-live="polite">Loading recent runs…</p></div><a href="/runs" data-nav="runs">View runs</a></header>
+              <div class="overview-table-wrap">
+                <table class="overview-runs-table">
+                  <thead><tr><th scope="col">Target</th><th scope="col">Status</th><th scope="col">Updated</th><th scope="col">Duration</th><th scope="col">Pages / actions</th><th scope="col">Findings</th><th scope="col">Report</th></tr></thead>
+                  <tbody id="overview-runs-body"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="overview-card" aria-labelledby="overview-findings-title">
+              <header><div><h2 id="overview-findings-title">Critical Findings</h2><p id="overview-findings-state" aria-live="polite">Loading critical findings…</p></div><a href="/findings" data-nav="findings">View findings</a></header>
+              <ul class="overview-findings" id="overview-findings-list"></ul>
+            </section>
+
+            <section class="overview-card overview-health-card" aria-labelledby="overview-health-title">
+              <header><div><h2 id="overview-health-title">Service Context</h2><p>Only directly reported health facts are shown.</p></div></header>
+              <dl class="overview-health" id="overview-health-list" aria-live="polite"></dl>
+              <div id="overview-health-error"></div>
+            </section>
+          </div>
+        </section>
+      </div>
 
 <!-- ── Page: Runs (agent workspace) ───────────────────────────── -->
 <div class="page" id="page-runs">

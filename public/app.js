@@ -15,6 +15,7 @@ import { loadBugs, initBugsWiring } from './bugs.js';
 import { renderPipeline, loadPipelineFromSession, renderDevIntel, loadDevIntelFromSession, pipelineState, devIntelState } from './pipeline.js';
 import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
+import { initOverview, loadOverview, markOverviewStale } from './overview.js';
 import { classifyViewport } from './deviceClassify.js';
 import { resolveLiveDevicePresentation } from './deviceLiveView.js';
 import { buildIntentMissionPayload } from './missionIntent.js';
@@ -2229,6 +2230,13 @@ el.composerInput.addEventListener('keydown', event => {
 });
 
 el.newRun.onclick = startRun;
+window.addEventListener('qase:start-run', event => {
+	void startRun().catch(fail).finally(() => event.detail?.done?.());
+});
+window.addEventListener('qase:select-run', event => {
+	const id = event.detail?.id;
+	if (id) void selectSession(id).catch(fail);
+});
 el.stopRun.onclick = () => api(`/sessions/${state.sessionId}/stop`, { method: 'POST' }).catch(fail);
 
 el.thinkingHead.onclick = () => {
@@ -2287,6 +2295,7 @@ async function selectProject(id) {
 	const projectId = id || undefined;
 	const projectVersion = ++state.projectVersion;
 	setProjectSwitching(true);
+	markOverviewStale();
 	state.stream?.close();
 	state.stream = undefined;
 	state.session = undefined;
@@ -2294,6 +2303,7 @@ async function selectProject(id) {
 	state.projectId = projectId;
 	localStorage.setItem('qase.project', projectId || '');
 	renderProjectSelect();
+	if (currentPage() === 'overview') void loadOverview();
 	try {
 	await refreshRuns(projectId, projectVersion);
 	if (projectVersion !== state.projectVersion) return;
@@ -2770,6 +2780,7 @@ document.addEventListener('click', event => {
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
+		if (page === 'overview' && state.projects.length > 0) void loadOverview();
 		if (page === 'findings') loadBugs();
 		if (page === 'test-cases') loadTestCases();
 		if (page === 'workflows') loadWorkflowsPage();
@@ -2786,6 +2797,7 @@ document.addEventListener('click', event => {
 	window.addEventListener('hashchange', followRunRoute);
 	window.addEventListener('popstate', followRunRoute);
 	initShell();
+	initOverview();
 	initRouter();
 
 	// Wire up event listeners.
@@ -2832,6 +2844,7 @@ document.addEventListener('click', event => {
 		state.projectId = state.projects[0].id;
 	}
 	renderProjectSelect();
+	if (currentPage() === 'overview') void loadOverview();
 
 	// Sessions depend on projectId — fetch after project resolution.
 	const runs = await api(`/sessions${state.projectId ? `?projectId=${state.projectId}` : ''}`).catch(err => {
