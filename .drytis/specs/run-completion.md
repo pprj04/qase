@@ -68,3 +68,44 @@ server on boot) and this spec file. Both entries were cleared via debugfs;
 spec was rewritten from `.drytis/memory/run-completion-architecture.md`.
 Root cause to watch: ext4 block-bitmap checksum mismatch on the container volume
 — flagged for infra.
+
+## Fix: runs stranded "stuck" when no snapshot survives (ticket #10636)
+
+### Root causes (three compounding defects)
+1. **Owner scoping hid sessions at boot** — `services.runs.list/get` filter by
+   the current request actor; at boot that is the default tenant actor, so
+   user-owned interrupted sessions were invisible → zero candidates.
+2. **Missing snapshot loader** — `index.js` wired `createRunResume` without
+   `loadSnapshot`, so every snapshot read resolved to the factory default
+   (null) and no candidate ever resumed even with snapshots present.
+3. **Snapshot-or-skip policy** — `runResume.js` skipped any candidate without a
+   readable runtime snapshot; when the crash also wiped `.qase/runsnapshots`
+   (as the volume corruption did), the run was stranded `interrupted` forever.
+   Additionally the recovery block sat after an early `return` in the
+   `NODE_ENV === 'production'` branch, and log event names with underscores
+   (`runresume.no_snapshot_...`) violated the logger's `^[a-z][a-z0-9.-]*$`
+   event-name pattern — the TypeError killed resumeAll silently.
+
+### Changes
+- `server/localServices.js`: unscoped `runs.listInterrupted()` and
+  `runs.getAny(id)` for boot-time recovery only.
+- `server/index.js`: pass `loadSnapshot: loadRunSnapshot`; wire
+  `listInterrupted`/`get` unscoped; recovery block now runs in every
+  environment (moved out of the NODE_ENV early-return).
+- `server/runResume.js`: store-scan fallback when the snapshot index is empty;
+  transcript-digest resume when no snapshot exists (digest of last 25 agent
+  messages + activity summaries seeded into the recovery instruction);
+  corrupt-snapshot restore degrades to transcript resume; recovery turn
+  wrapped in try/catch so a failed turn never kills boot; log events use
+  dash-only names.
+- `server/runResume.test.js`: 11 tests covering the lost-snapshot-directory
+  scenario, store-scan resumability rules, corrupt-restore fallback.
+
+### Verified
+- Unit: 11/11 runResume, full suite 460 tests / 454 pass / 0 fail.
+- Live: real stranded run `dac33a15` (drytis.com QA, interrupted mid
+  "Filled field") auto-resumed on boot (`runresume.no-snapshot-transcript-resume`),
+  status `running`, autoResumeCount=1, continuing the test plan from its
+  transcript ("Page reloaded cleanly after the restart — no console errors…").
+  Keepalive holding edge pings (200 via public IP) during the resumed run.
+

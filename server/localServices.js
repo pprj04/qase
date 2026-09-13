@@ -152,6 +152,22 @@ export function createLocalApplicationServices(options = {}) {
 		async list(options) {
 			return listSessions({ ...options, ownerUserId: ownerUserId() });
 		},
+		/**
+		 * Unscoped accessors for boot-time run recovery (runResume.js). The
+		 * request-scoped list/get above filter by the current actor, which at
+		 * boot is the default tenant actor — sessions owned by real users would
+		 * be invisible and never resume. These deliberately bypass owner
+		 * filtering; runResume re-enters each owner's actor context itself.
+		 */
+		async listInterrupted() {
+			return listSessions({ limit: 100, ownerUserId: undefined })
+				.filter(session => session.status === 'interrupted')
+				.map(summary => getSession(summary.id, undefined))
+				.filter(Boolean);
+		},
+		async getAny(id) {
+			return getSession(id, undefined);
+		},
 		async delete(id) {
 			return deleteSession(id, ownerUserId());
 		},

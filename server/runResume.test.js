@@ -16,7 +16,7 @@ function interruptedSession(overrides = {}) {
 	};
 }
 
-function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeLacksRestore, listThrows } = {}) {
+function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeLacksRestore, listThrows, listInterrupted } = {}) {
 	const turns = [];
 	const restored = [];
 	const log = [];
@@ -27,13 +27,14 @@ function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeL
 			log.push(['actor', actor]);
 			return Promise.resolve(work());
 		},
-		loadSnapshot: id => (snapshotFor ? snapshotFor(id) : { version: 1 })
+		loadSnapshot: id => (snapshotFor ? snapshotFor(id) : undefined)
 	});
 	const api = {
 		listSnapshots: async () => {
 			if (listThrows) throw new Error('index unreadable');
 			return snapshots ?? [];
 		},
+		listInterrupted: listInterrupted,
 		get: async id => sessions.find(s => s.id === id),
 		ensureRuntime: async session => {
 			const runtime = {
@@ -58,6 +59,7 @@ function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeL
 	};
 	const resumeAll = () => resume.resumeAll({
 		listSnapshots: api.listSnapshots,
+		listInterrupted: api.listInterrupted,
 		get: api.get,
 		ensureRuntime: api.ensureRuntime,
 		runTurn: api.runTurn,
@@ -107,17 +109,48 @@ test('a candidate with a snapshot is resumed inside its owner actor context', as
 	assert.ok(log.some(([event, actor]) => event === 'actor' && actor?.actorUserId === 'user-a'), 'owner actor context used');
 });
 
-test('candidates without a readable snapshot are skipped', async () => {
-	const session = interruptedSession({ id: 'run-b' });
+test('candidates without a snapshot resume from the recorded transcript', async () => {
+	const session = interruptedSession({ id: 'run-b', messages: [{ role: 'agent', text: 'Homepage verified.' }] });
 	const { resumeAll, turns } = makeHarness({
 		sessions: [session],
 		snapshots: [{ sessionId: 'run-b', ownerUserId: 'user-a', savedAt: 5 }],
 		snapshotFor: () => null
 	});
 	const count = await resumeAll();
+	assert.equal(count, 1, 'resumes despite missing snapshot');
+	assert.equal(turns.length, 1);
+	assert.match(turns[0].task, /interrupted by a server restart/);
+	assert.match(turns[0].task, /Homepage verified\./, 'transcript digest seeded into recovery instruction');
+});
+
+test('a lost snapshot directory still resumes an interrupted run from the store', async () => {
+	// The production bug: the crash destroyed .qase/runsnapshots entirely, so
+	// the snapshot index was empty and no candidate ever resumed.
+	const session = interruptedSession({ id: 'run-j', messages: [{ role: 'agent', text: 'Careers page renders fine end-to-end.' }] });
+	const { resumeAll, turns } = makeHarness({
+		sessions: [session],
+		snapshots: [], // snapshot directory wiped
+		listInterrupted: async () => [session]
+	});
+	const count = await resumeAll();
+	assert.equal(count, 1, 'resumes from store scan when snapshot index is empty');
+	assert.equal(turns.length, 1);
+	assert.match(turns[0].task, /Careers page renders fine/, 'transcript digest seeded');
+	assert.equal(session.autoResumeCount, 1);
+	assert.equal(session.interruptedFromRun, false);
+});
+
+test('store scan respects the same resumability rules', async () => {
+	const finished = interruptedSession({ id: 'run-k', status: 'done' });
+	const waiting = interruptedSession({ id: 'run-l', interruptedFromRun: false });
+	const { resumeAll, turns } = makeHarness({
+		sessions: [finished, waiting],
+		snapshots: [],
+		listInterrupted: async () => [finished, waiting]
+	});
+	const count = await resumeAll();
 	assert.equal(count, 0);
 	assert.equal(turns.length, 0);
-	assert.equal(session.status, 'interrupted');
 });
 
 test('snapshot for a session that is not resumable is ignored', async () => {
@@ -134,7 +167,7 @@ test('snapshot for a session that is not resumable is ignored', async () => {
 	assert.match(capped.messages.at(-1)?.text ?? '', /stopped after 3 attempts/, 'exhausted cap leaves an explanatory system message');
 });
 
-test('corrupt snapshot restore is skipped without crashing boot', async () => {
+test('corrupt snapshot restore falls back to transcript resume', async () => {
 	const session = interruptedSession({ id: 'run-f' });
 	const { resumeAll, turns } = makeHarness({
 		sessions: [session],
@@ -142,8 +175,8 @@ test('corrupt snapshot restore is skipped without crashing boot', async () => {
 		restoreThrows: true
 	});
 	const count = await resumeAll();
-	assert.equal(count, 0);
-	assert.equal(turns.length, 0);
+	assert.equal(count, 1, 'corrupt snapshot must not strand the run');
+	assert.equal(turns.length, 1);
 });
 
 test('runtime without snapshot restore support is skipped', async () => {

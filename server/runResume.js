@@ -57,13 +57,35 @@ export function createRunResume(overrides = {}) {
 	 * agent at the original target, forbids repeating completed/irreversible
 	 * steps, and directs it to finish and publish the final report.
 	 */
-	function recoveryInstruction(session) {
+	function recoveryInstruction(session, { transcriptDigest } = {}) {
 		const targetUrl = session?.targetUrl || '(unknown target)';
-		return [
+		const parts = [
 			`Your run was interrupted by a server restart. Target: ${targetUrl}`,
 			'Do not repeat completed or irreversible steps.',
 			'Continue from where your prior progress left off, verify remaining items, then publish the final report.'
-		].join(' ');
+		];
+		// Without a restored snapshot the runtime starts empty: the digest tells
+		// the agent what was already verified so it continues instead of redoing.
+		if (transcriptDigest) parts.push(`Progress so far (do not redo):\n${transcriptDigest}`);
+		return parts.join(' ');
+	}
+
+	/**
+	 * Compact digest of the recorded transcript: assistant steps + tool
+	 * activity, most recent last. Bounded so it cannot blow the context.
+	 */
+	function transcriptDigestFor(session, api) {
+		const messages = Array.isArray(session?.messages) ? session.messages : [];
+		const steps = messages
+			.filter(m => m?.role === 'agent' && typeof m.text === 'string' && m.text.trim())
+			.slice(-25)
+			.map(m => `- ${m.text.trim().slice(0, 300)}`);
+		const activity = Array.isArray(session?.activity) ? session.activity : [];
+		const actions = activity
+			.filter(a => a && typeof a.summary === 'string' && a.summary.trim())
+			.slice(-25)
+			.map(a => `- [${a.toolName ?? a.type ?? 'step'}] ${a.summary.trim().slice(0, 200)}`);
+		return [...steps, ...actions].join('\n');
 	}
 
 	/**
@@ -81,10 +103,28 @@ export function createRunResume(overrides = {}) {
 		try {
 			snapshots = await api.listSnapshots();
 		} catch (error) {
-			logger.warn?.('runresume.list_failed', { error: String(error) });
-			return 0;
+			logger.warn?.('runresume.list-failed', { error: String(error) });
+			snapshots = [];
 		}
-		if (!Array.isArray(snapshots) || snapshots.length === 0) return 0;
+		if (!Array.isArray(snapshots)) snapshots = [];
+
+		// The crash that interrupted the run can also destroy the snapshot
+		// directory itself (observed in production: corrupted volume left the
+		// index empty). Any resumable interrupted session not covered by the
+		// snapshot index becomes a candidate directly — it will resume from its
+		// recorded transcript instead of a runtime snapshot.
+		let indexedIds;
+		try {
+			indexedIds = new Set(snapshots.map(s => s?.sessionId).filter(Boolean));
+			const sessions = await api.listInterrupted?.();
+			for (const session of Array.isArray(sessions) ? sessions : []) {
+				if (!isResumable(session) || indexedIds.has(session.id)) continue;
+				snapshots.push({ sessionId: session.id, ownerUserId: session.ownerUserId, savedAt: 0 });
+			}
+		} catch (error) {
+			logger.warn?.('runresume.scan-failed', { error: String(error) });
+		}
+		if (snapshots.length === 0) return 0;
 
 		const candidates = [...snapshots]
 			.filter(s => s && typeof s.sessionId === 'string')
@@ -109,41 +149,62 @@ export function createRunResume(overrides = {}) {
 
 			if (!isResumable(session)) continue;
 
-			const snapshot = await Promise.resolve()
+			let snapshot = await Promise.resolve()
 				.then(() => loadSnapshot(candidate.sessionId))
 				.catch(() => null);
 			if (!snapshot) {
-				logger.info?.('runresume.skipped_no_snapshot', { runId: candidate.sessionId });
-				continue;
+				// The snapshot may not have survived the crash (e.g. the snapshot
+				// directory itself was lost). A resumable session still carries its
+				// recorded transcript, so resume with a fresh runtime seeded with
+				// a progress digest instead of leaving the run stranded forever.
+				logger.info?.('runresume.no-snapshot-transcript-resume', { runId: candidate.sessionId });
 			}
 
 			const { runtime } = await api.ensureRuntime(session).catch(error => {
-				logger.warn?.('runresume.runtime_failed', { runId: candidate.sessionId, error: String(error) });
+				logger.warn?.('runresume.runtime-failed', { runId: candidate.sessionId, error: String(error) });
 				return {};
 			}) || {};
 			if (!runtime || typeof runtime.restoreSessionSnapshot !== 'function') {
-				logger.info?.('runresume.skipped_no_restore', { runId: candidate.sessionId });
+				if (!snapshot) {
+					// No snapshot to restore AND runtime has no restore hook: the
+					// runtime object on this codepath is inert — skip safely.
+					logger.info?.('runresume.skipped-no-restore', { runId: candidate.sessionId });
+					continue;
+				}
+				logger.info?.('runresume.skipped-no-restore', { runId: candidate.sessionId });
 				continue;
 			}
 
-			try {
-				runtime.restoreSessionSnapshot(snapshot);
-			} catch (error) {
-				logger.warn?.('runresume.restore_failed', { runId: candidate.sessionId, error: String(error) });
-				continue;
+			if (snapshot) {
+				try {
+					runtime.restoreSessionSnapshot(snapshot);
+				} catch (error) {
+					// A corrupt snapshot degrades to a transcript-seeded resume
+					// rather than stranding the run.
+					logger.warn?.('runresume.restore-failed', { runId: candidate.sessionId, error: String(error) });
+					snapshot = null;
+				}
 			}
 
 			// Exactly one recovery turn, inside the owner's actor context so
 			// per-user model configuration, memory, and ownership resolve.
 			session.autoResumeCount = (session.autoResumeCount ?? 0) + 1;
 			session.interruptedFromRun = false;
-			await withRequestActor({ actorUserId: candidate.ownerUserId })(async () => {
-				await api.runTurn(session, {
-					task: recoveryInstruction(session),
-					recovery: true,
-					...(attemptDelayMs ? { attemptDelayMs } : {})
+			try {
+				await withRequestActor({ actorUserId: candidate.ownerUserId })(async () => {
+					await api.runTurn(session, {
+						task: recoveryInstruction(session, {
+							transcriptDigest: snapshot ? undefined : transcriptDigestFor(session, api)
+						}),
+						recovery: true,
+						...(attemptDelayMs ? { attemptDelayMs } : {})
+					});
 				});
-			});
+			} catch (error) {
+				// A failed recovery attempt is logged, never thrown: boot must
+				// not die because one session could not resume.
+				logger.warn?.('runresume.turn-failed', { runId: session.id, error: String(error) });
+			}
 			logger.info?.('runresume.resumed', { runId: session.id });
 			return 1;
 		}

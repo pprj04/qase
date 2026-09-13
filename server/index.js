@@ -8,7 +8,7 @@ import { createConfiguredDrytisIntegration } from './drytisIntegrationFactory.js
 import { closeApplicationBrowsers, drainHttpServer, installShutdownHandlers } from './processLifecycle.js';
 import { createRunKeepalive, isRunStatusActive } from './keepalive.js';
 import { createRunResume } from './runResume.js';
-import { listRunSnapshots } from './agent.js';
+import { listRunSnapshots, loadRunSnapshot } from './agent.js';
 import { runWithRequestActor } from './requestActor.js';
 
 // Validate process-local operational limits and metrics credentials before
@@ -101,8 +101,7 @@ server = app.listen(port, host, () => {
 			provider: config.provider, model: config.model
 		});
 		if (config.problem) logger.warn('configuration.problem', { errorName: 'ConfigurationError' });
-		return;
-	}
+	} else {
 	console.log('\n  Qase — autonomous QA agent');
 	console.log(`  http://${host}:${port}`);
 	console.log(`  run store: ${runStoreMode}`);
@@ -117,6 +116,7 @@ server = app.listen(port, host, () => {
 	if (config.problem) {
 		console.log(`  ! ${config.problem} Set it in the dashboard under Settings, or in .env.\n`);
 	}
+	}
 
 	// Boot-time recovery: any run that was actively running when the previous
 	// process died (container pause/restart) resumes automatically instead of
@@ -128,11 +128,31 @@ server = app.listen(port, host, () => {
 				logger,
 				// Session-owner actor context so per-user model configuration,
 				// memory, and run ownership resolve correctly during recovery.
-				withRequestActor: actor => work => runWithRequestActor(actor, work)
+				withRequestActor: actor => work => runWithRequestActor(actor, work),
+				// Snapshot loader — without this every snapshot read resolves to
+				// the factory default (null) and no candidate ever resumes.
+				loadSnapshot: loadRunSnapshot
 			});
 			void runResume.resumeAll({
 				listSnapshots: listRunSnapshots,
-				get: id => services.runs.get(id),
+				// Safety net for a lost snapshot directory: resumable interrupted
+				// sessions found in the store still become candidates. Unscoped
+				// owner (undefined) — boot-time recovery runs outside any request
+				// actor, and each resume re-enters the OWNER's actor context via
+				// withRequestActor, so per-user config still applies to the turn.
+				listInterrupted: async () => {
+					const summaries = await services.runs.listInterrupted?.() ?? [];
+					if (summaries.length) return summaries;
+					// Fallback: unscoped scan of recent sessions.
+					const all = await services.runs.listAll?.() ?? [];
+					const loaded = await Promise.all(
+						all.filter(s => s?.status === 'interrupted').map(s => services.runs.getAny?.(s.id) ?? s)
+					);
+					return loaded.filter(Boolean);
+				},
+				// Unscoped get — same reason as listInterrupted: the boot actor is
+				// the default tenant actor and would hide user-owned sessions.
+				get: id => services.runs.getAny?.(id) ?? services.runs.get(id),
 				ensureRuntime: session => services.agent.ensureRuntime(session),
 				runTurn: (session, options) => services.agent.runTurn(session, options),
 				addMessage: services.runs.addMessage.bind(services.runs),
