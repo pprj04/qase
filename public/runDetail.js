@@ -228,3 +228,23 @@ export function isCurrentRunView(state, snapshot) {
 		&& snapshot.projectVersion === state.projectVersion
 		&& snapshot.runViewVersion === state.runViewVersion;
 }
+
+export function credentialRequestSnapshot(state, sessionId) {
+	return {
+		...runViewSnapshot(state, sessionId),
+		credentialRequestVersion: state.credentialRequestVersion
+	};
+}
+
+export function isCurrentCredentialRequest(state, snapshot, { formConnected = true, questionKey } = {}) {
+	return formConnected
+		&& snapshot.credentialRequestVersion === state.credentialRequestVersion
+		&& (questionKey === undefined || questionKey === state.renderedQuestionKey)
+		&& isCurrentRunView(state, snapshot);
+}
+
+export function runStreamLifecycleAction(state, page) {
+	if (page !== 'runs') return state.stream ? 'close' : 'inactive';
+	if (!state.sessionId || state.session?.id !== state.sessionId) return 'none';
+	return state.stream ? 'none' : 'open';
+}

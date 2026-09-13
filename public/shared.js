@@ -146,6 +146,9 @@ const state = {
 	// Incremented for every run selection and project/route exit. Async detail,
 	// evidence, and SSE updates must match this generation before repainting.
 	runViewVersion: 0,
+	// Incremented for each credential form mount and submission so a late
+	// response cannot mutate a replacement form in the same run view.
+	credentialRequestVersion: 0,
 	projects: [],
 	suites: [],
 	tagFilter: null,

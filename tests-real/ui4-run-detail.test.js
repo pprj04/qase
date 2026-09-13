@@ -9,13 +9,16 @@ import {
 	buildCredentialFields,
 	browserHistoryPresentation,
 	canonicalRunPresentation,
+	credentialRequestSnapshot,
 	currentFindingPresentation,
 	evidenceScreenshotUrl,
 	executionHealthPresentation,
+	isCurrentCredentialRequest,
 	isCurrentRunView,
 	normalizeGeneratedReportMarkdown,
 	reportPresentation,
 	runMetricPresentation,
+	runStreamLifecycleAction,
 	runViewSnapshot
 } from '../public/runDetail.js';
 
@@ -194,7 +197,8 @@ test('UI-4: secret inputs are labelled, non-persistent, and associated with erro
 
 test('UI-4 AUTH CONTINUATION SAME SESSION: credentials post to the current session only', () => {
 	const form = app.slice(app.indexOf('function credentialForm'), app.indexOf('async function sendAnswer'));
-	assert.match(form, /api\(`\/sessions\/\$\{state\.sessionId\}\/credentials`/);
+	assert.match(form, /const sessionId = state\.sessionId/);
+	assert.match(form, /api\(`\/sessions\/\$\{sessionId\}\/credentials`/);
 	assert.doesNotMatch(form, /\/sessions['"`].*method:\s*['"]POST|\/v1\/missions/);
 	assert.match(server, /app\.post\('\/api\/sessions\/:id\/credentials', requireApiToken/);
 });
@@ -230,6 +234,77 @@ test('UI-4 STALE SSE/RUN GUARD: switched-run streams and events cannot overwrite
 	assert.equal(isCurrentRunView(state, snapshot), false);
 	assert.match(app, /state\.stream\?\.close\(\)/);
 	assert.match(app, /if \(!isCurrentRunView\(state, snapshot\)\) \{ stream\.close\(\); return; \}/);
+});
+
+test('UI-4.1: late successful Run A credential response is stale after switching to Run B', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 1, sessionId: 'run-a', credentialRequestVersion: 2, renderedQuestionKey: 'run-a:auth' };
+	const snapshot = credentialRequestSnapshot(state, 'run-a');
+	state.sessionId = 'run-b';
+	state.runViewVersion += 1;
+	state.renderedQuestionKey = 'run-b:auth';
+	assert.equal(isCurrentCredentialRequest(state, snapshot, { formConnected: false, questionKey: 'run-a:auth' }), false);
+	assert.match(app, /await api\(`\/sessions\/\$\{sessionId\}\/credentials`[^]*if \(!requestIsCurrent\(\)\) return;/);
+});
+
+test('UI-4.1: late rejected Run A credential response cannot show an error in Run B', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 4, sessionId: 'run-a', credentialRequestVersion: 7, renderedQuestionKey: 'run-a:auth' };
+	const snapshot = credentialRequestSnapshot(state, 'run-a');
+	state.sessionId = 'run-b';
+	state.runViewVersion += 1;
+	assert.equal(isCurrentCredentialRequest(state, snapshot, { formConnected: false, questionKey: 'run-a:auth' }), false);
+	const form = app.slice(app.indexOf('function credentialForm'), app.indexOf('async function sendAnswer'));
+	assert.match(form.slice(form.indexOf('} catch (caught)')), /if \(!requestIsCurrent\(\)\) return;/);
+});
+
+test('UI-4.1: Project A credential response is stale after switching to Project B', () => {
+	const state = { projectId: 'project-a', projectVersion: 3, runViewVersion: 5, sessionId: 'run-a', credentialRequestVersion: 1, renderedQuestionKey: 'run-a:auth' };
+	const snapshot = credentialRequestSnapshot(state, 'run-a');
+	state.projectId = 'project-b';
+	state.projectVersion += 1;
+	assert.equal(isCurrentCredentialRequest(state, snapshot, { questionKey: 'run-a:auth' }), false);
+});
+
+test('UI-4.1 STALE CREDENTIAL RESPONSE GUARD: a remounted form invalidates the previous request token', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 1, sessionId: 'run-a', credentialRequestVersion: 10, renderedQuestionKey: 'run-a:auth' };
+	const snapshot = credentialRequestSnapshot(state, 'run-a');
+	state.credentialRequestVersion += 1;
+	assert.equal(isCurrentCredentialRequest(state, snapshot, { questionKey: 'run-a:auth' }), false);
+	assert.match(app, /state\.credentialRequestVersion \+= 1/);
+});
+
+test('UI-4.1: leaving Runs closes the current live subscription', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: {} };
+	assert.equal(runStreamLifecycleAction(state, 'overview'), 'close');
+	assert.match(app, /if \(page !== 'runs' && state\.sessionId\) \{[^]*state\.stream\?\.close\(\)/);
+});
+
+test('UI-4.1 SSE RECONNECT ON RETURN: returning to Runs opens one live subscription', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'open');
+	assert.match(app, /if \(streamAction === 'open'\) \{[^]*connect\(state\.sessionId/);
+});
+
+test('UI-4.1: repeated Runs activation does not accumulate live subscriptions', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: {} };
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
+});
+
+test('UI-4.1: browser Back reconnects and Forward does not duplicate live updates', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'open');
+	state.stream = {};
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
+	assert.match(router, /window\.addEventListener\('popstate', \(\) => render\(parseRoute\(\)\)\)/);
+});
+
+test('UI-4.1: a late Run A SSE event remains invalid after returning on Run B', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 8, sessionId: 'run-a' };
+	const snapshot = runViewSnapshot(state, 'run-a');
+	state.sessionId = 'run-b';
+	state.runViewVersion += 1;
+	assert.equal(isCurrentRunView(state, snapshot), false);
+	assert.match(app, /if \(data\.sessionId === snapshot\.sessionId\) \{\s*handleEvent\(data\);/);
 });
 
 test('UI-4: project-switch generation invalidates session, lazy-detail, and evidence responses', () => {

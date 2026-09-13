@@ -22,11 +22,14 @@ import {
 	buildCredentialFields,
 	browserHistoryPresentation,
 	canonicalRunPresentation,
+	credentialRequestSnapshot,
 	executionHealthPresentation,
+	isCurrentCredentialRequest,
 	isCurrentRunView,
 	normalizeGeneratedReportMarkdown,
 	reportPresentation,
 	runMetricPresentation,
+	runStreamLifecycleAction,
 	runViewSnapshot,
 	safeRunDiagnostic
 } from './runDetail.js';
@@ -511,7 +514,7 @@ function renderQuestion() {
 		card.append(summary);
 	}
 
-	card.append(challenge.kind === 'credentials' ? credentialForm(challenge) : optionForm(question));
+	card.append(challenge.kind === 'credentials' ? credentialForm(challenge, questionKey) : optionForm(question));
 	el.questionSlot.append(card);
 	if (isNewQuestion && window.matchMedia('(max-width: 700px)').matches) {
 		activateRunSegment('details');
@@ -566,10 +569,11 @@ function optionForm(question) {
  * Credentials go straight to the vault, not into the answer text. The model is
  * told the placeholder names; the values never enter its context.
  */
-function credentialForm(challenge) {
+function credentialForm(challenge, questionKey) {
 	const form = document.createElement('form');
 	form.className = 'cred-form';
 	form.noValidate = true;
+	state.credentialRequestVersion += 1;
 
 	const row = document.createElement('div');
 	row.className = 'cred-row';
@@ -637,14 +641,23 @@ function credentialForm(challenge) {
 		submit.disabled = true;
 		skip.disabled = true;
 		progress.textContent = 'Submitting securely…';
+		const sessionId = state.sessionId;
+		state.credentialRequestVersion += 1;
+		const requestSnapshot = credentialRequestSnapshot(state, sessionId);
+		const requestIsCurrent = () => isCurrentCredentialRequest(state, requestSnapshot, {
+			formConnected: form.isConnected,
+			questionKey
+		});
 		try {
-			await api(`/sessions/${state.sessionId}/credentials`, { method: 'POST', body: JSON.stringify({ fields }) });
+			await api(`/sessions/${sessionId}/credentials`, { method: 'POST', body: JSON.stringify({ fields }) });
+			if (!requestIsCurrent()) return;
 			for (const control of Object.values(controls)) control.value = '';
 			state.session.pendingQuestion = undefined;
 			state.renderedQuestionKey = null;
 			el.questionSlot.replaceChildren();
 			toast('Authentication submitted. This run is continuing in the same session.', 'good');
 		} catch (caught) {
+			if (!requestIsCurrent()) return;
 			for (const control of Object.values(controls)) control.disabled = false;
 			submit.disabled = false;
 			skip.disabled = false;
@@ -2887,11 +2900,15 @@ document.addEventListener('click', event => {
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
-		if (page !== 'runs' && state.stream) {
-			state.stream.close();
+		const streamAction = runStreamLifecycleAction(state, page);
+		if (page !== 'runs' && state.sessionId) {
+			state.stream?.close();
 			state.stream = undefined;
 			state.runViewVersion += 1;
 			clearTimeout(state._reconnectTimer);
+		}
+		if (streamAction === 'open') {
+			connect(state.sessionId, runViewSnapshot(state, state.sessionId));
 		}
 		if (page === 'overview' && state.projects.length > 0) void loadOverview();
 		if (page === 'findings') loadBugs();
