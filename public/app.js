@@ -17,19 +17,22 @@ import { loadWorkflowsPage, initWorkflowsWiring } from './workflows.js';
 import { loadSchedulesPage, initSchedulesWiring } from './schedules.js';
 import { initOverview, loadOverview, markOverviewStale } from './overview.js';
 import { initNewRun, openNewRun } from './newRun.js';
+import {
+	authenticationChallengePresentation,
+	buildCredentialFields,
+	browserHistoryPresentation,
+	canonicalRunPresentation,
+	executionHealthPresentation,
+	isCurrentRunView,
+	normalizeGeneratedReportMarkdown,
+	reportPresentation,
+	runMetricPresentation,
+	runViewSnapshot,
+	safeRunDiagnostic
+} from './runDetail.js';
 import { classifyViewport } from './deviceClassify.js';
 import { resolveLiveDevicePresentation } from './deviceLiveView.js';
-import { renderExecMeta, renderExecutionHealth, renderSessionFindings, handleTabActivation, initExecutionDetail } from './executionDetail.js';
-
-/* P0-F3 — human labels for the truthful interruptedReason a session carries.
- * Keys match server/store.js INTERRUPT_REASONS. A session with a reason we
- * don't recognize renders the plain 'interrupted' chip — never a guess. */
-const INTERRUPT_REASON_LABELS = {
-	server_restart_recovery: 'server restart',
-	awaiting_input_timeout: 'input timeout',
-	watchdog_stuck: 'watchdog',
-	max_running_duration: 'run limit'
-};
+import { renderExecMeta, renderExecutionHealth, renderSessionFindings, handleTabActivation, initExecutionDetail, loadSessionEvidence } from './executionDetail.js';
 
 async function refreshRuns(projectId = state.projectId, projectVersion = state.projectVersion) {
 	const query = projectId ? `?projectId=${projectId}` : '';
@@ -51,11 +54,12 @@ async function refreshRuns(projectId = state.projectId, projectVersion = state.p
 }
 
 function renderRun(run) {
+	const presentation = canonicalRunPresentation(run);
 	const node = document.createElement('div');
 	node.className = `run${run.id === state.sessionId ? ' is-active' : ''}`;
 	node.setAttribute('role', 'button');
 	node.tabIndex = 0;
-	node.setAttribute('aria-label', `Open ${run.targetUrl ? hostOf(run.targetUrl) : run.title || 'run'}, status ${run.status || 'idle'}`);
+	node.setAttribute('aria-label', `Open ${run.targetUrl ? hostOf(run.targetUrl) : run.title || 'run'}, status ${presentation.label}`);
 	node.onclick = () => {
 		closeMobileRunsDrawer();
 		selectSession(run.id);
@@ -74,11 +78,11 @@ function renderRun(run) {
 	meta.className = 'run-meta';
 	const dot = document.createElement('span');
 	dot.className = 'run-status-dot';
-	dot.dataset.status = run.status || 'idle';
+	dot.dataset.status = presentation.key;
 	dot.setAttribute('aria-hidden', 'true');
 	const statusLabel = document.createElement('span');
 	statusLabel.className = 'run-status-label';
-	statusLabel.textContent = String(run.status || 'idle').replaceAll('_', ' ');
+	statusLabel.textContent = presentation.label;
 	meta.append(dot, statusLabel, document.createTextNode(relativeTime(run.updatedAt)));
 	if (run.findingCount > 0) {
 		const badge = document.createElement('span');
@@ -123,6 +127,10 @@ function closeMobileRunsDrawer() {
 /* ── Session loading ─────────────────────────────────────────────── */
 
 async function selectSession(id, projectVersion = state.projectVersion) {
+	state.stream?.close();
+	state.stream = undefined;
+	clearTimeout(state._reconnectTimer);
+	const runViewVersion = ++state.runViewVersion;
 	state.sessionId = id;
 	state.bubbles.clear();
 	// Viewport is per-session live state: reset it so a desktop session never
@@ -131,13 +139,15 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 	localStorage.setItem('qase.session', id);
 	// Keep the URL shareable in either the path-based or legacy hash scheme.
 	setRunRoute(id);
+	const snapshot = runViewSnapshot(state, id);
 
 	const session = await api(`/sessions/${id}`).catch(err => {
-		fail(err);
+		if (isCurrentRunView(state, snapshot)) fail(err);
 		return null;
 	});
 	if (!session) return;
-	if (projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
+	if (runViewVersion !== state.runViewVersion || !isCurrentRunView(state, snapshot)
+		|| projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
 	state.session = session;
 
 	// Lazy-load heavy arrays if stripped (large sessions).
@@ -147,7 +157,7 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 			api(`/sessions/${id}/detail?field=capturedSteps`).catch(() => []),
 			api(`/sessions/${id}/detail?field=findings`).catch(() => [])
 		]);
-		if (projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
+		if (!isCurrentRunView(state, snapshot) || projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
 		session.messages = messages;
 		session.capturedSteps = steps;
 		session.findings = findings;
@@ -186,10 +196,13 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 	handleTabActivation(document.querySelector('.tab.is-active')?.dataset.tab ?? null);
 	renderReport();
 	updateExecStats();
+	renderBrowserHistory(session);
+	if (session.frame) applyFrame(session.frame);
+	else el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
 
 	// Parallelize all secondary data loads — no more sequential blocking.
 	// SSE connection opens immediately so live events aren't missed.
-	connect(id);
+	connect(id, snapshot);
 
 	await Promise.allSettled([
 		loadWorkflows(),
@@ -199,8 +212,10 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 		loadPipelineFromSession(id),
 		loadDevIntelFromSession(id),
 		loadSessionMission(id),
+		loadSessionEvidence(id),
 		refreshRuns(),
 	]);
+	if (!isCurrentRunView(state, snapshot) || projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
 
 	// Restore persisted summary bar (Phase 15: previously only shown on live SSE).
 	const persistedSummary = session.pipeline?.summary;
@@ -208,59 +223,37 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 		updateMissionSummary(persistedSummary);
 	}
 
-	if (session.frame) {
-		applyFrame(session.frame);
-	} else {
-		el.frame.removeAttribute('src');
-		el.stageInner.hidden = true;
-		el.stageEmpty.hidden = false;
-		el.browserUrl.textContent = session.targetUrl ?? 'about:blank';
-		el.browserTitle.textContent = '';
-		// Device identity survives refresh even without a live frame.
-		renderDeviceStrip();
-		el.stageInner.classList.remove('device-phone', 'device-tablet', 'device-landscape');
-	}
 }
 
 function renderHeader() {
 	const session = state.session;
+	el.statusChip.hidden = false;
 	el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title;
 	el.chatTarget.textContent = session.targetUrl ?? 'Send a URL to begin';
 	setStatus(session.status);
+	renderRunSummary(session);
 	// BUILD 1: late joiners (selecting an already-running session) should see
 	// the same phase tracker a live viewer gets — hydrate from current status.
 	updateMissionPhase(session.status, session.latestActivity ?? null);
 }
 
 function setStatus(status) {
-	// Engine fact: the turn watchdog aborts the agent and the engine settles
-	// the session in `idle`. A bare "idle" chip reads as "waiting" — relabel
-	// it from the transcript so it communicates the real terminal state.
-	let label = status === 'awaiting_input' ? 'waiting for you' : status;
-	if (status === 'idle' && state.session && watchdogEnded(state.session)) {
-		label = 'interrupted — session limit';
-		el.statusChip.dataset.status = 'interrupted'; // reuse the amber terminal style
-	} else {
-		el.statusChip.dataset.status = status;
-	}
-	// P0-F3 — an interrupted session carries a truthful reason; surface it so
-	// "interrupted" is explainable instead of a bare amber chip. Never guessed:
-	// the field is null when the cause wasn't recorded.
-	if (status === 'interrupted' && state.session?.interruptedReason) {
-		const reasonLabel = INTERRUPT_REASON_LABELS[state.session.interruptedReason];
-		label = reasonLabel ? `interrupted — ${reasonLabel}` : 'interrupted';
-	}
-	el.statusChip.textContent = label;
-	const running = status === 'running';
+	if (state.session) state.session.status = status;
+	const presentation = canonicalRunPresentation(state.session ?? { status });
+	el.statusChip.dataset.status = presentation.key;
+	el.statusChip.textContent = presentation.label;
+	el.statusChip.title = state.session?.outcomeReason ? `Outcome reason: ${safeRunDiagnostic(state.session.outcomeReason)}` : '';
+	const running = status === 'running' && presentation.key === 'running';
 	el.stopRun.hidden = !running;
+	if (!running) {
+		el.stopRun.disabled = false;
+		el.stopRun.textContent = 'Stop';
+	}
 	el.sendBtn.disabled = running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
-	if (state.session) {
-		state.session.status = status;
-	}
 	// A question raised while the tab is in the background should be noticeable.
-	document.title = status === 'awaiting_input'
-		? 'Qase — waiting for you'
+	document.title = presentation.key === 'awaiting_input'
+		? 'Qase — awaiting input'
 		: 'Qase — autonomous QA agent';
 	updateThinkingStrip();
 }
@@ -305,26 +298,6 @@ function updateMissionPhase(status, activityLabel) {
 
 /* ── Execution stats bar (Step 4) ─────────────────────────────────── */
 
-/** Unique URLs visited by the agent. */
-function countPages(session) {
-	const steps = session?.capturedSteps ?? [];
-	const urls = new Set();
-	for (const step of steps) {
-		if (step.action === 'navigate' && step.url) {
-			urls.add(step.url.split('#')[0]);
-		} else if (step.url) {
-			urls.add(step.url.split('#')[0]);
-		}
-	}
-	return urls.size;
-}
-
-function watchdogEnded(session) {
-	const messages = session.messages ?? [];
-	const last = messages[messages.length - 1];
-	return Boolean(last?.role === 'system' && /timed out after \d+ minutes/i.test(last.text ?? ''));
-}
-
 function updateExecStats() {
 	const bar = document.getElementById('exec-stats-bar');
 	if (!bar) return;
@@ -332,22 +305,20 @@ function updateExecStats() {
 	const session = state.session;
 	if (!session) { bar.hidden = true; return; }
 
-	const activities = session.activities ?? [];
 	const findings = session.findings ?? [];
-	const steps = session.capturedSteps ?? [];
-	const running = session.status === 'running';
+	const metrics = runMetricPresentation(session);
+	const status = canonicalRunPresentation(session);
+	const running = status.key === 'running';
 
-	const pages = countPages(session);
-	const actions = steps.length;
-	const findingsCount = findings.length;
+	const pages = metrics.pages;
+	const actions = metrics.actions;
+	const findingsCount = metrics.findings.value;
 	const criticalCount = findings.filter(f => f.severity === 'critical').length;
 
 	// Elapsed time
 	let elapsedStr = '';
-	const start = session.startedAt ?? session.createdAt;
-	if (start) {
-		const end = session.status === 'running' ? Date.now() : (session.endedAt ?? session.updatedAt ?? Date.now());
-		const secs = Math.floor((end - start) / 1000);
+	if (metrics.durationMs != null) {
+		const secs = Math.floor(metrics.durationMs / 1000);
 		const mins = Math.floor(secs / 60);
 		const s = secs % 60;
 		elapsedStr = `${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
@@ -356,9 +327,9 @@ function updateExecStats() {
 	// Build the stats bar
 	const stats = [];
 	if (elapsedStr) stats.push(`<span class="es-item"><span class="es-icon">⏱</span> ${elapsedStr}</span>`);
-	stats.push(`<span class="es-item"><span class="es-icon">📄</span> ${pages} page${pages === 1 ? '' : 's'}</span>`);
-	stats.push(`<span class="es-item"><span class="es-icon">🖱</span> ${actions} action${actions === 1 ? '' : 's'}</span>`);
-	if (findingsCount > 0) {
+	if (pages != null) stats.push(`<span class="es-item"><span class="es-icon">📄</span> ${pages} page${pages === 1 ? '' : 's'}</span>`);
+	if (actions != null) stats.push(`<span class="es-item"><span class="es-icon">🖱</span> ${actions} action${actions === 1 ? '' : 's'}</span>`);
+	if (findingsCount != null) {
 		const critBadge = criticalCount > 0
 			? ` · <span class="es-crit">${criticalCount} critical</span>`
 			: '';
@@ -366,20 +337,10 @@ function updateExecStats() {
 	}
 	if (running) {
 		stats.push('<span class="es-item es-live"><span class="es-pulse"></span> LIVE</span>');
-	} else if (session.status === 'done') {
-		stats.push('<span class="es-item es-done">✓ RUN COMPLETED</span>');
-	} else if (session.status === 'error') {
-		stats.push('<span class="es-item es-failed">✕ RUN FAILED</span>');
-	} else if (session.status === 'interrupted') {
-		// P0-F3 — the bar says WHY, using the truthful reason (never guessed).
-		const reason = session.interruptedReason ? INTERRUPT_REASON_LABELS[session.interruptedReason] : null;
-		stats.push(`<span class="es-item es-failed">⏸ RUN INTERRUPTED${reason ? ` — ${reason}` : ''}</span>`);
-	} else if (session.status === 'idle' && watchdogEnded(session)) {
-		// Engine fact: the 20-minute turn watchdog aborts the agent and the
-		// engine settles the session in `idle` (same as a manual stop). The
-		// transcript's final system message is the honest signal — surface it
-		// as a terminal state so an exec never reads "idle" as "waiting".
-		stats.push('<span class="es-item es-failed">⏸ RUN INTERRUPTED — 20-minute session limit</span>');
+	} else if (status.key === 'completed') {
+		stats.push('<span class="es-item es-done">✓ COMPLETED</span>');
+	} else if (['failed', 'blocked', 'partial', 'cancelled', 'interrupted'].includes(status.key)) {
+		stats.push(`<span class="es-item es-failed">${escapeHtml(status.label.toUpperCase())}</span>`);
 	}
 
 	bar.innerHTML = stats.join('');
@@ -514,41 +475,57 @@ function renderQuestion() {
 	const question = state.session?.pendingQuestion;
 	el.questionSlot.replaceChildren();
 	if (!question) {
+		state.renderedQuestionKey = null;
 		return;
 	}
+	const challenge = authenticationChallengePresentation(question, state.session?.targetUrl);
+	const questionKey = `${state.sessionId}:${question.id ?? question.question ?? challenge.kind}`;
+	const isNewQuestion = state.renderedQuestionKey !== questionKey;
+	state.renderedQuestionKey = questionKey;
 
 	const card = document.createElement('div');
-	card.className = 'question';
+	card.className = `question ${challenge.kind === 'credentials' ? 'authentication-required' : 'awaiting-input'}`;
+	card.setAttribute('aria-labelledby', 'run-question-title');
 
-	const tag = document.createElement('span');
+	const tag = document.createElement('div');
 	tag.className = 'question-tag';
-	tag.textContent = question.credentialLike ? 'Credentials needed' : 'Decision needed';
+	tag.textContent = challenge.kind === 'credentials' ? 'Secure continuation' : 'Run paused';
 
-	const text = document.createElement('div');
+	const heading = document.createElement('h2');
+	heading.id = 'run-question-title';
+	heading.className = 'question-title';
+	heading.textContent = challenge.title;
+
+	const text = document.createElement('p');
 	text.className = 'question-text';
-	text.textContent = question.question;
+	text.textContent = challenge.kind === 'credentials'
+		? 'QASE needs credentials to continue testing this application.'
+		: String(question.question ?? 'QASE needs your input to continue this run.');
 
-	card.append(tag, text);
+	card.append(tag, heading, text);
 
-	if (question.summary) {
+	if (question.summary && challenge.kind !== 'credentials') {
 		const summary = document.createElement('div');
 		summary.className = 'question-summary';
 		summary.textContent = question.summary;
 		card.append(summary);
 	}
 
-	card.append(question.credentialLike ? credentialForm() : optionForm(question));
+	card.append(challenge.kind === 'credentials' ? credentialForm(challenge) : optionForm(question));
 	el.questionSlot.append(card);
-	card.querySelector('input')?.focus();
+	if (isNewQuestion && window.matchMedia('(max-width: 700px)').matches) {
+		activateRunSegment('details');
+	}
+	if (isNewQuestion) card.querySelector('input, button')?.focus({ preventScroll: true });
 }
 
 function optionForm(question) {
 	const wrap = document.createDocumentFragment();
 
-	if (question.options.length > 0) {
+	if ((question.options ?? []).length > 0) {
 		const options = document.createElement('div');
 		options.className = 'question-options';
-		for (const option of question.options) {
+		for (const option of question.options ?? []) {
 			const button = document.createElement('button');
 			button.className = 'opt';
 			button.type = 'button';
@@ -589,29 +566,45 @@ function optionForm(question) {
  * Credentials go straight to the vault, not into the answer text. The model is
  * told the placeholder names; the values never enter its context.
  */
-function credentialForm() {
+function credentialForm(challenge) {
 	const form = document.createElement('form');
 	form.className = 'cred-form';
+	form.noValidate = true;
 
 	const row = document.createElement('div');
 	row.className = 'cred-row';
-	const username = document.createElement('input');
-	username.placeholder = 'Username or email';
-	username.autocomplete = 'off';
-	const password = document.createElement('input');
-	password.type = 'password';
-	password.placeholder = 'Password';
-	password.autocomplete = 'off';
-	row.append(username, password);
-
-	const extra = document.createElement('input');
-	extra.placeholder = 'One-time code or extra field (optional)';
-	extra.autocomplete = 'off';
+	const controls = {};
+	const addField = (name, labelText, type, autocomplete, inputMode) => {
+		const label = document.createElement('label');
+		label.className = 'cred-field';
+		const labelNode = document.createElement('span');
+		labelNode.textContent = labelText;
+		const input = document.createElement('input');
+		input.name = name;
+		input.type = type;
+		input.autocomplete = autocomplete;
+		input.required = true;
+		if (inputMode) input.inputMode = inputMode;
+		input.setAttribute('aria-describedby', 'credential-security-note credential-error');
+		label.append(labelNode, input);
+		row.append(label);
+		controls[name] = input;
+	};
+	if (challenge.fields.includes('username')) addField('username', 'Email or username', 'text', 'off');
+	if (challenge.fields.includes('password')) addField('password', 'Password', 'password', 'off');
+	if (challenge.fields.includes('otp')) addField('otp', 'One-time code', 'password', 'off', 'numeric');
 
 	const note = document.createElement('div');
 	note.className = 'cred-note';
-	note.innerHTML = 'Held in this server\'s memory only — never written to disk, never sent to the model. ' +
-		'The agent fills the form with <code>{{QA_USERNAME}}</code> and <code>{{QA_PASSWORD}}</code>; the real values are swapped in at the keyboard.';
+	note.id = 'credential-security-note';
+	note.textContent = 'Credentials are sent directly to the existing in-memory session vault. Values are not added to activity, findings, reports, URLs, or browser storage.';
+	const errorNode = document.createElement('p');
+	errorNode.id = 'credential-error';
+	errorNode.className = 'credential-error';
+	errorNode.setAttribute('role', 'alert');
+	const progress = document.createElement('p');
+	progress.className = 'credential-progress';
+	progress.setAttribute('aria-live', 'polite');
 
 	const actions = document.createElement('div');
 	actions.className = 'cred-actions';
@@ -626,24 +619,38 @@ function credentialForm() {
 	submit.textContent = 'Store and continue';
 	actions.append(skip, submit);
 
-	form.append(row, extra, note, actions);
+	form.append(row, note, errorNode, progress, actions);
 	form.onsubmit = async event => {
 		event.preventDefault();
-		const fields = {};
-		if (username.value) fields.QA_USERNAME = username.value;
-		if (password.value) fields.QA_PASSWORD = password.value;
-		if (extra.value) fields.QA_OTP = extra.value;
+		errorNode.textContent = '';
+		const fields = buildCredentialFields({
+			username: controls.username?.value,
+			password: controls.password?.value,
+			otp: controls.otp?.value
+		}, challenge.fields);
 		if (Object.keys(fields).length === 0) {
-			toast('Enter a username or password first.', 'bad');
+			errorNode.textContent = 'Enter the requested authentication information.';
+			Object.values(controls)[0]?.focus();
 			return;
 		}
-		el.questionSlot.replaceChildren();
-		state.session.pendingQuestion = undefined;
+		for (const control of Object.values(controls)) control.disabled = true;
+		submit.disabled = true;
+		skip.disabled = true;
+		progress.textContent = 'Submitting securely…';
 		try {
 			await api(`/sessions/${state.sessionId}/credentials`, { method: 'POST', body: JSON.stringify({ fields }) });
-			toast('Credentials stored locally. The model only sees placeholders.', 'good');
-		} catch (error) {
-			fail(error);
+			for (const control of Object.values(controls)) control.value = '';
+			state.session.pendingQuestion = undefined;
+			state.renderedQuestionKey = null;
+			el.questionSlot.replaceChildren();
+			toast('Authentication submitted. This run is continuing in the same session.', 'good');
+		} catch (caught) {
+			for (const control of Object.values(controls)) control.disabled = false;
+			submit.disabled = false;
+			skip.disabled = false;
+			progress.textContent = '';
+			const safeMessage = caught instanceof Error ? caught.message : 'Authentication was rejected.';
+			errorNode.textContent = safeRunDiagnostic(safeMessage) || 'Authentication was rejected.';
 		}
 	};
 
@@ -651,20 +658,30 @@ function credentialForm() {
 }
 
 async function sendAnswer(answer) {
-	el.questionSlot.replaceChildren();
-	state.session.pendingQuestion = undefined;
-	await api(`/sessions/${state.sessionId}/answer`, {
-		method: 'POST',
-		body: JSON.stringify({ answer })
-	}).catch(fail);
+	const sessionId = state.sessionId;
+	try {
+		await api(`/sessions/${sessionId}/answer`, { method: 'POST', body: JSON.stringify({ answer }) });
+		if (sessionId !== state.sessionId) return;
+		el.questionSlot.replaceChildren();
+		state.session.pendingQuestion = undefined;
+		state.renderedQuestionKey = null;
+	} catch (error) {
+		fail(error);
+	}
 }
 
 /* ── Live browser view ───────────────────────────────────────────── */
 
 function applyFrame(frame) {
+	el.frame.onerror = null;
 	el.frame.src = `data:${frame.mimeType};base64,${frame.base64}`;
+	el.frame.alt = 'Current live view of the application under test';
 	el.stageEmpty.hidden = true;
 	el.stageInner.hidden = false;
+	el.stageInner.removeAttribute('data-mode');
+	document.getElementById('overlay')?.removeAttribute('hidden');
+	const browserState = document.getElementById('browser-state-label');
+	if (browserState) browserState.textContent = 'Live browser connected';
 	// P0-F5 — a real frame arrived: the browser is back. The reconnecting
 	// placeholder (if any) is no longer the truthful state.
 	delete el.stageEmpty.dataset.mode;
@@ -1001,22 +1018,24 @@ const VERDICTS = {
 };
 
 async function renderReport() {
+	const session = state.session;
 	const report = state.session.report;
+	const reportState = reportPresentation(session);
 	el.reportView.replaceChildren();
 	loadUxQualityPanel();
 	if (!report) {
-		// The agent never called its publish_report tool (watchdog-ended
-		// runs never do) — but the server still generates report.md on the
-		// fly with an honest verdict. Render that instead of a bare
-		// "published when the run finishes" placeholder that never resolves.
+		if (!reportState.available) {
+			el.reportView.innerHTML = `<div class="feed-empty"><strong>Report unavailable</strong><br><span class="subtle">Execution outcome: ${escapeHtml(reportState.execution.label)}.</span></div>`;
+			return;
+		}
 		el.reportView.innerHTML = '<div class="feed-empty">Loading report…</div>';
 		try {
 			// B1 W3 — authed read through the shared raw helper (text body).
 			const markdownText = await apiRaw(`/sessions/${state.sessionId}/report.md`).then(r => r.text());
 			if (state.session.report) return; // agent published meanwhile
-			renderGeneratedReport(markdownText);
+			renderGeneratedReport(normalizeGeneratedReportMarkdown(markdownText, session), reportState);
 		} catch (err) {
-			el.reportView.innerHTML = `<div class="feed-empty">The report is published when the run finishes.<br><span class="subtle">${escapeHtml(err.message)}</span></div>`;
+			el.reportView.innerHTML = `<div class="feed-empty"><strong>Report available — content unavailable</strong><br><span class="subtle">Execution outcome: ${escapeHtml(reportState.execution.label)}. ${escapeHtml(err.message)}</span></div>`;
 		}
 		return;
 	}
@@ -1035,18 +1054,11 @@ async function renderReport() {
 	sub.className = 'verdict-sub';
 	// HOTFIX B — surface the execution outcome next to the verdict so a
 	// blocked/incomplete run can never read as a normal completed test.
-	const executionOutcome = session.executionOutcome ?? session.outcome?.outcome ?? report.executionOutcome;
-	const findingCount = session.findingCount ?? report.findingCountCurrent ?? report.findings;
-	const outcomeNote = executionOutcome === 'blocked'
-		? ' · BLOCKED — testing could not run'
-		: ['partial', 'incomplete'].includes(executionOutcome)
-			? ' · INCOMPLETE — budget/timeout reached'
-			: executionOutcome === 'failed'
-				? ' · FAILED — execution did not complete successfully'
-				: executionOutcome === 'cancelled'
-					? ' · CANCELLED — execution was stopped'
-			: '';
-	sub.textContent = `${findingCount} finding${findingCount === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}${outcomeNote}`;
+	const findingCount = reportState.currentFindingCount;
+	const countLabel = findingCount == null ? 'Current findings not reported' : `${findingCount} current finding${findingCount === 1 ? '' : 's'}`;
+	const snapshotLabel = reportState.snapshotDiffers ? ` · Report snapshot: ${reportState.snapshotFindingCount}` : '';
+	const timestamp = report.ts ? ` · ${new Date(report.ts).toLocaleString()}` : '';
+	sub.textContent = `${countLabel}${snapshotLabel}${timestamp} · Execution: ${reportState.execution.label}`;
 	text.append(label, sub);
 	banner.append(mark, text);
 	el.reportView.append(banner);
@@ -1098,9 +1110,14 @@ async function renderReport() {
  * Parses the lightweight markdown the server emits: title, metadata list,
  * headings and list items.
  */
-function renderGeneratedReport(markdownText) {
+function renderGeneratedReport(markdownText, reportState = reportPresentation(state.session)) {
 	const wrap = document.createElement('div');
 	wrap.className = 'report-generated';
+
+	const outcome = document.createElement('div');
+	outcome.className = 'ev-empty ev-note';
+	outcome.textContent = `Report available — execution ${reportState.execution.label.toLowerCase()}.`;
+	wrap.append(outcome);
 
 	const note = document.createElement('div');
 	note.className = 'ev-empty ev-note';
@@ -1135,6 +1152,15 @@ function renderGeneratedReport(markdownText) {
 	download.href = `/api/sessions/${state.sessionId}/report.md`;
 	download.download = 'qase-report.md';
 	download.textContent = 'Download .md';
+	download.onclick = event => {
+		event.preventDefault();
+		const objectUrl = URL.createObjectURL(new Blob([markdownText], { type: 'text/markdown;charset=utf-8' }));
+		const anchor = document.createElement('a');
+		anchor.href = objectUrl;
+		anchor.download = 'qase-report.md';
+		anchor.click();
+		setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+	};
 	const copy = document.createElement('button');
 	copy.className = 'btn btn-ghost btn-sm';
 	copy.type = 'button';
@@ -1523,7 +1549,7 @@ function list(items) {
 
 /* ── Event stream ────────────────────────────────────────────────── */
 
-function connect(id) {
+function connect(id, snapshot = runViewSnapshot(state, id)) {
 	state.stream?.close();
 	clearTimeout(state._reconnectTimer);
 	// The HttpOnly qase_session cookie authenticates the stream (same-origin
@@ -1533,10 +1559,12 @@ function connect(id) {
 	state.stream = stream;
 
 	stream.onopen = () => {
+		if (!isCurrentRunView(state, snapshot)) { stream.close(); return; }
 		el.connDot.className = 'dot is-live';
 		el.connLabel.textContent = 'connected';
 	};
 	stream.onerror = () => {
+		if (!isCurrentRunView(state, snapshot)) { stream.close(); return; }
 		void fetch('/api/auth/me', { cache: 'no-store' }).then(response => {
 			if (response.status === 401) { stream.close(); location.replace('/login'); }
 		}).catch(() => {});
@@ -1550,8 +1578,10 @@ function connect(id) {
 		}, 2000);
 	};
 	stream.onmessage = event => {
-		const data = JSON.parse(event.data);
-		if (data.sessionId === state.sessionId) {
+		if (!isCurrentRunView(state, snapshot)) { stream.close(); return; }
+		let data;
+		try { data = JSON.parse(event.data); } catch { return; }
+		if (data.sessionId === snapshot.sessionId) {
 			handleEvent(data);
 		}
 	};
@@ -1559,8 +1589,10 @@ function connect(id) {
 	// Payload shape: { type: 'device', sessionId, device: {...} } — emit()
 	// spreads payloads at the top level, so event.data holds the whole event.
 	stream.addEventListener('device', event => {
+		if (!isCurrentRunView(state, snapshot)) { stream.close(); return; }
 		try {
 			const data = JSON.parse(event.data);
+			if (data.sessionId && data.sessionId !== snapshot.sessionId) return;
 			state.device = data.device ?? null;
 		} catch {
 			return;
@@ -1629,7 +1661,12 @@ function handleEvent(event) {
 		case 'finding':
 			if (!Array.isArray(session.findings)) session.findings = [];
 			session.findings.push(event.finding);
+			// The incoming finding is newer than the initial canonical count. Use
+			// the local de-duplicated fallback until the next server projection.
+			delete session.findingCount;
 			renderFindings();
+			renderSessionFindings(session);
+			renderRunSummary(session);
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
 				toast(`${event.finding.severity.toUpperCase()}: ${event.finding.title}`, 'bad');
 			}
@@ -1637,6 +1674,11 @@ function handleEvent(event) {
 
 		case 'report':
 			session.report = event.report;
+			session.reportAvailable = true;
+			if (['failed', 'blocked', 'partial', 'incomplete', 'cancelled'].includes(event.report?.executionOutcome)) {
+				session.executionOutcome = event.report.executionOutcome;
+			}
+			renderRunSummary(session);
 			renderReport();
 			// HOTFIX B — the toast must reflect the OUTCOME, not just the fact
 			// that a report exists. A blocked/failed run producing a report is
@@ -1646,17 +1688,17 @@ function handleEvent(event) {
 				? apiOutcome
 				: event.report?.executionOutcome ?? apiOutcome;
 			if (executionOutcome === 'blocked' || event.report?.verdict === 'blocked') {
-				toast('Blocked report generated — browser/testing could not run.', 'bad');
+				toast('Report available — execution blocked.', 'bad');
 			} else if (['partial', 'incomplete'].includes(executionOutcome)) {
-				toast('Report published — testing incomplete (budget or timeout reached).', 'warn' );
+				toast('Report available — execution partial.', 'warn' );
 			} else if (executionOutcome === 'failed') {
 				toast('Report available — execution failed.', 'bad');
 			} else if (executionOutcome === 'cancelled') {
 				toast('Report available — execution was cancelled.', 'warn');
 			} else if (event.report?.verdict === 'fail') {
-				toast('Report published — verdict: fail.', 'bad');
+				toast('Report available — verdict: fail.', 'bad');
 			} else {
-				toast('Report published.', 'good');
+				toast('Report available — execution completed.', 'good');
 			}
 			break;
 
@@ -1728,7 +1770,13 @@ function handleEvent(event) {
 			if (event.interruptedWhile !== undefined) {
 				session.interruptedWhile = event.interruptedWhile;
 			}
+			if (['queued', 'running'].includes(session.executionOutcome) && !['queued', 'running', 'awaiting_input'].includes(event.status)) {
+				delete session.executionOutcome;
+				delete session.outcome;
+			}
 			setStatus(event.status);
+			renderRunSummary(session);
+			renderBrowserHistory(session);
 			updateMissionPhase(event.status, event.activity);
 			updateExecStats();
 			if (event.status !== 'running') {
@@ -1742,6 +1790,7 @@ function handleEvent(event) {
 		case 'execution_health':
 			session.executionHealth = event.health;
 			renderExecutionHealth(session);
+			renderBrowserHistory(session);
 			break;
 
 		case 'browser':
@@ -2168,7 +2217,22 @@ window.addEventListener('qase:select-run', event => {
 	const id = event.detail?.id;
 	if (id) void selectSession(id).catch(fail);
 });
-el.stopRun.onclick = () => api(`/sessions/${state.sessionId}/stop`, { method: 'POST' }).catch(fail);
+window.addEventListener('qase:evidence-state', event => {
+	if (event.detail?.sessionId !== state.sessionId || !state.session) return;
+	renderBrowserHistory(state.session, event.detail);
+});
+function beginStopRequest() {
+	el.stopRun.disabled = true;
+	el.stopRun.textContent = 'Stopping…';
+	return { method: 'POST' };
+}
+
+el.stopRun.onclick = () => api(`/sessions/${state.sessionId}/stop`, beginStopRequest())
+	.catch(error => {
+		fail(error);
+		el.stopRun.disabled = false;
+		el.stopRun.textContent = 'Stop';
+	});
 
 el.thinkingHead.onclick = () => {
 	if (el.thinkingStrip.classList.contains('has-detail')) {
@@ -2188,16 +2252,44 @@ document.addEventListener('keydown', event => {
 	}
 });
 
-for (const tab of document.querySelectorAll('.tab')) {
-	tab.onclick = () => {
-		for (const other of document.querySelectorAll('.tab')) {
-			other.classList.toggle('is-active', other === tab);
-		}
-		for (const pane of document.querySelectorAll('.tab-pane')) {
-			pane.classList.toggle('is-active', pane.dataset.pane === tab.dataset.tab);
-		}
-		handleTabActivation(tab.dataset.tab);
+const runTabs = [...document.querySelectorAll('#tabs .tab')];
+function activateRunTab(tab, { focus = false } = {}) {
+	if (!tab) return;
+	for (const other of runTabs) {
+		other.classList.toggle('is-active', other === tab);
+		other.setAttribute('aria-selected', String(other === tab));
+		other.tabIndex = other === tab ? 0 : -1;
+	}
+	for (const pane of document.querySelectorAll('.tab-pane')) {
+		pane.classList.toggle('is-active', pane.dataset.pane === tab.dataset.tab);
+	}
+	handleTabActivation(tab.dataset.tab);
+	if (focus) tab.focus();
+}
+for (const tab of runTabs) {
+	tab.onclick = () => activateRunTab(tab);
+	tab.onkeydown = event => {
+		if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+		event.preventDefault();
+		const currentIndex = runTabs.indexOf(tab);
+		const nextIndex = event.key === 'Home' ? 0
+			: event.key === 'End' ? runTabs.length - 1
+				: (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + runTabs.length) % runTabs.length;
+		activateRunTab(runTabs[nextIndex], { focus: true });
 	};
+}
+
+function activateRunSegment(selected) {
+	for (const button of document.querySelectorAll('[data-run-segment]')) {
+		const active = button.dataset.runSegment === selected;
+		button.classList.toggle('is-active', active);
+		button.setAttribute('aria-pressed', String(active));
+	}
+	document.querySelector('.run-workspace-grid')?.setAttribute('data-mobile-segment', selected);
+}
+
+for (const segment of document.querySelectorAll('[data-run-segment]')) {
+	segment.addEventListener('click', () => activateRunSegment(segment.dataset.runSegment));
 }
 
 /* ── Project management ────────────────────────────────────────────── */
@@ -2229,6 +2321,7 @@ async function selectProject(id) {
 	markOverviewStale();
 	state.stream?.close();
 	state.stream = undefined;
+	state.runViewVersion += 1;
 	state.session = undefined;
 	state.sessionId = undefined;
 	state.projectId = projectId;
@@ -2255,18 +2348,100 @@ async function selectProject(id) {
 	if (!selectedSession) {
 		el.chatTitle.textContent = 'No run selected';
 		el.chatTarget.textContent = 'Start a run in this project to begin testing';
-		el.statusChip.textContent = 'idle';
-		el.statusChip.dataset.status = 'idle';
+		el.statusChip.hidden = true;
 		el.stopRun.hidden = true;
 		el.chatEmpty.hidden = false;
 		el.transcript.replaceChildren(el.chatEmpty);
 		el.reportView.replaceChildren();
 		el.activityFeed.replaceChildren();
+		for (const id of ['run-summary-duration', 'run-summary-pages', 'run-summary-actions', 'run-summary-findings', 'run-report-availability']) {
+			const node = document.getElementById(id);
+			if (node) node.textContent = 'Not reported';
+		}
+		renderExecutionHealth({});
+		renderBrowserHistory({ id: state.sessionId, status: 'queued' }, { loaded: false, items: [] });
 		await Promise.allSettled([loadWorkflowsPage(), loadTestCases(), loadSchedulesPage(), loadMetrics()]);
 	}
 	if (currentPage() === 'findings') await loadBugs({ reset: true });
 	} finally {
 		if (projectVersion === state.projectVersion) setProjectSwitching(false);
+	}
+}
+
+function formatDuration(milliseconds) {
+	if (!Number.isFinite(milliseconds)) return 'Not reported';
+	const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+	const minutes = Math.floor(seconds / 60);
+	const hours = Math.floor(minutes / 60);
+	if (hours) return `${hours}h ${minutes % 60}m`;
+	if (minutes) return `${minutes}m ${seconds % 60}s`;
+	return `${seconds}s`;
+}
+
+function renderRunSummary(session) {
+	const metrics = runMetricPresentation(session);
+	const report = reportPresentation(session);
+	const duration = document.getElementById('run-summary-duration');
+	const pages = document.getElementById('run-summary-pages');
+	const actions = document.getElementById('run-summary-actions');
+	const findings = document.getElementById('run-summary-findings');
+	const reportAvailable = document.getElementById('run-report-availability');
+	if (duration) duration.textContent = formatDuration(metrics.durationMs);
+	if (pages) pages.textContent = metrics.pages == null ? 'Not reported' : String(metrics.pages);
+	if (actions) actions.textContent = metrics.actions == null ? 'Not reported' : String(metrics.actions);
+	if (findings) {
+		findings.textContent = metrics.findings.value == null ? 'Not reported' : String(metrics.findings.value);
+		findings.title = metrics.findings.canonical ? 'Canonical current finding count' : 'Historical session fallback';
+	}
+	if (reportAvailable) {
+		reportAvailable.textContent = report.label;
+		reportAvailable.dataset.available = String(report.available);
+		reportAvailable.title = `${report.label} — execution ${report.execution.label.toLowerCase()}`;
+	}
+}
+
+function renderBrowserHistory(session, evidence = {}) {
+	if (!session || session.id !== state.sessionId) return;
+	el.browserUrl.textContent = session.targetUrl ?? 'about:blank';
+	if (!session.frame) el.browserTitle.textContent = '';
+	const view = browserHistoryPresentation(session, evidence);
+	const label = document.getElementById('browser-state-label');
+	const title = el.stageEmpty?.querySelector('span');
+	const detail = el.stageEmpty?.querySelector('small');
+	if (label) label.textContent = view.title;
+	if (session.frame || view.key === 'live') return;
+	if (title) title.textContent = view.title;
+	if (detail) detail.textContent = view.detail;
+	if (el.stageEmpty) {
+		el.stageEmpty.dataset.mode = view.key;
+		el.stageEmpty.hidden = Boolean(view.imageUrl);
+	}
+	if (view.imageUrl) {
+		el.frame.onerror = () => {
+			if (session.id !== state.sessionId || el.stageInner.dataset.mode !== 'persisted') return;
+			el.frame.onerror = null;
+			el.frame.removeAttribute('src');
+			el.stageInner.removeAttribute('data-mode');
+			el.stageInner.hidden = true;
+			if (el.stageEmpty) {
+				el.stageEmpty.hidden = false;
+				el.stageEmpty.dataset.mode = 'unavailable';
+			}
+			if (title) title.textContent = 'Persisted screenshot unavailable';
+			if (detail) detail.textContent = 'Open Evidence to review the remaining recorded actions.';
+			if (label) label.textContent = 'Persisted screenshot unavailable';
+		};
+		el.frame.src = view.imageUrl;
+		el.frame.alt = 'Persisted screenshot evidence from this run';
+		el.stageInner.dataset.mode = 'persisted';
+		el.stageInner.hidden = false;
+		document.getElementById('overlay')?.setAttribute('hidden', '');
+	} else {
+		el.frame.onerror = null;
+		el.frame.removeAttribute('src');
+		el.stageInner.removeAttribute('data-mode');
+		el.stageInner.hidden = true;
+		document.getElementById('overlay')?.removeAttribute('hidden');
 	}
 }
 
@@ -2712,6 +2887,12 @@ document.addEventListener('click', event => {
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
+		if (page !== 'runs' && state.stream) {
+			state.stream.close();
+			state.stream = undefined;
+			state.runViewVersion += 1;
+			clearTimeout(state._reconnectTimer);
+		}
 		if (page === 'overview' && state.projects.length > 0) void loadOverview();
 		if (page === 'findings') loadBugs();
 		if (page === 'test-cases') loadTestCases();
@@ -2798,6 +2979,8 @@ document.addEventListener('click', event => {
 	// of idle "New test run" shells that read as duplicates to a new user.
 	if (!state.sessionId) {
 		el.chatEmpty.hidden = false;
+		el.statusChip.hidden = true;
+		el.stopRun.hidden = true;
 	}
 	// No session (and therefore no event stream) — say so instead of
 	// leaving the boot-time "connecting…" label up forever.

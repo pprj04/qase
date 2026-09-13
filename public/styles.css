@@ -7878,6 +7878,203 @@ dialog.modal {
 	background: var(--bg-base);
 }
 
+/* UI-4 — Run Detail execution workspace. Scoped to #page-runs so the
+ * certified shell and all other routed pages keep their existing behavior. */
+.sr-only {
+	position: absolute !important;
+	width: 1px !important;
+	height: 1px !important;
+	padding: 0 !important;
+	margin: -1px !important;
+	overflow: hidden !important;
+	clip: rect(0, 0, 0, 0) !important;
+	white-space: nowrap !important;
+	border: 0 !important;
+}
+
+#page-runs { min-width: 0; overflow-x: hidden; }
+
+#page-runs .run-detail-app {
+	display: block;
+	height: calc(100dvh - 64px);
+	min-height: 0;
+	background: var(--well);
+}
+#page-runs .run-detail-shell {
+	display: grid;
+	grid-template-rows: auto auto auto minmax(0, 1fr);
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+#page-runs .run-detail-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 20px;
+	padding: 18px 24px 14px;
+	border-bottom: 1px solid var(--hair);
+	background: var(--glass);
+}
+#page-runs .run-detail-eyebrow {
+	margin: 0 0 3px;
+	color: var(--accent-2);
+	font: 700 11px/1.3 var(--mono);
+	letter-spacing: .09em;
+	text-transform: uppercase;
+}
+#page-runs .chat-id h1 { font-size: clamp(22px, 2.1vw, 30px); overflow-wrap: anywhere; }
+#page-runs .run-target {
+	margin: 5px 0 0;
+	max-width: min(860px, 70vw);
+	color: var(--text-dim);
+	font: 13px/1.45 var(--mono);
+	overflow-wrap: anywhere;
+}
+#page-runs .exec-meta { max-width: min(1000px, 75vw); white-space: normal; line-height: 1.45; }
+#page-runs .head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+#page-runs .status-chip { min-height: 28px; display: inline-flex; align-items: center; }
+#page-runs .status-chip[data-status="queued"] { color: #ffd08a; border-color: rgba(255,159,10,.45); }
+#page-runs .status-chip[data-status="running"] { color: #9fd0ff; border-color: rgba(10,132,255,.48); }
+#page-runs .status-chip[data-status="awaiting_input"] { color: #ffd08a; border-color: rgba(255,159,10,.56); background: rgba(255,159,10,.09); }
+#page-runs .status-chip[data-status="completed"] { color: #8ce8a6; border-color: rgba(48,209,88,.45); }
+#page-runs .status-chip[data-status="partial"],
+#page-runs .status-chip[data-status="interrupted"],
+#page-runs .status-chip[data-status="cancelled"] { color: #ffd08a; border-color: rgba(255,159,10,.45); }
+#page-runs .status-chip[data-status="blocked"],
+#page-runs .status-chip[data-status="failed"] { color: #ff9a93; border-color: rgba(255,69,58,.48); }
+
+#page-runs .run-summary {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	border-bottom: 1px solid var(--hair);
+	background: var(--glass-2);
+}
+#page-runs .run-summary > div { min-width: 0; padding: 10px 16px; border-right: 1px solid var(--hair-soft); }
+#page-runs .run-summary > div:last-child { border-right: 0; }
+#page-runs .run-summary span, #page-runs .run-summary strong { display: block; }
+#page-runs .run-summary span { color: var(--text-dim); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+#page-runs .run-summary strong { margin-top: 3px; color: var(--text); font: 600 13px/1.35 var(--mono); overflow-wrap: anywhere; }
+#page-runs #run-report-availability[data-available="true"] { color: #8ce8a6; }
+
+#page-runs .execution-health {
+	padding: 9px 24px;
+	background: var(--glass);
+}
+#page-runs .execution-health[data-status="unavailable"] { background: rgba(255,69,58,.07); }
+#page-runs .execution-health[data-status="degraded"] { background: rgba(255,159,10,.07); }
+#page-runs .execution-health-component { padding: 4px 9px; font-size: 10px; }
+#page-runs .execution-health-component[data-status="unavailable"] { color: #ff9a93; border-color: rgba(255,69,58,.4); }
+#page-runs .execution-health-component[data-status="not_reported"] { color: var(--text-dim); }
+
+#page-runs .run-workspace-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 1.65fr) minmax(360px, 1fr);
+	gap: 1px;
+	min-width: 0;
+	min-height: 0;
+	background: var(--hair-soft);
+}
+#page-runs .run-live-panel, #page-runs .run-context-panel { min-width: 0; min-height: 0; overflow: hidden; }
+#page-runs .run-live-head { align-items: center; gap: 16px; }
+#page-runs .run-live-head h2 { margin: 0; font-size: 18px; }
+#page-runs .run-live-head p { margin: 2px 0 0; color: var(--text-dim); font-size: 12px; }
+#page-runs .run-live-head .urlbar { max-width: 52%; }
+#page-runs .run-live-panel .stage { flex: 1; height: auto; min-height: 0; border-bottom: 0; }
+#page-runs .stage-inner[data-mode="persisted"] { max-width: 94%; max-height: 92%; border: 1px solid var(--hair); }
+#page-runs .stage-inner[data-mode="persisted"] #frame { max-width: 100%; max-height: 100%; object-fit: contain; }
+#page-runs .stage-empty[data-mode] > span,
+#page-runs .stage-empty[data-mode] > small { font-size: inherit; }
+#page-runs .stage-empty[data-mode] > span::after,
+#page-runs .stage-empty[data-mode] > small::after { content: none; }
+#page-runs .stage-empty[data-mode="blocked"] { color: #ff9a93; }
+#page-runs .stage-empty[data-mode="persisted"], #page-runs .stage-empty[data-mode="history"] { color: #9fd0ff; }
+
+#page-runs .run-context-panel { background: var(--glass); }
+#page-runs .question-slot { padding: 12px 14px 0; }
+#page-runs .question { margin: 0; padding: 14px; }
+#page-runs .question-title { margin: 0 0 5px; color: var(--text-bright); font-size: 18px; }
+#page-runs .question-text { margin: 0 0 10px; line-height: 1.45; }
+#page-runs .authentication-required { border-color: rgba(255,159,10,.52); }
+#page-runs .cred-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#page-runs .cred-field { display: grid; gap: 5px; min-width: 0; color: var(--text-dim); font-size: 12px; }
+#page-runs .cred-field input { width: 100%; min-width: 0; box-sizing: border-box; }
+#page-runs .credential-error { min-height: 1.2em; margin: 0; color: #ff9a93; font-size: 12px; }
+#page-runs .credential-progress { min-height: 1.2em; margin: 0; color: var(--accent-2); font-size: 12px; }
+#page-runs .tabs { overflow-x: auto; scrollbar-width: thin; }
+#page-runs .tabs .tab { flex: 0 0 auto; min-width: max-content; min-height: 40px; padding: 8px 10px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+#page-runs .tab-body { flex: 1; }
+#page-runs .tab-pane { padding: 0; }
+#page-runs .tab-pane[data-pane="activity"].is-active { display: flex; flex-direction: column; overflow: hidden; }
+#page-runs .tab-pane[data-pane="activity"] .transcript { flex: 1 1 48%; min-height: 160px; padding: 14px; border-bottom: 1px solid var(--hair-soft); }
+#page-runs .run-subsection-title { margin: 0; padding: 10px 14px 4px; color: var(--text-dim); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+#page-runs .thinking-stream { flex: 1 1 38%; min-height: 120px; overflow-y: auto; }
+#page-runs .composer { padding: 10px 12px; }
+#page-runs .composer textarea { min-height: 44px; }
+#page-runs .run-mobile-segments { display: none; }
+
+/* The run list is an on-demand drawer at every viewport; Runs navigation owns
+ * the durable list experience, keeping the execution workspace two-column. */
+#page-runs .run-picker-drawer { display: none; }
+#page-runs .run-picker-drawer.mobile-open {
+	display: flex;
+	position: fixed;
+	top: 64px;
+	bottom: 0;
+	left: max(0px, env(safe-area-inset-left));
+	width: min(360px, calc(100vw - 28px));
+	z-index: 140;
+	border-right: 1px solid var(--hair);
+	box-shadow: 18px 0 48px rgba(0,0,0,.5);
+}
+#page-runs #mobile-runs-toggle, #page-runs .run-picker-drawer.mobile-open #close-runs-drawer { display: inline-flex; }
+
+@media (max-width: 1100px) {
+	#page-runs .run-workspace-grid { grid-template-columns: minmax(0, 1.35fr) minmax(340px, 1fr); }
+	#page-runs .run-detail-header { padding-inline: 18px; }
+	#page-runs .execution-health { padding-inline: 18px; }
+}
+
+@media (max-width: 900px) {
+	#page-runs .run-detail-shell { overflow-y: auto; }
+	#page-runs .run-workspace-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(420px, 56vh) minmax(520px, 1fr); overflow: visible; }
+	#page-runs .run-live-panel, #page-runs .run-context-panel { overflow: hidden; }
+	#page-runs .run-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+	#page-runs .run-summary > div:nth-child(3) { border-right: 0; }
+	#page-runs .run-summary > div:nth-child(n+4) { border-top: 1px solid var(--hair-soft); }
+}
+
+@media (max-width: 700px) {
+	#page-runs .run-detail-app { height: calc(100dvh - 56px); }
+	#page-runs .run-detail-shell { grid-template-rows: auto auto auto auto minmax(0, 1fr); }
+	#page-runs .run-detail-header { flex-direction: column; padding: 14px 16px 12px; }
+	#page-runs .run-target, #page-runs .exec-meta { max-width: 100%; }
+	#page-runs .head-actions { width: 100%; justify-content: flex-start; }
+	#page-runs .run-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	#page-runs .run-summary > div { padding: 9px 12px; border-top: 1px solid var(--hair-soft); }
+	#page-runs .run-summary > div:nth-child(1), #page-runs .run-summary > div:nth-child(2) { border-top: 0; }
+	#page-runs .run-summary > div:nth-child(2n) { border-right: 0; }
+	#page-runs .run-report-fact { grid-column: 1 / -1; }
+	#page-runs .execution-health { padding: 10px 14px; }
+	#page-runs .run-mobile-segments { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 8px; border-bottom: 1px solid var(--hair); background: var(--well); }
+	#page-runs .run-mobile-segments button { min-height: 44px; border: 1px solid var(--hair); border-radius: 8px; background: transparent; color: var(--text-dim); }
+	#page-runs .run-mobile-segments button.is-active { border-color: var(--accent); background: rgba(10,132,255,.1); color: var(--text); }
+	#page-runs .run-workspace-grid { display: block; min-height: 0; }
+	#page-runs .run-workspace-grid[data-mobile-segment="browser"] .run-context-panel,
+	#page-runs .run-workspace-grid[data-mobile-segment="details"] .run-live-panel { display: none; }
+	#page-runs .panel.run-live-panel { position: relative; inset: auto; z-index: auto; transform: none; transition: none; border-radius: 0; }
+	#page-runs .run-live-panel, #page-runs .run-context-panel { height: max(520px, calc(100dvh - 260px)); }
+	#page-runs .run-live-head { align-items: flex-start; flex-wrap: wrap; }
+	#page-runs .run-live-head .urlbar { order: 3; flex-basis: 100%; max-width: 100%; }
+	#page-runs .cred-row { grid-template-columns: minmax(0, 1fr); }
+	#page-runs .cred-actions { position: sticky; bottom: 0; padding-top: 8px; background: var(--glass); }
+	#page-runs .cred-actions .btn { min-height: 44px; }
+	#page-runs .tabs .tab { min-height: 44px; }
+	#page-runs .composer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+	#page-runs .run-picker-drawer.mobile-open { top: 56px; }
+}
+
 /* UI-3 — New Run. The dialog is the single standalone mission-creation
  * surface; active-run steering remains in the existing composer. */
 .new-run-dialog {

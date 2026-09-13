@@ -12,6 +12,7 @@
 
 import { api, apiRaw, escapeHtml, state } from './shared.js';
 import { openBugDetail } from './bugs.js';
+import { canonicalRunPresentation, currentFindingPresentation, evidenceScreenshotUrl, executionHealthPresentation, isCurrentRunView, runViewSnapshot } from './runDetail.js';
 
 /* ── Execution header meta ─────────────────────────────────────────── */
 
@@ -89,13 +90,10 @@ export function renderExecutionHealth(session) {
 	const components = document.getElementById('execution-health-components');
 	const action = document.getElementById('execution-health-action');
 	if (!panel || !title || !summary || !components || !action) return;
-	const health = session?.executionHealth;
-	if (!health) {
-		panel.hidden = true;
-		return;
-	}
+	const health = session?.executionHealth ?? {};
+	const view = executionHealthPresentation(session);
 	panel.hidden = false;
-	panel.dataset.status = health.overall ?? 'running';
+	panel.dataset.status = view.overall.key;
 	const retry = health.lastIssue?.retry;
 	const retrySuffix = health.overall === 'retrying' && retry?.willRetry
 		? ` Retry ${retry.attempt}/${retry.maxAttempts} scheduled.`
@@ -108,17 +106,17 @@ export function renderExecutionHealth(session) {
 	summary.textContent = (health.overall === 'healthy'
 		? 'Execution completed without an infrastructure failure.'
 		: health.overall === 'running' && health.lastIssue
-			? `Recovered: ${health.lastIssue.summary}`
-			: health.lastIssue?.summary ?? 'QASE is preparing the execution environment.') + retrySuffix;
-	components.replaceChildren(...Object.entries(health.components ?? {}).map(([name, status]) => {
+			? `Recovered: ${view.reason}`
+			: view.reason || 'No execution health reported.') + retrySuffix;
+	components.replaceChildren(...view.components.map(({ name, key, label }) => {
 		const chip = document.createElement('span');
 		chip.className = 'execution-health-component';
-		chip.dataset.status = status;
-		chip.textContent = `${name}: ${String(status).replace('_', ' ')}`;
+		chip.dataset.status = key;
+		chip.textContent = `${name}: ${label}`;
 		return chip;
 	}));
 	action.textContent = ['failed', 'retrying', 'degraded'].includes(health.overall)
-		? health.lastIssue?.nextAction ?? '' : '';
+		? view.nextAction : '';
 	action.hidden = !action.textContent;
 }
 
@@ -139,9 +137,7 @@ function artifactUrl(artifactPath) {
 }
 
 function screenshotUrl(item) {
-	const metadata = item.metadata ?? {};
-	if (metadata.artifact?.id && metadata.screenshotPersisted !== false) return `/api/v1/artifacts/${encodeURIComponent(metadata.artifact.id)}/content`;
-	return metadata.artifactPath ? artifactUrl(metadata.artifactPath) : null;
+	return evidenceScreenshotUrl(item);
 }
 
 async function artifactExists(artifactPath) {
@@ -197,22 +193,22 @@ function renderEvidenceCard(item) {
 	if (kind === 'screenshot') {
 		const imageUrl = screenshotUrl(item);
 		if (imageUrl) {
+			const link = document.createElement('a');
+			link.href = imageUrl;
+			link.target = '_blank';
+			link.rel = 'noopener';
+			link.title = 'Open full artifact';
 			const img = document.createElement('img');
 			img.className = 'ev-shot';
 			img.loading = 'lazy';
 			img.alt = item.observation ?? 'screenshot';
 			img.src = imageUrl;
 			img.addEventListener('error', () => {
-				img.replaceWith(Object.assign(document.createElement('div'), {
+				link.replaceWith(Object.assign(document.createElement('div'), {
 					className: 'ev-shot-missing',
 					textContent: '🖼 artifact unavailable'
 				}));
 			});
-			const link = document.createElement('a');
-			link.href = imageUrl;
-			link.target = '_blank';
-			link.rel = 'noopener';
-			link.title = 'Open full artifact';
 			link.append(img);
 			body.append(link);
 		} else {
@@ -237,6 +233,15 @@ function renderEvidenceCard(item) {
 		const path = item.metadata?.tracePath ?? item.metadata?.artifactPath;
 		if (path) {
 			body.innerHTML = `<a class="ev-artifact-link" href="${escapeHtml(artifactUrl(path))}" target="_blank" rel="noopener">🔍 Open trace.zip (Playwright trace)</a>`;
+			const link = body.querySelector('.ev-artifact-link');
+			void artifactExists(path).then(exists => {
+				if (!exists && link?.isConnected) {
+					link.replaceWith(Object.assign(document.createElement('div'), {
+						className: 'ev-shot-missing',
+						textContent: '🔍 trace artifact unavailable'
+					}));
+				}
+			});
 		} else {
 			body.innerHTML = `<div class="ev-shot-missing">🔍 trace recorded — no file link in this record</div>`;
 		}
@@ -352,16 +357,21 @@ function zeroEvidenceHtml() {
 		<button class="btn btn-ghost btn-sm" id="ev-retry">Retry</button>
 	</div>`;
 }
-async function loadSessionEvidence(sessionId, { force = false } = {}) {
-	if (evState.loading) return;
+export async function loadSessionEvidence(sessionId, { force = false } = {}) {
+	if (evState.loading && evState.sessionId === sessionId) return;
 	if (evState.sessionId === sessionId && evState.loaded && !force) {
 		renderEvidenceGrid();
 		return;
 	}
+	const snapshot = runViewSnapshot(state, sessionId);
 	const grid = document.getElementById('ev-grid');
 	if (grid && (!evState.loaded || force)) grid.innerHTML = `<div class="ev-loading">Loading evidence…</div>`;
+	evState.sessionId = sessionId;
+	evState.items = [];
+	evState.loaded = false;
 	evState.loading = true;
 	evState.error = null;
+	window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items: [], loading: true, loaded: false, error: null } }));
 	try {
 		// B1 W3 — authed read via the raw helper (token from Settings).
 		const res = await apiRaw(`/v1/sessions/${sessionId}/evidence?limit=200`);
@@ -377,17 +387,20 @@ async function loadSessionEvidence(sessionId, { force = false } = {}) {
 			// so the tab reflects what actually happened.
 			items = await deriveEvidenceFromSteps(sessionId);
 		}
+		if (!isCurrentRunView(state, snapshot)) return;
 		evState.items = items;
-		evState.sessionId = sessionId;
 		evState.loaded = true;
 		renderEvidenceGrid();
+		window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items, loading: false, loaded: true, error: null } }));
 	} catch (err) {
+		if (!isCurrentRunView(state, snapshot)) return;
 		evState.error = err;
 		if (grid) grid.innerHTML = `<div class="ev-empty ev-empty-zero"><div class="ev-empty-title">Evidence unavailable</div>
 			<div class="ev-empty-why">${escapeHtml(err.message)}</div>
 			<button class="btn btn-ghost btn-sm" id="ev-retry">Retry</button></div>`;
+		window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items: [], loading: false, loaded: false, error: { message: err.message } } }));
 	} finally {
-		evState.loading = false;
+		if (isCurrentRunView(state, snapshot)) evState.loading = false;
 	}
 }
 
@@ -532,15 +545,21 @@ export function renderSessionFindings(session) {
 	const countEl = document.getElementById('count-findings-tab');
 	if (!host) return;
 	const findings = session?.findings ?? [];
-	if (countEl) countEl.textContent = findings.length ? String(findings.length) : '';
+	const currentCount = currentFindingPresentation(session);
+	if (countEl) {
+		countEl.textContent = currentCount.value == null ? '' : String(currentCount.value);
+		countEl.title = currentCount.canonical ? 'Canonical current finding count' : 'Historical session fallback';
+	}
 
 	if (!findings.length) {
-		const failed = session && ['error', 'interrupted'].includes(session.status);
+		const outcome = canonicalRunPresentation(session).key;
+		const failed = ['failed', 'blocked', 'partial', 'cancelled', 'interrupted'].includes(outcome);
+		const completed = outcome === 'completed';
 		host.innerHTML = failed
-			? `<div class="sf-empty"><div class="sf-empty-title">No findings — the run failed before reporting</div>
-			   <div class="subtle">Check the REASONING_LOG for the error. No defects were reported because the agent never finished.</div></div>`
-			: `<div class="sf-empty"><div class="sf-empty-title">No defects found in this run</div>
-			   <div class="subtle">The agent completed its sweep and reported no findings.</div></div>`;
+			? `<div class="sf-empty"><div class="sf-empty-title">No findings were reported before this run ended</div><div class="subtle">Review Activity and Evidence for the truthful execution state.</div></div>`
+			: completed
+				? `<div class="sf-empty"><div class="sf-empty-title">No defects found in this run</div><div class="subtle">The completed run reported zero current findings.</div></div>`
+				: `<div class="sf-empty"><div class="sf-empty-title">No findings reported yet</div><div class="subtle">Findings will appear here as the run progresses.</div></div>`;
 		return;
 	}
 	const sorted = [...findings].sort((a, b) =>

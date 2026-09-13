@@ -143,6 +143,9 @@ const state = {
 	// capture it before fetching so a late response cannot repaint another
 	// project's data after a switch.
 	projectVersion: 0,
+	// Incremented for every run selection and project/route exit. Async detail,
+	// evidence, and SSE updates must match this generation before repainting.
+	runViewVersion: 0,
 	projects: [],
 	suites: [],
 	tagFilter: null,

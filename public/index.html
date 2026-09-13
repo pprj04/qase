@@ -92,158 +92,107 @@
         </section>
       </div>
 
-<!-- ── Page: Runs (agent workspace) ───────────────────────────── -->
+<!-- ── Page: Runs (primary execution workspace) ───────────────── -->
 <div class="page" id="page-runs">
-  <div class="app">
-
-    <!-- ── Left: runs ─────────────────────────────────────────────── -->
-    <aside class="panel runs">
+  <div class="app run-detail-app">
+    <aside class="panel runs run-picker-drawer" aria-label="Run history">
       <header class="panel-head">
-        <button id="new-run" class="btn btn-primary" title="New run  (⌘N)">New run</button>
-		<button id="close-runs-drawer" class="btn btn-ghost btn-sm" type="button" aria-label="Close run history">Close</button>
+        <button id="new-run" class="btn btn-primary" title="New run (⌘N)">New run</button>
+        <button id="close-runs-drawer" class="btn btn-ghost btn-sm" type="button" aria-label="Close run history">Close</button>
       </header>
       <div class="run-list" id="run-list"></div>
-      <footer class="panel-foot">
-        <span class="dot" id="conn-dot"></span>
-        <span id="conn-label">connecting…</span>
-      </footer>
+      <footer class="panel-foot"><span class="dot" id="conn-dot"></span><span id="conn-label">connecting…</span></footer>
     </aside>
 
-    <!-- ── Middle: agent chat ─────────────────────────────────────── -->
-    <main class="panel chat">
-      <header class="panel-head">
+    <main class="run-detail-shell" aria-labelledby="chat-title">
+      <header class="run-detail-header">
         <div class="chat-id">
+          <p class="run-detail-eyebrow">Run detail</p>
           <h1 id="chat-title">No run selected</h1>
-          <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
+          <p class="run-target" id="chat-target">Start a run to begin testing</p>
           <p class="exec-meta subtle" id="exec-meta" hidden></p>
         </div>
         <div class="head-actions">
-		  <button id="mobile-runs-toggle" class="btn btn-ghost btn-sm" type="button" aria-controls="run-list" aria-expanded="false">Runs</button>
+          <button id="mobile-runs-toggle" class="btn btn-ghost btn-sm" type="button" aria-controls="run-list" aria-expanded="false">Run history</button>
           <span class="exec-mode-chip" id="exec-mode-chip" hidden></span>
-          <span class="status-chip" id="status-chip" data-status="idle">idle</span>
-          <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
+          <span class="status-chip" id="status-chip" data-status="queued">Queued</span>
+          <button id="stop-run" class="btn btn-danger btn-sm" type="button" hidden>Stop</button>
         </div>
       </header>
-	  <section class="execution-health" id="execution-health" hidden aria-live="polite">
-		<div class="execution-health-main">
-		  <strong id="execution-health-title">Execution health</strong>
-		  <span id="execution-health-summary"></span>
-		</div>
-		<div class="execution-health-components" id="execution-health-components"></div>
-		<p id="execution-health-action"></p>
-	  </section>
 
-      <div class="transcript" id="transcript">
-        <div class="empty-state" id="chat-empty">
-          <div class="ai-cursor">
-            <span class="ai-cursor-bracket">[</span>
-            <span class="ai-cursor-text">QASE</span>
-            <span class="ai-cursor-bracket">]</span>
-            <span class="ai-cursor-blink">_</span>
-          </div>
-          <h2>Autonomous Software Quality Engineer</h2>
-          <div id="auth-gate-rest">
-          <p>Validate any web application. Understand its purpose.<br>
-             Discover bugs, missing features and UX issues.<br>
-             Generate improvements automatically.</p>
-          <div class="prompt-chips">
-            <button class="prompt-chip" data-prompt="https://example.com">Validate Website</button>
-            <button class="prompt-chip" data-prompt="Test authentication">Test Authentication</button>
-            <button class="prompt-chip" data-prompt="Review checkout flow">Review Checkout</button>
-            <button class="prompt-chip" data-prompt="Find UX issues">Find UX Issues</button>
-            <button class="prompt-chip" data-prompt="Validate mobile experience">Check Mobile UX</button>
-          </div>
-		  <button class="btn btn-primary" type="button" data-open-new-run>Start a Run</button>
-          </div>
+      <section class="run-summary" aria-label="Run summary">
+        <div><span>Duration</span><strong id="run-summary-duration">Not reported</strong></div>
+        <div><span>Pages</span><strong id="run-summary-pages">Not reported</strong></div>
+        <div><span>Actions</span><strong id="run-summary-actions">Not reported</strong></div>
+        <div><span>Current findings</span><strong id="run-summary-findings">Not reported</strong></div>
+        <div class="run-report-fact"><span>Report</span><strong id="run-report-availability">Not reported</strong></div>
+      </section>
+
+      <section class="execution-health" id="execution-health" aria-labelledby="execution-health-title">
+        <div class="execution-health-main">
+          <strong id="execution-health-title">Execution health</strong>
+          <span id="execution-health-summary">No execution health reported.</span>
         </div>
-      </div>
+        <div class="execution-health-components" id="execution-health-components"></div>
+        <p id="execution-health-action"></p>
+      </section>
 
-      <!-- Live state while the agent works; hidden the moment it replies. -->
-      <div class="thinking-strip" id="thinking-strip" hidden>
-        <button class="thinking-head" id="thinking-head" type="button">
-          <span class="thinking-dots"><i></i><i></i><i></i></span>
-          <span class="thinking-label" id="thinking-label">Working</span>
-          <span class="thinking-peek" id="thinking-peek"></span>
-          <span class="thinking-caret" id="thinking-caret" hidden>▸</span>
-        </button>
-        <div class="thinking-body" id="thinking-body"></div>
-      </div>
-
-      <div class="question-slot" id="question-slot"></div>
-
-      <form class="composer" id="composer">
-        <textarea id="composer-input" rows="1" placeholder="https://example.com — or an instruction for the agent" autocomplete="off"></textarea>
-        <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
-      </form>
-    </main>
-
-    <!-- Mobile viewer toggle (shows on narrow screens only) -->
-    <button class="viewer-toggle" id="viewer-toggle" hidden>📊 View</button>
-
-    <!-- ── Right: live browser + activity ─────────────────────────── -->
-    <aside class="panel viewer">
-      <button class="viewer-close" id="viewer-close" hidden>✕</button>
-      <header class="panel-head">
-        <div class="urlbar">
-          <span class="dot" id="browser-dot"></span>
-          <span class="url" id="browser-url">about:blank</span>
-        </div>
-        <span class="subtle" id="browser-title"></span>
-      </header>
-
-        <div class="stage" id="stage">
-          <div class="device-strip" id="device-strip" hidden></div>
-          <div class="exec-stats" id="exec-stats-bar" hidden>
-            <span id="exec-stats-steps"></span><span id="exec-stats-pages"></span><span id="exec-stats-findings"></span><span id="exec-stats-dur"></span>
-          </div>
-          <div class="stage-inner" id="stage-inner" hidden>
-          <img id="frame" alt="Live view of the site under test">
-          <div class="overlay" id="overlay">
-            <div class="target-box" id="target-box"></div>
-            <div class="cursor" id="cursor">
-              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-                <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
-                      fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/>
-              </svg>
-              <span class="ripple" id="ripple"></span>
-              <span class="cursor-label" id="cursor-label"></span>
-            </div>
-          </div>
-        </div>
-        <div class="stage-empty" id="stage-empty">
-          <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true">
-            <rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/>
-            <circle cx="6" cy="5" r="1.2" fill="currentColor"/>
-            <circle cx="10.5" cy="5" r="1.2" fill="currentColor"/>
-            <circle cx="15" cy="5" r="1.2" fill="currentColor"/>
-            <path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-          <span>No browser yet</span>
-          <small>The live view appears when the agent opens the site</small>
-        </div>
-      </div>
-
-      <nav class="tabs" id="tabs">
-        <button class="tab is-active" data-tab="activity" id="tab-thinking">REASONING_LOG</button>
-        <button class="tab" data-tab="analysis" id="tab-analysis">APPLICATION_ANALYSIS</button>
-        <button class="tab" data-tab="plan" id="tab-evidence">EVIDENCE <span class="count" id="count-evidence-tab"></span></button>
-        <button class="tab" data-tab="findings" id="tab-findings">FINDINGS <span class="count" id="count-findings-tab"></span></button>
-        <button class="tab" data-tab="report" id="tab-report">REPORT</button>
+      <nav class="run-mobile-segments" aria-label="Run workspace sections">
+        <button class="is-active" type="button" data-run-segment="browser" aria-pressed="true">Browser</button>
+        <button type="button" data-run-segment="details" aria-pressed="false">Details</button>
       </nav>
 
-      <div class="tab-body">
-        <section class="tab-pane is-active" data-pane="activity">
-          <div class="mission-stage-strip" id="mission-stage-strip"></div>
-          <div class="subtle tab-pane-hint" id="activity-hint">Tool-by-tool execution trace — the agent's narrative reasoning is in the transcript panel on the left.</div>
-            <div class="mission-phases" id="mission-phases" hidden>
-              <div data-phase="explore"><span class="ph-mark"></span><span class="ph-name">Explore</span></div>
-              <div data-phase="test"><span class="ph-mark"></span><span class="ph-name">Test</span></div>
-              <div data-phase="report"><span class="ph-mark"></span><span class="ph-name">Report</span></div>
+      <div class="run-workspace-grid" data-mobile-segment="browser">
+        <section class="panel viewer run-live-panel" data-run-workspace="browser" aria-labelledby="live-application-title">
+          <header class="panel-head run-live-head">
+            <div><h2 id="live-application-title">Live Application</h2><p id="browser-state-label">Waiting for execution facts</p></div>
+            <div class="urlbar"><span class="dot" id="browser-dot"></span><span class="url" id="browser-url">about:blank</span></div>
+            <span class="subtle" id="browser-title"></span>
+          </header>
+          <div class="stage" id="stage">
+            <div class="device-strip" id="device-strip" hidden></div>
+            <div class="exec-stats" id="exec-stats-bar" hidden>
+              <span id="exec-stats-steps"></span><span id="exec-stats-pages"></span><span id="exec-stats-findings"></span><span id="exec-stats-dur"></span>
             </div>
-          <div class="thinking-stream" id="activity-feed"></div>
+            <div class="stage-inner" id="stage-inner" hidden>
+              <img id="frame" alt="Current live view of the application under test">
+              <div class="overlay" id="overlay">
+                <div class="target-box" id="target-box"></div>
+                <div class="cursor" id="cursor">
+                  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z" fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/></svg>
+                  <span class="ripple" id="ripple"></span><span class="cursor-label" id="cursor-label"></span>
+                </div>
+              </div>
+            </div>
+            <div class="stage-empty" id="stage-empty">
+              <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true"><rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/><circle cx="6" cy="5" r="1.2" fill="currentColor"/><circle cx="10.5" cy="5" r="1.2" fill="currentColor"/><circle cx="15" cy="5" r="1.2" fill="currentColor"/><path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              <span>Browser has not started</span>
+              <small>Waiting for browser execution facts.</small>
+            </div>
+          </div>
         </section>
-        <section class="tab-pane" data-pane="analysis">
+
+        <section class="panel chat run-context-panel" data-run-workspace="details" aria-label="Run details">
+          <div class="question-slot" id="question-slot" aria-live="polite"></div>
+          <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
+            <button class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="pane-activity" data-tab="activity" id="tab-thinking">Activity</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pane-analysis" data-tab="analysis" id="tab-analysis">Application Analysis</button>
+            <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pane-evidence" data-tab="plan" id="tab-evidence">Evidence <span class="count" id="count-evidence-tab"></span></button>
+            <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pane-findings" data-tab="findings" id="tab-findings">Findings <span class="count" id="count-findings-tab"></span></button>
+            <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pane-report" data-tab="report" id="tab-report">Report</button>
+          </nav>
+          <div class="tab-body">
+            <section class="tab-pane is-active" role="tabpanel" id="pane-activity" aria-labelledby="tab-thinking" data-pane="activity">
+              <div class="mission-stage-strip" id="mission-stage-strip"></div>
+              <div class="mission-phases" id="mission-phases" hidden><div data-phase="explore"><span class="ph-mark"></span><span class="ph-name">Explore</span></div><div data-phase="test"><span class="ph-mark"></span><span class="ph-name">Test</span></div><div data-phase="report"><span class="ph-mark"></span><span class="ph-name">Report</span></div></div>
+              <div class="transcript" id="transcript">
+                <div class="empty-state" id="chat-empty"><div class="ai-cursor"><span class="ai-cursor-bracket">[</span><span class="ai-cursor-text">QASE</span><span class="ai-cursor-bracket">]</span><span class="ai-cursor-blink">_</span></div><h2>Autonomous Software Quality Engineer</h2><div id="auth-gate-rest"><p>Validate an application and review its execution here.</p><button class="btn btn-primary" type="button" data-open-new-run>Start a Run</button></div></div>
+              </div>
+              <div class="thinking-strip" id="thinking-strip" hidden><button class="thinking-head" id="thinking-head" type="button" aria-expanded="false"><span class="thinking-dots"><i></i><i></i><i></i></span><span class="thinking-label" id="thinking-label">Working</span><span class="thinking-peek" id="thinking-peek"></span><span class="thinking-caret" id="thinking-caret" hidden>▸</span></button><div class="thinking-body" id="thinking-body"></div></div>
+              <h3 class="run-subsection-title">Execution activity</h3>
+              <div class="thinking-stream" id="activity-feed" aria-live="polite" aria-relevant="additions"></div>
+            </section>
+        <section class="tab-pane" role="tabpanel" id="pane-analysis" aria-labelledby="tab-analysis" data-pane="analysis">
           <div class="app-analysis-content" id="dev-intel-body"></div>
           <div id="knowledge-section"></div>
           <div id="decision-section"></div>
@@ -254,7 +203,7 @@
             <button class="btn btn-ghost btn-sm" id="dev-intel-download" title="Download full report">Report</button>
           </div>
         </section>
-        <section class="tab-pane" data-pane="plan">
+        <section class="tab-pane" role="tabpanel" id="pane-evidence" aria-labelledby="tab-evidence" data-pane="plan">
           <div class="evidence-experience" id="evidence-experience">
             <details class="ev-plan-details" id="ev-plan-details" hidden>
               <summary>AGENT TEST PLAN <span class="count" id="count-plan"></span></summary>
@@ -274,10 +223,10 @@
             <div class="ev-grid" id="ev-grid"></div>
           </div>
         </section>
-        <section class="tab-pane" data-pane="findings">
+        <section class="tab-pane" role="tabpanel" id="pane-findings" aria-labelledby="tab-findings" data-pane="findings">
           <div class="session-findings" id="session-findings"></div>
         </section>
-        <section class="tab-pane" data-pane="report">
+        <section class="tab-pane" role="tabpanel" id="pane-report" aria-labelledby="tab-report" data-pane="report">
           <div class="mission-summary" id="mission-summary-bar" hidden>
             <div class="ms-item">
               <span class="ms-label">TYPE</span>
@@ -351,10 +300,16 @@
               <footer class="modal-foot" id="ux-issue-foot"></footer>
             </form>
           </dialog>
+            </section>
+          </div>
+          <form class="composer" id="composer">
+            <label class="sr-only" for="composer-input">Continue this run</label>
+            <textarea id="composer-input" rows="1" placeholder="Continue this run with an instruction" autocomplete="off"></textarea>
+            <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+          </form>
         </section>
       </div>
-    </aside>
-
+    </main>
   </div><!-- /.app -->
 </div><!-- /#page-runs -->
 
