@@ -29,9 +29,9 @@ import {
 	normalizeGeneratedReportMarkdown,
 	reportPresentation,
 	runMetricPresentation,
-	runStreamLifecycleAction,
 	runViewSnapshot,
-	safeRunDiagnostic
+	safeRunDiagnostic,
+	shouldRefreshRunOnReentry
 } from './runDetail.js';
 import { classifyViewport } from './deviceClassify.js';
 import { resolveLiveDevicePresentation } from './deviceLiveView.js';
@@ -2900,15 +2900,19 @@ document.addEventListener('click', event => {
 	// ── Router: load page-specific data on navigation ──────────────
 	window.addEventListener('routechange', (e) => {
 		const page = e.detail.page;
-		const streamAction = runStreamLifecycleAction(state, page);
+		const wasRunRouteActive = state.runRouteActive;
+		state.runRouteActive = page === 'runs';
 		if (page !== 'runs' && state.sessionId) {
 			state.stream?.close();
 			state.stream = undefined;
 			state.runViewVersion += 1;
 			clearTimeout(state._reconnectTimer);
 		}
-		if (streamAction === 'open') {
-			connect(state.sessionId, runViewSnapshot(state, state.sessionId));
+		if (shouldRefreshRunOnReentry(state, page, wasRunRouteActive)) {
+			// selectSession owns the authoritative refresh, complete rerender, and
+			// exactly-one SSE handoff. Reusing it also remounts any pending
+			// credential challenge with enabled controls.
+			void selectSession(state.sessionId, state.projectVersion);
 		}
 		if (page === 'overview' && state.projects.length > 0) void loadOverview();
 		if (page === 'findings') loadBugs();

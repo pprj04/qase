@@ -149,6 +149,9 @@ const state = {
 	// Incremented for each credential form mount and submission so a late
 	// response cannot mutate a replacement form in the same run view.
 	credentialRequestVersion: 0,
+	// Tracks actual Runs route activation so re-entry recovery runs once rather
+	// than on every render of the already-active route.
+	runRouteActive: false,
 	projects: [],
 	suites: [],
 	tagFilter: null,

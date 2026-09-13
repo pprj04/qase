@@ -248,3 +248,7 @@ export function runStreamLifecycleAction(state, page) {
 	if (!state.sessionId || state.session?.id !== state.sessionId) return 'none';
 	return state.stream ? 'none' : 'open';
 }
+
+export function shouldRefreshRunOnReentry(state, page, wasRunRouteActive) {
+	return page === 'runs' && !wasRunRouteActive && Boolean(state.sessionId);
+}

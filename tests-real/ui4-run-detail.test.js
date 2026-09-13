@@ -19,7 +19,8 @@ import {
 	reportPresentation,
 	runMetricPresentation,
 	runStreamLifecycleAction,
-	runViewSnapshot
+	runViewSnapshot,
+	shouldRefreshRunOnReentry
 } from '../public/runDetail.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -281,7 +282,8 @@ test('UI-4.1: leaving Runs closes the current live subscription', () => {
 test('UI-4.1 SSE RECONNECT ON RETURN: returning to Runs opens one live subscription', () => {
 	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
 	assert.equal(runStreamLifecycleAction(state, 'runs'), 'open');
-	assert.match(app, /if \(streamAction === 'open'\) \{[^]*connect\(state\.sessionId/);
+	assert.equal(shouldRefreshRunOnReentry(state, 'runs', false), true);
+	assert.match(app, /if \(shouldRefreshRunOnReentry[^]*selectSession\(state\.sessionId, state\.projectVersion\)/);
 });
 
 test('UI-4.1: repeated Runs activation does not accumulate live subscriptions', () => {
@@ -305,6 +307,83 @@ test('UI-4.1: a late Run A SSE event remains invalid after returning on Run B', 
 	state.runViewVersion += 1;
 	assert.equal(isCurrentRunView(state, snapshot), false);
 	assert.match(app, /if \(data\.sessionId === snapshot\.sessionId\) \{\s*handleEvent\(data\);/);
+});
+
+test('UI-4.2 CREDENTIAL FORM RE-ENTRY RECOVERY: leave and return remounts an enabled challenge form', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
+	assert.equal(shouldRefreshRunOnReentry(state, 'overview', true), false);
+	assert.equal(shouldRefreshRunOnReentry(state, 'runs', false), true);
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /const session = await api\(`\/sessions\/\$\{id\}`\)/);
+	assert.match(selection, /renderQuestion\(\)/);
+	const form = app.slice(app.indexOf('function credentialForm'), app.indexOf('async function sendAnswer'));
+	assert.doesNotMatch(form.slice(0, form.indexOf('form.onsubmit')), /\.disabled = true/);
+});
+
+test('UI-4.2: re-entry refresh does not depend on a stale in-memory session match', () => {
+	const state = { sessionId: 'run-b', session: { id: 'run-a' }, stream: undefined };
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
+	assert.equal(shouldRefreshRunOnReentry(state, 'runs', false), true);
+	assert.match(app, /if \(shouldRefreshRunOnReentry\(state, page, wasRunRouteActive\)\)/);
+});
+
+test('UI-4.2: stale credential success cannot clear a remounted current challenge', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 2, sessionId: 'run-a', credentialRequestVersion: 4, renderedQuestionKey: 'run-a:auth' };
+	const stale = credentialRequestSnapshot(state, 'run-a');
+	state.runViewVersion += 1;
+	state.credentialRequestVersion += 1;
+	assert.equal(isCurrentCredentialRequest(state, stale, { formConnected: false, questionKey: 'run-a:auth' }), false);
+	assert.match(app, /if \(!requestIsCurrent\(\)\) return;[^]*state\.session\.pendingQuestion = undefined/);
+});
+
+test('UI-4.2: stale credential failure cannot disable or annotate a remounted current challenge', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 2, sessionId: 'run-a', credentialRequestVersion: 4, renderedQuestionKey: 'run-a:auth' };
+	const stale = credentialRequestSnapshot(state, 'run-a');
+	state.credentialRequestVersion += 1;
+	assert.equal(isCurrentCredentialRequest(state, stale, { formConnected: false, questionKey: 'run-a:auth' }), false);
+	const form = app.slice(app.indexOf('function credentialForm'), app.indexOf('async function sendAnswer'));
+	assert.match(form.slice(form.indexOf('} catch (caught)')), /if \(!requestIsCurrent\(\)\) return;[^]*errorNode\.textContent/);
+});
+
+test('UI-4.2: re-entry refresh renders a missed Awaiting Input or resumed Running transition', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /state\.session = session;[^]*renderHeader\(\);[^]*renderQuestion\(\)/);
+	assert.match(app, /canonicalRunPresentation\(state\.session/);
+});
+
+test('UI-4.2 RUN RE-ENTRY STATE REFRESH: re-entry renders missed Completed and Failed outcomes', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /renderHeader\(\);[^]*renderExecutionHealth\(session\)/);
+	assert.equal(canonicalRunPresentation({ executionOutcome: 'completed' }).label, 'Completed');
+	assert.equal(canonicalRunPresentation({ executionOutcome: 'failed' }).label, 'Failed');
+});
+
+test('UI-4.2: re-entry refresh synchronizes missed finding-count changes', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /renderFindings\(\);[^]*renderSessionFindings\(session\)/);
+	assert.match(selection, /updateExecStats\(\)/);
+});
+
+test('UI-4.2: re-entry refresh exposes a report that became available while away', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /renderReport\(\)/);
+	assert.match(selection, /const session = await api\(`\/sessions\/\$\{id\}`\)/);
+});
+
+test('UI-4.2: authoritative refresh hands off to exactly one SSE subscription', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.equal((selection.match(/connect\(id, snapshot\)/g) ?? []).length, 1);
+	const routeLifecycle = app.slice(app.indexOf("window.addEventListener('routechange'"), app.indexOf('// Deep links select a run'));
+	assert.doesNotMatch(routeLifecycle, /connect\(/);
+	assert.match(routeLifecycle, /selectSession\(state\.sessionId, state\.projectVersion\)/);
+});
+
+test('UI-4.2: repeated leave and return activation remains refresh- and stream-leak free', () => {
+	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
+	assert.equal(shouldRefreshRunOnReentry(state, 'runs', false), true);
+	state.stream = {};
+	assert.equal(shouldRefreshRunOnReentry(state, 'runs', true), false);
+	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
 });
 
 test('UI-4: project-switch generation invalidates session, lazy-detail, and evidence responses', () => {
