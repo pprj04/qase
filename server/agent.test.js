@@ -144,8 +144,32 @@ for (const [mode, finalizer] of [['qa', 'finish_qa_report'], ['sqa', 'finish_sqa
 		assert.equal(readAfterPublication, false);
 		assert.equal(streamClosed, true);
 		assert.equal(session.messages.some(item => item.kind === 'error'), false);
+		assert.equal(session.messages.filter(item => item.kind === 'qa-report').length, mode === 'qa' ? 1 : 0);
 	});
 }
+
+test('QA completion posts the actual findings after progress text and before done, once per report', async () => {
+	const fixture = runtimeFixture({ findings: [{ severity: 'high', title: 'Contact form fails', actual: 'HTTP 500 on submit' }] });
+	let version = 1;
+	fixture.record.runtime.run = async function* () {
+		yield { type: 'chat_text', content: 'I will publish the report now.' };
+		fixture.session.report = { ts: version, verdict: 'fail', summary: 'Public pages checked.', covered: ['Home', 'Contact'] };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', toolCallId: 'finish', result: { success: true, published: true } };
+	};
+	const setStatus = fixture.store.setStatus;
+	fixture.store.setStatus = async (s, status, detail) => {
+		if (status === 'done') assert.ok(s.messages.some(m => m.kind === 'qa-report' && m.text.includes('Contact form fails')));
+		await setStatus(s, status, detail);
+	};
+	await runTurn(fixture.session, { task: 'Complete QA' }, fixture.store);
+	assert.equal(fixture.session.messages.at(-1).kind, 'qa-report');
+	assert.match(fixture.session.messages.at(-1).text, /HTTP 500/);
+	await runTurn(fixture.session, { task: 'Repeat finalization' }, fixture.store);
+	assert.equal(fixture.session.messages.filter(m => m.kind === 'qa-report').length, 1);
+	version++;
+	await runTurn(fixture.session, { task: 'Run QA again' }, fixture.store);
+	assert.equal(fixture.session.messages.filter(m => m.kind === 'qa-report').length, 2);
+});
 
 test('graceful model cancellation stops without launching an automatic continuation', async () => {
 	const fixture = runtimeFixture();

@@ -59,6 +59,7 @@ const el = {
 	planList: $('plan-list'),
 	findingsList: $('findings-list'),
 	reportView: $('report-view'),
+	reportTab: $('tab-report'),
 	activityTab: $('tab-activity'),
 	sqaTab: $('tab-sqa'),
 	sqaView: $('sqa-view'),
@@ -346,6 +347,7 @@ function applyStageDevice(session) {
 
 
 async function selectSession(id) {
+	state.shownFounderReport = undefined;
 	state.sessionId = id;
 	state.bubbles.clear();
 	localStorage.setItem('qase.session', id);
@@ -358,6 +360,7 @@ async function selectSession(id) {
 }
 
 function applySessionSnapshot(session) {
+	const changedSession = state.session?.id !== session.id;
 	state.bubbles.clear();
 	state.session = session;
 	applyStageDevice(session);
@@ -370,9 +373,10 @@ function applySessionSnapshot(session) {
 	renderTodos();
 	renderFindings();
 	renderReport();
-	syncSqaDetailMode();
+	syncSqaDetailMode(changedSession);
 	renderSqa();
 	renderFounder();
+	showCompletedFounderReport();
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -1231,14 +1235,25 @@ function sqaValues(value) {
 	return [];
 }
 
-function syncSqaDetailMode() {
+function showCompletedFounderReport() {
+	const session = state.session;
+	if (session?.mode !== 'founder' || session.status !== 'done'
+		|| !session.founder?.report || !session.founder.finalizedAt) return;
+	const reportKey = `${session.id}:${session.founder.finalizedAt}`;
+	if (state.shownFounderReport === reportKey) return;
+	state.shownFounderReport = reportKey;
+	activateDetailTab(el.reportTab);
+}
+
+function syncSqaDetailMode(selectDefault = false) {
 	const isSqa = state.session?.mode === 'sqa';
 	const isFounder = state.session?.mode === 'founder';
+	const enteringFounder = isFounder && (el.founderTab.hidden || selectDefault);
 	el.sqaTab.hidden = !isSqa;
 	el.founderTab.hidden = !isFounder;
 	if (isSqa && !el.sqaTab.classList.contains('is-active')) {
 		activateDetailTab(el.sqaTab);
-	} else if (isFounder && !el.founderTab.classList.contains('is-active')) {
+	} else if (enteringFounder) {
 		activateDetailTab(el.founderTab);
 	} else if ((!isSqa && el.sqaTab.classList.contains('is-active'))
 		|| (!isFounder && el.founderTab.classList.contains('is-active'))) {
@@ -1944,6 +1959,7 @@ function handleEvent(event) {
 			renderHeader();
 			renderFounder();
 			renderReport();
+			showCompletedFounderReport();
 			void refreshRuns();
 			toast('Founder brief published.', 'good');
 			break;
@@ -1962,6 +1978,7 @@ function handleEvent(event) {
 			if (session.mode === 'founder') {
 				renderFounder();
 				renderReport();
+				showCompletedFounderReport();
 			}
 			if (event.status !== 'running') {
 				void refreshRuns();

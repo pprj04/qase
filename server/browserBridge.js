@@ -27,6 +27,11 @@ const CURSOR_DWELL_MS = Number(process.env.QASE_CURSOR_DWELL_MS ?? 420);
 /** How long to let a click's navigation land before reporting where we are. */
 const NAV_SETTLE_MS = Number(process.env.QASE_NAV_SETTLE_MS ?? 1600);
 
+export function selectSnapshotElements(elements, requestedLimit) {
+	const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.floor(requestedLimit))) : 150;
+	return [...elements.filter(element => element.interactive), ...elements.filter(element => !element.interactive)].slice(0, limit);
+}
+
 /**
  * Methods that move the pointer somewhere the user should see it move.
  * `navigates` marks the ones that can change the page, and whose reported URL
@@ -87,19 +92,22 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		try {
 			// The same node list the snapshot enumerated, in the same order, so
 			// an element's `eN` id indexes straight into these paths.
-			const paths = await page.locator('body *:visible').evaluateAll(nodes => nodes.map(node => {
-				if (node.id) {
-					return `#${CSS.escape(node.id)}`;
+			const elements = await page.locator('body *:visible').evaluateAll(nodes => nodes.flatMap((node, index) => {
+				const rect = node.getBoundingClientRect();
+				if (rect.width < 1 || rect.height < 1) return [];
+				let selector;
+				if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) selector = `#${CSS.escape(node.id)}`;
+				for (const attribute of ['data-testid', 'data-test', 'data-cy']) {
+					const value = node.getAttribute(attribute);
+					if (!selector && value) {
+						const candidate = `[${attribute}="${CSS.escape(value)}"]`;
+						if (document.querySelectorAll(candidate).length === 1) selector = candidate;
+					}
 				}
-				const testId = node.getAttribute('data-testid') ?? node.getAttribute('data-test') ?? node.getAttribute('data-cy');
-				if (testId) {
-					return `[data-testid="${CSS.escape(testId)}"]`;
-				}
-
 				const steps = [];
-				for (let element = node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
+				for (let element = selector ? undefined : node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
 					const tag = element.tagName.toLowerCase();
-					if (element.id) {
+					if (element.id && document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1) {
 						steps.unshift(`#${CSS.escape(element.id)}`);
 						break;
 					}
@@ -109,16 +117,24 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})`
 						: tag);
 				}
-				return steps.join(' > ');
+				return [{
+					id: `e${index + 1}`, tagName: node.tagName.toLowerCase(), selector: selector || steps.join(' > '),
+					interactive: node.matches('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[role="tab"],[role="slider"],[role="combobox"],[contenteditable="true"],[tabindex]:not([tabindex="-1"]),[onclick]'),
+					testId: node.getAttribute('data-testid') || undefined,
+					role: node.getAttribute('role') || undefined,
+					name: node.getAttribute('aria-label') || node.getAttribute('title') || undefined,
+					text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) || undefined,
+					ariaLabel: node.getAttribute('aria-label') || undefined,
+					placeholder: node.getAttribute('placeholder') || undefined,
+					href: node.href || undefined, type: node.getAttribute('type') || undefined,
+					checked: 'checked' in node ? Boolean(node.checked) : undefined,
+					disabled: 'disabled' in node ? Boolean(node.disabled) : undefined,
+					boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+				}];
 			}));
-
-			for (const element of snapshot.elements) {
-				const index = Number(String(element.id ?? '').slice(1)) - 1;
-				const path = paths[index];
-				if (path) {
-					element.selector = path;
-				}
-			}
+			snapshot.elements = selectSnapshotElements(elements, options?.limit);
+			snapshot.elementCoverage = { total: elements.length, returned: snapshot.elements.length, omitted: elements.length - snapshot.elements.length };
+			snapshot.guidance = 'Controls are listed before layout elements. Use the supplied unique selector or a semantic locator; coordinates are viewport-relative and become stale after scrolling. If an action has no effect, inspect the resulting state and retry once with a different verified locator. Then record the observed defect or unresolved coverage and continue the plan; do not repeat the same attempt or claim untested checks passed.';
 		} catch {
 			// A snapshot with the SDK's selectors beats no snapshot at all.
 		}

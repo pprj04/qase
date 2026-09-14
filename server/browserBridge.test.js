@@ -1,7 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { attachBrowserBridge } from './browserBridge.js';
+import { attachBrowserBridge, selectSnapshotElements } from './browserBridge.js';
 import { BROWSER_POLICY_CODES, createBrowserPolicy } from './browserPolicy.js';
+
+test('snapshot selection finds late controls without renumbering or exceeding its budget', () => {
+	const nodes = Array.from({ length: 600 }, (_, i) => ({ id: `e${i + 1}`, tagName: 'div' }));
+	nodes.push({ id: 'e601', tagName: 'button', interactive: true });
+	nodes.push({ id: 'e602', tagName: 'input', interactive: true });
+	const selected = selectSnapshotElements(nodes, 20);
+	assert.equal(selected.length, 20);
+	assert.deepEqual(selected.slice(0, 2).map(node => node.id), ['e601', 'e602']);
+	assert.equal(new Set(selected.map(node => node.id)).size, 20);
+	assert.equal(selectSnapshotElements(nodes, 999).length, 500);
+	assert.equal(selectSnapshotElements(nodes, NaN).length, 150);
+	assert.equal(selectSnapshotElements(nodes, 0).length, 1);
+});
 
 function fakeLocator(descriptor = {}) {
 	const locator = {

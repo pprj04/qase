@@ -7,6 +7,7 @@ import { createBrowserTools } from './browserTools.js';
 import { getConfig, getPublicConfig } from './config.js';
 import { buildQaContext } from './prompt.js';
 import { createQaTools } from './qaTools.js';
+import { buildQaChatReport } from './report.js';
 import { buildFounderContext, buildFounderSynthesisContext } from './founderPrompt.js';
 import { createFounderTools, founderFinishReadiness } from './founderTools.js';
 import { createFounderReviewTodos } from './founderService.js';
@@ -515,6 +516,22 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		assistant = undefined;
 	};
 
+	const completeRun = async () => {
+		// We stop the model at publication, so deliver its results ourselves
+		// after flushing progress text and before announcing completion.
+		await finalizeAssistant();
+		if (session.mode !== 'founder' && session.mode !== 'sqa' && session.report) {
+			const id = `qa-report-${session.report.ts}`;
+			if (!session.messages.some(message => message.id === id)) {
+				await runStore.addMessage(session, {
+					id, role: 'agent', kind: 'qa-report',
+					text: redact(session.id, buildQaChatReport(session))
+				});
+			}
+		}
+		await runStore.setStatus(session, 'done');
+	};
+
 	// Reasoning is streamed for the live strip but never stored: it belongs to
 	// the moment, not the transcript, and a reloaded page should show what the
 	// agent said rather than what it was mulling over an hour ago.
@@ -672,7 +689,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			// An idempotent SQA/Founder finalizer can return its durable existing
 			// artifact. Require the actual successful result rather than treating
 			// every later turn with an old report as a completed reassessment.
-			await runStore.setStatus(session, 'done');
+			await completeRun();
 			deleteRunSnapshot(session.id);
 		} else if (handoffToFounderSynthesis) {
 			continueIncompleteRun=true;
@@ -685,7 +702,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			await runStore.commit(session, 'question', { question: session.pendingQuestion });
 			await runStore.setStatus(session, 'awaiting_input');
 		} else if (finalArtifact(session) && finalArtifact(session) !== previousArtifact) {
-			await runStore.setStatus(session, 'done');
+			await completeRun();
 		} else if (!session.targetUrl) {
 			// A greeting or prose-only response can ask for the target without
 			// invoking ask_question. No QA run has started yet, so continuing
@@ -711,7 +728,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		}
 	} catch (error) {
 		if (successfulFinalizer) {
-			await runStore.setStatus(session, 'done');
+			await completeRun();
 			deleteRunSnapshot(session.id);
 		} else if (controller.signal.aborted) {
 			await runStore.setStatus(session, 'idle', 'Stopped by user.');
