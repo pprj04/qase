@@ -129,6 +129,7 @@ const evState = {
 	loaded: false,
 	loading: false,
 	error: null,
+	requestVersion: 0,
 	artifactProbe: new Set() // artifactPaths already probed (exists / missing)
 };
 
@@ -358,12 +359,14 @@ function zeroEvidenceHtml() {
 	</div>`;
 }
 export async function loadSessionEvidence(sessionId, { force = false } = {}) {
-	if (evState.loading && evState.sessionId === sessionId) return;
+	if (evState.loading && evState.sessionId === sessionId && !force) return;
 	if (evState.sessionId === sessionId && evState.loaded && !force) {
 		renderEvidenceGrid();
 		return;
 	}
 	const snapshot = runViewSnapshot(state, sessionId);
+	const requestVersion = ++evState.requestVersion;
+	const isCurrentRequest = () => requestVersion === evState.requestVersion && isCurrentRunView(state, snapshot);
 	const grid = document.getElementById('ev-grid');
 	if (grid && (!evState.loaded || force)) grid.innerHTML = `<div class="ev-loading">Loading evidence…</div>`;
 	evState.sessionId = sessionId;
@@ -371,6 +374,7 @@ export async function loadSessionEvidence(sessionId, { force = false } = {}) {
 	evState.loaded = false;
 	evState.loading = true;
 	evState.error = null;
+	evState.artifactProbe.clear();
 	window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items: [], loading: true, loaded: false, error: null } }));
 	try {
 		// B1 W3 — authed read via the raw helper (token from Settings).
@@ -387,20 +391,20 @@ export async function loadSessionEvidence(sessionId, { force = false } = {}) {
 			// so the tab reflects what actually happened.
 			items = await deriveEvidenceFromSteps(sessionId);
 		}
-		if (!isCurrentRunView(state, snapshot)) return;
+		if (!isCurrentRequest()) return;
 		evState.items = items;
 		evState.loaded = true;
 		renderEvidenceGrid();
 		window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items, loading: false, loaded: true, error: null } }));
 	} catch (err) {
-		if (!isCurrentRunView(state, snapshot)) return;
+		if (!isCurrentRequest()) return;
 		evState.error = err;
 		if (grid) grid.innerHTML = `<div class="ev-empty ev-empty-zero"><div class="ev-empty-title">Evidence unavailable</div>
 			<div class="ev-empty-why">${escapeHtml(err.message)}</div>
 			<button class="btn btn-ghost btn-sm" id="ev-retry">Retry</button></div>`;
 		window.dispatchEvent(new CustomEvent('qase:evidence-state', { detail: { sessionId, items: [], loading: false, loaded: false, error: { message: err.message } } }));
 	} finally {
-		if (isCurrentRunView(state, snapshot)) evState.loading = false;
+		if (isCurrentRequest()) evState.loading = false;
 	}
 }
 

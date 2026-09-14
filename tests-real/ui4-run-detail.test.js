@@ -283,7 +283,7 @@ test('UI-4.1 SSE RECONNECT ON RETURN: returning to Runs opens one live subscript
 	const state = { sessionId: 'run-a', session: { id: 'run-a' }, stream: undefined };
 	assert.equal(runStreamLifecycleAction(state, 'runs'), 'open');
 	assert.equal(shouldRefreshRunOnReentry(state, 'runs', false), true);
-	assert.match(app, /if \(shouldRefreshRunOnReentry[^]*selectSession\(state\.sessionId, state\.projectVersion\)/);
+	assert.match(app, /if \(shouldRefreshRunOnReentry[^]*selectSession\(state\.sessionId, state\.projectVersion/);
 });
 
 test('UI-4.1: repeated Runs activation does not accumulate live subscriptions', () => {
@@ -375,7 +375,7 @@ test('UI-4.2: authoritative refresh hands off to exactly one SSE subscription', 
 	assert.equal((selection.match(/connect\(id, snapshot\)/g) ?? []).length, 1);
 	const routeLifecycle = app.slice(app.indexOf("window.addEventListener('routechange'"), app.indexOf('// Deep links select a run'));
 	assert.doesNotMatch(routeLifecycle, /connect\(/);
-	assert.match(routeLifecycle, /selectSession\(state\.sessionId, state\.projectVersion\)/);
+	assert.match(routeLifecycle, /selectSession\(state\.sessionId, state\.projectVersion/);
 });
 
 test('UI-4.2: repeated leave and return activation remains refresh- and stream-leak free', () => {
@@ -384,6 +384,57 @@ test('UI-4.2: repeated leave and return activation remains refresh- and stream-l
 	state.stream = {};
 	assert.equal(shouldRefreshRunOnReentry(state, 'runs', true), false);
 	assert.equal(runStreamLifecycleAction(state, 'runs'), 'none');
+});
+
+test('UI-4.3 EVIDENCE RE-ENTRY REFRESH: returning to a run forces protected evidence reload', () => {
+	const selection = app.slice(app.indexOf('async function selectSession'), app.indexOf('function renderHeader'));
+	assert.match(selection, /loadSessionEvidence\(id, \{ force: forceEvidence \}\)/);
+	const routeLifecycle = app.slice(app.indexOf("window.addEventListener('routechange'"), app.indexOf('// Deep links select a run'));
+	assert.match(routeLifecycle, /selectSession\(state\.sessionId, state\.projectVersion, \{ forceEvidence: true \}\)/);
+	assert.match(detail, /apiRaw\(`\/v1\/sessions\/\$\{sessionId\}\/evidence\?limit=200`\)/);
+});
+
+test('UI-4.3: evidence added while away replaces the cached evidence grid', () => {
+	assert.match(detail, /if \(evState\.sessionId === sessionId && evState\.loaded && !force\)/);
+	assert.match(detail, /evState\.items = items;[\s\S]*renderEvidenceGrid\(\)/);
+	assert.match(app, /loadSessionEvidence\(id, \{ force: forceEvidence \}\)/);
+});
+
+test('UI-4.3: pruned or missing evidence is rechecked rather than trusted from the old view', () => {
+	assert.match(detail, /evState\.artifactProbe\.clear\(\)/);
+	assert.match(detail, /if \(!res\.ok\) throw new Error\(`evidence API \$\{res\.status\}`\)/);
+	assert.match(detail, /textContent: '🖼 artifact unavailable'/);
+});
+
+test('UI-4.3: late Run A evidence response cannot overwrite Run B', () => {
+	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 3, sessionId: 'run-a' };
+	const snapshot = runViewSnapshot(state, 'run-a');
+	state.sessionId = 'run-b';
+	state.runViewVersion += 1;
+	assert.equal(isCurrentRunView(state, snapshot), false);
+	assert.match(detail, /const isCurrentRequest = \(\) => requestVersion === evState\.requestVersion && isCurrentRunView\(state, snapshot\)/);
+	assert.match(detail, /if \(!isCurrentRequest\(\)\) return;/);
+});
+
+test('UI-4.3: late Project A evidence response cannot overwrite Project B', () => {
+	const state = { projectId: 'project-a', projectVersion: 5, runViewVersion: 3, sessionId: 'run-a' };
+	const snapshot = runViewSnapshot(state, 'run-a');
+	state.projectId = 'project-b';
+	state.projectVersion += 1;
+	assert.equal(isCurrentRunView(state, snapshot), false);
+	assert.match(detail, /const snapshot = runViewSnapshot\(state, sessionId\)/);
+});
+
+test('UI-4.3: repeated leave and return supersedes stale in-flight evidence requests safely', () => {
+	assert.match(detail, /if \(evState\.loading && evState\.sessionId === sessionId && !force\) return;/);
+	assert.match(detail, /const requestVersion = \+\+evState\.requestVersion/);
+	assert.match(detail, /if \(isCurrentRequest\(\)\) evState\.loading = false/);
+});
+
+test('UI-4.3: ordinary same-view renders do not create uncontrolled evidence loads', () => {
+	assert.equal(shouldRefreshRunOnReentry({ sessionId: 'run-a' }, 'runs', true), false);
+	assert.match(detail, /if \(evState\.loading && evState\.sessionId === sessionId && !force\) return;/);
+	assert.match(detail, /if \(evState\.sessionId === sessionId && evState\.loaded && !force\) \{/);
 });
 
 test('UI-4: project-switch generation invalidates session, lazy-detail, and evidence responses', () => {

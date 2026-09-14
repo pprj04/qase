@@ -129,7 +129,7 @@ function closeMobileRunsDrawer() {
 
 /* ── Session loading ─────────────────────────────────────────────── */
 
-async function selectSession(id, projectVersion = state.projectVersion) {
+async function selectSession(id, projectVersion = state.projectVersion, { forceEvidence = false } = {}) {
 	state.stream?.close();
 	state.stream = undefined;
 	clearTimeout(state._reconnectTimer);
@@ -215,7 +215,7 @@ async function selectSession(id, projectVersion = state.projectVersion) {
 		loadPipelineFromSession(id),
 		loadDevIntelFromSession(id),
 		loadSessionMission(id),
-		loadSessionEvidence(id),
+		loadSessionEvidence(id, { force: forceEvidence }),
 		refreshRuns(),
 	]);
 	if (!isCurrentRunView(state, snapshot) || projectVersion !== state.projectVersion || session.projectId !== state.projectId) return;
@@ -2912,7 +2912,7 @@ document.addEventListener('click', event => {
 			// selectSession owns the authoritative refresh, complete rerender, and
 			// exactly-one SSE handoff. Reusing it also remounts any pending
 			// credential challenge with enabled controls.
-			void selectSession(state.sessionId, state.projectVersion);
+			void selectSession(state.sessionId, state.projectVersion, { forceEvidence: true });
 		}
 		if (page === 'overview' && state.projects.length > 0) void loadOverview();
 		if (page === 'findings') loadBugs();
