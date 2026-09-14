@@ -7,6 +7,6 @@ Publish the reviewed Founder completion report, QA chat report, and browser snap
 - [x] Preserve customer attachments locally and omit runtime/session exports and unrelated artifacts.
 - [x] Existing verification: 463 tests passed, 6 skipped; independent reviewer and tester passed, as recorded in the feature specs.
 - [x] Diff whitespace check passes.
-- [ ] Publish without forcing and verify live remote DEV matches the resulting local revision.
+- [x] Publish without forcing and verify live remote DEV matches the resulting local revision: 6e789a86e96777dcbc6c9616186cec6349ad30ed.
 
 Attachment inspection: image_21567749.png contains a runtime session JSON export; image_6f9ac21e.png is a customer QA screenshot. Neither is referenced by code; both remain untouched and unpublished.
