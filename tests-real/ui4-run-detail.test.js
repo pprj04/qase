@@ -437,6 +437,59 @@ test('UI-4.3: ordinary same-view renders do not create uncontrolled evidence loa
 	assert.match(detail, /if \(evState\.sessionId === sessionId && evState\.loaded && !force\) \{/);
 });
 
+test('UI-4.4 STALE ARTIFACT PROBE GUARD: an old available probe cannot resurrect pruned fresh evidence', () => {
+	assert.match(detail, /artifactProbe: new Map\(\)/);
+	assert.match(detail, /evidenceVersion: evState\.requestVersion/);
+	assert.match(detail, /return probe\.evidenceVersion === evState\.requestVersion[\s\S]*isCurrentRunView\(state, probe\.runView\)/);
+	assert.match(detail, /return isCurrentArtifactProbe\(probe\) \? exists : null;/);
+	assert.match(detail, /exists === false && isCurrentArtifactProbe\(probe\) && link\?\.isConnected/);
+});
+
+test('UI-4.4: an old available probe cannot override a current protected 404', () => {
+	assert.match(detail, /const key = `\$\{probe\.evidenceVersion\}:\$\{probe\.artifactPath\}`;/);
+	assert.match(detail, /fetch\(artifactUrl\(probe\.artifactPath\), \{ method: 'HEAD' \}\)/);
+	assert.match(detail, /\.then\(res => res\.ok\)[\s\S]*\.catch\(\(\) => false\)/);
+});
+
+test('UI-4.4: a stale unavailable probe cannot hide an artifact available in a newer evidence generation', () => {
+	const state = { projectId: 'project-a', projectVersion: 1, runViewVersion: 2, sessionId: 'run-a' };
+	const oldSnapshot = runViewSnapshot(state, 'run-a');
+	const probeIsCurrent = (probe, version) => probe.evidenceVersion === version && isCurrentRunView(state, probe.runView);
+	const oldProbe = { evidenceVersion: 4, runView: oldSnapshot, artifactPath: 'trace.zip' };
+	assert.equal(probeIsCurrent(oldProbe, 5), false);
+	assert.match(detail, /const key = `\$\{probe\.evidenceVersion\}:\$\{probe\.artifactPath\}`;/);
+});
+
+test('UI-4.4 ARTIFACT PROBE RUN/PROJECT ISOLATION: Run A probe cannot mutate Run B', () => {
+	const state = { projectId: 'project-a', projectVersion: 1, runViewVersion: 2, sessionId: 'run-a' };
+	const probe = { evidenceVersion: 6, runView: runViewSnapshot(state, 'run-a'), artifactPath: 'trace.zip' };
+	state.sessionId = 'run-b';
+	state.runViewVersion += 1;
+	assert.equal(isCurrentRunView(state, probe.runView), false);
+	assert.match(detail, /isCurrentArtifactProbe\(probe\) && link\?\.isConnected/);
+});
+
+test('UI-4.4 ARTIFACT PROBE RUN/PROJECT ISOLATION: Project A probe cannot mutate Project B', () => {
+	const state = { projectId: 'project-a', projectVersion: 3, runViewVersion: 4, sessionId: 'run-a' };
+	const probe = { evidenceVersion: 7, runView: runViewSnapshot(state, 'run-a'), artifactPath: 'trace.zip' };
+	state.projectId = 'project-b';
+	state.projectVersion += 1;
+	assert.equal(isCurrentRunView(state, probe.runView), false);
+	assert.match(detail, /runView: runViewSnapshot\(state, sessionId\)/);
+});
+
+test('UI-4.4 ARTIFACT PROBE DEDUPLICATION: same-view renders share one current-generation probe', () => {
+	assert.match(detail, /let pending = evState\.artifactProbe\.get\(key\);/);
+	assert.match(detail, /if \(!pending\) \{[\s\S]*evState\.artifactProbe\.set\(key, pending\);/);
+	assert.match(detail, /const probe = artifactProbeSnapshot\(path\);/);
+});
+
+test('UI-4.4 PRUNED ARTIFACT TRUTHFULNESS: current unavailable probes remove the Open action', () => {
+	assert.match(detail, /if \(exists === false && isCurrentArtifactProbe\(probe\) && link\?\.isConnected\) \{/);
+	assert.match(detail, /textContent: '🔍 trace artifact unavailable'/);
+	assert.match(detail, /artifactUrl\(probe\.artifactPath\)/);
+});
+
 test('UI-4: project-switch generation invalidates session, lazy-detail, and evidence responses', () => {
 	const state = { projectId: 'p1', projectVersion: 1, runViewVersion: 1, sessionId: 'r1' };
 	const snapshot = runViewSnapshot(state, 'r1');

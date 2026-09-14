@@ -130,7 +130,7 @@ const evState = {
 	loading: false,
 	error: null,
 	requestVersion: 0,
-	artifactProbe: new Set() // artifactPaths already probed (exists / missing)
+	artifactProbe: new Map() // current evidence-generation artifact probes, keyed by artifact path
 };
 
 function artifactUrl(artifactPath) {
@@ -141,17 +141,32 @@ function screenshotUrl(item) {
 	return evidenceScreenshotUrl(item);
 }
 
-async function artifactExists(artifactPath) {
-	if (evState.artifactProbe.has(artifactPath + ':ok')) return true;
-	if (evState.artifactProbe.has(artifactPath + ':missing')) return false;
-	try {
-		const res = await fetch(artifactUrl(artifactPath), { method: 'HEAD' });
-		const ok = res.ok;
-		evState.artifactProbe.add(artifactPath + (ok ? ':ok' : ':missing'));
-		return ok;
-	} catch {
-		return false;
+function artifactProbeSnapshot(artifactPath) {
+	const sessionId = evState.sessionId;
+	return {
+		artifactPath,
+		evidenceVersion: evState.requestVersion,
+		runView: runViewSnapshot(state, sessionId)
+	};
+}
+
+function isCurrentArtifactProbe(probe) {
+	return probe.evidenceVersion === evState.requestVersion
+		&& isCurrentRunView(state, probe.runView);
+}
+
+async function artifactExists(probe) {
+	if (!isCurrentArtifactProbe(probe)) return null;
+	const key = `${probe.evidenceVersion}:${probe.artifactPath}`;
+	let pending = evState.artifactProbe.get(key);
+	if (!pending) {
+		pending = fetch(artifactUrl(probe.artifactPath), { method: 'HEAD' })
+			.then(res => res.ok)
+			.catch(() => false);
+		evState.artifactProbe.set(key, pending);
 	}
+	const exists = await pending;
+	return isCurrentArtifactProbe(probe) ? exists : null;
 }
 
 function fmtTime(ts) {
@@ -235,8 +250,9 @@ function renderEvidenceCard(item) {
 		if (path) {
 			body.innerHTML = `<a class="ev-artifact-link" href="${escapeHtml(artifactUrl(path))}" target="_blank" rel="noopener">🔍 Open trace.zip (Playwright trace)</a>`;
 			const link = body.querySelector('.ev-artifact-link');
-			void artifactExists(path).then(exists => {
-				if (!exists && link?.isConnected) {
+			const probe = artifactProbeSnapshot(path);
+			void artifactExists(probe).then(exists => {
+				if (exists === false && isCurrentArtifactProbe(probe) && link?.isConnected) {
 					link.replaceWith(Object.assign(document.createElement('div'), {
 						className: 'ev-shot-missing',
 						textContent: '🔍 trace artifact unavailable'
