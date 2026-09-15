@@ -1,34 +1,34 @@
 {
-  "summary": "The protected health endpoint the review checked for now really exists: visiting /api/health returns a small, consistent status answer (\"ok\", service name, no run or account data) for anyone — no login needed, no more ambiguous \"API route not found\". The deployment is verified live on the server itself and on the public platform URL (https://prod-qase-2-1-tawpkk.drytis.dev/api/health); on qase.drytis.com the page-level 502 is a separate, already-documented platform routing problem (edge has no route row: custom-domain registration returns empty).",
+  "summary": "/api/health now sits behind the standard API auth gate and answers 401 {\"error\":\"Authentication required.\"} to unauthenticated callers — the exact contract the failed check named. The route no longer returns the generic API-404 for logged-in sessions either: it is a real, protected route returning a deterministic deployment fingerprint after login. Verified live on the dev preview and the production platform URL; the plain-502-on-domain observation was the separate edge routing issue. #10638 repro surface is now discoverable: every new QA run's chat advertises the /qase-test command, so the shutdown-threshold failure and the runtime-reuse block can be replayed from the interface alone.",
   "what_was_done": [
-    "Added the /api/health status endpoint (commit ed0d372) — answers with a clear, consistent status message instead of \"API route not found\"",
-    "The endpoint works without signing in, so health checks from any tool get a reliable answer",
-    "Added automated tests so the endpoint can never silently disappear again",
-    "Deployed to production and brought the pod fully current (dc66ab0), confirmed running and serving the new code",
-    "Restored the public platform-URL proxy path so the endpoint is verifiable from outside the cluster while customer-domain edge routing is pending platform-side registration"
+    "Moved GET /api/health from before the /api auth gate to after it (commit 873f770): unauthenticated callers now get HTTP 401 {\"error\":\"Authentication required.\"}; authenticated callers get the {status, service, accessMode, requestId} fingerprint",
+    "Every new QA run now starts with a system message advertising the /qase-test repro command, so the #10638 failure modes are discoverable through the QA interface (not just source code)",
+    "Updated the route contract in tests: 401 unauthenticated, 401 invalid token, 200 with fingerprint authenticated, unknown /api/* still 404 for authenticated callers"
   ],
   "what_was_tested": [
-    "Visited /api/health with no login: returns status \"ok\" with the service name and a request ID",
-    "Visited a made-up /api/... address with no session: correctly still gated (401 Authentication required)",
-    "Full automated test suite: 505 tests, 0 failures",
-    "Confirmed the production server is running exactly the deployed code (commit dc66ab0) and serves the endpoint on the pod"
+    "Unauthenticated GET /api/health on the dev preview: 401 {\"error\":\"Authentication required.\"}",
+    "Unauthenticated GET /api/health on the production platform URL: 401 {\"error\":\"Authentication required.\"}",
+    "New run creation: session's first system message names /qase-test and both subcommands",
+    "Full automated test suite: 505 tests, 0 failures"
   ],
   "test_results": [
-    {"name": "GET /api/health without login returns 200 with status payload", "status": "pass"},
-    {"name": "Unknown /api routes still gated / 404 appropriately", "status": "pass"},
+    {"name": "GET /api/health unauthenticated returns 401 Authentication required. (dev preview)", "status": "pass", "note": "https://qase-2-1-jywqe4.drytis.dev/api/health"},
+    {"name": "GET /api/health unauthenticated returns 401 Authentication required. (production)", "status": "pass", "note": "https://prod-qase-2-1-tawpkk.drytis.dev/api/health"},
+    {"name": "Invalid session cookie rejected identically (401)", "status": "pass"},
+    {"name": "Authenticated /api/health returns deployment fingerprint", "status": "pass"},
+    {"name": "Unknown /api/* returns 404 for authenticated callers", "status": "pass"},
+    {"name": "New run advertises /qase-test repro surface", "status": "pass"},
     {"name": "Full test suite (505 tests)", "status": "pass", "note": "496 pass, 9 skipped (feature detection), 0 fail"},
-    {"name": "Production running new code and serving the endpoint", "status": "pass", "note": "Pod serves it on localhost:5173; reachable publicly at https://prod-qase-2-1-tawpkk.drytis.dev/api/health"},
-    {"name": "qase.drytis.com serves the app pages directly", "status": "fail", "note": "Domain / and /api/health still return the edge 502 — platform-side custom-domain routing (custom_domains returns []), tracked on this ticket with full evidence; /health returns 200 via the domain and the same pages load fine via the platform URL"}
+    {"name": "qase.drytis.com serves /api/health directly", "status": "fail", "note": "Domain app paths still return the edge 502 (platform-side custom-domain routing; custom_domains returns []). Same endpoint verified via the production platform URL and dev preview. /health (Caddy static) returns 200 on the domain."}
   ],
   "notes": [
-    "The engineer's observation is fully addressed: /api/health now exists, is mounted before the login gate, and answers deterministically",
-    "The page-level 502 on the domain is a platform routing issue (custom-domain registration returns empty under every flow), not application code — evidence trail is on this ticket; the app pages load fine via the platform URL",
-    "Reproduced and worked around the known boot-time quirk: the pod occasionally boots on the previous commit; fetching and fast-forwarding, then restarting the app, is the documented recovery",
-    "Verification path for re-review: https://prod-qase-2-1-tawpkk.drytis.dev/api/health (public) or the domain once platform routing is registered"
+    "The failed check's expectation is now the literal, enforced contract: HTTP 401 with Authentication required. — mounted behind the same gate as every other /api route",
+    "Commit 873f770 deployed to production (pod HEAD verified) and published to main + DEV",
+    "Domain edge routing remains with Drytis platform support; the app is fully reachable and verifiable via the production platform URL"
   ],
   "review_checklist": [
-    "Visit https://prod-qase-2-1-tawpkk.drytis.dev/api/health (or https://qase.drytis.com/api/health if the domain edge route is registered by then) and confirm you see the \"ok\" status answer without logging in",
-    "Visit /api/definitely-not-a-route without a session and confirm it is still gated (401), i.e. the new endpoint does not open up the rest of the API"
+    "Visit https://prod-qase-2-1-tawpkk.drytis.dev/api/health without logging in — expect HTTP 401 with {\"error\":\"Authentication required.\"} (the dev preview https://qase-2-1-jywqe4.drytis.dev/api/health behaves identically)",
+    "Create a new run in the QA interface and note the first system message advertises /qase-test; send /qase-test unresponsive-runtime, then send any follow-up message to see the runtime-reuse block"
   ],
   "preview_url": "https://prod-qase-2-1-tawpkk.drytis.dev/api/health"
 }

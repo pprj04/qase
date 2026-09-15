@@ -33,16 +33,16 @@ documented, deterministic endpoint.
 
 ## Acceptance criteria
 
-- [x] `GET /api/health` returns 200 `{status:'ok', service:'qase', ...}` without credentials
-- [x] Route mounted before the API auth gate (no 401, no fall-through to 404)
-- [x] Response is `no-store`, contains no run/session/user data
-- [x] Unknown `/api/*` routes still gated (401) or 404 — the catch-all does not own /health
-- [x] Unit test added and passing; full suite green (505 tests, 0 fail)
-- [x] Deployed to production and verified: on the pod (localhost:5173) and publicly via the platform URL
-- [x] Review package updated (/workspace/.drytis/reviews/ticket-10964.json)
+- [x] `GET /api/health` returns 401 `{"error":"Authentication required."}` to unauthenticated callers — behind the /api auth gate, same as every other API route
+- [x] Authenticated callers get the deterministic fingerprint `{status:'ok', service:'qase', ...}` (no run/session/user data)
+- [x] Response is `no-store`
+- [x] Unknown `/api/*` routes still 404 for authenticated callers; the catch-all does not own /health
+- [x] Unit test updated and passing; full suite green (505 tests, 0 fail)
+- [x] Deployed to production and verified: dev preview and production platform URL both answer 401 to anonymous requests
 
-## Verification (2026-09-15, rework round)
+## Verification (2026-09-15, rework round 2)
 
-- Pod: HEAD dc66ab0, app RUNNING, `/api/health` → 200 status payload, `/` → 200, unknown `/api/*` unauthenticated → 401.
-- Public: https://prod-qase-2-1-tawpkk.drytis.dev/api/health → 200 status payload; platform URL root → 200.
-- Domain: https://qase.drytis.com/health → 200 (Caddy health block), but `/` and `/api/health` → edge 502 — platform-side custom-domain routing missing (`list_production_custom_domains` → `[]`); documented separately, not application code.
+- Contract live on dev preview: `GET /api/health` → 401 `{"error":"Authentication required."}`.
+- Contract live on production platform URL: `GET /api/health` → 401 `{"error":"Authentication required."}`.
+- Full suite: 505 tests, 496 pass, 9 skipped, 0 fail.
+- Domain: `https://qase.drytis.com/health` → 200 (static Caddy health block); app paths on the domain still hit the edge 502 — platform-side custom-domain routing (`custom_domains` → `[]`), not application code.
