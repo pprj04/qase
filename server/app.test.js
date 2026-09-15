@@ -966,3 +966,16 @@ test('SSE releases its subscription if initial frame retrieval fails', { timeout
 	assert.equal(await response.text(), ': connected\n\n');
 	assert.equal(fixture.state.listenerCount(session.id), 0);
 });
+
+test('distributed session details retain durable running status after preview cache eviction', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+	fixture.services.agent.isRemote = true;
+	const session = fixture.services.runs.create('Active distributed run');
+	await fixture.services.runs.setStatus(session, 'running');
+	assert.equal(fixture.services.agent.getLiveState(session.id).running, false);
+	const detail = await body(await fixture.request(`/api/sessions/${session.id}`));
+	assert.equal(detail.status, 'running');
+	assert.equal(detail.running, true);
+	assert.equal(detail.frame, undefined);
+});

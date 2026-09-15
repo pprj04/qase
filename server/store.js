@@ -47,7 +47,8 @@ function persistNow() {
 		// Atomic-write pattern: write to a temp file then rename, so a crash
 		// mid-write can never leave a truncated sessions.json behind.
 		const tmp = `${STATE_FILE}.tmp-${process.pid}`;
-		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'));
+		// 0600 like auth.json/config.json: session history is operator-private.
+		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'), { mode: 0o600 });
 		fs.renameSync(tmp, STATE_FILE);
 	} catch (error) {
 		// A dashboard that cannot write its history is still a usable dashboard,

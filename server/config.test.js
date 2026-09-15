@@ -169,18 +169,25 @@ test('model probe accepts JSON only and enforces declared and streamed body limi
 	assert.match(streamed.error, /too large/);
 });
 
-test('development may probe a local HTTP gateway without weakening production defaults', async () => {
+test('private-network probes are blocked in development unless explicitly opted in', async () => {
 	let called = false;
-	const result = await testConnection({
-		...CANDIDATE, baseUrl: 'http://127.0.0.1:4000/v1'
-	}, options({
-		environment: { NODE_ENV: 'development' },
+	const opts = extra => options({
+		...extra,
 		dnsLookup: async () => { throw new Error('Direct IP addresses must not require DNS.'); },
 		fetchImpl: async () => {
 			called = true;
 			return new Response(JSON.stringify({ data: [] }), { headers: { 'content-type': 'application/json' } });
 		}
-	}));
-	assert.equal(result.ok, true);
+	});
+	const blocked = await testConnection({
+		...CANDIDATE, baseUrl: 'http://127.0.0.1:4000/v1'
+	}, opts({ environment: { NODE_ENV: 'development' } }));
+	assert.equal(blocked.ok, false);
+	assert.match(blocked.error, /public network destination/);
+
+	const allowed = await testConnection({
+		...CANDIDATE, baseUrl: 'http://127.0.0.1:16000/v1'
+	}, opts({ environment: { NODE_ENV: 'development', QASE_ALLOW_PRIVATE_NETWORK: 'true' } }));
+	assert.equal(allowed.ok, true);
 	assert.equal(called, true);
 });

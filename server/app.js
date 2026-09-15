@@ -36,6 +36,20 @@ import {
 	setAuthCookies
 } from './auth.js';
 
+/** Safe error response: validation-style errors keep their message; everything
+ * else is logged server-side with the request id and reduced to a generic
+ * phrase so filesystem paths and internals never reach the client. */
+function safeErrorResponse(request, response, error, status = 400) {
+	if (error instanceof Error && error.name === 'AuthError') {
+		return response.status(error.status ?? 400).json({ error: error.message });
+	}
+	if (error instanceof Error && /^(?:ERR_|ENOENT|EACCES|EISDIR|ENOTDIR)/.test(error.code ?? '')) {
+		console.error(`[Qase server ${request.qaseRequestId ?? 'no-request-id'}] sanitized route error:`, error?.code ?? error?.message);
+		return response.status(500).json({ error: 'The request could not be completed. Try again.' });
+	}
+	return response.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+}
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
 
@@ -142,9 +156,9 @@ export function createApplication(options = {}) {
 		mountDemoSite(app);
 	}
 
-	// Drytis owns authentication and routes each user to a dedicated Qase
-	// instance. The in-process boundary rejects cross-origin browser API calls
-	// and attributes work to the trusted instance owner.
+	// The instance boundary rejects cross-origin browser API calls. First-party
+	// authentication below supplies account identity; disabling it requires a
+	// separately verified authenticated gateway and isolated instance routing.
 	access.mount(app);
 	const authService = services.auth;
 	const authRequired = options.authRequired ?? (Boolean(authService)
@@ -323,7 +337,7 @@ export function createApplication(options = {}) {
 			const kept = await services.agent.invalidateIdleRuntimes();
 			response.json({ ...config, runsKeepingOldSettings: kept });
 		} catch (error) {
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -377,7 +391,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -411,7 +425,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -422,7 +436,7 @@ export function createApplication(options = {}) {
 		response.json({
 			...session,
 			secretNames: await services.secrets.names(session.id),
-			running: liveState.running,
+			running: liveState.running || (services.agent.isRemote === true && session.status === 'running'),
 			frame: liveState.frame
 		});
 	});
@@ -447,7 +461,7 @@ export function createApplication(options = {}) {
 			);
 			response.json({ result, assessment: session.sqa.assessment });
 		} catch (error) {
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -670,8 +684,10 @@ export function createApplication(options = {}) {
 			response.setHeader('Content-Disposition', 'attachment; filename="qase-' + (session.mode || 'qa') + '-report.pdf"');
 			response.send(pdf);
 		} catch (error) {
-			const status = error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE' ? 503 : 500;
-			response.status(status).json({ error: error?.message ?? 'PDF rendering failed.' });
+			if (error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE') {
+				return response.status(503).json({ error: 'PDF rendering is temporarily unavailable.' });
+			}
+			safeErrorResponse(request, response, error, 500);
 		}
 	});
 

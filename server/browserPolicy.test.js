@@ -135,12 +135,18 @@ test('allows public third-party subresources while blocking private and metadata
 	);
 });
 
-test('local development remains usable and production private targets require a trusted host allowlist', async () => {
+test('private targets are blocked by default everywhere; dev must opt in, production needs a trusted host allowlist', async () => {
 	const development = createBrowserPolicy({
 		getTargetUrl: () => 'http://127.0.0.1:5173/',
 		environment: { NODE_ENV: 'development' }
 	});
-	assert.equal((await development.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, true);
+	assert.equal((await development.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, false);
+
+	const optedIn = createBrowserPolicy({
+		getTargetUrl: () => 'http://127.0.0.1:5173/',
+		environment: { NODE_ENV: 'development', QASE_ALLOW_PRIVATE_NETWORK: 'true' }
+	});
+	assert.equal((await optedIn.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, true);
 
 	const production = createBrowserPolicy({
 		getTargetUrl: () => 'http://127.0.0.1:5173/',

@@ -368,7 +368,14 @@ export async function testConnection(candidate, options = {}) {
 
 	const environment = options.environment ?? process.env;
 	const production = environment.NODE_ENV === 'production';
-	const allowPrivateNetwork = options.allowPrivateNetwork ?? !production;
+	// Private-network SSRF guard is ON by default in EVERY environment. Local
+	// development against an on-box LLM gateway must opt out explicitly via
+	// QASE_ALLOW_PRIVATE_NETWORK=true.
+	const allowPrivateNetwork = options.allowPrivateNetwork ?? (
+		production
+			? false
+			: String(environment.QASE_ALLOW_PRIVATE_NETWORK ?? '') === 'true'
+	);
 	const dnsLookup = options.dnsLookup ?? lookupDns;
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const timeoutMs = Math.max(1, Math.min(30_000, Number(options.timeoutMs) || DEFAULT_PROBE_TIMEOUT_MS));
