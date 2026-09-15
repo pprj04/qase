@@ -331,25 +331,55 @@ test('health and readiness are public, minimal, and reflect the injected readine
 	assert.deepEqual(await body(unavailable), { status: 'not_ready' });
 });
 
-test('GET /api/health is a versioned, unauthenticated deployment fingerprint', async t => {
-	const fixture = await startFixture({ access: createTestAccess() });
-	t.after(() => fixture.close());
+test('GET /api/health is a protected deployment fingerprint: 401 unauthenticated, payload authenticated (#10964)', async t => {
+	// An auth service that accepts exactly one token; wired BEFORE the
+	// application is created so the /api auth gate is genuinely active.
+	const memory = createMemoryServices();
+	const acceptingAuth = {
+		authenticate: async token => (token === 'valid-test-token' ? { userId: 'u1' } : undefined)
+	};
+	const application = createApplication({
+		services: { ...memory.services, auth: acceptingAuth },
+		access: createTestAccess(),
+		environment: {}
+	});
+	const server = await new Promise(resolve => {
+		const candidate = application.app.listen(0, '127.0.0.1', () => resolve(candidate));
+	});
+	t.after(() => new Promise(resolve => server.close(resolve)));
+	const origin = `http://127.0.0.1:${server.address().port}`;
 
-	// No Authorization header, no cookies: the probe must be reachable by any
-	// verifier (deploy smoke test, engineer review, uptime monitor) without
-	// credentials, deterministically, before the API auth gate rejects.
-	const response = await fetch(`${fixture.origin}/api/health`);
-	assert.equal(response.status, 200);
-	const payload = await body(response);
+	// Unauthenticated: the API auth gate owns the route — the documented
+	// contract is the standard 401 Authentication required., never the
+	// static 502 and never the generic API 404.
+	const anonymous = await fetch(`${origin}/api/health`);
+	assert.equal(anonymous.status, 401);
+	assert.deepEqual(await body(anonymous), { error: 'Authentication required.' });
+	assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+
+	// An invalid token is rejected exactly like no token.
+	const badToken = await fetch(`${origin}/api/health`, {
+		headers: { cookie: 'qase_session=wrong' }
+	});
+	assert.equal(badToken.status, 401);
+	assert.deepEqual(await body(badToken), { error: 'Authentication required.' });
+
+	// Authenticated: the probe returns the deterministic deployment fingerprint.
+	const withToken = await fetch(`${origin}/api/health`, {
+		headers: { cookie: 'qase_session=valid-test-token' }
+	});
+	assert.equal(withToken.status, 200);
+	const payload = await body(withToken);
 	assert.equal(payload.status, 'ok');
 	assert.equal(payload.service, 'qase');
 	assert.ok(typeof payload.accessMode === 'string' && payload.accessMode.length > 0);
 	assert.ok(typeof payload.requestId === 'string' && payload.requestId.length > 0);
-	assert.equal(response.headers.get('cache-control'), 'no-store');
+	assert.equal(withToken.headers.get('cache-control'), 'no-store');
 
-	// The middleware that rejects unauthenticated /api callers must NOT have
-	// swallowed this route: confirm the API 404 catch-all does not own it.
-	const apiUnknown = await fixture.request('/api/definitely-not-a-route');
+	// The generic API 404 catch-all still owns everything else (behind auth).
+	const apiUnknown = await fetch(`${origin}/api/definitely-not-a-route`, {
+		headers: { cookie: 'qase_session=valid-test-token' }
+	});
 	assert.equal(apiUnknown.status, 404);
 });
 
@@ -376,7 +406,16 @@ test('/qase-test chat commands reproduce the stuck-run failure modes determinist
 	assert.ok(errorMessages.length >= 1);
 	assert.match(errorMessages.at(-1).text, /stopped responding and could not shut down safely/);
 
-	// 2. The runtime-reuse block: any follow-up turn on the quarantined runtime
+	// 2. Discoverability through the QA interface (#10638 rework round 2):
+	//    a new run exposes the command surface so a reviewer sees how to
+	//    reproduce the stuck-run failure modes without reading source.
+	const fresh = await fixture.request('/api/sessions', { method: 'POST' });
+	assert.equal(fresh.status, 201);
+	const reproSession = await body(fresh);
+	const reproHint = await body(await fixture.request(`/api/sessions/${reproSession.id}`));
+	assert.match(String(reproHint.messages.at(-1)?.text ?? ''), /\/qase-test/);
+
+	// 3. The runtime-reuse block: any follow-up turn on the quarantined runtime
 	//    is rejected with the actionable "start a new run" guidance — the exact
 	//    500 surface the engineer was unable to reach. The fixture mirrors the
 	//    real service contract: an ASYNC ensureRuntime, which previously turned
@@ -472,7 +511,7 @@ test('run CRUD preserves summaries, derived detail fields, cleanup, and 404 beha
 	const summaries = await body(await fixture.request('/api/sessions'));
 	assert.equal(summaries.length, 1);
 	assert.equal(summaries[0].id, created.id);
-	assert.equal(summaries[0].messageCount, 0);
+	assert.equal(summaries[0].messageCount, 1);
 	assert.equal(summaries[0].findingCount, 0);
 
 	fixture.services.secrets.store(created.id, { qa_password: 'fixture-secret' });

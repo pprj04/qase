@@ -36,6 +36,13 @@ documented, deterministic endpoint.
 - [x] `GET /api/health` returns 200 `{status:'ok', service:'qase', ...}` without credentials
 - [x] Route mounted before the API auth gate (no 401, no fall-through to 404)
 - [x] Response is `no-store`, contains no run/session/user data
-- [x] Unknown `/api/*` routes still 404 with `{"error":"API route not found."}`
-- [x] Unit test added and passing; full suite green (498 tests, 0 fail)
-- [x] Deployed to production and verified on the pod and via the domain edge
+- [x] Unknown `/api/*` routes still gated (401) or 404 — the catch-all does not own /health
+- [x] Unit test added and passing; full suite green (505 tests, 0 fail)
+- [x] Deployed to production and verified: on the pod (localhost:5173) and publicly via the platform URL
+- [x] Review package updated (/workspace/.drytis/reviews/ticket-10964.json)
+
+## Verification (2026-09-15, rework round)
+
+- Pod: HEAD dc66ab0, app RUNNING, `/api/health` → 200 status payload, `/` → 200, unknown `/api/*` unauthenticated → 401.
+- Public: https://prod-qase-2-1-tawpkk.drytis.dev/api/health → 200 status payload; platform URL root → 200.
+- Domain: https://qase.drytis.com/health → 200 (Caddy health block), but `/` and `/api/health` → edge 502 — platform-side custom-domain routing missing (`list_production_custom_domains` → `[]`); documented separately, not application code.

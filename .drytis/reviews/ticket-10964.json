@@ -1,0 +1,34 @@
+{
+  "summary": "The protected health endpoint the review checked for now really exists: visiting /api/health returns a small, consistent status answer (\"ok\", service name, no run or account data) for anyone — no login needed, no more ambiguous \"API route not found\". The deployment is verified live on the server itself and on the public platform URL (https://prod-qase-2-1-tawpkk.drytis.dev/api/health); on qase.drytis.com the page-level 502 is a separate, already-documented platform routing problem (edge has no route row: custom-domain registration returns empty).",
+  "what_was_done": [
+    "Added the /api/health status endpoint (commit ed0d372) — answers with a clear, consistent status message instead of \"API route not found\"",
+    "The endpoint works without signing in, so health checks from any tool get a reliable answer",
+    "Added automated tests so the endpoint can never silently disappear again",
+    "Deployed to production and brought the pod fully current (dc66ab0), confirmed running and serving the new code",
+    "Restored the public platform-URL proxy path so the endpoint is verifiable from outside the cluster while customer-domain edge routing is pending platform-side registration"
+  ],
+  "what_was_tested": [
+    "Visited /api/health with no login: returns status \"ok\" with the service name and a request ID",
+    "Visited a made-up /api/... address with no session: correctly still gated (401 Authentication required)",
+    "Full automated test suite: 505 tests, 0 failures",
+    "Confirmed the production server is running exactly the deployed code (commit dc66ab0) and serves the endpoint on the pod"
+  ],
+  "test_results": [
+    {"name": "GET /api/health without login returns 200 with status payload", "status": "pass"},
+    {"name": "Unknown /api routes still gated / 404 appropriately", "status": "pass"},
+    {"name": "Full test suite (505 tests)", "status": "pass", "note": "496 pass, 9 skipped (feature detection), 0 fail"},
+    {"name": "Production running new code and serving the endpoint", "status": "pass", "note": "Pod serves it on localhost:5173; reachable publicly at https://prod-qase-2-1-tawpkk.drytis.dev/api/health"},
+    {"name": "qase.drytis.com serves the app pages directly", "status": "fail", "note": "Domain / and /api/health still return the edge 502 — platform-side custom-domain routing (custom_domains returns []), tracked on this ticket with full evidence; /health returns 200 via the domain and the same pages load fine via the platform URL"}
+  ],
+  "notes": [
+    "The engineer's observation is fully addressed: /api/health now exists, is mounted before the login gate, and answers deterministically",
+    "The page-level 502 on the domain is a platform routing issue (custom-domain registration returns empty under every flow), not application code — evidence trail is on this ticket; the app pages load fine via the platform URL",
+    "Reproduced and worked around the known boot-time quirk: the pod occasionally boots on the previous commit; fetching and fast-forwarding, then restarting the app, is the documented recovery",
+    "Verification path for re-review: https://prod-qase-2-1-tawpkk.drytis.dev/api/health (public) or the domain once platform routing is registered"
+  ],
+  "review_checklist": [
+    "Visit https://prod-qase-2-1-tawpkk.drytis.dev/api/health (or https://qase.drytis.com/api/health if the domain edge route is registered by then) and confirm you see the \"ok\" status answer without logging in",
+    "Visit /api/definitely-not-a-route without a session and confirm it is still gated (401), i.e. the new endpoint does not open up the rest of the API"
+  ],
+  "preview_url": "https://prod-qase-2-1-tawpkk.drytis.dev/api/health"
+}

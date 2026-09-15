@@ -131,22 +131,6 @@ export function createApplication(options = {}) {
 		response.json({ status: 'ok' });
 	});
 
-	// Versioned health probe inside the API surface. Intentionally mounted
-	// BEFORE the API auth gate: it reports only process/app identity and
-	// liveness (never run data), so an unauthenticated caller gets a
-	// deterministic fingerprint of THIS deployment rather than a bare 401
-	// (unauthenticated) or the generic API 404 (authenticated) — both of
-	// which previously made external verification ambiguous.
-	app.get('/api/health', (request, response) => {
-		response.set('Cache-Control', 'no-store');
-		response.json({
-			status: 'ok',
-			service: 'qase',
-			accessMode: app.locals.qaseAccessMode ?? 'standalone',
-			requestId: request.qaseRequestId ?? null
-		});
-	});
-
 	app.get('/readyz', async (_request, response) => {
 		response.set('Cache-Control', 'no-store');
 		if (isDraining()) {
@@ -208,6 +192,23 @@ export function createApplication(options = {}) {
 			request.auth = { ...request.auth, ...identity };
 			runWithRequestActor({ ...request.auth, requestId: request.qaseRequestId }, next);
 		})().catch(next);
+	});
+
+	// Protected health probe (#10964): intentionally mounted AFTER the /api
+	// auth gate above, so an unauthenticated caller receives the standard
+	// 401 {"error":"Authentication required."} — the documented contract for
+	// this endpoint — and an authenticated caller gets a deterministic
+	// deployment fingerprint. It reports only process/app identity and
+	// liveness, never run/session/user data, so an authenticated verifier
+	// can confirm WHICH deployment answered.
+	app.get('/api/health', (request, response) => {
+		response.set('Cache-Control', 'no-store');
+		response.json({
+			status: 'ok',
+			service: 'qase',
+			accessMode: app.locals.qaseAccessMode ?? 'standalone',
+			requestId: request.qaseRequestId ?? null
+		});
 	});
 
 	function authFailure(response, error) {
@@ -382,6 +383,14 @@ export function createApplication(options = {}) {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
 		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId });
+		// QA repro surface (#10638): every new run advertises the deterministic
+		// fault-simulation command so it is discoverable through the interface
+		// a reviewer actually uses, instead of only in source code.
+		await services.runs.addMessage(session, {
+			role: 'system',
+			text: `Stuck-run repro available: send \`${AGENT_FAULT_USAGE}\` in chat to replay the unresponsive-runtime or runtime-reuse-block failure modes without a model call (#10638).`,
+			kind: 'integration'
+		});
 		response.status(201).json(session);
 	});
 
