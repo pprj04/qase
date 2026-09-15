@@ -36,3 +36,17 @@ the actionable error nor the runtime-reuse block could be verified.
 Full suite: 487 tests, 478 passed, 9 skipped, 0 failed with local networking permissions. Focused guard tests cover silence, endless reasoning, healthy progress, failed tool loops, Stop, uncooperative streams, and finalization. Agent integration tests cover retry/report completion, runtime quarantine, and surviving executor rejection. Code reviewer passed round 2. Infrastructure checks passed after production-command preview service reload: procmgr green, Caddy root to 5173, root and local health HTTP 200. Browser tester verified live login and controlled Stop request/SSE behavior after reload. No real provider stall or original screenshot session was reproduced/recovered. Existing filesystem corruption remains untouched and is a separate limitation.
 
 Rework verification: unit tests 6/6, app integration test passing, full suite 505/496/0/9. Deployed to preview and production with the `/qase-test` command live.
+
+## Rework round 2 (second engineer review): discoverability in the interface
+
+The repro command existed but was invisible unless you read source. Every new
+QA run now advertises it in the chat itself.
+
+- [x] `server/app.js` POST /api/sessions — new runs start with a system message:
+      "Stuck-run repro available: send `/qase-test <unresponsive-runtime |
+      runtime-reuse-block>` in chat to replay the … failure modes without a
+      model call (#10638)."
+- [x] Verified end-to-end through the real auth + CSRF flow: created account,
+      logged in, created a run — first message is the hint (role: system).
+- [x] Full suite remains green (505 tests, 0 fail); deployed to preview and
+      production (commit 873f770).

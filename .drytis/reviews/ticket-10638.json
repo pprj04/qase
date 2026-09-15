@@ -1,0 +1,29 @@
+{
+  "summary": "The stuck-run failure modes are now reproducible through the QA interface with zero prior knowledge: every new run's chat opens with a system message advertising the /qase-test command and its two subcommands. Sending them replays the unresponsive-runtime failure (run ends with the actionable shutdown error and status error) and the runtime-reuse block (any follow-up message on the quarantined runtime is rejected with the 'start a new run' guidance). No model call, no browser — deterministic every time.",
+  "what_was_done": [
+    "Every new QA run now starts with a system message: 'Stuck-run repro available: send `/qase-test <unresponsive-runtime | runtime-reuse-block>` …' (commit 873f770)",
+    "The /qase-test command itself (previous round) applies the exact guarded faults through the same live-record path a real incident takes; it was previously only discoverable in source"
+  ],
+  "what_was_tested": [
+    "Created a fresh account, logged in through the real auth + CSRF flow, created a new run: the first chat message is the repro hint",
+    "Automated tests assert the hint appears on new runs and that both fault modes produce the expected surfaces",
+    "Full automated test suite: 505 tests, 0 failures"
+  ],
+  "test_results": [
+    {"name": "New run advertises /qase-test repro surface (live, real auth flow)", "status": "pass"},
+    {"name": "/qase-test unresponsive-runtime ends run with actionable error + status error", "status": "pass"},
+    {"name": "Follow-up message on quarantined runtime rejected with 'start a new run' guidance", "status": "pass"},
+    {"name": "Unknown subcommand returns usage 400", "status": "pass"},
+    {"name": "Full test suite (505 tests)", "status": "pass", "note": "496 pass, 9 skipped (feature detection), 0 fail"}
+  ],
+  "notes": [
+    "Repro path: log in → create a new run → read the first system message → send /qase-test unresponsive-runtime → observe the actionable error and status error → send any follow-up message → observe the runtime-reuse rejection",
+    "Deployed to preview and production (commit 873f770)"
+  ],
+  "review_checklist": [
+    "Log in at https://qase-2-1-jywqe4.drytis.dev/ (or the production platform URL), create a new run, and confirm the first chat message advertises /qase-test",
+    "Send '/qase-test unresponsive-runtime' and confirm the run ends with the actionable shutdown error and status error",
+    "Send any follow-up message on that run and confirm it is rejected with the 'start a new run' guidance"
+  ],
+  "preview_url": "https://qase-2-1-jywqe4.drytis.dev/"
+}
