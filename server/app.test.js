@@ -103,6 +103,8 @@ function createMemoryServices(options = {}) {
 				live.delete(id);
 				return sessions.delete(id);
 			},
+			liveFor,
+			peekLive: id => live.get(id),
 			recordCleanup(id, cleanupOptions) {
 				state.cleanupCalls.push({ id, options: cleanupOptions });
 				return Promise.resolve({ recorded: true, runId: id, ...cleanupOptions });
@@ -184,10 +186,12 @@ function createMemoryServices(options = {}) {
 			buildMarkdown: session => `# QA report\n\nRun: ${session.title}`
 		},
 		agent: {
-			ensureRuntime(session) {
+			async ensureRuntime(session) {
 				state.ensureCalls.push(session.id);
 				if (state.ensureError) throw state.ensureError;
-				liveFor(session.id).runtime ??= {};
+				const record = liveFor(session.id);
+				if (record.unresponsive) throw new Error('This agent could not shut down safely. Start a new run to continue.');
+				record.runtime ??= {};
 			},
 			runTurn(session, turnOptions) {
 				state.runCalls.push({ sessionId: session.id, options: turnOptions });
@@ -347,6 +351,53 @@ test('GET /api/health is a versioned, unauthenticated deployment fingerprint', a
 	// swallowed this route: confirm the API 404 catch-all does not own it.
 	const apiUnknown = await fixture.request('/api/definitely-not-a-route');
 	assert.equal(apiUnknown.status, 404);
+});
+
+test('/qase-test chat commands reproduce the stuck-run failure modes deterministically (#10638)', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+
+	const created = await fixture.request('/api/sessions', { method: 'POST' });
+	assert.equal(created.status, 201);
+	const session = await body(created);
+	const send = text => fixture.request(`/api/sessions/${session.id}/message`, {
+		method: 'POST',
+		json: { text }
+	});
+
+	// 1. The unresponsive-runtime mode ends the run exactly as a real incident
+	//    does: actionable error message + status error + quarantined runtime.
+	const unresponsive = await send('/qase-test unresponsive-runtime');
+	assert.equal(unresponsive.status, 200);
+	assert.equal((await body(unresponsive)).simulation, true);
+	const after = await body(await fixture.request(`/api/sessions/${session.id}`));
+	assert.equal(after.status, 'error');
+	const errorMessages = after.messages.filter(message => message.role === 'system' && message.kind === 'error');
+	assert.ok(errorMessages.length >= 1);
+	assert.match(errorMessages.at(-1).text, /stopped responding and could not shut down safely/);
+
+	// 2. The runtime-reuse block: any follow-up turn on the quarantined runtime
+	//    is rejected with the actionable "start a new run" guidance — the exact
+	//    500 surface the engineer was unable to reach. The fixture mirrors the
+	//    real service contract: an ASYNC ensureRuntime, which previously turned
+	//    this rejection into an unhandled rejection that crashed the server.
+	const blocked = await send('continue the run');
+	assert.equal(blocked.status, 500);
+	assert.match((await body(blocked)).error, /could not shut down safely. Start a new run/);
+	assert.equal(fixture.state.runCalls.length, 0, 'no model turn was started by the simulations');
+
+	// 2b. The same rejection when ensureRuntime is async must be captured, not
+	//     crash the process.
+	fixture.state.ensureError = new Error('This agent could not shut down safely. Start a new run to continue.');
+	const asyncBlocked = await send('still continuing');
+	fixture.state.ensureError = undefined;
+	assert.equal(asyncBlocked.status, 500);
+	assert.match((await body(asyncBlocked)).error, /could not shut down safely/);
+
+	// 3. An unknown subcommand is usage-rejected, never guessed.
+	const unknown = await send('/qase-test nonsense');
+	assert.equal(unknown.status, 400);
+	assert.match((await body(unknown)).error, /\/qase-test/);
 });
 
 test('embedded instance APIs need no Qase login and reject cross-origin browser mutations', async t => {

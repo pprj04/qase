@@ -4,6 +4,7 @@ import express from 'express';
 import { createInstanceAccess, securityHeaders } from './instanceAccess.js';
 import { isDeviceId, DEFAULT_DEVICE_ID, publicDeviceProfile, DEVICE_PROFILES } from './deviceProfiles.js';
 import { assertApplicationServices } from './contracts.js';
+import { AGENT_FAULT_USAGE, applyAgentFault, parseAgentFaultCommand } from './agentFaultSimulation.js';
 import { mountDemoSite } from './demoSite.js';
 import { createOperationalControls } from './operations.js';
 import { runWithRequestActor } from './requestActor.js';
@@ -536,6 +537,22 @@ export function createApplication(options = {}) {
 			return;
 		}
 
+		// Deterministic reproduction of the stuck-run failure modes (#10638):
+		// a chat command that applies the guarded faults through the same code
+		// paths a real incident takes. Never reaches the model.
+		const faultCommand = parseAgentFaultCommand(text);
+		if (faultCommand !== undefined) {
+			const applied = await applyAgentFault(session, faultCommand, services.runs);
+			if (applied !== undefined) {
+				response.json({ ok: true, simulation: true, message: applied });
+				return;
+			}
+			const message = `Unknown simulation. ${AGENT_FAULT_USAGE}`;
+			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
+			response.status(400).json({ error: message });
+			return;
+		}
+
 		const url = extractUrl(text);
 		if (session.mode === 'founder' && !session.targetUrl && !url) {
 			response.status(400).json({ error: 'Founder Mode needs a target URL before the review can start.' });
@@ -567,8 +584,13 @@ export function createApplication(options = {}) {
 			);
 		}
 
+		// In the local services this call is synchronous, but the contract
+		// allows an async implementation (user configuration is awaited first).
+		// Both must surface the runtime-reuse block as the established 500
+		// error surface — an await here keeps an async rejection from becoming
+		// an unhandled rejection that kills the process (#10638).
 		try {
-			services.agent.ensureRuntime(session);
+			await services.agent.ensureRuntime(session);
 		} catch (error) {
 			const message = sanitizeErrorDetail(error);
 			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
