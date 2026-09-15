@@ -1,22 +1,22 @@
 {
   "preview_url": "https://qase-2-1-jywqe4.drytis.dev/",
-  "notes": "Qase dashboard has its own account system (QASE_AUTH_REQUIRED=true). demo@qase.dev/demo1234 is only for the /demo practice site, NOT the dashboard. Since #10338, new registrations inherit the env gateway key (custom / llm.drytis.ai) automatically.",
+  "notes": "Qase dashboard has its own account system (QASE_AUTH_REQUIRED=true). demo@qase.dev/demo1234 is only for the /demo practice site, NOT the dashboard. Since #10338, new registrations inherit the env gateway key (custom / llm.drytis.ai) automatically. 2026-09-14: the local auth store (.qase/auth.json) was destroyed by block-level corruption (ticket #10900); accounts were re-seeded and verified on 2026-09-14.",
   "accounts": [
     {
       "role": "developer",
       "email": "mishal@qase.local",
       "password": "QaseTest!2026",
-      "verified_at": "2026-09-10T13:32:30Z",
+      "verified_at": "2026-09-14T21:52:00Z",
       "verified_by": "leader",
-      "notes": "Primary account. Has user-scope settings set (custom gateway, key ••••l8nw)."
+      "notes": "Primary account. Re-created after auth-store loss in #10900; prior user-scope settings (custom gateway) were lost with the old store and must be re-entered in Settings."
     },
     {
       "role": "fresh-user",
       "email": "newuser-test@qase.local",
       "password": "FreshUser!2026",
-      "verified_at": "2026-09-10T14:02:00Z",
+      "verified_at": "2026-09-14T21:52:00Z",
       "verified_by": "leader",
-      "notes": "Fresh account created AFTER the env-inheritance change — for verifying new users get the key automatically. Empty settings store by design."
+      "notes": "Fresh account for verifying new users inherit the env key automatically. Empty settings store by design."
     }
   ]
 }

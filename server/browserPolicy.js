@@ -341,6 +341,15 @@ export function createBrowserPolicy({
 		if (!parsedTarget.allowed) return parsedTarget;
 		const target = parsedTarget.url;
 		if (url.origin === target.origin) return success(url);
+		// Studio meeting links hand off to the meeting app through buttons and
+		// redirects. Treat only that exact declared room as a target alias;
+		// never grant the entire meeting origin or another room.
+		if (target.origin === 'https://studio.drytis.ai' &&
+			url.origin === 'https://meeting.drytis.dev' &&
+			/^\/meeting\/mtg-[A-Za-z0-9_-]+$/.test(target.pathname) &&
+			url.pathname === target.pathname) {
+			return success(url);
+		}
 		// A same-host HTTP to HTTPS redirect is a common, strictly safer upgrade.
 		if (target.protocol === 'http:' && url.protocol === 'https:' &&
 			cleanHost(target.hostname) === cleanHost(url.hostname) &&

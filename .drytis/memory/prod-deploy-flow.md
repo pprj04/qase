@@ -1,0 +1,9 @@
+# Production deploy notes for QASE-2.1 (project 3542, domain qase.drytis.com)
+
+- Production clones from the repository URL configured in the backend (project → repositories). Originally pointed at https://github.com/XSTOOR/QASE-2.1 — **we have NO push credentials for that GitHub repo** (push prompts for username). Team publishes go to the managed origin: `https://x:<token>@git.drytis.dev/mishal-muneer-208/qase-2-1-3542.git`.
+- 2026-09-14: repository record was switched to the managed gitea URL (branch `main`) so prod pulls the code we actually control.
+- **Prod clone is persistent and does NOT re-clone when the repo URL/branch changes in the backend.** A `restart_production` only runs `git pull` against the existing `.git/config`. After changing the remote URL, you must `prod_run_bash` a manual `git remote set-url origin <new-url-from-init.json>` + `git fetch` + `git merge --ff-only origin/main` + `bash /project-config/setup.sh` + `prod_restart_service service-bg-service-4182`.
+- Release flow used: verified DEV tip is fast-forwarded to origin/main on the managed repo (`git push origin DEV:main`, no force), then the prod pull picks it up. Release 1a61e1c deployed 2026-09-14.
+- `deploy_to_production` returned 500 while an existing deployment record exists even in stopped state; use `stop_production(keep_volume=true)` then `redeploy_production(domains=..., admin_email=...)` instead.
+- Prod app runs as background service `service-bg-service-4182` (node server/index.js, port 5173, Caddy reverse_proxy at /). Logs: /var/log/services/service-bg-service-4182.log. Practice target: /demo (demo@qase.dev / demo1234).
+- Suspicious untracked file in dev workspace: `userDocs/image_21567749.png` is a session dump, not an image — should be deleted/gitignored, never committed.
