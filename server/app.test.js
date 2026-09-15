@@ -327,6 +327,28 @@ test('health and readiness are public, minimal, and reflect the injected readine
 	assert.deepEqual(await body(unavailable), { status: 'not_ready' });
 });
 
+test('GET /api/health is a versioned, unauthenticated deployment fingerprint', async t => {
+	const fixture = await startFixture({ access: createTestAccess() });
+	t.after(() => fixture.close());
+
+	// No Authorization header, no cookies: the probe must be reachable by any
+	// verifier (deploy smoke test, engineer review, uptime monitor) without
+	// credentials, deterministically, before the API auth gate rejects.
+	const response = await fetch(`${fixture.origin}/api/health`);
+	assert.equal(response.status, 200);
+	const payload = await body(response);
+	assert.equal(payload.status, 'ok');
+	assert.equal(payload.service, 'qase');
+	assert.ok(typeof payload.accessMode === 'string' && payload.accessMode.length > 0);
+	assert.ok(typeof payload.requestId === 'string' && payload.requestId.length > 0);
+	assert.equal(response.headers.get('cache-control'), 'no-store');
+
+	// The middleware that rejects unauthenticated /api callers must NOT have
+	// swallowed this route: confirm the API 404 catch-all does not own it.
+	const apiUnknown = await fixture.request('/api/definitely-not-a-route');
+	assert.equal(apiUnknown.status, 404);
+});
+
 test('embedded instance APIs need no Qase login and reject cross-origin browser mutations', async t => {
 	const fixture = await startFixture();
 	t.after(() => fixture.close());

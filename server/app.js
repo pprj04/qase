@@ -130,6 +130,22 @@ export function createApplication(options = {}) {
 		response.json({ status: 'ok' });
 	});
 
+	// Versioned health probe inside the API surface. Intentionally mounted
+	// BEFORE the API auth gate: it reports only process/app identity and
+	// liveness (never run data), so an unauthenticated caller gets a
+	// deterministic fingerprint of THIS deployment rather than a bare 401
+	// (unauthenticated) or the generic API 404 (authenticated) — both of
+	// which previously made external verification ambiguous.
+	app.get('/api/health', (request, response) => {
+		response.set('Cache-Control', 'no-store');
+		response.json({
+			status: 'ok',
+			service: 'qase',
+			accessMode: app.locals.qaseAccessMode ?? 'standalone',
+			requestId: request.qaseRequestId ?? null
+		});
+	});
+
 	app.get('/readyz', async (_request, response) => {
 		response.set('Cache-Control', 'no-store');
 		if (isDraining()) {
