@@ -30,3 +30,6 @@ Thumbs.db
 # Dev agent state
 .playwright-mcp/
 .ka-sid
+
+# Quarantined corrupt runtime state
+.qase.corrupt-*/
