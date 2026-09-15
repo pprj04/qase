@@ -16,7 +16,7 @@ import { timingSafeEqual, randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { closeBrowser, runTurn, finalizeTurnLimitedRun, disposeSessionResources, settleThenDispose } from './agent.js';
-import { getConfig, getPublicConfig, saveConfig, testConnection } from './config.js';
+import { getConfig, getPublicConfig, getExecutionReadiness, saveConfig, testConnection } from './config.js';
 import { testBrowserstackConnection } from './browserstackTest.js';
 import {
 	hasUsers, canBootstrapAdmin, createBootstrapAdmin, listUsers, createUser, findUserById, updateUser, setPassword,
@@ -976,6 +976,7 @@ app.get('/api/config', requireApiToken, (request, response) => {
 		delete c.discoveryModel;
 		delete c.executionModel;
 		delete c.reasoning;
+		delete c.providers;
 		delete c.hasApiKey;
 		delete c.apiKeyHint;
 		delete c.apiKeyFromEnv;
@@ -1000,6 +1001,24 @@ app.get('/api/config', requireApiToken, (request, response) => {
 	}
 	response.json(getPublicConfig());
 });
+
+/**
+ * PF-1A — prevent a signed-in product user from launching work that the
+ * server already knows cannot reach an AI provider. Machine and integration
+ * principals retain their existing authorization and execution contracts.
+ */
+function requireManagedExecutionReady(request, response) {
+	if (request.auth?.kind !== 'user') return true;
+	const readiness = getExecutionReadiness();
+	if (readiness.executionReady) return true;
+	response.status(503).json({
+		error: readiness.executionStatusMessage,
+		code: 'execution_setup_required',
+		executionReady: false,
+		setupRequired: true
+	});
+	return false;
+}
 
 /**
  * Saves model settings. Runtimes capture their configuration at construction,
@@ -3263,6 +3282,11 @@ app.post('/api/v1/missions', requireApiToken, async (request, response) => {
 		return response.status(400).json({ error: targetCheck.message, code: targetCheck.code });
 	}
 
+	// A draft mission may still be created deliberately, but a human auto-start
+	// is refused after request validation and before secrets or mission/session/
+	// runtime state are written.
+	if (body.autoStart !== false && !requireManagedExecutionReady(request, response)) return;
+
 	// Build mission context — testCredentials go to in-memory vault, not persisted JSON
 	let contextForMission = {
 		buildPrompt: body.buildPrompt || undefined,
@@ -3441,6 +3465,7 @@ async function startMissionByIdHandler(request, response, mission) {
 	if (!targetCheck.ok) {
 		return response.status(400).json({ error: targetCheck.message, code: targetCheck.code });
 	}
+	if (!requireManagedExecutionReady(request, response)) return;
 
 	// M1-P4.2 — through the governor; execution begins only on slot grant.
 	const outcome = startMissionExecution(mission, () => {
@@ -3677,6 +3702,7 @@ app.post('/api/v1/missions/:id/iterate', requireApiToken, async (request, respon
 	if (!iterateTargetCheck.ok) {
 		return response.status(400).json({ error: iterateTargetCheck.message, code: iterateTargetCheck.code });
 	}
+	if (!requireManagedExecutionReady(request, response)) return;
 
 	// M1-P4.2 — through the governor.
 	const outcome = startMissionExecution(mission, () => {
@@ -3800,6 +3826,7 @@ async function revalidateMissionByIdHandlerInner(request, response, mission) {
 	if (!revalTargetCheck.ok) {
 		return response.status(400).json({ error: revalTargetCheck.message, code: revalTargetCheck.code });
 	}
+	if (!requireManagedExecutionReady(request, response)) return;
 
 	// Guard: iteration limit reached
 	if (hasReachedIterationLimit(mission)) {

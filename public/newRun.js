@@ -52,11 +52,16 @@ function setPhase(phase, message = '') {
 	submission.phase = phase;
 	const pending = phase === 'submitting' || phase === 'validating';
 	if (submit()) {
-		submit().disabled = pending;
-		submit().textContent = pending ? 'Starting QA run…' : phase === 'error' ? 'Retry starting QA run' : 'Start QA run';
+		submit().disabled = pending || phase === 'setup_required';
+		submit().textContent = pending ? 'Starting QA run…' : phase === 'setup_required' ? 'Workspace setup required' : phase === 'error' ? 'Retry starting QA run' : 'Start QA run';
 	}
 	if (form()) form().setAttribute('aria-busy', String(pending));
 	setText(progress(), message);
+}
+
+function executionSetupMessage() {
+	return state.config?.executionStatusMessage
+		?? 'AI execution is not configured for this workspace. Contact your workspace administrator.';
 }
 
 function showTargetError(message) {
@@ -107,6 +112,11 @@ async function resolveImmediateSession(missionId, snapshot) {
 async function submitMission() {
 	if (submission.phase === 'submitting' || submission.phase === 'validating') return;
 	resetValidation();
+	if (state.config?.executionReady === false) {
+		setPhase('setup_required', executionSetupMessage());
+		setText(formError(), executionSetupMessage());
+		return;
+	}
 	setPhase('validating', 'Validating run details…');
 	const built = missionPayload();
 	if (built.error) {
@@ -154,8 +164,9 @@ function preserveRetrySafety() {
 	if (submission.phase !== 'error') return;
 	submission.idempotencyKey = createIdempotencyKey();
 	submission.awaitingOutcome = false;
-	setPhase('idle');
-	setText(formError());
+	const setupRequired = state.config?.executionReady === false;
+	setPhase(setupRequired ? 'setup_required' : 'idle', setupRequired ? executionSetupMessage() : '');
+	setText(formError(), setupRequired ? executionSetupMessage() : '');
 }
 
 export function openNewRun(defaults = {}) {
@@ -170,7 +181,9 @@ export function openNewRun(defaults = {}) {
 	renderProject();
 	resetValidation();
 	if (opening) node.showModal();
-	setPhase('idle');
+	const setupRequired = state.config?.executionReady === false;
+	setPhase(setupRequired ? 'setup_required' : 'idle', setupRequired ? executionSetupMessage() : '');
+	if (setupRequired) setText(formError(), executionSetupMessage());
 	setTimeout(() => (target()?.value.trim() ? objective() : target())?.focus(), 0);
 }
 

@@ -4,6 +4,14 @@ import { navigate } from './router.js';
 
 let initialized = false;
 
+function productRoleLabel(who) {
+  if (who?.kind === 'master') return 'System administrator';
+  if (who?.role === 'admin') return 'Workspace Admin';
+  if (who?.role === 'operator') return 'Member';
+  if (who?.role === 'viewer') return 'Viewer';
+  return 'Signed in';
+}
+
 function focusable(container) {
   return [...container.querySelectorAll('a[href], button:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')]
     .filter(node => !node.hidden && node.offsetParent !== null);
@@ -38,7 +46,7 @@ function updateAccountMenu() {
   const isAdmin = who?.role === 'admin' || who?.kind === 'master';
   const identity = $('shell-account-identity');
   if (identity) identity.textContent = isUser ? (who.name || who.email || 'Signed in user') : 'QASE session';
-  if ($('shell-account-role')) $('shell-account-role').textContent = isUser ? (who.role || 'user') : 'authenticated';
+  if ($('shell-account-role')) $('shell-account-role').textContent = productRoleLabel(who);
   if ($('shell-account-settings')) $('shell-account-settings').hidden = !isAdmin;
   if ($('shell-nav-settings')) $('shell-nav-settings').hidden = !isAdmin;
   if ($('shell-account-toggle')) $('shell-account-toggle').hidden = !who;

@@ -42,7 +42,7 @@ form.addEventListener('submit', async event => {
     const body = await response.json();
     if (!response.ok) { message.textContent = body.error || 'Unable to sign in.'; return; }
     password.value = ''; confirmPassword.value = '';
-    location.replace(signup && !bootstrap ? '/login?created=1' : '/runs');
+    location.replace(signup && !bootstrap ? '/login?created=1' : '/overview');
   } catch { message.textContent = 'Unable to reach QASE. Please try again.'; }
   finally { submit.disabled = false; }
 });

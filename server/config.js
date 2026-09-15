@@ -310,8 +310,27 @@ export function getPublicConfig() {
 		browserstackKeyLength: effectiveKeyLength(),
 		hasBrowserstackKey: Boolean(config.browserstackKey),
 		browserstackStrict: config.browserstackStrict !== false,
+		...getExecutionReadiness(config),
 		ready: isReady(config),
 		problem: describeProblem(config)
+	};
+}
+
+/**
+ * Browser-safe execution readiness for the ordinary product journey.
+ * This deliberately reports no provider identity, endpoint, model, key hint,
+ * or detailed configuration failure. Administrators retain the existing
+ * detailed Settings projection from getPublicConfig().
+ */
+export function getExecutionReadiness(config = getConfig()) {
+	const ready = isReady(config);
+	return {
+		executionReady: ready,
+		executionSetupRequired: !ready,
+		executionStatus: ready ? 'ready' : 'setup_required',
+		executionStatusMessage: ready
+			? 'AI execution is ready.'
+			: 'AI execution is not configured for this workspace. Contact your workspace administrator.'
 	};
 }
 

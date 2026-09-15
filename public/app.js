@@ -2195,9 +2195,9 @@ el.composer.onsubmit = async event => {
 		return;
 	}
 
-	if (!state.config?.ready) {
-		toast('Set up the model endpoint first.', 'bad');
-		void openSettings();
+	if (state.config?.executionReady === false || state.config?.ready === false) {
+		toast(state.config?.executionStatusMessage ?? 'AI execution is not configured for this workspace. Contact your workspace administrator.', 'bad');
+		if (state.auth?.kind === 'master' || state.auth?.role === 'admin') void openSettings();
 		return;
 	}
 	el.composerInput.value = '';
