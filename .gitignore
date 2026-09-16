@@ -34,6 +34,7 @@ Thumbs.db
 # Quarantined corrupt runtime state
 .qase.corrupt-*/
 server.corrupt-*/
+userDocs.corrupt-*/
 .drytis/specs.corrupt-*/
 
 # Session dumps / test credentials / mislabeled binaries — never repo content
