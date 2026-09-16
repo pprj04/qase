@@ -3,8 +3,7 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 // Load real deployed UI assets, isolating API/SSE fixtures from customer runs.
-const base = process.env.TEST_BASE_URL;
-if (!base) { console.error('TEST_BASE_URL must point at the deployed app (e.g. http://127.0.0.1:5173).'); process.exit(1); }
+const base = process.env.TEST_BASE_URL ?? 'https://qase-2-1-jywqe4.drytis.dev';
 const id = '12345678-1234-4234-8234-123456789abc';
 const report = { generatedAt:'2026-09-13T00:00:00.000Z', executiveSummary:'Completion fixture founder thesis', coverage:{categoriesReviewed:[],totalCategories:0,evidenceBackedObservations:0} };
 const fixture = (status = 'running', mode = 'founder', finalized = false) => ({ id, title:'Founder completion fixture', mode, status, createdAt:Date.now(),updatedAt:Date.now(),messages:[],activities:[],findings:[],todos:[],secretNames:[],founder:{scope:{target:{name:'Fixture',url:'https://example.test'},categories:[]},observations:[],...(finalized ? {report,finalizedAt:report.generatedAt} : {})} });

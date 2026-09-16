@@ -4,7 +4,6 @@ import express from 'express';
 import { createInstanceAccess, securityHeaders } from './instanceAccess.js';
 import { isDeviceId, DEFAULT_DEVICE_ID, publicDeviceProfile, DEVICE_PROFILES } from './deviceProfiles.js';
 import { assertApplicationServices } from './contracts.js';
-import { AGENT_FAULT_USAGE, applyAgentFault, parseAgentFaultCommand } from './agentFaultSimulation.js';
 import { mountDemoSite } from './demoSite.js';
 import { createOperationalControls } from './operations.js';
 import { runWithRequestActor } from './requestActor.js';
@@ -36,20 +35,6 @@ import {
 	requestCsrfToken,
 	setAuthCookies
 } from './auth.js';
-
-/** Safe error response: validation-style errors keep their message; everything
- * else is logged server-side with the request id and reduced to a generic
- * phrase so filesystem paths and internals never reach the client. */
-function safeErrorResponse(request, response, error, status = 400) {
-	if (error instanceof Error && error.name === 'AuthError') {
-		return response.status(error.status ?? 400).json({ error: error.message });
-	}
-	if (error instanceof Error && /^(?:ERR_|ENOENT|EACCES|EISDIR|ENOTDIR)/.test(error.code ?? '')) {
-		console.error(`[Qase server ${request.qaseRequestId ?? 'no-request-id'}] sanitized route error:`, error?.code ?? error?.message);
-		return response.status(500).json({ error: 'The request could not be completed. Try again.' });
-	}
-	return response.status(status).json({ error: error instanceof Error ? error.message : String(error) });
-}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
@@ -157,9 +142,9 @@ export function createApplication(options = {}) {
 		mountDemoSite(app);
 	}
 
-	// The instance boundary rejects cross-origin browser API calls. First-party
-	// authentication below supplies account identity; disabling it requires a
-	// separately verified authenticated gateway and isolated instance routing.
+	// Drytis owns authentication and routes each user to a dedicated Qase
+	// instance. The in-process boundary rejects cross-origin browser API calls
+	// and attributes work to the trusted instance owner.
 	access.mount(app);
 	const authService = services.auth;
 	const authRequired = options.authRequired ?? (Boolean(authService)
@@ -192,23 +177,6 @@ export function createApplication(options = {}) {
 			request.auth = { ...request.auth, ...identity };
 			runWithRequestActor({ ...request.auth, requestId: request.qaseRequestId }, next);
 		})().catch(next);
-	});
-
-	// Protected health probe (#10964): intentionally mounted AFTER the /api
-	// auth gate above, so an unauthenticated caller receives the standard
-	// 401 {"error":"Authentication required."} — the documented contract for
-	// this endpoint — and an authenticated caller gets a deterministic
-	// deployment fingerprint. It reports only process/app identity and
-	// liveness, never run/session/user data, so an authenticated verifier
-	// can confirm WHICH deployment answered.
-	app.get('/api/health', (request, response) => {
-		response.set('Cache-Control', 'no-store');
-		response.json({
-			status: 'ok',
-			service: 'qase',
-			accessMode: app.locals.qaseAccessMode ?? 'standalone',
-			requestId: request.qaseRequestId ?? null
-		});
 	});
 
 	function authFailure(response, error) {
@@ -355,7 +323,7 @@ export function createApplication(options = {}) {
 			const kept = await services.agent.invalidateIdleRuntimes();
 			response.json({ ...config, runsKeepingOldSettings: kept });
 		} catch (error) {
-			safeErrorResponse(request, response, error);
+			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
 		}
 	});
 
@@ -383,14 +351,6 @@ export function createApplication(options = {}) {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
 		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId });
-		// QA repro surface (#10638): every new run advertises the deterministic
-		// fault-simulation command so it is discoverable through the interface
-		// a reviewer actually uses, instead of only in source code.
-		await services.runs.addMessage(session, {
-			role: 'system',
-			text: `Stuck-run repro available: send \`${AGENT_FAULT_USAGE}\` in chat to replay the unresponsive-runtime or runtime-reuse-block failure modes without a model call (#10638).`,
-			kind: 'integration'
-		});
 		response.status(201).json(session);
 	});
 
@@ -417,7 +377,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			safeErrorResponse(request, response, error);
+			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
 		}
 	});
 
@@ -451,7 +411,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			safeErrorResponse(request, response, error);
+			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
 		}
 	});
 
@@ -462,7 +422,7 @@ export function createApplication(options = {}) {
 		response.json({
 			...session,
 			secretNames: await services.secrets.names(session.id),
-			running: liveState.running || (services.agent.isRemote === true && session.status === 'running'),
+			running: liveState.running,
 			frame: liveState.frame
 		});
 	});
@@ -487,7 +447,7 @@ export function createApplication(options = {}) {
 			);
 			response.json({ result, assessment: session.sqa.assessment });
 		} catch (error) {
-			safeErrorResponse(request, response, error);
+			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
 		}
 	});
 
@@ -546,22 +506,6 @@ export function createApplication(options = {}) {
 			return;
 		}
 
-		// Deterministic reproduction of the stuck-run failure modes (#10638):
-		// a chat command that applies the guarded faults through the same code
-		// paths a real incident takes. Never reaches the model.
-		const faultCommand = parseAgentFaultCommand(text);
-		if (faultCommand !== undefined) {
-			const applied = await applyAgentFault(session, faultCommand, services.runs);
-			if (applied !== undefined) {
-				response.json({ ok: true, simulation: true, message: applied });
-				return;
-			}
-			const message = `Unknown simulation. ${AGENT_FAULT_USAGE}`;
-			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
-			response.status(400).json({ error: message });
-			return;
-		}
-
 		const url = extractUrl(text);
 		if (session.mode === 'founder' && !session.targetUrl && !url) {
 			response.status(400).json({ error: 'Founder Mode needs a target URL before the review can start.' });
@@ -593,13 +537,8 @@ export function createApplication(options = {}) {
 			);
 		}
 
-		// In the local services this call is synchronous, but the contract
-		// allows an async implementation (user configuration is awaited first).
-		// Both must surface the runtime-reuse block as the established 500
-		// error surface — an await here keeps an async rejection from becoming
-		// an unhandled rejection that kills the process (#10638).
 		try {
-			await services.agent.ensureRuntime(session);
+			services.agent.ensureRuntime(session);
 		} catch (error) {
 			const message = sanitizeErrorDetail(error);
 			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
@@ -731,10 +670,8 @@ export function createApplication(options = {}) {
 			response.setHeader('Content-Disposition', 'attachment; filename="qase-' + (session.mode || 'qa') + '-report.pdf"');
 			response.send(pdf);
 		} catch (error) {
-			if (error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE') {
-				return response.status(503).json({ error: 'PDF rendering is temporarily unavailable.' });
-			}
-			safeErrorResponse(request, response, error, 500);
+			const status = error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE' ? 503 : 500;
+			response.status(status).json({ error: error?.message ?? 'PDF rendering failed.' });
 		}
 	});
 

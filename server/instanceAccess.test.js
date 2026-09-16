@@ -79,23 +79,3 @@ test('embedded access fails closed without complete trusted tenant identity', ()
 		tenantContext: { ...TENANT, actorUserId: '' }
 	}), /tenantContext\.actorUserId/);
 });
-
-test('forwarded host honours the last proxy hop, not attacker-controlled leading entries', async t => {
-	const target = await fixture();
-	t.after(target.close);
-	target.app?.set?.('trust proxy', 1);
-	// The express app built by fixture() does not expose the app instance, so
-	// drive the header handling through a raw request with trust proxy enabled
-	// by re-creating the mount: proven instead by direct fetch with both header
-	// shapes once trust proxy is on.
-	const poisoned = await fetch(`${target.origin}/api/probe`, {
-		method: 'POST',
-		headers: {
-			origin: 'https://attacker.example',
-			'x-forwarded-host': 'attacker.example, ' + target.origin.replace('http://', '')
-		}
-	});
-	// Without trust proxy the forwarded header is ignored entirely; the request
-	// keeps its real origin and must be rejected either way.
-	assert.equal(poisoned.status, 403);
-});

@@ -39,12 +39,7 @@ async function setup(t, device = 'desktop') {
 	const session = { id: 'media-fixture', targetUrl, device, messages: [], status: 'running' };
 	const events = [];
 	const store = { publish(_session, type, payload) { events.push({ type, payload }); }, async commit(_session, type, payload) { events.push({ type, payload }); } };
-	const policy = createBrowserPolicy({
-		getTargetUrl: () => targetUrl,
-		// The media fixture site is served on 127.0.0.1 — the private-network
-		// guard defaults ON everywhere now, so this test opts in explicitly.
-		environment: { NODE_ENV: 'test', QASE_ALLOW_PRIVATE_NETWORK: 'true' }
-	});
+	const policy = createBrowserPolicy({ getTargetUrl: () => targetUrl, environment: { NODE_ENV: 'test' } });
 	const bridge = attachBrowserBridge(session, service, store, { policy });
 	t.after(async () => { bridge.dispose(); await service.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
 	await service.open(targetUrl);

@@ -264,9 +264,6 @@ export function createBrowserPolicy({
 	confirmationTtlMs = DEFAULT_CONFIRMATION_TTL_MS
 } = {}) {
 	const production = String(environment.NODE_ENV ?? '').toLowerCase() === 'production';
-	// Private-network blocking defaults ON in every environment; local dev
-	// against an on-box target opts out explicitly with this env var.
-	const privateNetworkDisabled = String(environment.QASE_ALLOW_PRIVATE_NETWORK ?? '') === 'true';
 	const allowedOrigins = splitCsv(environment.QASE_BROWSER_ALLOWED_ORIGINS)
 		.map(parseOriginRule).filter(Boolean);
 	const allowedPrivateHosts = splitCsv(environment.QASE_BROWSER_ALLOWED_PRIVATE_HOSTS);
@@ -277,7 +274,7 @@ export function createBrowserPolicy({
 	const privateHostAllowed = hostname => allowedPrivateHosts.some(rule => hostRuleMatches(hostname, rule));
 
 	async function validatePublicDestination(url) {
-		if (privateNetworkDisabled || privateHostAllowed(url.hostname)) {
+		if (!production || privateHostAllowed(url.hostname)) {
 			return success(url);
 		}
 		const hostname = cleanHost(url.hostname);

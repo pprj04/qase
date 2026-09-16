@@ -15,7 +15,6 @@ import { buildSqaContext } from './sqaPrompt.js';
 import { createSqaTools } from './sqaTools.js';
 import { redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
-import { progressStream } from './progressStream.js';
 
 /**
  * One CleanSlate runtime per session, narrowed to browser work.
@@ -48,7 +47,7 @@ function appendUserMemory(context, session) {
 
 function isRetryableModelTimeout(error) {
 	const message = sanitizeErrorDetail(error);
-	return error?.code === 'QASE_PROGRESS_TIMEOUT' || /request timed out|provider activity for \d+ seconds/i.test(message);
+	return /request timed out|provider activity for \d+ seconds/i.test(message);
 }
 
 /**
@@ -326,7 +325,6 @@ async function closeOtherBrowsers(keepSession, runStore) {
 
 export function ensureRuntime(session, runStore) {
 	const record = runStore.liveFor(session.id);
-	if (record.unresponsive) throw new Error('This agent could not shut down safely. Start a new run to continue.');
 	if (record.runtime) {
 		return record;
 	}
@@ -435,15 +433,8 @@ export function ensureRuntime(session, runStore) {
 	// executor the loop calls.
 	const originalExecute = headless.executeTool.bind(headless);
 	headless.executeTool = async function* (toolName, input, toolCallId, signal) {
-		record.executingTools = (record.executingTools ?? 0) + 1;
-		try {
-			signal?.throwIfAborted();
-			await record.onToolStart?.(toolName, input, toolCallId);
-			signal?.throwIfAborted();
-			yield* originalExecute(toolName, input, toolCallId, signal);
-		} finally {
-			record.executingTools--;
-		}
+		await record.onToolStart?.(toolName, input, toolCallId);
+		yield* originalExecute(toolName, input, toolCallId, signal);
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
@@ -589,9 +580,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	const snapshots = snapshotWriter(session.id, runtime, session.ownerUserId);
 
 	try {
-		const stream = progressStream(signal => resumeAnswer === undefined
-			? runtime.run(task, signal)
-			: runtime.resumePendingQuestion(resumeAnswer, signal), controller.signal);
+		const stream = resumeAnswer === undefined
+			? runtime.run(task, controller.signal)
+			: runtime.resumePendingQuestion(resumeAnswer, controller.signal);
 
 		streamLoop: for await (const part of stream) {
 			switch (part.type) {
@@ -686,7 +677,6 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 					break;
 			}
 		}
-		if (record.executingTools > 0) throw Object.assign(new Error('An agent tool did not shut down safely. Start a new run to continue.'), { code: 'QASE_STREAM_UNRESPONSIVE' });
 		await finalizeAssistant();
 
 		// The loop ends either because the work is done or because ask_question
@@ -737,17 +727,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			deleteRunSnapshot(session.id);
 		}
 	} catch (error) {
-		if (record.executingTools > 0) {
-			error = Object.assign(new Error('An agent tool did not shut down safely. Start a new run to continue.'), { code: 'QASE_STREAM_UNRESPONSIVE' });
-		}
-		if (error?.code === 'QASE_STREAM_UNRESPONSIVE') record.unresponsive = true;
 		if (successfulFinalizer) {
 			await completeRun();
-			deleteRunSnapshot(session.id);
-		} else if (record.unresponsive) {
-			const message = sanitizeErrorDetail(error);
-			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
-			await runStore.setStatus(session, 'error', message);
 			deleteRunSnapshot(session.id);
 		} else if (controller.signal.aborted) {
 			await runStore.setStatus(session, 'idle', 'Stopped by user.');
@@ -808,7 +789,6 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		if (session.status !== 'idle') await runStore.setStatus(session, 'idle', 'Stopped by user.');
 	};
 	if (controller.signal.aborted) {
-		if (record.unresponsive) return;
 		await stoppedBeforeContinuation();
 		return;
 	}

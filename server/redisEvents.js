@@ -5,12 +5,6 @@ import { createClient } from 'redis';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_EVENT_BYTES = 2 * 1024 * 1024;
 
-function positiveLimit(value, fallback) {
-	if (value === undefined) return fallback;
-	if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError('Live cache limits must be positive integers.');
-	return value;
-}
-
 function redisUrl(environment, allowInsecure) {
 	const raw = String(environment.QASE_REDIS_URL ?? '').trim();
 	if (!raw) throw new Error('Distributed execution requires QASE_REDIS_URL.');
@@ -23,10 +17,6 @@ function redisUrl(environment, allowInsecure) {
 }
 
 export function createRedisEventTransport(options = {}) {
-	const now = options.now ?? Date.now;
-	const cacheTtlMs = positiveLimit(options.liveCacheTtlMs, 5 * 60_000);
-	const cacheMaxEntries = positiveLimit(options.liveCacheMaxEntries, 128);
-	const cacheMaxBytes = positiveLimit(options.liveCacheMaxBytes, 16 * 1024 * 1024);
 	const environment = options.environment ?? process.env;
 	const tenant = options.tenantContext;
 	if (!tenant || !UUID_PATTERN.test(tenant.organizationId) || !UUID_PATTERN.test(tenant.projectId)) {
@@ -42,39 +32,6 @@ export function createRedisEventTransport(options = {}) {
 	const bus = new EventEmitter();
 	bus.setMaxListeners(0);
 	const live = new Map();
-	let liveBytes = 0;
-	function removeLive(id) {
-		liveBytes -= live.get(id)?.bytes ?? 0;
-		live.delete(id);
-	}
-	function expireLive() {
-		const time = now();
-		for (const [id, entry] of live) {
-			if (entry.expiresAt <= time) removeLive(id);
-			else if (entry.frameExpiresAt <= time) {
-				delete entry.value.frame;
-				delete entry.frameExpiresAt;
-				const bytes = Buffer.byteLength(id, 'utf8') + Buffer.byteLength(JSON.stringify(entry.value), 'utf8');
-				liveBytes += bytes - entry.bytes;
-				entry.bytes = bytes;
-			}
-		}
-	}
-	// This is a disposable preview cache, never the authoritative run state.
-	// Sweep even without traffic so stale screenshots leave memory promptly.
-	const sweepTimer = setInterval(expireLive, Math.min(cacheTtlMs, 30_000));
-	sweepTimer.unref?.();
-	function cacheLive(id, value, frameExpiresAt) {
-		const serialized = JSON.stringify(value);
-		const bytes = Buffer.byteLength(id, 'utf8') + Buffer.byteLength(serialized, 'utf8');
-		removeLive(id);
-		if (bytes > cacheMaxBytes) return;
-		while (live.size >= cacheMaxEntries || liveBytes + bytes > cacheMaxBytes) {
-			removeLive(live.keys().next().value);
-		}
-		live.set(id, { value: JSON.parse(serialized), bytes, expiresAt: now() + cacheTtlMs, frameExpiresAt });
-		liveBytes += bytes;
-	}
 	const frameSubscriptions = new Map();
 	const framePublications = new Map();
 	let loaded = false;
@@ -83,18 +40,17 @@ export function createRedisEventTransport(options = {}) {
 	let closePromise;
 
 	function accept(event) {
-		if (closed || !event || typeof event !== 'object' || typeof event.sessionId !== 'string') return;
-		expireLive();
+		if (!event || typeof event !== 'object' || typeof event.sessionId !== 'string') return;
 		if (event.type === 'run.deleted') {
-			removeLive(event.sessionId);
+			live.delete(event.sessionId);
 		} else if (event.type === 'frame') {
-			const current = { ...live.get(event.sessionId)?.value };
+			const current = live.get(event.sessionId) ?? {};
 			current.frame = event.frame;
-			cacheLive(event.sessionId, current, now() + cacheTtlMs);
+			live.set(event.sessionId, current);
 		} else if (event.type === 'status') {
-			const current = { ...live.get(event.sessionId)?.value };
+			const current = live.get(event.sessionId) ?? {};
 			current.running = event.status === 'running';
-			cacheLive(event.sessionId, current, live.get(event.sessionId)?.frameExpiresAt);
+			live.set(event.sessionId, current);
 		}
 		bus.emit(event.sessionId, event);
 		bus.emit('*', event);
@@ -105,7 +61,6 @@ export function createRedisEventTransport(options = {}) {
 	}
 
 	function receive(message) {
-		if (closed || typeof message !== 'string' || Buffer.byteLength(message, 'utf8') > MAX_EVENT_BYTES) return;
 		try {
 			const envelope = JSON.parse(message);
 			if (envelope.source !== instanceId) accept(envelope.event);
@@ -171,12 +126,10 @@ export function createRedisEventTransport(options = {}) {
 			lastError = undefined;
 		},
 		publish(event) {
-			if (closed) return;
+			accept(event);
 			let message;
 			try { message = JSON.stringify({ source: instanceId, event }); } catch { return; }
-			if (Buffer.byteLength(message, 'utf8') > MAX_EVENT_BYTES) return;
-			accept(JSON.parse(message).event);
-			if (!loaded) return;
+			if (Buffer.byteLength(message, 'utf8') > MAX_EVENT_BYTES || !loaded || closed) return;
 			if (event?.type === 'frame' && typeof event.sessionId === 'string') {
 				publishFrame(event.sessionId, message);
 				return;
@@ -220,9 +173,7 @@ export function createRedisEventTransport(options = {}) {
 			return () => bus.off('*', listener);
 		},
 		getLiveState(sessionId) {
-			expireLive();
-			const state = live.get(sessionId)?.value;
-			return { running: Boolean(state?.running), frame: structuredClone(state?.frame) };
+			return { running: Boolean(live.get(sessionId)?.running), frame: live.get(sessionId)?.frame };
 		},
 		async check() {
 			if (!loaded || closed) return false;
@@ -235,11 +186,9 @@ export function createRedisEventTransport(options = {}) {
 		close() {
 			closePromise ??= (async () => {
 				closed = true;
-				clearInterval(sweepTimer);
 				await Promise.allSettled([subscriber.close(), publisher.close()]);
 				bus.removeAllListeners();
 				live.clear();
-				liveBytes = 0;
 				frameSubscriptions.clear();
 				framePublications.clear();
 			})();

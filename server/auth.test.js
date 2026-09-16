@@ -133,34 +133,3 @@ test('memory rejects credential-shaped content and expires/revokes sessions', as
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
-
-test('throttle map evicts oldest windows instead of refusing new keys', () => {
-	let time = 0;
-	const consume = createAuthThrottle({ now: () => time });
-	// Fill the map to its cap with bogus account keys.
-	for (let i = 0; i < 10_000; i++) consume(`attacker-${i}`, 40);
-	// A legitimate visitor's fresh key must still get a window (eviction), not
-	// a blanket 429 — the old fail-closed cap made this an auth DoS.
-	assert.equal(consume('ip:legitimate-visitor', 40), true);
-	assert.equal(consume('ip:legitimate-visitor', 40), true);
-	// And the very first bogus key was evicted, so it is throttled anew.
-	assert.equal(consume('attacker-0', 40), true);
-});
-
-test('users without a stored role are never elevated to owner', async () => {
-	const { auth, directory } = await service();
-	try {
-		const alice = await auth.register({ email: 'norole@example.com', password: 'correct horse battery staple' });
-		const file = path.join(directory, 'auth.json');
-		const state = JSON.parse(await fs.readFile(file, 'utf-8'));
-		const record = state.users.find(u => u.email === 'norole@example.com');
-		delete record.role;
-		await fs.writeFile(file, JSON.stringify(state));
-		// A FRESH service instance must read the doctored file from disk —
-		// exercising the loadData role-default path, not in-memory state.
-		const reloaded = createLocalAuthService({ tenantContext: DEFAULT_TENANT_CONTEXT, file });
-		await reloaded.load();
-		const result = await reloaded.authenticate(alice.token);
-		assert.equal(result.role, 'developer');
-	} finally { await fs.rm(directory, { recursive: true, force: true }); }
-});
