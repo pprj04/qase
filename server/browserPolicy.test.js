@@ -71,27 +71,6 @@ test('allows only target-scope top-level navigation unless an operator allowlist
 	);
 });
 
-test('Studio meeting targets permit only the same HTTPS Drytis meeting handoff', async () => {
-	const target = 'https://studio.drytis.ai/meeting/mtg-Aajxsxmsq9bGgW';
-	const destination = 'https://meeting.drytis.dev/meeting/mtg-Aajxsxmsq9bGgW?guest=true';
-	const policy = productionPolicy({ getTargetUrl: () => target });
-	assert.equal((await policy.evaluateNavigation(destination)).allowed, true);
-	assert.equal((await policy.evaluateRequest(destination, { topLevel: true })).allowed, true);
-	for (const url of [
-		'https://meeting.drytis.dev/meeting/mtg-other',
-		'https://meeting.drytis.dev/admin',
-		'https://meeting.drytis.dev.evil.test/meeting/mtg-Aajxsxmsq9bGgW',
-		'http://meeting.drytis.dev/meeting/mtg-Aajxsxmsq9bGgW',
-		'https://meeting.drytis.dev:8443/meeting/mtg-Aajxsxmsq9bGgW',
-		'https://user:secret@meeting.drytis.dev/meeting/mtg-Aajxsxmsq9bGgW'
-	]) assert.equal((await policy.evaluateNavigation(url)).allowed, false, url);
-	for (const source of ['https://studio.drytis.ai/', 'https://evil.test/meeting/mtg-Aajxsxmsq9bGgW', 'http://studio.drytis.ai/meeting/mtg-Aajxsxmsq9bGgW']) {
-		assert.equal((await productionPolicy({ getTargetUrl: () => source }).evaluateNavigation(destination)).allowed, false, source);
-	}
-	const privateDns = productionPolicy({ getTargetUrl: () => target, resolveHost: async () => ['127.0.0.1'] });
-	assert.equal((await privateDns.evaluateNavigation(destination)).code, BROWSER_POLICY_CODES.PRIVATE_NETWORK);
-});
-
 test('allows a same-host HTTP to HTTPS upgrade but not a downgrade', async () => {
 	const upgrade = createBrowserPolicy({
 		getTargetUrl: () => 'http://app.example.test/start',

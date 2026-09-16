@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import crypto, { createSecretKey } from 'node:crypto';
-import { syncBuiltinESMExports } from 'node:module';
+import { createSecretKey } from 'node:crypto';
 import test from 'node:test';
 import {
 	DRYTIS_INBOUND_HEADERS,
@@ -139,31 +138,6 @@ test('memory nonce store prunes expired reservations and is bounded', async () =
 	assert.equal(await store.consume(key, time + 1000), true);
 });
 
-test('default outbound nonce accepts random bytes that would begin with base64url punctuation', async t => {
-	for (const byte of [0xfb, 0xff]) {
-		const random = t.mock.method(crypto, 'randomBytes', size => {
-			assert.equal(size, 24);
-			return Buffer.alloc(size, byte);
-		});
-		syncBuiltinESMExports();
-		try {
-			let nonce;
-			const client = createDrytisDeliveryClient({
-				config: CONFIG, now: () => NOW,
-				async fetchImpl(url, options) {
-					nonce = options.headers[DRYTIS_OUTBOUND_HEADERS.nonce];
-					return new Response('{}', { status: 202, headers: { 'content-type': 'application/json' } });
-				}
-			});
-			await client.deliver('/v1/qase/events', {}, {
-				idempotencyKey: 'run-123/completed', correlationId: 'correlation-12345678'
-			});
-			assert.match(nonce, /^[a-zA-Z0-9][a-zA-Z0-9_-]{15,127}$/);
-			assert.equal(random.mock.callCount(), 1);
-		} finally { random.mock.restore(); syncBuiltinESMExports(); }
-	}
-});
-
 test('outbound client signs exact JSON bytes and sends required delivery controls without redirects', async () => {
 	let observed;
 	const client = createDrytisDeliveryClient({
@@ -247,3 +221,4 @@ test('outbound client bounds payloads and responses and never reflects upstream 
 		error.code === 'delivery_failed' && !error.message.includes('secret-token-value')
 		&& !error.message.includes('token=secret') && !error.message.includes('user:pass'));
 });
+

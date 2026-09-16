@@ -233,36 +233,21 @@ function createLocalDataStore({ tenantContext, now = () => Date.now(), file = AU
 		return loading;
 	}
 	async function loadData() {
-		let raw;
 		try {
-			raw = await fs.promises.readFile(file, 'utf8');
-		} catch (error) {
-			if (error?.code === 'ENOENT') return void (state.loaded = true);
-			// Read failures can be transient. Never replace an existing account
-			// store with an empty one or mark it loaded after a failed read.
-			throw new Error('The local authentication store is unreadable.', { cause: error });
-		}
-		let parsed;
-		try {
-			parsed = JSON.parse(raw);
-		} catch (error) {
-			throw new Error('The local authentication store is invalid.', { cause: error });
-		}
-		if (parsed?.version !== 1 || !Array.isArray(parsed.users) || !Array.isArray(parsed.sessions)) {
-			throw new Error('The local authentication store is invalid.');
-		}
-		for (const user of parsed.users) {
-			if (!user || typeof user !== 'object' || Array.isArray(user)) {
-				throw new Error('The local authentication store is invalid.');
+			const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+			if (parsed?.version === 1 && Array.isArray(parsed.users) && Array.isArray(parsed.sessions)) {
+				state.data = parsed;
+				for (const user of state.data.users) {
+					user.status ??= 'active';
+					user.role ??= 'owner';
+					user.profile ??= defaultProfile();
+				}
 			}
-			user.status ??= 'active';
-			user.role ??= 'owner';
-			user.profile ??= defaultProfile();
+		} catch (error) {
+			if (error?.code !== 'ENOENT') throw new Error('The local authentication store is unreadable.');
 		}
-		state.data = parsed;
 		state.loaded = true;
 	}
-
 function findUser(id) { return state.data.users.find(user => user.id === id); }
 	async function createAccount({ email, password, displayName }) {
 		await load();

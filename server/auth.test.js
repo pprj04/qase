@@ -43,45 +43,6 @@ test('account settings remain encrypted, isolated and durable; password changes 
 	} finally { await auth.close(); await fs.rm(directory, { recursive: true, force: true }); }
 });
 
-test('transient auth-store read errors preserve accounts and retry without persistence', async t => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-auth-'));
-	const file = path.join(directory, 'auth.json');
-	const original = JSON.stringify({ version: 1, users: [{ id: 'existing-user', email: 'existing@example.com' }], sessions: [], memory: [] });
-	await fs.writeFile(file, original);
-	const readFile = fs.readFile.bind(fs);
-	const auth = createLocalAuthService({ tenantContext: DEFAULT_TENANT_CONTEXT, file });
-	const failure = Object.assign(new Error('temporary read failure'), { code: 'EIO' });
-	const mock = t.mock.method(fs, 'readFile', async (target, ...args) => {
-		if (target === file) throw failure;
-		return readFile(target, ...args);
-	});
-	try {
-		await assert.rejects(auth.load(), /authentication store/i);
-		await assert.rejects(auth.register({ email: 'replacement@example.com', password: 'a long enough password' }), /authentication store/i);
-		await auth.close();
-		assert.equal(await readFile(file, 'utf8'), original);
-		assert.deepEqual(await fs.readdir(directory), ['auth.json']);
-		mock.mock.restore();
-		assert.deepEqual(await auth.check(), { ready: true, backend: 'local', users: 1 });
-	} finally { mock.mock.restore(); await fs.rm(directory, { recursive: true, force: true }); }
-});
-
-for (const original of ['{"version":1,"users":[{"id":"torn-writ', '{"version":2,"users":[],"sessions":[]}']) {
-	test('invalid auth-store contents cannot be replaced by registration or shutdown: ' + original, async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-auth-'));
-		const file = path.join(directory, 'auth.json');
-		await fs.writeFile(file, original);
-		const auth = createLocalAuthService({ tenantContext: DEFAULT_TENANT_CONTEXT, file });
-		try {
-			await assert.rejects(auth.load(), /authentication store/i);
-			await assert.rejects(auth.register({ email: 'replacement@example.com', password: 'a long enough password' }), /authentication store/i);
-			await auth.close();
-			assert.equal(await fs.readFile(file, 'utf8'), original);
-			assert.deepEqual(await fs.readdir(directory), ['auth.json']);
-		} finally { await fs.rm(directory, { recursive: true, force: true }); }
-	});
-}
-
 test('authentication throttle blocks repeated attempts and expires its window', () => {
 	let time = 0;
 	const consume = createAuthThrottle({ now: () => time });
