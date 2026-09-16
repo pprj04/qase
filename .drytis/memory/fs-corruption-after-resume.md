@@ -1,30 +1,39 @@
 # Block-level file corruption after container resume (recurring)
 
-**Symptoms:** after a container pause/resume, files in `.qase/` become
-unreadable at the FS level. `stat` → "Structure needs cleaning", `ls` shows
-`-?????????`, reads/writes fail with "Bad message" / "Unknown system error
--117" / EIO. Crucially, **the damaged inode cannot be deleted, truncated,
-unlinked, or renamed directly** — plain `rm`/`mv` on the file does nothing.
+**Symptoms:** after a container pause/resume, inodes become unreadable at the
+FS level. `stat` → "Structure needs cleaning" / "Bad message", `ls` shows
+`-?????????`, reads fail with EIO / "Unknown system error -117". The damaged
+inode cannot be deleted, truncated, unlinked, or renamed directly.
 
 **History:** #10626 (runResume.js), #10636 (source files), #10900
-(.qase/auth.json → server crash-loop → preview 502), plus a damaged run
-snapshot in `.qase/runsnapshots/` the same day.
+(.qase/auth.json → server crash-loop → preview 502), damaged runsnapshot
+(2026-09-14), **#11203 (2026-09-16 — worst yet: ENTIRE server/ dir [169 files]
++ .drytis/specs/ + .qase/{auth.json,sessions.json,workspaces,runsnapshots}
+all fused; dmesg showed EXT4 dirblock-csum + block-bitmap corruption)**.
 
-**Fix patterns:**
-1. *App level* — `loadData()` in `server/auth.js` now quarantines any
-   non-ENOENT / non-JSON auth store (rename best-effort + console.warn) and
-   boots with a fresh store instead of throwing. Regression tests in
-   `server/auth.test.js`. Snapshot readers in `agent.js` were already
-   try/catch-guarded.
-2. *Data recovery* — to reclaim a damaged inode, rebuild its PARENT directory:
-   `mv <dir> <dir>.corrupt-<date>` (renaming the parent works even when the
-   child inode is fused), `mkdir <dir>`, then `mv` each healthy entry back.
-   The damaged entry stays behind in the quarantine folder.
+**Fix pattern (proven again in #11203):**
+1. Quarantine by rebuilding the PARENT dir: `mv <dir> <dir>.corrupt-<date>`,
+   `mkdir <dir>`, then `cp -r` each healthy entry back (cp fails on fused
+   inodes — those stay behind in quarantine). Plain rm/mv on the damaged
+   child does nothing, but renaming the parent works.
+2. For git-tracked files (server/, .drytis/specs/): `git checkout -- <dir>`
+   after recreating the dir restores everything from HEAD.
+3. For runtime data (.qase/): boot with fresh store; app-level quarantine
+   (auth.js loadData) accepts a missing store. Sessions/workspaces data in
+   quarantine is likely unrecoverable — restart any in-flight runs.
+
+**Post-recovery checklist (all done in #11203):**
+- `git status` clean of D entries; only intentional M entries remain.
+- `procmgr restart service-bg-service-4182` → RUNNING.
+- curl localhost:5173 AND preview URL → 200.
+- Auth-store loss: re-seed accounts via POST /api/auth/register
+  ({"email","password","name"}), verify via /api/auth/login, then refresh
+  `.drytis/cred.json` verified_at/verified_by.
+- Quarantines at /workspace/server.corrupt-*, .qase.corrupt-*,
+  .drytis/specs.corrupt-* for forensics; .qase/ is gitignored runtime data.
 
 **Operational notes:**
-- After any auth-store loss, accounts must be re-seeded and
-  `.drytis/cred.json` refreshed with fresh `verified_at`.
-- Corrupted preview 502 → check `procmgr status` + tail
+- Corrupted preview 502 / crash-loop → `procmgr status` + tail
   `/var/log/services/service-bg-service-4182.log` FIRST.
-- Quarantines kept at `/workspace/.qase.corrupt-*` for forensics; `.qase/` is
-  gitignored, so this is runtime data, not repo content.
+- If server/ is wiped again, check `git status` before anything else —
+  restore-from-HEAD is fast and complete.

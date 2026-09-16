@@ -1,16 +1,17 @@
 # qase.drytis.com 502 — diagnostic trail (2026-09-15)
 
 ## Symptom
-https://qase.drytis.com → 502 Bad Gateway (edge-branded page, md5 65b7ea85c3deefcc2dc2d51e6e232ca4), HTTP and HTTPS alike.
+https://qase.drytis.com → 502 Bad Gateway (edge-branded page, md5 65b7ea85c3deef0dc2d51c4e6e232ca4), HTTP and HTTPS alike.
 
 ## Verified WORKING (project side is fine)
-- Deployment #152: status=running, health=healthy, admin_email=mishmuneer2011@gmail.com, domains=[qase.drytis.com]
+- Deployment #153: status=running, health=healthy, admin_email=mishmuneer2011@gmail.com, domains=[qase.drytis.com]
 - App in pod: localhost:5173 → 200; qase-server banner OK; custom LLM gateway (z-ai/glm-5.2 @ llm.drytis.ai) loads from env keys
 - Pod Caddy: Host qase.drytis.com over http://:80 → 200 (routes to 127.0.0.1:5173)
 - Pod-side HTTPS (:443) uses Caddy-internal self-signed certs by design — TLS is terminated upstream; do NOT misread pod :443 handshake failure as a bug
 - Platform-managed hostname https://prod-qase-2-1-mkqetf.drytis.dev/health → 200 (gateway→pod works)
 - DNS: qase.drytis.com → 147.135.77.206 (cluster A-record, matches apex_ips)
 - Edge TLS: valid Let's Encrypt cert CN=qase.drytis.com (issued Aug 26 2026, YE2) — hostname is REGISTERED at the edge
+- **18:04Z: edge started routing the domain** — user's browser got "Production Environment OK" at https://qase.drytis.com/health, and in-container `--resolve` probes to the public edge IP get 200 on /health with live (cache-busted) responses.
 
 ## Verified BROKEN
 - Edge custom-domain routing for qase.drytis.com does not deliver traffic to deployment #152's pod.
