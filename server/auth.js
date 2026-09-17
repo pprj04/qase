@@ -61,7 +61,7 @@ function safeUser(user) {
 		userId: user.id,
 		email: user.email,
 		displayName: user.displayName,
-		role: user.role ?? 'owner',
+		role: user.role ?? 'developer',
 		createdAt: user.createdAt,
 		profile: user.profile ? structuredClone(user.profile) : undefined
 	}) : undefined;
@@ -201,7 +201,7 @@ function userFromRow(row, profile) {
 		id: row.id ?? row.user_id,
 		email: row.email,
 		displayName: row.display_name,
-		role: row.role ?? 'owner',
+		role: row.role ?? 'developer',
 		createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
 		profile: profile ?? defaultProfile()
 	};
@@ -239,7 +239,7 @@ function createLocalDataStore({ tenantContext, now = () => Date.now(), file = AU
 				state.data = parsed;
 				for (const user of state.data.users) {
 					user.status ??= 'active';
-					user.role ??= 'owner';
+					user.role ??= 'developer';
 					user.profile ??= defaultProfile();
 				}
 			}
@@ -389,7 +389,12 @@ export function createPostgresAuthService({ pool, tenantContext, now = () => Dat
 		async profile(userId) { return transaction(async client => { const user = await selectUser(client, userId); return user ? { ...safeUser(user), profile: user.profile } : undefined; }); },
 		async updateProfile(userId, input) { return transaction(async client => { const user = await selectUser(client, userId); if (!user) throw new AuthError('Profile not found.', 'not_found', 404); const name = input?.displayName === undefined ? user.displayName : normalizeDisplayName(input.displayName); const profile = { ...defaultProfile(), ...user.profile, ...cleanProfilePatch(input) }; await client.query('UPDATE users SET display_name = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [userId, name]); await client.query(`INSERT INTO qase_user_profiles (user_id,organization_id,project_id,timezone,locale,preferences,onboarding_complete) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (user_id) DO UPDATE SET timezone=EXCLUDED.timezone,locale=EXCLUDED.locale,preferences=EXCLUDED.preferences,onboarding_complete=EXCLUDED.onboarding_complete,updated_at=CURRENT_TIMESTAMP`, [userId, tenant.organizationId, tenant.projectId, profile.timezone, profile.locale, profile.preferences, profile.onboardingComplete]); return { ...safeUser({ ...user, displayName: name }), profile }; }); },
 		async listMemory(userId) { return transaction(async client => { const result = await client.query('SELECT id,key,value,scope,kind,created_at,updated_at FROM qase_memory_entries WHERE user_id = $1 ORDER BY updated_at DESC', [userId]); return result.rows.map(row => publicMemory({ id: row.id, key: row.key, value: row.value, scope: row.scope, kind: row.kind, createdAt: pgDate(row.created_at).toISOString(), updatedAt: pgDate(row.updated_at).toISOString() })); }); },
-		async putMemory(userId, input) { const clean = cleanMemoryInput(input); return transaction(async client => { const existing = await client.query('SELECT id FROM qase_memory_entries WHERE user_id = $1 AND scope = $2 AND key = $3', [userId, clean.scope, clean.key]); if (!existing.rows.length) { const count = await client.query('SELECT COUNT(*)::int AS count FROM qase_memory_entries WHERE user_id = $1', [userId]); if (Number(count.rows[0]?.count ?? 0) >= 100) throw new AuthError('Memory is limited to 100 entries per account.', 'memory_limit', 400); } const result = await client.query(`INSERT INTO qase_memory_entries (id,user_id,organization_id,project_id,key,value,scope,kind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id,scope,key) DO UPDATE SET value=EXCLUDED.value,kind=EXCLUDED.kind,updated_at=CURRENT_TIMESTAMP RETURNING id,key,value,scope,kind,created_at,updated_at`, [randomUUID(), userId, tenant.organizationId, tenant.projectId, clean.key, clean.value, clean.scope, clean.kind]); const row = result.rows[0]; return publicMemory({ id: row.id, key: row.key, value: row.value, scope: row.scope, kind: row.kind, createdAt: pgDate(row.created_at).toISOString(), updatedAt: pgDate(row.updated_at).toISOString() }); }); },
+		async putMemory(userId, input) { const clean = cleanMemoryInput(input); return transaction(async client => {
+			const account = await client.query(`SELECT user_id FROM qase_user_profiles
+				WHERE user_id = $1 AND organization_id = $2 AND project_id = $3 FOR UPDATE`,
+				[userId, tenant.organizationId, tenant.projectId]);
+			if (!account.rows.length) throw new AuthError('Account not found.', 'not_found', 404);
+			const existing = await client.query('SELECT id FROM qase_memory_entries WHERE user_id = $1 AND scope = $2 AND key = $3', [userId, clean.scope, clean.key]); if (!existing.rows.length) { const count = await client.query('SELECT COUNT(*)::int AS count FROM qase_memory_entries WHERE user_id = $1', [userId]); if (Number(count.rows[0]?.count ?? 0) >= 100) throw new AuthError('Memory is limited to 100 entries per account.', 'memory_limit', 400); } const result = await client.query(`INSERT INTO qase_memory_entries (id,user_id,organization_id,project_id,key,value,scope,kind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id,scope,key) DO UPDATE SET value=EXCLUDED.value,kind=EXCLUDED.kind,updated_at=CURRENT_TIMESTAMP RETURNING id,key,value,scope,kind,created_at,updated_at`, [randomUUID(), userId, tenant.organizationId, tenant.projectId, clean.key, clean.value, clean.scope, clean.kind]); const row = result.rows[0]; return publicMemory({ id: row.id, key: row.key, value: row.value, scope: row.scope, kind: row.kind, createdAt: pgDate(row.created_at).toISOString(), updatedAt: pgDate(row.updated_at).toISOString() }); }); },
 		async deleteMemory(userId, id) { if (!USER_ID.test(String(id))) throw new AuthError('Memory entry not found.', 'not_found', 404); return transaction(async client => (await client.query('DELETE FROM qase_memory_entries WHERE id = $1 AND user_id = $2', [id, userId])).rowCount === 1); },
 		async check() { return transaction(async client => { await client.query('SELECT 1'); return { ready: true, backend: 'postgres' }; }); },
 		async close() {}

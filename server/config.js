@@ -3,6 +3,7 @@ import { lookup as lookupDns } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import * as path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { PublicInputError } from './publicErrors.js';
 
 const userConfiguration = new AsyncLocalStorage();
 export function withUserConfiguration(settings, save, work) {
@@ -156,10 +157,10 @@ export function saveConfig(patch) {
 		next.headless = Boolean(patch.headless);
 	}
 	if (next.provider && !PROVIDERS.includes(next.provider)) {
-		throw new Error(`Unknown provider: ${next.provider}`);
+		throw new PublicInputError(`Unknown provider: ${next.provider}`);
 	}
 	if (userConfiguration.getStore() && next.provider === 'bedrock') {
-		throw new Error('Private workspaces require an explicit API key provider. Shared AWS credentials are not supported.');
+		throw new PublicInputError('Private workspaces require an explicit API key provider. Shared AWS credentials are not supported.');
 	}
 
 	const scope = userConfiguration.getStore();
@@ -367,8 +368,12 @@ export async function testConnection(candidate, options = {}) {
 	}
 
 	const environment = options.environment ?? process.env;
-	const production = environment.NODE_ENV === 'production';
-	const allowPrivateNetwork = options.allowPrivateNetwork ?? !production;
+	const nodeEnvironment = String(environment.NODE_ENV ?? '').toLowerCase();
+	const production = nodeEnvironment === 'production';
+	const allowPrivateNetwork = options.allowPrivateNetwork ?? (
+		nodeEnvironment === 'development'
+			&& String(environment.QASE_ALLOW_PRIVATE_NETWORK ?? '') === 'true'
+	);
 	const dnsLookup = options.dnsLookup ?? lookupDns;
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const timeoutMs = Math.max(1, Math.min(30_000, Number(options.timeoutMs) || DEFAULT_PROBE_TIMEOUT_MS));

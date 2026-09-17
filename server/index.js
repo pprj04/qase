@@ -156,7 +156,10 @@ server = app.listen(port, host, () => {
 				ensureRuntime: session => services.agent.ensureRuntime(session),
 				runTurn: (session, options) => services.agent.runTurn(session, options),
 				addMessage: services.runs.addMessage.bind(services.runs),
-				setStatus: services.runs.setStatus.bind(services.runs)
+				setStatus: services.runs.setStatus.bind(services.runs),
+				// Fails activities still "running" from before the restart so they
+				// cannot veto the recovery turn's report publication.
+				updateActivity: services.runs.updateActivity.bind(services.runs)
 			});
 		}, 5_000);
 		resumeTimer.unref?.();

@@ -13,8 +13,12 @@ import { createFounderTools, founderFinishReadiness } from './founderTools.js';
 import { createFounderReviewTodos } from './founderService.js';
 import { buildSqaContext } from './sqaPrompt.js';
 import { createSqaTools } from './sqaTools.js';
+import { isCredentialQuestion } from '../public/questionPresentation.js';
 import { redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
+import { guardSqaBrowserTool } from './sqaBrowserBudget.js';
+
+export { guardSqaBrowserTool } from './sqaBrowserBudget.js';
 
 /**
  * One CleanSlate runtime per session, narrowed to browser work.
@@ -129,6 +133,24 @@ export function loadRunSnapshot(sessionId) {
 		return JSON.parse(fs.readFileSync(snapshotPathFor(sessionId), 'utf8'))?.snapshot ?? null;
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Restore the SDK conversation for a durable approval wait after a process
+ * restart. The caller still owns the persisted dashboard question; this only
+ * restores the runtime state required by resumePendingQuestion().
+ */
+export function restoreWaitingSnapshot(runtime, session, loadSnapshot = loadRunSnapshot) {
+	if (session?.status !== 'awaiting_input' || !session.pendingQuestion || !runtime) return false;
+	if (typeof runtime.restoreSessionSnapshot !== 'function') return false;
+	try {
+		const snapshot = loadSnapshot(session.id);
+		if (!snapshot) return false;
+		runtime.restoreSessionSnapshot(snapshot);
+		return Boolean(runtime.getPendingQuestion?.());
+	} catch {
+		return false;
 	}
 }
 
@@ -402,13 +424,14 @@ export function ensureRuntime(session, runStore) {
 		.filter(tool => allowedTools.has(tool.name));
 	const headless = runtime.headlessRuntime;
 	const registeredTools = [...ALL_TOOLS, ...sessionTools].filter(tool => allowedTools.has(tool.name)).map(tool => {
-		if (session.mode !== 'founder' || tool.name !== 'update_todo') return tool;
+		const guardedTool = guardSqaBrowserTool(tool, session);
+		if (session.mode !== 'founder' || guardedTool.name !== 'update_todo') return guardedTool;
 		const canonicalPlan = createFounderReviewTodos();
 		return {
-			...tool,
-			description: `${tool.description} Founder mode requires every canonical host-plan item in its original order and text; change only statuses.`,
+			...guardedTool,
+			description: `${guardedTool.description} Founder mode requires every canonical host-plan item in its original order and text; change only statuses.`,
 			async run(input, context) {
-				const result = await tool.run(input, context);
+				const result = await guardedTool.run(input, context);
 				if (result.success === false) return result;
 				const proposed = normaliseTodos(result, []);
 				if (proposed.length !== canonicalPlan.length || proposed.some((todo, index) => todo.text !== canonicalPlan[index].text)) {
@@ -442,6 +465,7 @@ export function ensureRuntime(session, runStore) {
 
 	record.runtime = runtime;
 	record.bridge = bridge;
+	record.waitingSnapshotRestored = restoreWaitingSnapshot(runtime, session);
 	record.dispose = () => {
 		bridge.dispose();
 		try {
@@ -462,6 +486,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	const record = ensureRuntime(session, runStore);
 	const { runtime, bridge } = record;
 	const previousArtifact = finalArtifact(session);
+	const pendingQuestionBeforeRun = session.pendingQuestion;
+	const canResumePendingQuestion = resumeAnswer !== undefined && Boolean(runtime.getPendingQuestion?.());
 
 	if (record.running) {
 		throw new Error('This session is already running. Stop it first.');
@@ -580,9 +606,17 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	const snapshots = snapshotWriter(session.id, runtime, session.ownerUserId);
 
 	try {
-		const stream = resumeAnswer === undefined
-			? runtime.run(task, controller.signal)
-			: runtime.resumePendingQuestion(resumeAnswer, controller.signal);
+		const recoveryTask = resumeAnswer === undefined || canResumePendingQuestion
+			? task
+			: [
+				'The process restarted while you were waiting for the user, so the SDK pending-question handle is unavailable.',
+				`Your prior question was: ${pendingQuestionBeforeRun?.question ?? 'Continue the paused task?'}`,
+				`The user answered: ${resumeAnswer}`,
+				'Continue from the recorded transcript and current browser state. Honor the answer, avoid repeating completed or irreversible actions, and finish the run.'
+			].join('\n');
+		const stream = canResumePendingQuestion
+			? runtime.resumePendingQuestion(resumeAnswer, controller.signal)
+			: runtime.run(recoveryTask, controller.signal);
 
 		streamLoop: for await (const part of stream) {
 			switch (part.type) {
@@ -905,13 +939,6 @@ function normaliseQuestion(question) {
 		customLabel: payload.customLabel,
 		placeholder: payload.placeholder,
 		// Credential questions get a dedicated, non-echoing form in the UI.
-		credentialLike: looksLikeCredentialRequest(text, options)
+		credentialLike: isCredentialQuestion({ question: text, options })
 	};
-}
-
-const CREDENTIAL_HINT = /\b(credential|password|passcode|username|user name|login|log in|sign in|sign-in|email and password|account)\b/i;
-
-function looksLikeCredentialRequest(text, options) {
-	const haystack = [text, ...options.map(option => option.label ?? '')].join(' ');
-	return CREDENTIAL_HINT.test(haystack);
 }

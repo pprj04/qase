@@ -27,6 +27,7 @@ import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
+import { PublicInputError, publicInput } from './publicErrors.js';
 import {
 	AuthError,
 	clearAuthCookies,
@@ -35,6 +36,17 @@ import {
 	requestCsrfToken,
 	setAuthCookies
 } from './auth.js';
+
+function safeErrorResponse(request, response, error, status = 400) {
+	if (error instanceof AuthError) {
+		return response.status(error.status ?? 400).json({ error: error.message });
+	}
+	if (error instanceof PublicInputError) {
+		return response.status(error.status).json({ error: error.message });
+	}
+	console.error(`[Qase server ${request.qaseRequestId ?? 'no-request-id'}] sanitized route error:`, error?.code ?? error?.message ?? String(error));
+	return response.status(500).json({ error: 'The request could not be completed. Try again.' });
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
@@ -323,7 +335,7 @@ export function createApplication(options = {}) {
 			const kept = await services.agent.invalidateIdleRuntimes();
 			response.json({ ...config, runsKeepingOldSettings: kept });
 		} catch (error) {
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -357,7 +369,7 @@ export function createApplication(options = {}) {
 	app.post('/api/sqa/sessions', async (request, response) => {
 		let session;
 		try {
-			const sqa = createSqaState(request.body ?? {});
+			const sqa = publicInput(() => createSqaState(request.body ?? {}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
@@ -377,7 +389,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -386,11 +398,11 @@ export function createApplication(options = {}) {
 		try {
 			// Tenant and actor identity always come from trusted per-instance
 			// context. Only the explicit Founder review scope crosses this boundary.
-			const founder = createFounderState({
+			const founder = publicInput(() => createFounderState({
 				authorizationConfirmed: request.body?.authorizationConfirmed,
 				target: request.body?.target,
 				productContext: request.body?.productContext
-			});
+			}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
@@ -411,7 +423,7 @@ export function createApplication(options = {}) {
 			response.status(201).json(session);
 		} catch (error) {
 			if (session) await services.runs.delete(session.id).catch(() => undefined);
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -447,7 +459,7 @@ export function createApplication(options = {}) {
 			);
 			response.json({ result, assessment: session.sqa.assessment });
 		} catch (error) {
-			response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+			safeErrorResponse(request, response, error);
 		}
 	});
 
@@ -670,8 +682,10 @@ export function createApplication(options = {}) {
 			response.setHeader('Content-Disposition', 'attachment; filename="qase-' + (session.mode || 'qa') + '-report.pdf"');
 			response.send(pdf);
 		} catch (error) {
-			const status = error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE' ? 503 : 500;
-			response.status(status).json({ error: error?.message ?? 'PDF rendering failed.' });
+			if (error?.code === 'QASE_PDF_BROWSER_UNAVAILABLE') {
+				return response.status(503).json({ error: 'PDF rendering is temporarily unavailable.' });
+			}
+			safeErrorResponse(request, response, error, 500);
 		}
 	});
 

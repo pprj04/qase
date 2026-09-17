@@ -5,11 +5,12 @@ function requestOrigin(request) {
 }
 
 function requestHost(request) {
-	// The Drytis edge proxy routes by X-Forwarded-Host and may rewrite Host to
-	// the upstream address. Only honour the forwarded host when the app is
-	// explicitly configured to sit behind a trusted proxy.
+	// Only honour the forwarded host behind a trusted proxy. Proxies append to
+	// this list, so the last entry is the value supplied by our trusted edge;
+	// leading entries can be attacker-controlled.
 	if (request.app?.get('trust proxy') && request.get('x-forwarded-host')) {
-		return request.get('x-forwarded-host').split(',')[0].trim();
+		const forwarded = request.get('x-forwarded-host').split(',');
+		return forwarded[forwarded.length - 1].trim();
 	}
 	return request.get('host');
 }

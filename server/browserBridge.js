@@ -641,6 +641,29 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			const page = currentPage();
 			const pagesBefore = service.context?.pages?.() ?? [];
 			const urlBefore = page?.url();
+			let clickLocator;
+			// Resolve presence and uniqueness before descriptor enrichment. Reading an
+			// element descriptor also auto-waits, so doing that first would retain the
+			// driver's 30-second missing-selector stall that this preflight replaces.
+			if (method === 'click' && page && input && service.hasLocator?.(input)) {
+				try {
+					clickLocator = await service.locator(page, input);
+					await clickLocator.first().waitFor({ state: 'visible', timeout: 2_500 });
+				} catch (error) {
+					if (error?.name === 'TimeoutError' || /timed?\s*out/i.test(String(error?.message ?? ''))) {
+						return { success: false, code: 'BROWSER_TARGET_NOT_FOUND', matches: 0, error: 'No visible element matched this locator within 2.5 seconds. Take one fresh snapshot and try one different verified locator; then record the blocker and continue.' };
+					}
+					return { success: false, code: 'BROWSER_TARGET_NOT_ACTIONABLE', error: `The browser could not evaluate this locator (${error?.name || 'LocatorError'}). Take one fresh snapshot and use a valid unique locator; then record the blocker and continue.` };
+				}
+				try {
+					const matches = await clickLocator.count();
+					if (matches > 1) {
+						return { success: false, code: 'BROWSER_TARGET_AMBIGUOUS', matches, error: `${matches} visible elements match this locator. Use a unique selector from a fresh snapshot; do not retry the same ambiguous locator.` };
+					}
+				} catch (error) {
+					return { success: false, code: 'BROWSER_TARGET_NOT_ACTIONABLE', error: `The browser could not evaluate this locator (${error?.name || 'LocatorError'}). Take one fresh snapshot and use a valid unique locator; then record the blocker and continue.` };
+				}
+			}
 			const descriptor = await resolveActionDescriptor(input);
 			const canSubmit = method === 'click' ||
 				(method === 'pressKey' && /^(?:Enter|NumpadEnter|Space)$/i.test(String(input?.key ?? '')));
@@ -657,6 +680,20 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 				return policy.asBlockedResult(authorization);
 			}
 			const securityMarker = bridge.securityBlocks.length;
+
+			// Fail deterministic locator problems before Playwright spends its full
+			// action timeout retrying. The model gets a precise recovery instruction
+			// and can continue the assessment instead of circling the same overlay.
+			if (clickLocator) {
+				try {
+					await clickLocator.click({ trial: true, timeout: 2_500 });
+				} catch (error) {
+					if (/intercept(?:s|ing)? pointer events|another element.*receives|obscur|overlay/i.test(String(error?.message ?? ''))) {
+						return { success: false, code: 'BROWSER_TARGET_OBSCURED', error: `The target is not actionable because an overlay or another element is intercepting it. Close the visible overlay using a unique control, or record the blocker and continue. (${error?.name || 'ActionabilityError'})` };
+					}
+					return { success: false, code: 'BROWSER_TARGET_NOT_ACTIONABLE', error: `The target is visible but not currently actionable (${error?.name || 'ActionabilityError'}). Inspect its disabled or unstable state once, then record the blocker and continue.` };
+				}
+			}
 
 			try {
 				target = await resolveTarget(input);

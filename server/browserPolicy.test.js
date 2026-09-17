@@ -71,6 +71,42 @@ test('allows only target-scope top-level navigation unless an operator allowlist
 	);
 });
 
+test('a declared studio meeting room authorizes only the same room on the meeting host', async () => {
+	const policy = createBrowserPolicy({
+		getTargetUrl: () => 'https://studio.drytis.ai/meeting/mtg-Aajxsxmsq9bGgW',
+		environment: { NODE_ENV: 'production' },
+		resolveHost: publicDns
+	});
+	// The exact room, with the query the guest hand-off appends, is the alias.
+	assert.equal(
+		(await policy.evaluateNavigation('https://meeting.drytis.dev/meeting/mtg-Aajxsxmsq9bGgW?workspaceUrl=https%3A%2F%2Fstudio.drytis.ai&guest=true')).allowed,
+		true
+	);
+	// The origin is NOT granted: another room, another path, and the bare origin stay blocked.
+	assert.equal(
+		(await policy.evaluateNavigation('https://meeting.drytis.dev/meeting/mtg-anotherRoom1')).code,
+		BROWSER_POLICY_CODES.OUT_OF_SCOPE_NAVIGATION
+	);
+	assert.equal(
+		(await policy.evaluateNavigation('https://meeting.drytis.dev/login')).code,
+		BROWSER_POLICY_CODES.OUT_OF_SCOPE_NAVIGATION
+	);
+	assert.equal(
+		(await policy.evaluateNavigation('https://meeting.drytis.dev/')).code,
+		BROWSER_POLICY_CODES.OUT_OF_SCOPE_NAVIGATION
+	);
+	// A non-meeting target never earns the alias.
+	const other = createBrowserPolicy({
+		getTargetUrl: () => 'https://studio.drytis.ai/dashboard',
+		environment: { NODE_ENV: 'production' },
+		resolveHost: publicDns
+	});
+	assert.equal(
+		(await other.evaluateNavigation('https://meeting.drytis.dev/dashboard')).code,
+		BROWSER_POLICY_CODES.OUT_OF_SCOPE_NAVIGATION
+	);
+});
+
 test('allows a same-host HTTP to HTTPS upgrade but not a downgrade', async () => {
 	const upgrade = createBrowserPolicy({
 		getTargetUrl: () => 'http://app.example.test/start',
@@ -114,12 +150,36 @@ test('allows public third-party subresources while blocking private and metadata
 	);
 });
 
-test('local development remains usable and production private targets require a trusted host allowlist', async () => {
+test('private targets are blocked by default everywhere; dev must opt in, production needs a trusted host allowlist', async () => {
 	const development = createBrowserPolicy({
 		getTargetUrl: () => 'http://127.0.0.1:5173/',
 		environment: { NODE_ENV: 'development' }
 	});
-	assert.equal((await development.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, true);
+	assert.equal((await development.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, false);
+
+	const optedIn = createBrowserPolicy({
+		getTargetUrl: () => 'http://127.0.0.1:5173/',
+		environment: { NODE_ENV: 'development', QASE_ALLOW_PRIVATE_NETWORK: 'true' }
+	});
+	assert.equal((await optedIn.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, true);
+
+	const productionOptOutIgnored = createBrowserPolicy({
+		getTargetUrl: () => 'http://127.0.0.1:5173/',
+		environment: { NODE_ENV: 'production', QASE_ALLOW_PRIVATE_NETWORK: 'true' }
+	});
+	assert.equal((await productionOptOutIgnored.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, false);
+
+	for (const nodeEnv of ['staging', 'Production', '']) {
+		const nonDevelopmentOptOutIgnored = createBrowserPolicy({
+			getTargetUrl: () => 'http://127.0.0.1:5173/',
+			environment: { NODE_ENV: nodeEnv, QASE_ALLOW_PRIVATE_NETWORK: 'true' }
+		});
+		assert.equal(
+			(await nonDevelopmentOptOutIgnored.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed,
+			false,
+			`private-network opt-out must be ignored for NODE_ENV=${JSON.stringify(nodeEnv)}`
+		);
+	}
 
 	const production = createBrowserPolicy({
 		getTargetUrl: () => 'http://127.0.0.1:5173/',

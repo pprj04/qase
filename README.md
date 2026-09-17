@@ -238,7 +238,9 @@ Everything below has a sensible default; set them in `.env` only if you need to.
 | `QASE_BROWSER_IDLE_MS` | `0` | Close a session's browser after this long idle. `0` keeps it open for the whole session. Cookies and the current page are restored either way. |
 | `QASE_BROWSER_ALLOWED_ORIGINS` | unset | Comma-separated trusted HTTP(S) origins (or `https://*.example.com`) that may receive top-level navigation outside the declared target origin |
 | `QASE_BROWSER_ALLOWED_PRIVATE_HOSTS` | unset | Explicit private-network host exceptions for reviewed internal production targets; exact hosts or `*.example.com` only |
+| `QASE_ALLOW_PRIVATE_NETWORK` | unset | Development-only explicit opt-out from private-network guards for local browser targets and model probes; ignored outside `NODE_ENV=development` |
 | `QASE_MAX_TURNS` | `120` | Hard ceiling on agent turns per run |
+| `QASE_SQA_BROWSER_TOOL_BUDGET` | `120` | Hard ceiling on completed browser tools in one SQA assessment; remaining unsupported controls are blocked and finalized |
 
 ## Microphone and meeting checks
 

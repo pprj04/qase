@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { allowedToolNames, ensureRuntime, isFounderSynthesisReady, prepareFounderSynthesis, runTurn, summariseResult } from './agent.js';
+import { allowedToolNames, ensureRuntime, guardSqaBrowserTool, isFounderSynthesisReady, prepareFounderSynthesis, restoreWaitingSnapshot, runTurn, summariseResult } from './agent.js';
 import { createBrowserTools } from './browserTools.js';
 import { createFounderReviewTodos, FOUNDER_CATEGORY_IDS } from './founderService.js';
 
@@ -106,6 +106,36 @@ test('new browser capabilities validate model arguments before invoking the brid
 	assert.equal((await meeting.run({ selector: '#meeting' })).success, true);
 });
 
+test('SQA browser budget blocks more browser work without blocking finalization tools', async () => {
+	const session = {
+		mode: 'sqa',
+		activities: [
+			{ toolName: 'browser_open', status: 'done' },
+			{ toolName: 'browser_snapshot', status: 'done' }
+		]
+	};
+	let browserCalls = 0;
+	const guarded = guardSqaBrowserTool({
+		name: 'browser_click',
+		description: 'Click a control.',
+		run: async () => { browserCalls++; return { success: true }; }
+	}, session, 2);
+	const blocked = await guarded.run({ selector: '#submit' }, {});
+	assert.equal(blocked.success, false);
+	assert.equal(blocked.code, 'SQA_BROWSER_BUDGET_EXHAUSTED');
+	assert.equal(blocked.used, 2);
+	assert.equal(blocked.limit, 2);
+	assert.equal(browserCalls, 0);
+
+	let finalizerCalls = 0;
+	const finalizer = guardSqaBrowserTool({
+		name: 'finish_sqa_assessment',
+		run: async () => { finalizerCalls++; return { success: true, published: true }; }
+	}, session, 2);
+	assert.equal((await finalizer.run({}, {})).success, true);
+	assert.equal(finalizerCalls, 1);
+});
+
 test('media evidence summaries fit Founder evidence limits and retain the latest app track state', () => {
 	const summary = summariseResult('browser_media', { permission:'granted', observed:{requests:Array.from({length:50},()=>({source:'application',outcome:'granted',tracks:[{kind:'audio',enabled:false,readyState:'live'}]}))} });
 	assert.ok(summary.length<=1000);
@@ -184,6 +214,69 @@ test('graceful model cancellation stops without launching an automatic continuat
 	assert.equal(fixture.statuses.at(-1).detail, 'Stopped by user.');
 	assert.equal(fixture.record.running, false);
 	assert.equal(fixture.record.controller, undefined);
+});
+
+test('a recreated runtime restores the saved pending-question snapshot', () => {
+	const snapshot = { conversation: [{ role: 'assistant', content: 'May I continue?' }] };
+	const calls = [];
+	const runtime = {
+		restoreSessionSnapshot(value) { calls.push(value); },
+		getPendingQuestion: () => ({ toolCallId: 'ask-1' })
+	};
+	const restored = restoreWaitingSnapshot(runtime, {
+		id: 'wait-1', status: 'awaiting_input', pendingQuestion: { question: 'May I continue?' }
+	}, () => snapshot);
+	assert.equal(restored, true);
+	assert.deepEqual(calls, [snapshot]);
+});
+
+test('an answer without a restorable SDK question continues as a recovery task', async () => {
+	const fixture = runtimeFixture({
+		status: 'awaiting_input',
+		pendingQuestion: { toolCallId: 'ask-1', question: 'May I join the live meeting?' }
+	});
+	let recoveryTask;
+	fixture.record.runtime.resumePendingQuestion = async function* () {
+		throw new Error('must not resume missing SDK state');
+	};
+	fixture.record.runtime.run = async function* (task) {
+		recoveryTask = task;
+		fixture.session.report = { ts: 99, verdict: 'pass' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', toolCallId: 'finish', result: { success: true, published: true } };
+	};
+	await runTurn(fixture.session, { resumeAnswer: 'Yes, join it.' }, fixture.store);
+	assert.match(recoveryTask, /May I join the live meeting/);
+	assert.match(recoveryTask, /Yes, join it/);
+	assert.equal(fixture.session.status, 'done');
+});
+
+test('plural credentials in an SQA question select the secure credential form', async () => {
+	for (const question of [
+		{ question: 'Provide vaulted credentials to test authenticated workflows.', options: [] },
+		{ question: 'How should the assessment proceed?', options: [{ label: 'Use vaulted credentials' }, { label: 'Public-only scope' }] }
+	]) {
+		const fixture = runtimeFixture({
+			mode: 'sqa',
+			sqa: { scope: { applicableControlIds: [] }, observations: [] }
+		});
+		fixture.record.runtime.getPendingQuestion = () => ({ toolCallId: 'ask-credentials', question });
+		await runTurn(fixture.session, { task: 'Continue SQA' }, fixture.store);
+		assert.equal(fixture.session.status, 'awaiting_input');
+		assert.equal(fixture.session.pendingQuestion.credentialLike, true);
+	}
+});
+
+test('ordinary SQA scope decisions remain normal option questions', async () => {
+	const fixture = runtimeFixture({
+		mode: 'sqa',
+		sqa: { scope: { applicableControlIds: [] }, observations: [] }
+	});
+	fixture.record.runtime.getPendingQuestion = () => ({
+		toolCallId: 'ask-scope',
+		question: { question: 'Choose the assessment scope.', options: [{ label: 'Public pages' }, { label: 'Full product' }] }
+	});
+	await runTurn(fixture.session, { task: 'Continue SQA' }, fixture.store);
+	assert.equal(fixture.session.pendingQuestion.credentialLike, false);
 });
 
 test('Stop remains effective during timeout backoff and releases the running lock', async () => {

@@ -130,3 +130,94 @@ test('local run creation binds a Drytis integration without storing submitted so
 	assert.deepEqual(restoredStore.getSession(id).drytisIntegration, session.drytisIntegration);
 	restoredStore.flushSessions();
 });
+
+test('a reload after a mid-tool crash fails the orphaned running activity instead of stranding publish', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-stale-activity-store-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const first = await import(`./store.js?stale-write=${Date.now()}`);
+	const session = first.createSession('Interrupted mid browser_click');
+	session.targetUrl = 'https://example.test';
+	session.status = 'running';
+	session.activities = [
+		{ id: 'done-open', ts: 1, status: 'done', toolName: 'browser_open' },
+		{ id: 'call_stuck', ts: 2, status: 'running', toolName: 'browser_click', label: 'Clicked', detail: 'Share Meeting Link' }
+	];
+	first.emit(session, 'status', { status: 'running' });
+	first.flushSessions();
+
+	const second = await import(`./store.js?stale-read=${Date.now()}`);
+	second.loadSessions();
+	const restored = second.getSession(session.id);
+	assert.equal(restored.status, 'interrupted', 'mid-run session becomes interrupted');
+	assert.equal(restored.interruptedFromRun, true, 'active execution qualifies for auto-resume');
+	const stuck = restored.activities.find(activity => activity.id === 'call_stuck');
+	const settled = restored.activities.find(activity => activity.id === 'done-open');
+	assert.equal(stuck.status, 'failed');
+	assert.match(stuck.error, /Interrupted by a server restart/);
+	assert.equal(settled.status, 'done', 'finished activities are untouched');
+	second.flushSessions();
+});
+
+test('a reload while awaiting approval preserves the question instead of interrupting the run', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-waiting-store-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const first = await import(`./store.js?waiting-write=${Date.now()}`);
+	const session = first.createSession('Approval required');
+	session.status = 'awaiting_input';
+	session.pendingQuestion = { toolCallId: 'ask-1', question: 'May I join the live meeting?' };
+	session.secretNames = ['QA_PASSWORD'];
+	session.activities = [{ id: 'orphaned', status: 'running', toolName: 'browser_click' }];
+	first.emit(session, 'status', { status: 'awaiting_input' });
+	first.flushSessions();
+
+	const second = await import(`./store.js?waiting-read=${Date.now()}`);
+	second.loadSessions();
+	const restored = second.getSession(session.id);
+	assert.equal(restored.status, 'awaiting_input');
+	assert.deepEqual(restored.pendingQuestion, session.pendingQuestion);
+	assert.deepEqual(restored.secretNames, [], 'ephemeral vault names are still cleared');
+	assert.equal(restored.activities[0].status, 'failed', 'orphaned activity is reconciled');
+	assert.equal(restored.interruptedFromRun, false);
+	second.flushSessions();
+});
+
+test('session persistence is not blocked by a stale PID temp directory', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-temp-collision-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	await fs.mkdir(path.join(isolatedDirectory, '.qase', `sessions.json.tmp-${process.pid}`), { recursive: true });
+	const store = await import(`./store.js?temp-collision=${Date.now()}`);
+	const session = store.createSession('Must persist despite stale temp path');
+	store.flushSessions();
+	const persisted = JSON.parse(await fs.readFile(path.join(isolatedDirectory, '.qase', 'sessions.json'), 'utf8'));
+	assert.equal(persisted.some(candidate => candidate.id === session.id), true);
+});
+
+test('session history is persisted with owner-only permissions', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-session-mode-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?mode=${Date.now()}`);
+	store.createSession('Private history');
+	store.flushSessions();
+	const metadata = await fs.stat(path.join(isolatedDirectory, '.qase', 'sessions.json'));
+	assert.equal(metadata.mode & 0o777, 0o600);
+});

@@ -47,6 +47,11 @@ function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeL
 			return { runtime };
 		},
 		runTurn: async (session, options) => { turns.push({ id: session.id, task: options.task }); },
+		updateActivity: async (session, id, patch) => {
+			const activity = session.activities?.find(candidate => candidate.id === id);
+			if (activity) Object.assign(activity, patch);
+			return activity;
+		},
 		addMessage: async (session, message) => {
 			session.messages ??= [];
 			session.messages.push(message);
@@ -63,6 +68,7 @@ function makeHarness({ sessions, snapshots, snapshotFor, restoreThrows, runtimeL
 		get: api.get,
 		ensureRuntime: api.ensureRuntime,
 		runTurn: api.runTurn,
+		updateActivity: api.updateActivity,
 		addMessage: api.addMessage,
 		setStatus: api.setStatus
 	});
@@ -211,4 +217,28 @@ test('at most one run resumes per boot pass', async () => {
 	assert.equal(count, 1);
 	assert.equal(turns.length, 1);
 	assert.equal(b.autoResumeCount ?? 0, 0, 'second candidate untouched');
+});
+
+test('resume fails activities still running from before the restart so publish cannot be vetoed', async () => {
+	// Production incident shape: browser_click died with the process, the store
+	// never failed it, and every finish_qa_report was rejected forever.
+	const session = interruptedSession({
+		id: 'run-stuck',
+		activities: [
+			{ id: 'call_stuck', ts: 1, status: 'running', toolName: 'browser_click' },
+			{ id: 'done-probe', ts: 0, status: 'done', toolName: 'browser_snapshot' }
+		]
+	});
+	const { resumeAll, turns } = makeHarness({
+		sessions: [session],
+		snapshots: [{ sessionId: 'run-stuck', ownerUserId: 'user-a', savedAt: 1 }]
+	});
+	const count = await resumeAll();
+	assert.equal(count, 1);
+	assert.equal(turns.length, 1, 'recovery turn still runs');
+	const stuck = session.activities.find(activity => activity.id === 'call_stuck');
+	const done = session.activities.find(activity => activity.id === 'done-probe');
+	assert.equal(stuck.status, 'failed', 'orphaned running activity is failed before the turn');
+	assert.match(stuck.error, /Interrupted by a server restart/);
+	assert.equal(done.status, 'done', 'settled activities are untouched');
 });

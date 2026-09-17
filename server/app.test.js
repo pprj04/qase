@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { createApplication } from './app.js';
+import { PublicInputError } from './publicErrors.js';
 import { createInstanceAccess } from './instanceAccess.js';
 import { finishSqaAssessment } from './sqaService.js';
 
@@ -468,6 +469,12 @@ test('SQA catalog and authorized scope creation stay pending until evidence is e
 		assert.ok(created.todos.every(item => item.status === 'pending'));
 		assert.match(created.todos[0].text, /authorized target.*assessment boundary/i);
 		assert.match(created.todos.at(-1).text, /publish the professional SQA report/i);
+		const invalidObservation = await fixture.request(`/api/sessions/${created.id}/sqa/observations`, {
+			method: 'POST',
+			json: { controlId: 'NOT-IN-SCOPE', status: 'pass', evidence: [] }
+		});
+		assert.equal(invalidObservation.status, 400);
+		assert.match((await body(invalidObservation)).error, /control|scope/i);
 		const initialPlan = fixture.state.events.find(event => (
 			event.type === 'todos' && event.sessionId === created.id
 		));
@@ -965,4 +972,63 @@ test('SSE releases its subscription if initial frame retrieval fails', { timeout
 	const response = await fixture.request(`/api/sessions/${session.id}/events`);
 	assert.equal(await response.text(), ': connected\n\n');
 	assert.equal(fixture.state.listenerCount(session.id), 0);
+});
+
+test('route failures never expose filesystem paths to API clients', async t => {
+	const memory = createMemoryServices();
+	memory.services.configuration.save = async () => {
+		throw Object.assign(new Error('ENOENT: missing /workspace/private/config.json'), { code: 'ENOENT' });
+	};
+	const fixture = await startFixture({ memory });
+	t.after(() => fixture.close());
+	const response = await fixture.request('/api/config', { method: 'PUT', json: { model: 'test' } });
+	assert.equal(response.status, 500);
+	const payload = await body(response);
+	assert.equal(payload.error, 'The request could not be completed. Try again.');
+	assert.doesNotMatch(JSON.stringify(payload), /workspace|config\.json/);
+});
+
+test('route failures never expose unexpected database or internal details', async t => {
+	const memory = createMemoryServices();
+	memory.services.configuration.save = async () => {
+		throw Object.assign(new Error('duplicate key violates users_email_key; SQL=INSERT INTO users'), { code: '23505' });
+	};
+	const fixture = await startFixture({ memory });
+	t.after(() => fixture.close());
+	const response = await fixture.request('/api/config', { method: 'PUT', json: { model: 'test' } });
+	assert.equal(response.status, 500);
+	const payload = await body(response);
+	assert.equal(payload.error, 'The request could not be completed. Try again.');
+	assert.doesNotMatch(JSON.stringify(payload), /duplicate|users_email_key|INSERT INTO/);
+});
+
+test('only explicitly public input errors retain their message', async t => {
+	const memory = createMemoryServices();
+	memory.services.configuration.save = async input => {
+		if (input.model === 'public') throw new PublicInputError('Choose a supported model.');
+		if (input.model === 'spoof') {
+			throw Object.assign(new Error('failed reading /workspace/private/auth.json'), {
+				name: 'AuthError', status: 418
+			});
+		}
+		throw new TypeError('failed reading /workspace/private/config.json');
+	};
+	const fixture = await startFixture({ memory });
+	t.after(() => fixture.close());
+
+	const publicResponse = await fixture.request('/api/config', { method: 'PUT', json: { model: 'public' } });
+	assert.equal(publicResponse.status, 400);
+	assert.deepEqual(await body(publicResponse), { error: 'Choose a supported model.' });
+
+	const internalResponse = await fixture.request('/api/config', { method: 'PUT', json: { model: 'internal' } });
+	assert.equal(internalResponse.status, 500);
+	const payload = await body(internalResponse);
+	assert.equal(payload.error, 'The request could not be completed. Try again.');
+	assert.doesNotMatch(JSON.stringify(payload), /workspace|config\.json/);
+
+	const spoofedResponse = await fixture.request('/api/config', { method: 'PUT', json: { model: 'spoof' } });
+	assert.equal(spoofedResponse.status, 500);
+	const spoofedPayload = await body(spoofedResponse);
+	assert.equal(spoofedPayload.error, 'The request could not be completed. Try again.');
+	assert.doesNotMatch(JSON.stringify(spoofedPayload), /workspace|auth\.json/);
 });

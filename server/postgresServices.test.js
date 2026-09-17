@@ -316,18 +316,23 @@ test('loaded summaries preserve newest-first ordering and exact child counts', a
 	assert.equal(summaries[0].findings, undefined);
 });
 
-test('load recovery interrupts active runs, clears pending input and all secret names', async () => {
+test('load recovery interrupts executing runs but preserves durable approval waits', async () => {
 	const running = session({
 		id: FIRST_ID,
 		status: 'running',
 		pendingQuestion: { question: 'Should be cleared?' },
-		secretNames: ['QA_PASSWORD']
+		secretNames: ['QA_PASSWORD'],
+		activities: [
+			{ id: 'call_stuck', ts: 10, status: 'running', toolName: 'browser_click' },
+			{ id: 'done-open', ts: 9, status: 'done', toolName: 'browser_open' }
+		]
 	});
 	const waiting = session({
 		id: SECOND_ID,
 		status: 'awaiting_input',
 		pendingQuestion: { question: 'Continue?' },
-		secretNames: ['QA_USERNAME', 'QA_PASSWORD']
+		secretNames: ['QA_USERNAME', 'QA_PASSWORD'],
+		activities: [{ id: 'call_waiting', ts: 10, status: 'running', toolName: 'browser_wait' }]
 	});
 	const fake = createFakeRepository({
 		rows: [{ session: running, version: 2 }, { session: waiting, version: 5 }]
@@ -339,12 +344,25 @@ test('load recovery interrupts active runs, clears pending input and all secret 
 	});
 	await services.runs.load();
 
-	for (const id of [FIRST_ID, SECOND_ID]) {
-		const recovered = await services.runs.get(id);
-		assert.equal(recovered.status, 'interrupted');
-		assert.equal(recovered.pendingQuestion, undefined);
+	const recoveredRunning = await services.runs.get(FIRST_ID);
+	assert.equal(recoveredRunning.status, 'interrupted');
+	assert.equal(recoveredRunning.pendingQuestion, undefined);
+	const recoveredWaiting = await services.runs.get(SECOND_ID);
+	assert.equal(recoveredWaiting.status, 'awaiting_input');
+	assert.deepEqual(recoveredWaiting.pendingQuestion, { question: 'Continue?' });
+	for (const recovered of [recoveredRunning, recoveredWaiting]) {
 		assert.deepEqual(recovered.secretNames, []);
+		assert.ok(recovered.activities.every(activity => activity.status === 'failed' || activity.status === 'done'),
+			'no activity may stay "running" after recovery');
 	}
+	const stuck = (await services.runs.get(FIRST_ID)).activities.find(activity => activity.id === 'call_stuck');
+	assert.equal(stuck.status, 'failed');
+	assert.match(stuck.error, /Interrupted by a server restart/);
+	assert.equal(
+		fake.state.saveCalls.every(call => call.session.activities.every(activity => activity.status !== 'running')),
+		true,
+		'recovery persistence must never retain a "running" activity'
+	);
 	assert.equal(
 		fake.state.saveCalls.every(call => call.session.secretNames.length === 0),
 		true,

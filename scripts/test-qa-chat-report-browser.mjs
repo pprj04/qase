@@ -5,7 +5,7 @@ import { buildQaChatReport } from '../server/report.js';
 
 // Real preview UI and production formatter; isolated fixtures prevent paid runs
 // and writes to customer data. Backend persistence is tested by runTurn tests.
-const base = process.env.TEST_BASE_URL ?? 'https://qase-2-1-jywqe4.drytis.dev';
+const base = process.env.TEST_BASE_URL ?? 'http://localhost:5173';
 const id = '12345678-1234-4234-8234-123456789abc';
 const browser = await chromium.launch();
 const checks = [];

@@ -214,16 +214,31 @@ export function createPostgresApplicationServices({
 			// its browser/model handles, so preserve the established interrupted
 			// recovery behavior and clear vault names whose values no longer exist.
 			for (const session of recoverActiveRuns ? sessions.values() : []) {
-				const wasActive = session.status === 'running' || session.status === 'awaiting_input';
+				const wasRunning = session.status === 'running';
+				const wasWaiting = session.status === 'awaiting_input';
+				const wasActive = wasRunning || wasWaiting;
 				const hadSecretNames = (session.secretNames?.length ?? 0) > 0;
 				if (!wasActive && !hadSecretNames) continue;
 				if (wasActive) {
-					session.status = 'interrupted';
-					session.pendingQuestion = undefined;
+					session.interruptedFromRun = wasRunning;
+					if (wasRunning) {
+						session.status = 'interrupted';
+						session.pendingQuestion = undefined;
+					}
+					// A tool executing when the process died can never return; left
+					// "running" it would veto report publication forever after the
+					// run is resumed.
+					for (const activity of Array.isArray(session.activities) ? session.activities : []) {
+						if (activity && activity.status === 'running') {
+							activity.status = 'failed';
+							activity.error = 'Interrupted by a server restart before this tool returned.';
+						}
+					}
 				}
 				session.secretNames = [];
 				await commit(session, 'run.recovered', {
-					interrupted: wasActive,
+					interrupted: wasRunning,
+					waitingPreserved: wasWaiting,
 					clearedSecretNames: hadSecretNames
 				});
 			}

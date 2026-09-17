@@ -186,6 +186,24 @@ export function createRunResume(overrides = {}) {
 				}
 			}
 
+			// Last-resort reconciliation: a tool executing when the process died
+			// can never return, and an activity left "running" vetoes report
+			// publication forever. Stores normally fail these on load; this sweep
+			// guarantees it no matter how the session reached memory.
+			if (typeof api.updateActivity === 'function' && Array.isArray(session?.activities)) {
+				for (const activity of session.activities) {
+					if (activity?.status !== 'running') continue;
+					try {
+						await api.updateActivity(session, activity.id, {
+							status: 'failed',
+							error: 'Interrupted by a server restart before this tool returned.'
+						});
+					} catch (error) {
+						logger.warn?.('runresume.stale-activity-failed', { runId: candidate.sessionId, activityId: activity.id, error: String(error) });
+					}
+				}
+			}
+
 			// Exactly one recovery turn, inside the owner's actor context so
 			// per-user model configuration, memory, and ownership resolve.
 			session.autoResumeCount = (session.autoResumeCount ?? 0) + 1;

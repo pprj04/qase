@@ -76,13 +76,32 @@ test('QA cannot publish success without a plan, successful browser evidence, or 
 });
 
 test('QA waits for ongoing tools and cannot finalize SQA or Founder runs', async () => {
-	const target = fixture({ activities: [{ id: 'running-mic', toolName: 'browser_media_probe', status: 'running', ts: 0 }] });
+	const target = fixture({ activities: [{ id: 'running-mic', toolName: 'browser_media_probe', status: 'running', ts: Date.now() }] });
 	const result = await target.finish.run(report);
 	assert.equal(result.success, false);
 	assert.deepEqual(result.active_activity_ids, ['running-mic']);
 	for (const mode of ['sqa', 'founder']) {
 		assert.equal((await fixture({ mode }).finish.run(report)).success, false);
 	}
+});
+
+test('a running activity left behind by a dead process no longer blocks publishing', async () => {
+	// Production incident: browser_click stayed "running" for hours after a
+	// restart, rejecting finish_qa_report 24 times in a row.
+	const stale = fixture({ activities: [
+		{ id: 'stuck-click', toolName: 'browser_click', status: 'running', ts: Date.now() - 130_000 },
+		{ id: 'done-wait', toolName: 'browser_wait', status: 'done', ts: Date.now() - 200_000 }
+	] });
+	const result = await stale.finish.run(report);
+	assert.equal(result.success, true);
+	assert.equal(stale.session.report.verdict, 'pass');
+	assert.equal(stale.commits.length, 1);
+
+	const timeless = fixture({ activities: [
+		{ id: 'ancient-click', toolName: 'browser_click', status: 'running' },
+		{ id: 'done-snapshot', toolName: 'browser_snapshot', status: 'done', ts: Date.now() - 200_000 }
+	] });
+	assert.equal((await timeless.finish.run(report)).success, true);
 });
 
 test('a blocked QA report records unavailable checks without inventing browser evidence', async () => {

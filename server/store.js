@@ -42,14 +42,20 @@ const MAX_DRYTIS_INTEGRATION_BYTES = 1_000_000;
 let saveTimer;
 
 function persistNow() {
+	let tmp;
 	try {
 		fs.mkdirSync(STATE_DIR, { recursive: true });
 		// Atomic-write pattern: write to a temp file then rename, so a crash
-		// mid-write can never leave a truncated sessions.json behind.
-		const tmp = `${STATE_FILE}.tmp-${process.pid}`;
-		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'));
+		// mid-write can never leave a truncated sessions.json behind. Include a
+		// nonce because a killed/corrupted process can leave its old PID path as
+		// a directory; PID reuse must never disable all future persistence.
+		tmp = `${STATE_FILE}.tmp-${process.pid}-${randomUUID()}`;
+		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'), { mode: 0o600 });
 		fs.renameSync(tmp, STATE_FILE);
 	} catch (error) {
+		if (tmp) {
+			try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+		}
 		// A dashboard that cannot write its history is still a usable dashboard,
 		// but surface it loudly so the operator notices data loss risk.
 		console.error(`[qase-store] failed to persist sessions: ${error?.code ?? error?.message ?? 'unknown'}`);
@@ -87,14 +93,30 @@ export function loadSessions() {
 				session.device = isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID;
 				session.deviceLandscape = session.deviceLandscape === true;
 				session.ownerUserId = typeof session.ownerUserId === 'string' ? session.ownerUserId : DEFAULT_ACTOR_USER_ID;
-			// Nothing survives a restart mid-run, so anything that was in flight is stale.
-			if (session.status === 'running' || session.status === 'awaiting_input') {
-				// Only a run that was actively executing qualifies for automatic
-				// resumption (runResume.js); a run waiting on user input stays put.
-				session.interruptedFromRun = session.status === 'running';
-				session.status = 'interrupted';
-				session.pendingQuestion = undefined;
+			// A running browser/model turn cannot survive a restart and is resumed
+			// from its snapshot. A run waiting for a human answer is already at a
+			// durable boundary: preserve that status and question so the dashboard
+			// does not turn a legitimate approval wait into an interruption.
+			const wasRunning = session.status === 'running';
+			const wasWaiting = session.status === 'awaiting_input';
+			if (wasRunning || wasWaiting) {
+				session.interruptedFromRun = wasRunning;
+				if (wasRunning) {
+					session.status = 'interrupted';
+					session.pendingQuestion = undefined;
+				}
+				// A tool executing when the process died can never return; leave it
+				// marked "running" and it vetoes report publication forever.
+				for (const activity of Array.isArray(session.activities) ? session.activities : []) {
+					if (activity && activity.status === 'running') {
+						activity.status = 'failed';
+						activity.error = 'Interrupted by a server restart before this tool returned.';
+					}
+				}
 			}
+			// Vault contents are process-local. Never advertise names whose values
+			// disappeared during the restart, including on a preserved approval wait.
+			session.secretNames = [];
 			if (typeof session.autoResumeCount !== 'number' || session.autoResumeCount < 0) {
 				session.autoResumeCount = 0;
 			}

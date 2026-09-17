@@ -1,4 +1,5 @@
 import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentation.js';
+import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
 import { hostOf, list, markdown, paragraph, relativeTime, section, truncate } from './uiPrimitives.js';
@@ -581,7 +582,8 @@ function renderQuestion() {
 
 	const tag = document.createElement('span');
 	tag.className = 'question-tag';
-	tag.textContent = question.credentialLike ? 'Credentials needed' : 'Decision needed';
+	const credentialLike = isCredentialQuestion(question);
+	tag.textContent = credentialLike ? 'Credentials needed' : 'Decision needed';
 
 	const text = document.createElement('div');
 	text.className = 'question-text';
@@ -596,7 +598,7 @@ function renderQuestion() {
 		card.append(summary);
 	}
 
-	card.append(question.credentialLike ? credentialForm() : optionForm(question));
+	card.append(credentialLike ? credentialForm() : optionForm(question));
 	el.questionSlot.append(card);
 	card.querySelector('input')?.focus();
 }

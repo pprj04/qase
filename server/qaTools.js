@@ -131,8 +131,16 @@ export function createQaTools(session, runStore) {
 					remaining_count: remainingTodos.length
 				};
 			}
+			// A genuinely in-flight tool still gates publication, but an activity
+			// left "running" by a crashed or restarted process can never settle —
+			// so mirror the 120 s recency window the SQA and Founder finalizers
+			// use instead of blocking the report forever.
+			const now = Date.now();
 			const activeActivities = (session.activities ?? []).filter(activity => (
-				activity.status === 'running' && activity.toolName !== 'finish_qa_report'
+				activity.status === 'running'
+				&& activity.toolName !== 'finish_qa_report'
+				&& Number.isFinite(Number(activity.ts))
+				&& now - Number(activity.ts) < 120_000
 			));
 			if (activeActivities.length > 0) {
 				return { success: false, error: 'QA checks are still running. Wait for their tool results before publishing.', active_activity_ids: activeActivities.map(item => item.id) };

@@ -94,3 +94,25 @@ test('memory rejects credential-shaped content and expires/revokes sessions', as
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
+
+test('throttle map evicts oldest windows instead of refusing new keys', () => {
+	const consume = createAuthThrottle({ now: () => 0 });
+	for (let i = 0; i < 10_000; i++) consume(`attacker-${i}`, 40);
+	assert.equal(consume('ip:legitimate-visitor', 40), true);
+	assert.equal(consume('ip:legitimate-visitor', 40), true);
+	assert.equal(consume('attacker-0', 40), true);
+});
+
+test('users without a stored role are never elevated to owner', async () => {
+	const { auth, directory } = await service();
+	try {
+		const alice = await auth.register({ email: 'norole@example.com', password: 'correct horse battery staple' });
+		const file = path.join(directory, 'auth.json');
+		const state = JSON.parse(await fs.readFile(file, 'utf-8'));
+		delete state.users.find(user => user.email === 'norole@example.com').role;
+		await fs.writeFile(file, JSON.stringify(state));
+		const reloaded = createLocalAuthService({ tenantContext: DEFAULT_TENANT_CONTEXT, file });
+		await reloaded.load();
+		assert.equal((await reloaded.authenticate(alice.token)).role, 'developer');
+	} finally { await fs.rm(directory, { recursive: true, force: true }); }
+});

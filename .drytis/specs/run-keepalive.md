@@ -27,6 +27,27 @@ The keepalive pings the **public site URL** while any run is active. Public HTTP
 - [x] Full test suite green (437 pass / 0 fail / 6 skipped).
 - [x] Live run end-to-end: run created → `keepalive.started` logged → `keepalive.ping.ok` → run finished `done` with no interruption.
 
+## Restart-safe approval waits (Sep 16 regression)
+
+The keepalive intentionally stops after a quiet window while the agent is
+waiting for a human answer. That state must be durable: pausing the container
+must not turn an approval request into an interrupted run or discard the
+question needed to continue it.
+
+### Acceptance criteria
+- [x] Local and PostgreSQL stores preserve `awaiting_input` and its
+  `pendingQuestion` across process restart while still clearing ephemeral
+  secret names and failing any orphaned running activity.
+- [x] A newly created runtime restores the persisted agent snapshot before an
+  answer is submitted.
+- [x] If the snapshot is absent or cannot restore the SDK pending-question
+  state, the answer continues as an explicit recovery task instead of failing
+  or stranding the run.
+- [x] Running sessions retain the existing bounded auto-resume behavior.
+- [x] Atomic session persistence cannot be blocked by a stale PID-derived temp
+  file or directory left by a prior process/crash.
+- [x] Focused restart/resume tests and the full unit/integration suite pass.
+
 ## Verification history
 - Sep 10 v1: loopback keepalive, unit green, loopback pings observed — but runs still died (loopback ≠ edge traffic).
 - Sep 11 v2: public-URL keepalive. Live run fc9bf569 (demo login check) ran 02:06–02:07 UTC with `keepalive.started` + `keepalive.ping.ok`; run completed `done`. Container paused later at idle (expected behavior).
