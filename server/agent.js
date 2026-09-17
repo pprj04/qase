@@ -14,7 +14,7 @@ import { createFounderReviewTodos } from './founderService.js';
 import { buildSqaContext } from './sqaPrompt.js';
 import { createSqaTools } from './sqaTools.js';
 import { isCredentialQuestion } from '../public/questionPresentation.js';
-import { redact, secretNames } from './secrets.js';
+import { clearSecrets, redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
 import { guardSqaBrowserTool } from './sqaBrowserBudget.js';
 
@@ -483,6 +483,9 @@ export function ensureRuntime(session, runStore) {
  * asked a blocking question.
  */
 export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, incompleteAttempt = 0 }, runStore) {
+	// Rehydrate only placeholder names before rebuilding prompt context. Values
+	// remain inside the encrypted host vault and browser substitution boundary.
+	session.secretNames = secretNames(session.id);
 	const record = ensureRuntime(session, runStore);
 	const { runtime, bridge } = record;
 	const previousArtifact = finalArtifact(session);
@@ -556,6 +559,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			}
 		}
 		await runStore.setStatus(session, 'done');
+		clearSecrets(session.id);
+		session.secretNames = [];
 	};
 
 	// Reasoning is streamed for the live strip but never stored: it belongs to
@@ -758,6 +763,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = `The agent paused repeatedly before publishing the final ${artifact}. Send "continue" to resume this run.`;
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			clearSecrets(session.id);
 			deleteRunSnapshot(session.id);
 		}
 	} catch (error) {
@@ -778,6 +784,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = sanitizeErrorDetail(error);
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			clearSecrets(session.id);
 			deleteRunSnapshot(session.id);
 		}
 	} finally {
@@ -821,6 +828,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		record.running = false;
 		record.controller = undefined;
 		if (session.status !== 'idle') await runStore.setStatus(session, 'idle', 'Stopped by user.');
+		clearSecrets(session.id);
+		session.secretNames = [];
 	};
 	if (controller.signal.aborted) {
 		await stoppedBeforeContinuation();

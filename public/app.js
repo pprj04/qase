@@ -675,7 +675,7 @@ function credentialForm() {
 
 	const note = document.createElement('div');
 	note.className = 'cred-note';
-	note.innerHTML = 'Held in this server\'s memory only — never written to disk, never sent to the model. ' +
+	note.innerHTML = 'Encrypted locally for this run and deleted when the run ends — never sent to the model. ' +
 		'The agent fills the form with <code>{{QA_USERNAME}}</code> and <code>{{QA_PASSWORD}}</code>; the real values are swapped in at the keyboard.';
 
 	const actions = document.createElement('div');

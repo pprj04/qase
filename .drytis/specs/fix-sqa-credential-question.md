@@ -63,3 +63,24 @@ and has performed no browser action since 03:34:58 UTC; the fresh unauthenticate
 browser could not inspect its private dashboard. The separate browser-efficiency
 script still has a pre-existing open/frame-start race before click handling and
 is not a regression from this change.
+
+## Follow-up: survive a server restart without asking again
+
+The reported run accepted credentials through the secure form, but a later
+server restart destroyed the process-local vault and browser session. Recovery
+then reached the same sign-in wall with no usable placeholders and asked the
+operator for the same credentials again. A run must keep its credential handoff
+across an ordinary process restart so automatic recovery can finish unattended.
+
+### Restart-safety acceptance criteria
+
+- [ ] Local run credentials are encrypted at rest and can be restored after a
+      process restart without exposing values in the session or transcript.
+- [ ] Restored credentials repopulate only placeholder names for the model and
+      continue to resolve inside the browser bridge.
+- [ ] Run credential material is deleted when the run is deleted or reaches a
+      terminal lifecycle boundary; corrupt or undecryptable records fail closed.
+- [ ] The secure form accurately explains restart-scoped storage and never
+      echoes submitted values.
+- [ ] Focused regressions, the full suite, infrastructure verification,
+      independent review, and live browser verification pass.

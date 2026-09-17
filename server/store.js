@@ -6,6 +6,7 @@ import { normalizeFounderState } from './founderService.js';
 import { normalizePendingSqaState } from './sqaService.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { DEFAULT_ACTOR_USER_ID } from './tenancy.js';
+import { clearSecrets, secretNames } from './secrets.js';
 
 /**
  * In-memory session store with a JSON mirror on disk.
@@ -114,9 +115,14 @@ export function loadSessions() {
 					}
 				}
 			}
-			// Vault contents are process-local. Never advertise names whose values
-			// disappeared during the restart, including on a preserved approval wait.
-			session.secretNames = [];
+			// Rehydrate names only for resumable/waiting work. A crash between final
+			// status persistence and vault cleanup is reconciled here on next boot.
+			if (['done', 'error', 'idle'].includes(session.status)) {
+				clearSecrets(session.id);
+				session.secretNames = [];
+			} else {
+				session.secretNames = secretNames(session.id);
+			}
 			if (typeof session.autoResumeCount !== 'number' || session.autoResumeCount < 0) {
 				session.autoResumeCount = 0;
 			}
