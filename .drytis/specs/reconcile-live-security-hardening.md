@@ -28,16 +28,32 @@ Acceptance criteria:
 
 ## Repository organisation follow-up — 2026-09-17
 
-- [ ] Preserve every tracked and untracked workspace change in a commit on
+- [x] Preserve every tracked and untracked workspace change in a commit on
       `DEV`, the ongoing development branch.
-- [ ] Fast-forward `LIVE`, the production branch, to the same fully verified
+- [x] Fast-forward `LIVE`, the production branch, to the same fully verified
       revision so it contains all current changes without rewriting history.
-- [ ] Remove local and remote `NIHARIKA`, `MANOJ`, and `PUSHKAR` branches only
+- [x] Remove local and remote `NIHARIKA`, `MANOJ`, and `PUSHKAR` branches only
       after confirming their tips are ancestors of the retained branches.
-- [ ] Fetch before reconciliation, publish the resulting `DEV` and `LIVE`
+- [x] Fetch before reconciliation, publish the resulting `DEV` and `LIVE`
       refs, and verify both remote refs match their local counterparts.
-- [ ] Leave the working tree clean and record the final branch topology on
+- [x] Leave the working tree clean and record the final branch topology on
       ticket #11298.
+
+## Repository organisation verification — 2026-09-17
+
+- Cleared stale `revert --no-commit` sequencer metadata with `git revert
+  --quit`; no files or commits were discarded.
+- Consolidated every tracked and untracked workspace change in commit
+  `ea5200a`, then fast-forwarded local `DEV` through normal history.
+- Full automated suite passed outside the network-bind sandbox: 486 passed,
+  0 failed, and 9 intentionally skipped (495 total).
+- Confirmed `origin/NIHARIKA`, `origin/MANOJ`, `origin/PUSHKAR`, local
+  `PUSHKAR`, and the former `origin/LIVE` tip were all ancestors of `DEV`
+  before deletion or advancement.
+- Published `DEV` and `LIVE` to the consolidated revision without force, then
+  deleted remote `NIHARIKA`, `MANOJ`, and `PUSHKAR` plus local `PUSHKAR`.
+- A final fetch/prune and exact-ref comparison is required after this record's
+  commit is published to both retained branches.
 
 ## Verification record — 2026-09-17
 
