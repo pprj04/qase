@@ -302,6 +302,61 @@ test('Stop remains effective during timeout backoff and releases the running loc
 	assert.equal(fixture.record.controller, undefined);
 });
 
+for (const mode of ['sqa', 'founder']) {
+	test(`${mode} retries a transient provider disconnect and completes through its finalizer`, async () => {
+		const fixture = runtimeFixture({
+			mode,
+			[mode]: mode === 'sqa'
+				? { scope: { applicableControlIds: [] }, observations: [] }
+				: { scope: {}, observations: [] }
+		});
+		let calls = 0;
+		fixture.record.runtime.run = async function* () {
+			calls++;
+			if (calls === 1) throw new Error('Connection error: socket hang up');
+			fixture.session[mode].finalizedAt = new Date().toISOString();
+			yield {
+				type: 'tool_result',
+				toolName: mode === 'sqa' ? 'finish_sqa_assessment' : 'finish_founder_review',
+				toolCallId: 'finish',
+				result: { success: true, published: true }
+			};
+		};
+		await runTurn(fixture.session, { task: `Complete ${mode}` }, fixture.store);
+		assert.equal(calls, 2);
+		assert.equal(fixture.session.status, 'done');
+		assert.equal(fixture.session.messages.some(item => item.kind === 'error'), false);
+		assert.ok(fixture.statuses.some(item => item.detail?.includes('interrupted')));
+	});
+}
+
+test('QA provider disconnect behavior is unchanged', async () => {
+	const fixture = runtimeFixture();
+	let calls = 0;
+	fixture.record.runtime.run = async function* () {
+		calls++;
+		throw new Error('Connection error: socket hang up');
+	};
+	await runTurn(fixture.session, { task: 'Run QA' }, fixture.store);
+	assert.equal(calls, 1);
+	assert.equal(fixture.session.status, 'error');
+});
+
+test('SQA does not retry authentication failures disguised as connection errors', async () => {
+	const fixture = runtimeFixture({
+		mode: 'sqa',
+		sqa: { scope: { applicableControlIds: [] }, observations: [] }
+	});
+	let calls = 0;
+	fixture.record.runtime.run = async function* () {
+		calls++;
+		throw new Error('Connection error: 401 unauthorized API key');
+	};
+	await runTurn(fixture.session, { task: 'Complete SQA' }, fixture.store);
+	assert.equal(calls, 1);
+	assert.equal(fixture.session.status, 'error');
+});
+
 test('cancellation during unfinished-tool cleanup prevents a planned continuation', async () => {
 	const fixture = runtimeFixture();
 	let calls = 0;

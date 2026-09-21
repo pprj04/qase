@@ -55,6 +55,22 @@ function isRetryableModelTimeout(error) {
 }
 
 /**
+ * Long SQA and Founder runs must survive ordinary provider transport churn.
+ * Keep QA's established failure behavior untouched: only its existing timeout
+ * retry applies. The patterns deliberately describe transport failures rather
+ * than authentication, quota, policy, or malformed-request errors.
+ */
+function isRetryableModeInterruption(error, mode) {
+	if (isRetryableModelTimeout(error)) return true;
+	if (mode !== 'sqa' && mode !== 'founder') return false;
+	const message = sanitizeErrorDetail(error);
+	if (/\b(?:400|401|402|403|404|409|422|429)\b|unauthori[sz]ed|forbidden|api key|authentication|quota|rate limit|policy|invalid request/i.test(message)) {
+		return false;
+	}
+	return /connection (?:error|closed|reset|terminated)|socket hang up|econnreset|etimedout|fetch failed|network error|premature close/i.test(message);
+}
+
+/**
  * Point the SDK at Playwright's own Chromium.
  *
  * Left alone it launches with `channel: 'chrome'`, which drives the user's
@@ -767,12 +783,15 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		} else if (controller.signal.aborted) {
 			await runStore.setStatus(session, 'idle', 'Stopped by user.');
 			deleteRunSnapshot(session.id);
-		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModelTimeout(error)) {
+		} else if (retryAttempt < MODEL_TIMEOUT_RETRIES && isRetryableModeInterruption(error, session.mode)) {
 			retryAfterTimeout = true;
+			const interrupted = !isRetryableModelTimeout(error);
 			await runStore.setStatus(
 				session,
 				'running',
-				`The model response timed out. Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
+				interrupted
+					? `The ${session.mode === 'sqa' ? 'SQA' : 'Founder Mode'} agent connection was interrupted. Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
+					: `The model response timed out. Retrying automatically (${retryAttempt + 1}/${MODEL_TIMEOUT_RETRIES})…`
 			);
 		} else {
 			const message = sanitizeErrorDetail(error);
@@ -862,7 +881,11 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		record.running = false;
 		record.controller = undefined;
 		return runTurn(session, {
-			task: 'Continue from the latest transcript and browser state. The previous model request timed out after the last successful step. Inspect the current state before acting, do not repeat completed or irreversible actions, and finish the remaining test plan.',
+			task: session.mode === 'sqa'
+				? 'Continue the SQA assessment from its durable control evidence, plan, and current browser state. The previous provider connection ended after the last successful step. Do not repeat completed or irreversible actions. Finish remaining scoped controls and call finish_sqa_assessment.'
+				: session.mode === 'founder'
+					? 'Continue the Founder review from its durable observations, plan, and current browser state. The previous provider connection ended after the last successful step. Do not repeat completed or irreversible actions. Finish the evidence-linked synthesis and call finish_founder_review.'
+					: 'Continue from the latest transcript and browser state. The previous model request timed out after the last successful step. Inspect the current state before acting, do not repeat completed or irreversible actions, and finish the remaining test plan.',
 			retryAttempt: retryAttempt + 1,
 			incompleteAttempt
 		}, runStore);

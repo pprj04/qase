@@ -61,9 +61,15 @@ export function createRunResume(overrides = {}) {
 		const targetUrl = session?.targetUrl || '(unknown target)';
 		const parts = [
 			`Your run was interrupted by a server restart. Target: ${targetUrl}`,
-			'Do not repeat completed or irreversible steps.',
-			'Continue from where your prior progress left off, verify remaining items, then publish the final report.'
+			'Do not repeat completed or irreversible steps.'
 		];
+		if (session?.mode === 'sqa') {
+			parts.push('Preserve recorded control evidence and blocker decisions. Complete only the remaining scoped controls, then call finish_sqa_assessment to durably publish the final assessment.');
+		} else if (session?.mode === 'founder') {
+			parts.push('Preserve recorded observations, browser evidence, and plan progress. Complete only the remaining review work, then call finish_founder_review to durably publish the final report.');
+		} else {
+			parts.push('Continue from where your prior progress left off, verify remaining items, then publish the final report.');
+		}
 		// Without a restored snapshot the runtime starts empty: the digest tells
 		// the agent what was already verified so it continues instead of redoing.
 		if (transcriptDigest) parts.push(`Progress so far (do not redo):\n${transcriptDigest}`);
