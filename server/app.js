@@ -149,6 +149,9 @@ export function createApplication(options = {}) {
 	drytisIntegrationApi?.mount(app);
 
 	app.use(express.json({ limit: '1mb' }));
+	app.get('/login', (_request, response) => {
+		response.sendFile(path.join(publicDirectory, 'index.html'));
+	});
 	app.use(express.static(publicDirectory));
 	if (demoEnabled) {
 		mountDemoSite(app);

@@ -300,6 +300,21 @@ test('application construction has no startup side effects and validates its ser
 	);
 });
 
+test('login entry route serves the existing application without masking unknown routes', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+
+	const login = await fixture.request('/login');
+	assert.equal(login.status, 200);
+	assert.match(login.headers.get('content-type') ?? '', /^text\/html\b/);
+	assert.match(await login.text(), /<title>Qase — autonomous QA agent<\/title>/);
+
+	const loginHead = await fixture.request('/login', { method: 'HEAD' });
+	assert.equal(loginHead.status, 200);
+
+	assert.equal((await fixture.request('/not-a-qase-route')).status, 404);
+});
+
 test('health and readiness are public, minimal, and reflect the injected readiness check', async t => {
 	let draining = false;
 	const fixture = await startFixture({
