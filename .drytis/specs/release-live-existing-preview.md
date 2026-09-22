@@ -1,9 +1,9 @@
-# #10964 Release the current preview to qase.drytis.com
+# #11554 Replace production and release the current preview to qase.drytis.com
 
 Promote the exact application version currently represented by the project 3542
-worktree and preview to the `LIVE` branch, then deploy it to the existing
-`qase.drytis.com` production target without discarding user data or unrelated
-worktree content.
+worktree and preview to the `LIVE` branch, fully delete the existing production
+deployment and persistent volume, then create a fresh production deployment for
+the user-provided `qase.drytis.com` domain. Preserve unrelated worktree content.
 
 ## Acceptance criteria
 
@@ -16,14 +16,19 @@ worktree content.
       gate.
 - [ ] Independent code review and browser testing approve the release candidate.
 - [ ] The verified release commit is published from `LIVE` without a force update.
-- [ ] Production is updated from that commit and `https://qase.drytis.com` serves
-      the expected Qase application over HTTPS.
+- [ ] The existing production deployment and persistent volume are deleted only
+      after the replacement inputs and release commit are ready.
+- [ ] A fresh production deployment is created from that commit and
+      `https://qase.drytis.com` serves the expected Qase application over HTTPS.
 - [ ] The release ticket records the commit, deployment action, and test evidence
       before moving to In Review.
 
 ## Safety constraints
 
-- Preserve existing production data and persistent volumes.
+- The user explicitly authorized deletion of the existing production deployment
+  and persistent volume for this replacement.
+- Do not delete production until the required domain, certificate contact email,
+  verified release commit, and project-selection control plane are ready.
 - Do not force-update shared branches or overwrite unrelated worktree changes.
 - Do not claim success from HTTP status alone; verify the served application
   identity and production health after deployment.

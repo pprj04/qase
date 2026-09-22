@@ -96,6 +96,19 @@ test('recovery instruction names the target and forbids repeating steps', () => 
 	assert.match(instruction, /publish the final report/);
 });
 
+test('SQA and Founder recovery instructions enforce their own completion contracts', () => {
+	const { resume } = makeHarness({});
+	const sqa = resume.recoveryInstruction(interruptedSession({ mode: 'sqa' }));
+	assert.match(sqa, /preserve recorded control evidence/i);
+	assert.match(sqa, /finish_sqa_assessment/);
+	assert.doesNotMatch(sqa, /finish_founder_review/);
+
+	const founder = resume.recoveryInstruction(interruptedSession({ mode: 'founder' }));
+	assert.match(founder, /preserve recorded observations/i);
+	assert.match(founder, /finish_founder_review/);
+	assert.doesNotMatch(founder, /finish_sqa_assessment/);
+});
+
 test('a candidate with a snapshot is resumed inside its owner actor context', async () => {
 	const session = interruptedSession({ id: 'run-a', ownerUserId: 'user-a' });
 	const snapshot = { version: 1, agent: { history: ['x'] } };

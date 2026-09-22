@@ -149,6 +149,9 @@ export function createApplication(options = {}) {
 	drytisIntegrationApi?.mount(app);
 
 	app.use(express.json({ limit: '1mb' }));
+	app.get('/login', (_request, response) => {
+		response.sendFile(path.join(publicDirectory, 'index.html'));
+	});
 	app.use(express.static(publicDirectory));
 	if (demoEnabled) {
 		mountDemoSite(app);
@@ -359,6 +362,33 @@ export function createApplication(options = {}) {
 		response.json(await services.runs.list({ limit }));
 	});
 
+	// Test Execution Timer analytics. Computed server-side from stored run
+	// timestamps; falls back to an empty aggregate when the repository does
+	// not support analytics (in-memory store).
+	app.get('/api/analytics/durations', async (request, response) => {
+		const targetUrl = typeof request.query.targetUrl === 'string' && request.query.targetUrl.trim() !== ''
+			? request.query.targetUrl.trim()
+			: undefined;
+		if (typeof services.runs.durationAnalytics !== 'function') {
+			response.json({ runCount: 0, byTarget: [] });
+			return;
+		}
+		response.json(await services.runs.durationAnalytics({ targetUrl }));
+	});
+
+	app.get('/api/analytics/targets/durations', async (request, response) => {
+		const targetUrl = typeof request.query.targetUrl === 'string' ? request.query.targetUrl.trim() : '';
+		if (targetUrl === '') {
+			response.status(400).json({ error: 'targetUrl query parameter is required.' });
+			return;
+		}
+		if (typeof services.runs.targetDurationHistory !== 'function') {
+			response.json([]);
+			return;
+		}
+		response.json(await services.runs.targetDurationHistory(targetUrl));
+	});
+
 	app.post('/api/sessions', async (request, response) => {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
@@ -435,7 +465,10 @@ export function createApplication(options = {}) {
 			...session,
 			secretNames: await services.secrets.names(session.id),
 			running: liveState.running,
-			frame: liveState.frame
+			frame: liveState.frame,
+			// Server-authoritative clock sample: the client computes elapsed
+			// timer time from this skew, never from its own render time.
+			serverNow: Date.now()
 		});
 	});
 
