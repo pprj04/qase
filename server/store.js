@@ -215,6 +215,11 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			// Needed by boot-time recovery (runResume), which runs without a
 			// request actor and must see runs owned by any user.
 			ownerUserId: session.ownerUserId,
+			startedAt: session.startedAt,
+			completedAt: session.completedAt,
+			durationSeconds: Number.isFinite(session.startedAt)
+				? ((session.completedAt ?? Date.now()) - session.startedAt) / 1000
+				: undefined,
 			findingCount: session.findings.length,
 			messageCount: session.messages.length
 		}));
@@ -307,6 +312,88 @@ export function updateActivity(session, id, patch) {
 }
 
 export function setStatus(session, status, detail) {
+	applyStatusTiming(session, status);
 	session.status = status;
-	emit(session, 'status', { status, detail });
+	emit(session, 'status', { status, detail, timing: timingForEvent(session) });
+}
+
+/**
+ * Server-authoritative run timing (Test Execution Timer).
+ *
+ * Timestamps are set here — once, at the moment of each transition — so every
+ * persistence backend (Postgres repository or this JSON mirror) stores the same
+ * authoritative values. `startedAt` and `completedAt` are write-once: repeat
+ * transitions never reset or extend them.
+ */
+export function applyStatusTiming(session, status) {
+	const now = Date.now();
+	switch (status) {
+		case 'queued':
+			if (session.queuedAt === undefined) session.queuedAt = now;
+			break;
+		case 'running':
+			// Environment setup starts the moment the run flips to running.
+			if (session.startedAt === undefined) {
+				session.startedAt = now;
+				session.setupStartedAt = now;
+			}
+			break;
+		case 'done':
+			if (session.completedAt === undefined) session.completedAt = now;
+			if (session.reportStartedAt !== undefined && session.reportEndedAt === undefined) {
+				session.reportEndedAt = now;
+			}
+			session.failureReason = undefined;
+			break;
+		case 'error':
+		case 'interrupted':
+			if (session.completedAt === undefined) session.completedAt = now;
+			break;
+		case 'idle':
+			// User stop: an idle run that was executing counts as cancelled,
+			// not completed.
+			if (session.startedAt !== undefined && session.completedAt === undefined) {
+				session.cancelledAt = now;
+				session.completedAt = now;
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+/** Mark report-generation boundaries; called by the agent workflow. */
+export function markReportPhase(session, phase) {
+	const now = Date.now();
+	if (phase === 'start') {
+		if (session.reportStartedAt === undefined) session.reportStartedAt = now;
+	} else if (phase === 'end' && session.reportStartedAt !== undefined) {
+		if (session.reportEndedAt === undefined) session.reportEndedAt = now;
+	}
+}
+
+/** Mark the boundary between environment setup and actual test execution. */
+export function markExecutionStarted(session) {
+	if (session.setupEndedAt === undefined && session.setupStartedAt !== undefined) {
+		session.setupEndedAt = Date.now();
+	}
+}
+
+/**
+ * Timing payload attached to status events; `serverNow` lets clients correct
+ * local clock skew so elapsed time is computed from server timestamps only.
+ */
+export function timingForEvent(session) {
+	return {
+		serverNow: Date.now(),
+		startedAt: session.startedAt,
+		completedAt: session.completedAt,
+		queuedAt: session.queuedAt,
+		setupStartedAt: session.setupStartedAt,
+		setupEndedAt: session.setupEndedAt,
+		reportStartedAt: session.reportStartedAt,
+		reportEndedAt: session.reportEndedAt,
+		cancelledAt: session.cancelledAt,
+		failureReason: session.failureReason
+	};
 }

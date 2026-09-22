@@ -571,6 +571,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 				});
 			}
 		}
+		// Test Execution Timer: the chat report is the last report-generation
+		// step; close the report phase before the terminal transition.
+		runStore.markReportPhase?.(session, 'end');
 		await runStore.setStatus(session, 'done');
 	};
 
@@ -598,6 +601,11 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	const beginActivity = async (toolName, input, toolCallId) => {
 		await finalizeAssistant();
 		closeThinking();
+		// Test Execution Timer: the finalizer tool opening is the start of
+		// report generation.
+		if (toolName === finalizerName(session)) {
+			runStore.markReportPhase?.(session, 'start');
+		}
 		const safeInput = redact(session.id, input);
 		if (toolName === 'browser_open' && typeof input?.url === 'string') {
 			session.targetUrl ??= input.url;
@@ -708,6 +716,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 					if (part.toolName === 'browser_open' && ok && result?.url) {
 						bridge.startFrames();
 					}
+					// Test Execution Timer: the first successful tool call ends the
+					// environment-setup phase; actual test execution has begun.
+					runStore.markExecutionStarted?.(session);
 					// A published artifact is the end of this run. Continuing the model
 					// after this point can overwrite success with a provider error or
 					// trigger redundant browser actions and a second finalization.

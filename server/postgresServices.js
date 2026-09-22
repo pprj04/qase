@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
+import { applyStatusTiming, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -52,9 +53,23 @@ function summary(session) {
 		deviceLandscape: session.deviceLandscape === true,
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
+		startedAt: session.startedAt,
+		completedAt: session.completedAt,
+		durationSeconds: session.durationSeconds,
 		findingCount: session.findings.length,
 		messageCount: session.messages.length
 	};
+}
+
+/** Live elapsed seconds for a still-running run, computed from server stamps. */
+export function liveDurationSeconds(session, now = Date.now()) {
+	if (session.completedAt !== undefined && session.startedAt !== undefined) {
+		return Math.max(0, Math.floor((session.completedAt - session.startedAt) / 1000));
+	}
+	if (session.startedAt !== undefined) {
+		return Math.max(0, Math.floor((now - session.startedAt) / 1000));
+	}
+	return undefined;
 }
 
 function eventActor(type, payload, tenantContext) {
@@ -319,6 +334,18 @@ export function createPostgresApplicationServices({
 			}
 			return repository.recordCleanup(id, options);
 		},
+		async durationAnalytics(options = {}) {
+			if (typeof repository.durationAnalytics !== 'function') {
+				return { runCount: 0, byTarget: [] };
+			}
+			return repository.durationAnalytics(options);
+		},
+		async targetDurationHistory(targetUrl, options = {}) {
+			if (typeof repository.targetDurationHistory !== 'function') {
+				return [];
+			}
+			return repository.targetDurationHistory(targetUrl, options);
+		},
 		commit,
 		async addMessage(session, message) {
 			const entry = { id: randomUUID(), ts: now(), ...message };
@@ -342,10 +369,20 @@ export function createPostgresApplicationServices({
 			await commit(session, 'activity', { activity: entry });
 			return entry;
 		},
-		async setStatus(session, status, detail) {
-			session.status = status;
-			await commit(session, 'status', { status, detail });
-		},
+	async setStatus(session, status, detail) {
+		applyStatusTiming(session, status);
+		session.status = status;
+		if (status === 'error' && detail && session.failureReason === undefined) {
+			session.failureReason = String(detail);
+		}
+		await commit(session, 'status', { status, detail, timing: timingForEvent(session) });
+	},
+	markReportPhase(session, phase) {
+		markReportPhase(session, phase);
+	},
+	markExecutionStarted(session) {
+		markExecutionStarted(session);
+	},
 		publish,
 		subscribe(sessionId, listener) {
 			if (eventTransport) return eventTransport.subscribe(sessionId, listener);
