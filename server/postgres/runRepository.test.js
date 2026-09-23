@@ -664,11 +664,13 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	});
 	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
 
-	// create: token_usage rides in the run INSERT alongside context_usage.
+	// create: token_usage rides in the run INSERT alongside context_usage;
+	// queuedAt (DEV timing) is the trailing write-once column.
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
-	assert.equal(runInsert.params[runInsert.params.length - 1].getTime(), new Date(NOW).getTime());
+	assert.equal(runInsert.params[runInsert.params.length - 1], null);
+	assert.equal(runInsert.params[runInsert.params.length - 2].getTime(), new Date(NOW).getTime());
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
@@ -841,6 +843,13 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		targetUrl: 'https://other.example/',
 		createdAt: NOW - 1_000,
 		updatedAt: NOW,
+		startedAt: undefined,
+		completedAt: undefined,
+		setupDurationSeconds: undefined,
+		executionDurationSeconds: undefined,
+		reportDurationSeconds: undefined,
+		queueDurationSeconds: undefined,
+		durationSeconds: undefined,
 		findingCount: 1,
 		messageCount: 3,
 		todoTotal: 0,

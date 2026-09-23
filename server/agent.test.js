@@ -5,6 +5,7 @@ import { allowedToolNames, ensureRuntime, guardSqaBrowserTool, isFounderSynthesi
 import { attachUsageCapture, createUsageLogger } from './usageCapture.js';
 import { createBrowserTools } from './browserTools.js';
 import { createFounderReviewTodos, FOUNDER_CATEGORY_IDS } from './founderService.js';
+import { clearSecrets, resolveSecrets, storeSecrets } from './secrets.js';
 
 function runtimeFixture(overrides = {}) {
 	const session = { id: randomUUID(), mode: 'qa', targetUrl: 'https://example.test', messages: [], activities: [], todos: [], findings: [], secretNames: [], ...overrides };
@@ -396,6 +397,22 @@ test('QA completion posts the actual findings after progress text and before don
 	version++;
 	await runTurn(fixture.session, { task: 'Run QA again' }, fixture.store);
 	assert.equal(fixture.session.messages.filter(m => m.kind === 'qa-report').length, 2);
+});
+
+test('a terminal run deletes its restart-safe credential material', async t => {
+	const fixture = runtimeFixture();
+	t.after(() => clearSecrets(fixture.session.id));
+	storeSecrets(fixture.session.id, { qa_password: 'terminal-private-value' });
+	fixture.session.secretNames = ['QA_PASSWORD'];
+	fixture.record.runtime.run = async function* () {
+		fixture.session.report = { ts: 123, verdict: 'pass' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', toolCallId: 'finish', result: { success: true, published: true } };
+	};
+
+	await runTurn(fixture.session, { task: 'Complete QA' }, fixture.store);
+	assert.equal(fixture.session.status, 'done');
+	assert.deepEqual(fixture.session.secretNames, []);
+	assert.equal(resolveSecrets(fixture.session.id, '{{QA_PASSWORD}}'), '{{QA_PASSWORD}}');
 });
 
 test('graceful model cancellation stops without launching an automatic continuation', async () => {

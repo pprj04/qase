@@ -74,6 +74,14 @@
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
+    <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
+      <h2 class="perf-title">⏱ Performance</h2>
+      <dl class="perf-grid" id="perf-grid"></dl>
+      <div class="perf-compare" id="perf-compare" hidden>
+        <h3 class="perf-compare-title" id="perf-compare-title">Same-target runs</h3>
+        <ol class="perf-compare-list" id="perf-compare-list"></ol>
+      </div>
+    </section>
     <footer class="panel-foot">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
       <span id="conn-label" role="status" aria-live="polite">connecting…</span>
@@ -89,6 +97,13 @@
       <div class="chat-id">
         <h1 id="chat-title">No run selected</h1>
         <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
+      </div>
+      <div class="head-actions">
+        <span class="run-timer" id="run-timer" hidden>
+          <span class="run-timer-icon" aria-hidden="true">⏱</span>
+          <span class="run-timer-label" id="run-timer-label">Elapsed</span>
+          <span class="run-timer-clock" id="run-timer-clock">00:00:00</span>
+        </span>
       </div>
     </header>
 

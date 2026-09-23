@@ -4,7 +4,8 @@ import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
 	addActivity, addMessage, bus, createSession, deleteSession, emit, getSession,
-	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, peekLive, setStatus, updateActivity, watchRunBus
+	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
+	markReportPhase, peekLive, setStatus, updateActivity, watchRunBus
 } from './store.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
@@ -158,6 +159,58 @@ export function createLocalApplicationServices(options = {}) {
 		async list(options) {
 			return listSessions({ ...options, ownerUserId: ownerUserId() });
 		},
+		// Duration analytics for the in-memory store: computed from loaded
+		// sessions so dev-without-Postgres still shows real numbers.
+		async durationAnalytics({ targetUrl } = {}) {
+			const now = Date.now();
+			const completed = listSessions({ limit: 100, ownerUserId: ownerUserId() })
+				.filter(candidate => {
+					const session = getSession(candidate.id, undefined);
+					if (!session?.startedAt || !session.completedAt) return false;
+					if (targetUrl !== undefined && session.targetUrl !== targetUrl) return false;
+					return true;
+				})
+				.map(candidate => getSession(candidate.id, undefined));
+			const durations = completed.map(session => (session.completedAt - session.startedAt) / 1000).sort((a, b) => a - b);
+			const average = values => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined);
+			const byTargetMap = new Map();
+			for (const session of completed) {
+				const entry = byTargetMap.get(session.targetUrl) ?? { runCount: 0, total: 0 };
+				entry.runCount += 1;
+				entry.total += (session.completedAt - session.startedAt) / 1000;
+				byTargetMap.set(session.targetUrl, entry);
+			}
+			return {
+				runCount: durations.length,
+				minDurationSeconds: durations[0],
+				maxDurationSeconds: durations[durations.length - 1],
+				avgDurationSeconds: average(durations),
+				medianDurationSeconds: durations.length
+					? durations[Math.floor(durations.length / 2)]
+					: undefined,
+				avgSecondsPerItem: undefined,
+				byTarget: [...byTargetMap.entries()].map(([url, entry]) => ({
+					targetUrl: url,
+					runCount: entry.runCount,
+					avgDurationSeconds: entry.total / entry.runCount
+				})),
+				serverNow: now
+			};
+		},
+		async targetDurationHistory(targetUrl, { limit = 20 } = {}) {
+			return listSessions({ limit: 100, ownerUserId: ownerUserId() })
+				.map(candidate => getSession(candidate.id, undefined))
+				.filter(session => session?.startedAt && session.completedAt && session.targetUrl === targetUrl)
+				.sort((a, b) => a.startedAt - b.startedAt)
+				.slice(0, Math.min(100, Math.max(1, Number(limit) || 20)))
+				.map(session => ({
+					id: session.id,
+					status: session.status,
+					startedAt: session.startedAt,
+					completedAt: session.completedAt,
+					durationSeconds: (session.completedAt - session.startedAt) / 1000
+				}));
+		},
 		/**
 		 * Unscoped accessors for boot-time run recovery (runResume.js). The
 		 * request-scoped list/get above filter by the current actor, which at
@@ -193,6 +246,8 @@ export function createLocalApplicationServices(options = {}) {
 		async setStatus(session, status, detail) {
 			setStatus(session, status, detail);
 		},
+		markReportPhase,
+		markExecutionStarted,
 		publish: emit,
 		subscribe(sessionId, listener) {
 			bus.on(sessionId, listener);

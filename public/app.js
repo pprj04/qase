@@ -40,6 +40,14 @@ const el = {
 	progressBar: $('progress-bar'),
 	currentActivity: $('current-activity'),
 	currentActivityState: $('current-activity-state'),
+	runTimer: $('run-timer'),
+	runTimerLabel: $('run-timer-label'),
+	runTimerClock: $('run-timer-clock'),
+	perfPanel: $('perf-panel'),
+	perfGrid: $('perf-grid'),
+	perfCompare: $('perf-compare'),
+	perfCompareTitle: $('perf-compare-title'),
+	perfCompareList: $('perf-compare-list'),
 	stopRun: $('stop-run'),
 	thinkingStrip: $('thinking-strip'),
 	thinkingHead: $('thinking-head'),
@@ -109,7 +117,20 @@ const state = {
 	founderCatalogPromise: undefined,
 	/** Live reasoning for the current turn. Never kept once the agent replies. */
 	thinking: { text: '', action: '' },
-	user: undefined
+	user: undefined,
+	/**
+	 * Test Execution Timer state. Server-authoritative: elapsed time is always
+	 * computed from server timestamps (startedAt/completedAt) corrected by the
+	 * latest serverNow sample, never from a frontend start event — so browser
+	 * refresh, tab switches and reconnects can never reset or skew it.
+	 */
+	timer: {
+		interval: undefined,
+		/** serverNow − clientNow (ms) from the latest snapshot/event. */
+		skew: 0,
+		/** run id -> live duration node in the runs list. */
+		runLiveTimers: new Map()
+	}
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -200,6 +221,7 @@ async function refreshRuns() {
 	const runs = await api('/sessions').catch(() => []);
 	if (runs.length === 0) {
 		el.runList.innerHTML = '<div class="feed-empty">No runs yet</div>';
+		state.timer.runLiveTimers.clear();
 		return;
 	}
 	el.runList.replaceChildren(...runs.map(renderRun));
@@ -238,6 +260,30 @@ function renderRun(run) {
 	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
 	dot.setAttribute('aria-hidden', 'true');
 	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
+	// Per-run timer: live elapsed for running runs, stored duration for
+	// finished ones. Each row computes independently — never a shared clock.
+	if (Number.isFinite(run.startedAt)) {
+		const duration = Number.isFinite(run.completedAt)
+			? formatDurationShort(run.durationSeconds ?? (run.completedAt - run.startedAt) / 1000)
+			: Number.isFinite(run.startedAt)
+				? formatDurationShort(elapsedSecondsOf(run))
+				: '';
+		if (duration) {
+			const timer = document.createElement('span');
+			timer.className = `run-duration${run.status === 'running' ? ' run-duration--live' : ''}`;
+			timer.dataset.runId = run.id;
+			timer.textContent = run.status === 'running' ? `⏱ ${duration}` : `⏱ ${duration}`;
+			timer.title = run.status === 'running'
+				? `Elapsed time — started ${formatTimeOfDay(run.startedAt)}`
+				: `Total duration — completed ${formatTimeOfDay(run.completedAt)}`;
+			meta.append(timer);
+			if (run.status === 'running') {
+				state.timer.runLiveTimers.set(run.id, timer);
+			} else {
+				state.timer.runLiveTimers.delete(run.id);
+			}
+		}
+	}
 	if (run.mode === 'sqa') {
 		const mode = document.createElement('span');
 		mode.className = 'run-mode-badge';
@@ -410,12 +456,15 @@ async function selectSession(id) {
 	applySessionSnapshot(session);
 	await connect(id);
 	await refreshRuns();
+	void refreshPerformance();
 }
 
 function applySessionSnapshot(session) {
 	const changedSession = state.session?.id !== session.id;
 	state.bubbles.clear();
 	state.session = session;
+	// Refresh the clock-skew sample on every snapshot (load, resync, refresh).
+	noteServerNow(session.serverNow);
 	applyStageDevice(session);
 
 	renderHeader();
@@ -430,6 +479,7 @@ function applySessionSnapshot(session) {
 	renderSqa();
 	renderFounder();
 	showCompletedFounderReport();
+	updateRunTimer();
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -589,7 +639,190 @@ function setStatus(status) {
 	document.title = status === 'awaiting_input'
 		? 'Qase — waiting for you'
 		: 'Qase — autonomous QA agent';
+	updateRunTimer();
 	updateThinkingStrip();
+}
+
+/* ── Test Execution Timer ────────────────────────────────────────── */
+
+function formatClock(totalSeconds) {
+	if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '00:00:00';
+	const seconds = Math.floor(totalSeconds);
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = seconds % 60;
+	return [h, m, s].map(part => String(part).padStart(2, '0')).join(':');
+}
+
+/** Human short form, e.g. "12m 18s" — used in run lists. */
+function formatDurationShort(totalSeconds) {
+	if (!Number.isFinite(totalSeconds)) return '';
+	const seconds = Math.max(0, Math.floor(totalSeconds));
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = seconds % 60;
+	if (h > 0) return `${h}h ${m}m`;
+	if (m > 0) return `${m}m ${s}s`;
+	return `${s}s`;
+}
+
+function formatTimeOfDay(epochMs) {
+	if (!Number.isFinite(epochMs)) return '';
+	return new Date(epochMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+/** Record a server clock sample so elapsed math corrects local clock skew. */
+function noteServerNow(serverNow) {
+	if (Number.isFinite(serverNow) && serverNow > 0) {
+		state.timer.skew = serverNow - Date.now();
+	}
+}
+
+function serverNowNow() {
+	return Date.now() + state.timer.skew;
+}
+
+/** Live elapsed seconds for a session-like object with server timing fields. */
+function elapsedSecondsOf(session, now = serverNowNow()) {
+	if (!Number.isFinite(session?.startedAt)) return undefined;
+	const end = Number.isFinite(session.completedAt) ? session.completedAt : now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000));
+}
+
+const TIMER_LABELS = {
+	running: 'Elapsed',
+	awaiting_input: 'Elapsed (paused for input)',
+	done: 'Total Duration',
+	error: 'Duration Until Failure',
+	interrupted: 'Duration Until Failure',
+	idle: 'Duration'
+};
+
+/**
+ * Render the header timer for the current session and keep it ticking.
+ * Stamps come only from the server (snapshot fields or SSE status timing);
+ * the interval merely re-renders elapsed time between updates.
+ */
+function updateRunTimer() {
+	const session = state.session;
+	if (!session || !Number.isFinite(session.startedAt)) {
+		el.runTimer.hidden = true;
+		return;
+	}
+	el.runTimer.hidden = false;
+	const terminal = ['done', 'error', 'interrupted'].includes(session.status)
+		|| Number.isFinite(session.completedAt);
+	const label = TIMER_LABELS[session.status] ?? 'Elapsed';
+	el.runTimerLabel.textContent = session.cancelledAt ? 'Duration (cancelled)' : label;
+	el.runTimerLabel.dataset.state = session.status;
+	if (session.status === 'done') {
+		el.runTimer.dataset.state = 'completed';
+		el.runTimerLabel.textContent = '✓ Test Completed';
+	} else if (session.status === 'error' || session.status === 'interrupted') {
+		el.runTimer.dataset.state = 'failed';
+		el.runTimerLabel.textContent = '⚠ Test Execution Failed';
+	} else if (session.cancelledAt) {
+		el.runTimer.dataset.state = 'cancelled';
+		el.runTimerLabel.textContent = 'Test Cancelled';
+	} else if (session.status === 'awaiting_input') {
+		el.runTimer.dataset.state = 'paused';
+		el.runTimerLabel.textContent = '⏸ Paused (awaiting input)';
+	} else if (session.status === 'running') {
+		el.runTimer.dataset.state = 'running';
+		el.runTimerLabel.textContent = '● Testing';
+	}
+	const seconds = elapsedSecondsOf(session);
+	el.runTimerClock.textContent = formatClock(seconds);
+	if (terminal || session.status === 'awaiting_input') {
+		// Terminal or paused-on-question states don't need a second hand;
+		// show the completed stamp too.
+		el.runTimer.title = Number.isFinite(session.completedAt)
+			? `Test Completed: ${formatTimeOfDay(session.completedAt)}`
+			: Number.isFinite(session.startedAt)
+				? `Test Started: ${formatTimeOfDay(session.startedAt)}`
+				: '';
+	} else {
+		el.runTimer.title = `Test Started: ${formatTimeOfDay(session.startedAt)}`;
+	}
+}
+
+function startTimerInterval() {
+	if (state.timer.interval !== undefined) return;
+	state.timer.interval = setInterval(() => {
+		const session = state.session;
+		if (!session || el.runTimer.hidden) return;
+		// Re-render only while a live run can advance the clock.
+		if (session.status === 'running' && !Number.isFinite(session.completedAt)) {
+			el.runTimerClock.textContent = formatClock(elapsedSecondsOf(session));
+		}
+		// Keep the runs list's live per-row elapsed times ticking too.
+		if (state.runLiveTimers?.size) {
+			for (const [runId, node] of state.runLiveTimers) {
+				const run = runId === session?.id ? session : undefined;
+				if (run && run.status === 'running') {
+					node.textContent = `⏱ ${formatDurationShort(elapsedSecondsOf(run))}`;
+				}
+			}
+		}
+	}, 1000);
+}
+
+/* ── Performance analytics & run-time comparison ─────────────────── */
+
+function perfRow(label, value) {
+	const dt = document.createElement('dt');
+	dt.textContent = label;
+	const dd = document.createElement('dd');
+	dd.textContent = value ?? '—';
+	return [dt, dd];
+}
+
+/**
+ * Render the Performance panel from the analytics API. Shows real aggregates
+ * only; when there are no completed runs the panel stays hidden.
+ */
+async function refreshPerformance() {
+	const aggregate = await api('/analytics/durations').catch(() => undefined);
+	if (!aggregate || !aggregate.runCount) {
+		el.perfPanel.hidden = true;
+		return;
+	}
+	el.perfPanel.hidden = false;
+	el.perfGrid.replaceChildren(
+		...perfRow('Completed runs', String(aggregate.runCount)),
+		...perfRow('Average execution', formatDurationShort(aggregate.avgDurationSeconds)),
+		...perfRow('Median execution', formatDurationShort(aggregate.medianDurationSeconds)),
+		...perfRow('Fastest run', formatDurationShort(aggregate.minDurationSeconds)),
+		...perfRow('Slowest run', formatDurationShort(aggregate.maxDurationSeconds)),
+		...perfRow('Avg / test item', aggregate.avgSecondsPerItem !== undefined
+			? `${aggregate.avgSecondsPerItem.toFixed(1)}s`
+			: undefined)
+	);
+	// Same-target comparison for the currently selected run's target.
+	const session = state.session;
+	if (!session?.targetUrl || typeof session.targetUrl !== 'string') {
+		el.perfCompare.hidden = true;
+		return;
+	}
+	const history = await api(`/analytics/targets/durations?targetUrl=${encodeURIComponent(session.targetUrl)}`)
+		.catch(() => []);
+	if (!Array.isArray(history) || history.length < 2) {
+		el.perfCompare.hidden = true;
+		return;
+	}
+	el.perfCompare.hidden = false;
+	el.perfCompareTitle.textContent = `${hostOf(session.targetUrl)} — run comparison`;
+	const items = history.map((entry, index) => {
+		const li = document.createElement('li');
+		const trend = index === 0 ? '' : (
+			entry.durationSeconds < history[index - 1].durationSeconds ? ' ▼ faster'
+				: entry.durationSeconds > history[index - 1].durationSeconds ? ' ▲ slower'
+					: ' → stable');
+		li.textContent = `Run #${index + 1} · ${formatDurationShort(entry.durationSeconds)}${trend}`;
+		if (entry.id === session.id) li.classList.add('is-current');
+		return li;
+	});
+	el.perfCompareList.replaceChildren(...items);
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
@@ -824,7 +1057,7 @@ function credentialForm() {
 
 	const note = document.createElement('div');
 	note.className = 'cred-note';
-	note.innerHTML = 'Held in this server\'s memory only — never written to disk, never sent to the model. ' +
+	note.innerHTML = 'Encrypted locally for this run and deleted when the run ends — never sent to the model. ' +
 		'The agent fills the form with <code>{{QA_USERNAME}}</code> and <code>{{QA_PASSWORD}}</code>; the real values are swapped in at the keyboard.';
 
 	const actions = document.createElement('div');
@@ -2139,6 +2372,17 @@ function handleEvent(event) {
 		case 'status':
 			setStatus(event.status);
 			renderCurrentActivity();
+			// Server-authoritative timing arrives with every status event.
+			if (event.timing) {
+				noteServerNow(event.timing.serverNow);
+				Object.assign(session, {
+					startedAt: event.timing.startedAt,
+					completedAt: event.timing.completedAt,
+					cancelledAt: event.timing.cancelledAt,
+					failureReason: event.timing.failureReason
+				});
+			}
+			updateRunTimer();
 			if (session.mode === 'sqa') {
 				renderSqa();
 				renderReport();
@@ -2148,9 +2392,10 @@ function handleEvent(event) {
 				renderReport();
 				showCompletedFounderReport();
 			}
-			if (event.status !== 'running') {
-				void refreshRuns();
-			}
+		if (event.status !== 'running') {
+			void refreshRuns();
+			void refreshPerformance();
+		}
 			if (event.detail && event.status === 'error') {
 				toast(event.detail, 'bad');
 			}
@@ -3071,6 +3316,8 @@ async function bootWorkspace() {
 
 (async function boot() {
 	await window.qaseEntryReady;
+	// Test Execution Timer: one shared second-hand for every live timer view.
+	startTimerInterval();
 	try {
 		state.user = await api('/auth/me');
 	} catch (error) {

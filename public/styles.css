@@ -820,6 +820,161 @@ a {
   text-transform: lowercase;
 }
 
+/* ── Test Execution Timer ──────────────────────────────────────── */
+.run-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.run-timer[hidden] {
+  display: none;
+}
+
+.run-timer-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.run-timer-clock {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 58px;
+  text-align: right;
+}
+
+.run-timer[data-state="running"] {
+  border-color: rgba(104, 119, 255, 0.32);
+  background: var(--accent-soft);
+  color: #aeb7ff;
+}
+
+.run-timer[data-state="running"] .run-timer-clock {
+  color: #dfe3ff;
+}
+
+.run-timer[data-state="paused"] {
+  border-color: rgba(232, 181, 95, 0.3);
+  background: var(--warning-soft);
+  color: #efc77f;
+}
+
+.run-timer[data-state="completed"] {
+  border-color: rgba(91, 208, 150, 0.27);
+  background: var(--success-soft);
+  color: #86dcbb;
+}
+
+.run-timer[data-state="completed"] .run-timer-clock,
+.run-timer[data-state="failed"] .run-timer-clock,
+.run-timer[data-state="cancelled"] .run-timer-clock {
+  color: var(--text);
+}
+
+.run-timer[data-state="failed"] {
+  border-color: rgba(240, 110, 110, 0.32);
+  background: rgba(240, 110, 110, 0.09);
+  color: #f0a1a1;
+}
+
+.run-timer[data-state="cancelled"] {
+  color: var(--text-muted);
+}
+
+.run-duration {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-duration--live {
+  color: #aeb7ff;
+}
+
+/* ── Performance panel ─────────────────────────────────────────── */
+.perf-panel {
+  margin: 10px 12px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.perf-panel[hidden] {
+  display: none;
+}
+
+.perf-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.perf-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+
+.perf-grid dt {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.perf-grid dd {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-compare {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.perf-compare[hidden] {
+  display: none;
+}
+
+.perf-compare-title {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.perf-compare-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+}
+
+.perf-compare-list .is-current {
+  color: #aeb7ff;
+  font-weight: 700;
+}
+
 .status-chip::before {
   content: "";
   width: 6px;

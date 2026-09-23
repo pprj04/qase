@@ -232,6 +232,63 @@ function runMode(session) {
 	return session.mode === 'sqa' || session.mode === 'founder' ? session.mode : 'qa';
 }
 
+/** Server-authoritative timing columns, hydrated into the run aggregate. */
+const TIMING_COLUMNS = `started_at, completed_at, queued_at, setup_started_at, setup_ended_at,
+	report_started_at, report_ended_at, cancelled_at, failure_reason`;
+
+function optionalDate(target, key, value) {
+	optional(target, key, value === null || value === undefined ? undefined : epoch(value));
+	return target;
+}
+
+/** Attach timing fields (epoch ms) from a qa_runs row to a hydrated session. */
+function hydrateTiming(target, row) {
+	optionalDate(target, 'startedAt', row.started_at);
+	optionalDate(target, 'completedAt', row.completed_at);
+	optionalDate(target, 'queuedAt', row.queued_at);
+	optionalDate(target, 'setupStartedAt', row.setup_started_at);
+	optionalDate(target, 'setupEndedAt', row.setup_ended_at);
+	optionalDate(target, 'reportStartedAt', row.report_started_at);
+	optionalDate(target, 'reportEndedAt', row.report_ended_at);
+	optionalDate(target, 'cancelledAt', row.cancelled_at);
+	optional(target, 'failureReason', row.failure_reason ?? undefined);
+	return target;
+}
+
+/**
+ * Column expressions for phase durations (seconds, server-computed).
+ * `queue` is only meaningful between enqueue and start; total duration needs
+ * both endpoints, otherwise the run is still in flight.
+ */
+function timingSelect(alias = '') {
+	const a = alias;
+	return `CASE WHEN ${a}completed_at IS NOT NULL AND ${a}started_at IS NOT NULL
+			THEN EXTRACT(EPOCH FROM (${a}completed_at - ${a}started_at)) END AS duration_seconds,
+		CASE WHEN ${a}started_at IS NOT NULL AND ${a}queued_at IS NOT NULL
+			THEN EXTRACT(EPOCH FROM (${a}started_at - ${a}queued_at)) END AS queue_duration_seconds,
+		CASE WHEN ${a}setup_started_at IS NOT NULL AND ${a}setup_ended_at IS NOT NULL
+			THEN EXTRACT(EPOCH FROM (${a}setup_ended_at - ${a}setup_started_at)) END AS setup_duration_seconds,
+		CASE WHEN ${a}report_started_at IS NOT NULL AND ${a}report_ended_at IS NOT NULL
+			THEN EXTRACT(EPOCH FROM (${a}report_ended_at - ${a}report_started_at)) END AS report_duration_seconds`;
+}
+
+function readTiming(row) {
+	const read = value => (value === null || value === undefined ? undefined : Number(value));
+	return {
+		durationSeconds: read(row.duration_seconds),
+		queueDurationSeconds: read(row.queue_duration_seconds),
+		setupDurationSeconds: read(row.setup_duration_seconds),
+		reportDurationSeconds: read(row.report_duration_seconds),
+		// The rest of the elapsed time between setup end and report start is
+		// the actual test execution phase.
+		executionDurationSeconds: row.setup_ended_at && row.report_started_at
+			? Math.max(0, (epoch(row.report_started_at) - epoch(row.setup_ended_at)) / 1000)
+			: row.setup_ended_at && row.completed_at
+				? Math.max(0, (epoch(row.completed_at) - epoch(row.setup_ended_at)) / 1000)
+				: undefined
+	};
+}
+
 function sqaProfiles(session) {
 	if (runMode(session) !== 'sqa') return [];
 	return [...new Set(session.sqa.scope.profiles.map(profile => profile.trim()))];
@@ -239,6 +296,15 @@ function sqaProfiles(session) {
 
 function asDate(value, fallback) {
 	if (value === undefined || value === null) return new Date(fallback);
+	const result = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+	if (Number.isNaN(result.getTime())) {
+		throw new TypeError('Run timestamps must be valid dates or epoch values.');
+	}
+	return result;
+}
+
+function asNullableDate(value) {
+	if (value === undefined || value === null) return null;
 	const result = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 	if (Number.isNaN(result.getTime())) {
 		throw new TypeError('Run timestamps must be valid dates or epoch values.');
@@ -403,6 +469,8 @@ function hydrateRun(row, children) {
 	if (row.drytis_integration !== undefined && row.drytis_integration !== null) {
 		session.drytisIntegration = row.drytis_integration;
 	}
+	hydrateTiming(session, row);
+	Object.assign(session, readTiming(row));
 	return { session, version: Number(row.lock_version) };
 }
 
@@ -569,9 +637,9 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, token_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
-			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21)
-		 RETURNING lock_version, updated_at`,
+			created_at, updated_at, queued_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22)
+			RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
 			String(session.title ?? 'New test run'), session.targetUrl ?? null,
@@ -581,7 +649,8 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage),
 			json(session.tokenUsage), names(session.secretNames),
 			session.messages?.length ?? 0, session.findings?.length ?? 0,
-			nextEventSequence, createdAt, updatedAt
+			nextEventSequence, createdAt, updatedAt,
+			asNullableDate(session.queuedAt)
 		]
 	);
 	await replaceChildren(client, tenant, session, updatedAt);
@@ -695,7 +764,8 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version,
+					${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 				 ORDER BY updated_at DESC, id ASC`,
@@ -712,7 +782,8 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version,
+					${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND deleted_at IS NULL
@@ -729,7 +800,7 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, title, status, run_mode, target_url, created_at, updated_at,
-					message_count, finding_count, token_usage,
+					message_count, finding_count, token_usage, ${TIMING_COLUMNS}, ${timingSelect()},
 					(SELECT COUNT(*)::int FROM qa_plan_items
 						WHERE organization_id = $1 AND project_id = $2 AND run_id = id) AS todo_total,
 					(SELECT COUNT(*)::int FROM qa_plan_items
@@ -750,6 +821,9 @@ export function createPostgresRunRepository({
 				targetUrl: row.target_url ?? undefined,
 				createdAt: epoch(row.created_at),
 				updatedAt: epoch(row.updated_at),
+				startedAt: row.started_at ? epoch(row.started_at) : undefined,
+				completedAt: row.completed_at ? epoch(row.completed_at) : undefined,
+				...readTiming(row),
 				findingCount: Number(row.finding_count ?? 0),
 				messageCount: Number(row.message_count ?? 0),
 				// Plan progress for the sidebar card — derived from the child table.
@@ -856,9 +930,17 @@ export function createPostgresRunRepository({
 					drytis_integration = $11, pending_question = $12, context_usage = $13, token_usage = $14, secret_names = $15,
 					message_count = $16, finding_count = $17, updated_at = $18,
 					lock_version = lock_version + 1,
-					next_event_sequence = next_event_sequence + $19
+					next_event_sequence = next_event_sequence + $19,
+					started_at = COALESCE(started_at, $21), completed_at = COALESCE(completed_at, $22),
+					queued_at = COALESCE(queued_at, $23),
+					setup_started_at = COALESCE(setup_started_at, $24),
+					setup_ended_at = COALESCE(setup_ended_at, $25),
+					report_started_at = COALESCE(report_started_at, $26),
+					report_ended_at = COALESCE(report_ended_at, $27),
+					cancelled_at = COALESCE(cancelled_at, $28),
+					failure_reason = CASE WHEN $29 IS NOT NULL THEN $29 ELSE failure_reason END
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
-					AND lock_version = $21 AND deleted_at IS NULL
+					AND lock_version = $22 AND deleted_at IS NULL
 					AND ($20::uuid IS NULL OR created_by_user_id = $20)
 					RETURNING lock_version, updated_at, next_event_sequence`,
 				[
@@ -872,6 +954,13 @@ export function createPostgresRunRepository({
 					session.messages?.length ?? 0, session.findings?.length ?? 0,
 					updatedAt, eventIncrement,
 					currentRequestActor()?.actorUserId ?? null,
+					// Write-once timing columns: existing values always win, so a
+					// retried or replayed save can never reset the timer.
+					asNullableDate(session.startedAt), asNullableDate(session.completedAt),
+					asNullableDate(session.queuedAt), asNullableDate(session.setupStartedAt),
+					asNullableDate(session.setupEndedAt), asNullableDate(session.reportStartedAt),
+					asNullableDate(session.reportEndedAt), asNullableDate(session.cancelledAt),
+					session.failureReason ?? null,
 					expectedVersion
 				]
 			);
@@ -1180,6 +1269,98 @@ export function createPostgresRunRepository({
 		});
 	}
 
+	/**
+	 * Duration aggregates for the Performance panel: min/max/avg/median over
+	 * completed runs, plus optional per-target filtering for comparison.
+	 */
+	async function durationAnalytics({ targetUrl, limit = 100 } = {}) {
+		const boundedLimit = boundedInteger(limit, 100, 1, 100, 'limit');
+		return transaction(async client => {
+			const parameters = [tenant.organizationId, tenant.projectId, boundedLimit];
+			let targetFilter = '';
+			if (targetUrl !== undefined && targetUrl !== null && targetUrl !== '') {
+				targetFilter = ' AND target_url = $3';
+				parameters.push(String(targetUrl));
+			}
+			const result = await client.query(
+				`WITH completed AS (
+					SELECT target_url, started_at, completed_at,
+						EXTRACT(EPOCH FROM (completed_at - started_at)) AS duration_seconds,
+						message_count, finding_count
+					FROM qa_runs
+					WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
+						AND status IN ('done', 'error', 'interrupted')
+						AND started_at IS NOT NULL AND completed_at IS NOT NULL
+						${targetFilter}
+					ORDER BY completed_at DESC
+					LIMIT $3
+				)
+				SELECT
+					COUNT(*)::int AS run_count,
+					MIN(duration_seconds) AS min_duration_seconds,
+					MAX(duration_seconds) AS max_duration_seconds,
+					AVG(duration_seconds) AS avg_duration_seconds,
+					PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_seconds) AS median_duration_seconds,
+					AVG(CASE WHEN message_count + finding_count > 0
+						THEN duration_seconds / (message_count + finding_count) END) AS avg_seconds_per_item
+					FROM completed`,
+				parameters
+			);
+			const row = result.rows?.[0] ?? {};
+			const perTarget = await client.query(
+				`SELECT target_url, COUNT(*)::int AS run_count,
+					AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) AS avg_duration_seconds
+				 FROM qa_runs
+				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
+					AND started_at IS NOT NULL AND completed_at IS NOT NULL
+				 GROUP BY target_url ORDER BY MAX(completed_at) DESC LIMIT 20`,
+				[tenant.organizationId, tenant.projectId]
+			);
+			const read = value => (value === null || value === undefined ? undefined : Number(value));
+			return {
+				runCount: read(row.run_count) ?? 0,
+				minDurationSeconds: read(row.min_duration_seconds),
+				maxDurationSeconds: read(row.max_duration_seconds),
+				avgDurationSeconds: read(row.avg_duration_seconds),
+				medianDurationSeconds: read(row.median_duration_seconds),
+				avgSecondsPerItem: read(row.avg_seconds_per_item),
+				byTarget: (perTarget.rows ?? []).map(entry => ({
+					targetUrl: entry.target_url ?? undefined,
+					runCount: Number(entry.run_count ?? 0),
+					avgDurationSeconds: read(entry.avg_duration_seconds)
+				}))
+			};
+		});
+	}
+
+	/**
+	 * Chronological durations for one target, for run-over-run trend
+	 * comparison ("is testing this site getting faster or slower?").
+	 */
+	async function targetDurationHistory(targetUrl, { limit = 20 } = {}) {
+		if (typeof targetUrl !== 'string' || targetUrl.trim() === '') {
+			throw new TypeError('targetUrl must be a non-empty string.');
+		}
+		const boundedLimit = boundedInteger(limit, 20, 1, 100, 'limit');
+		return transaction(async client => {
+			const result = await client.query(
+				`SELECT id, status, started_at, completed_at, ${timingSelect()}
+				 FROM qa_runs
+				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
+					AND target_url = $3 AND started_at IS NOT NULL AND completed_at IS NOT NULL
+				 ORDER BY started_at ASC LIMIT $4`,
+				[tenant.organizationId, tenant.projectId, targetUrl.trim(), boundedLimit]
+			);
+			return (result.rows ?? []).map(row => ({
+				id: row.id,
+				status: row.status,
+				startedAt: epoch(row.started_at),
+				completedAt: epoch(row.completed_at),
+				...readTiming(row)
+			}));
+		});
+	}
+
 	function close() {
 		closePromise ??= Promise.resolve().then(() => pool.end());
 		return closePromise;
@@ -1195,6 +1376,8 @@ export function createPostgresRunRepository({
 		save,
 		delete: deleteRun,
 		recordCleanup,
+		durationAnalytics,
+		targetDurationHistory,
 		check,
 		close
 	};
