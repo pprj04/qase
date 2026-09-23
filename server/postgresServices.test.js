@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { DEFAULT_TENANT_CONTEXT } from './tenancy.js';
 import { createPostgresApplicationServices } from './postgresServices.js';
@@ -420,4 +421,39 @@ test('trusted Drytis request identity is retained for detached durable user even
 	assert.equal(fake.state.deleteCalls[0].metadata.actorUserId, actorUserId);
 	assert.equal(fake.state.deleteCalls[0].metadata.correlationId, requestId);
 	assert.deepEqual(fake.state.deleteCalls[0].metadata.payload, { reasonCode: 'user_request' });
+});
+
+test('finding status transitions persist through the durable event log', async () => {
+	const { repository, state } = createFakeRepository();
+	const services = createPostgresApplicationServices({ repository, tenantContext: DEFAULT_TENANT_CONTEXT });
+	await services.runs.load();
+
+	const run = await services.runs.create('Tracked bugs run', {});
+	run.findings = [{
+		id: randomUUID(), ts: 900, severity: 'high', title: 'Checkout fails',
+		category: 'cart', url: 'https://example.test/cart', expected: 'order placed', actual: 'error'
+	}];
+
+	const finding = await services.runs.setFindingStatus(run, run.findings[0].id, { status: 'in_progress', note: 'triaged' });
+	assert.equal(finding.status, 'in_progress');
+
+	const save = state.saveCalls.at(-1);
+	assert.equal(save.metadata.eventType, 'finding_status');
+	assert.equal(save.session.findings[0].status, 'in_progress');
+	assert.equal(save.session.findings[0].statusNote, 'triaged');
+
+	const events = [];
+	services.events.subscribe(run.id, event => events.push(event.type));
+	await services.runs.setFindingStatus(run, run.findings[0].id, { status: 'fixed' });
+	assert.deepEqual(events, ['finding_status']);
+
+	const rows = await services.runs.aggregateFindings({ ownerUserId: run.ownerUserId });
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0].status, 'fixed');
+
+	await assert.rejects(
+		() => services.runs.setFindingStatus(run, randomUUID(), { status: 'fixed' }),
+		error => error.code === 'QASE_FINDING_NOT_FOUND'
+	);
+	await services.runs.close();
 });

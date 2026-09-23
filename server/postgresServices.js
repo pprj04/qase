@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
-import { applyStatusTiming, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
+import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -378,6 +378,23 @@ export function createPostgresApplicationServices({
 			session.failureReason = String(detail);
 		}
 		await commit(session, 'status', { status, detail, timing: timingForEvent(session) });
+	},
+	async setFindingStatus(session, findingId, patch) {
+		// Mutate the in-memory aggregate first (validation happens there),
+		// then persist durably through the queued event log exactly like every
+		// other run mutation. On version conflict the failed save restores the
+		// last committed snapshot, so the optimistic lock stays sound.
+		const finding = setFindingStatus(session, findingId, patch ?? {});
+		await commit(session, 'finding_status', { finding });
+		return finding;
+	},
+	async aggregateFindings(options) {
+		// Aggregates over the loaded in-memory run aggregates, mirroring the
+		// local store's semantics including owner scoping.
+		return aggregateSessionFindings(sessions.values(), {
+			...options,
+			ownerUserId: options?.ownerUserId ?? currentRequestActor()?.actorUserId ?? tenantContext?.actorUserId
+		});
 	},
 	markReportPhase(session, phase) {
 		markReportPhase(session, phase);

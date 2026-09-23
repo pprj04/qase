@@ -3,9 +3,9 @@ import { getPublicConfig, saveConfig, testConnection, withUserConfiguration } fr
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
-	addActivity, addMessage, bus, createSession, deleteSession, emit, getSession,
+	addActivity, addMessage, aggregateFindings, bus, createSession, deleteSession, emit, getSession,
 	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
-	markReportPhase, peekLive, setStatus, updateActivity, watchRunBus
+	markReportPhase, peekLive, setFindingStatus, setStatus, updateActivity, watchRunBus
 } from './store.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
@@ -233,6 +233,14 @@ export function createLocalApplicationServices(options = {}) {
 		async commit(session, type, payload = {}) {
 			emit(session, type, payload);
 			return session;
+		},
+		async setFindingStatus(session, findingId, patch) {
+			const finding = setFindingStatus(session, findingId, patch ?? {});
+			emit(session, 'finding_status', { finding });
+			return finding;
+		},
+		async aggregateFindings(options) {
+			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
 		},
 		async addMessage(session, message) {
 			return addMessage(session, message);

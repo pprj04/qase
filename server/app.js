@@ -496,6 +496,47 @@ export function createApplication(options = {}) {
 		}
 	});
 
+	app.get('/api/findings', async (request, response) => {
+		try {
+			const rawLimit = Number(request.query.limit);
+			const findings = await services.runs.aggregateFindings({
+				status: request.query.status,
+				severity: request.query.severity,
+				runId: request.query.run,
+				search: request.query.q,
+				limit: Number.isSafeInteger(rawLimit) ? rawLimit : undefined
+			});
+			response.json({ findings, serverNow: Date.now() });
+		} catch (error) {
+			if (error?.code === 'QASE_FINDING_STATUS_INVALID' || error?.code === 'QASE_FINDING_SEVERITY_INVALID') {
+				return response.status(400).json({ error: error.message });
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.patch('/api/sessions/:id/findings/:findingId', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		// Any authenticated user may track bugs on runs they own;
+		// requireSession already scopes access to the requesting owner.
+		try {
+			const finding = await services.runs.setFindingStatus(session, request.params.findingId, {
+				status: request.body?.status,
+				note: request.body?.note
+			});
+			response.json({ ok: true, finding });
+		} catch (error) {
+			if (error?.code === 'QASE_FINDING_NOT_FOUND') {
+				return response.status(404).json({ error: 'That bug does not exist on this run.' });
+			}
+			if (error?.code === 'QASE_FINDING_STATUS_INVALID') {
+				return response.status(400).json({ error: error.message });
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
 	app.delete('/api/sessions/:id', async (request, response) => {
 		const session = await services.runs.get(request.params.id);
 		if (!session) {

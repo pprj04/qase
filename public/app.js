@@ -2,6 +2,7 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
+import { createBugsView } from './bugsView.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
@@ -22,6 +23,8 @@ const el = {
 	newRun: $('new-run'),
 	newSqa: $('new-sqa'),
 	newFounder: $('new-founder'),
+	openBugs: $('open-bugs'),
+	bugsView: $('bugs-view'),
 	connDot: $('conn-dot'),
 	connLabel: $('conn-label'),
 	modelBadge: $('model-badge'),
@@ -114,6 +117,7 @@ const state = {
 	session: undefined,
 	config: undefined,
 	stream: undefined,
+	bugsViewOpen: false,
 	/** Message id -> the nodes streamed text is appended to. */
 	bubbles: new Map(),
 	viewport: { width: 1440, height: 900 },
@@ -221,6 +225,57 @@ const founderView = createFounderView({
 });
 const renderFounder = founderView.render;
 const renderFounderReportTab = founderView.renderReportTab;
+
+/* ── Bug tracker (standalone view) ───────────────────────────────── */
+
+const bugsView = createBugsView({
+	elements: {
+		statusFilter: $('bugs-status-filter'),
+		severityFilter: $('bugs-severity-filter'),
+		runSelect: $('bugs-run-filter-select'),
+		searchInput: $('bugs-search-input'),
+		summary: $('bugs-summary'),
+		tableWrap: $('bugs-table-wrap'),
+		tbody: $('bugs-tbody'),
+		empty: $('bugs-empty'),
+		refresh: $('bugs-refresh')
+	},
+	api,
+	toast,
+	fail,
+	openRun: runId => {
+		setBugsViewOpen(false);
+		void selectSession(runId);
+	}
+});
+bugsView.bind();
+
+el.bugsClose = $('bugs-close');
+el.bugsClose.onclick = () => setBugsViewOpen(false);
+
+// The SSE stream is per-run, so findings filed by agents in OTHER runs never
+// reach the open backlog view. While it is open, poll on a slow cadence via
+// the view's own coalesced scheduleRefresh (max one refetch per 4s window).
+let bugsViewLiveTimer;
+function setBugsViewOpen(open) {
+	state.bugsViewOpen = open;
+	el.bugsView.hidden = !open;
+	el.openBugs.setAttribute('aria-pressed', String(open));
+	// The three-panel workspace and the bugs view are exclusive regions.
+	document.querySelector('.app')?.classList.toggle('is-hidden', open);
+	if (open) {
+		// Coming back to the view: filters may be stale after runs finished.
+		bugsView.load().catch(fail);
+		if (bugsViewLiveTimer === undefined) {
+			bugsViewLiveTimer = setInterval(() => bugsView.scheduleRefresh(), 10_000);
+		}
+	} else {
+		clearInterval(bugsViewLiveTimer);
+		bugsViewLiveTimer = undefined;
+	}
+}
+
+el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
 
 /* ── Runs (left panel) ───────────────────────────────────────────── */
 
@@ -2338,6 +2393,9 @@ function handleEvent(event) {
 			session.findings.push(event.finding);
 			renderFindings();
 			renderProgressCard();
+			// The backlog view is server-sourced; a new finding anywhere in
+			// this account's stream coalesces to one throttled refetch.
+			if (state.bugsViewOpen) bugsView.scheduleRefresh();
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
 				toast(`${event.finding.severity.toUpperCase()}: ${event.finding.title}`, 'bad');
 			}

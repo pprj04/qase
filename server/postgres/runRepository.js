@@ -44,6 +44,7 @@ const EVENT_CHILD_GROUPS = new Map([
 	['activity', Object.freeze(['activities'])],
 	['todos', Object.freeze(['planItems'])],
 	['finding', Object.freeze(['findings'])],
+	['finding_status', Object.freeze(['findings'])],
 	['report', Object.freeze(['reports'])],
 	['browser', Object.freeze([])],
 	['context', Object.freeze([])],
@@ -420,6 +421,13 @@ function hydrateFinding(row) {
 	};
 	optional(finding, 'url', row.page_url);
 	optional(finding, 'evidence', row.evidence);
+	// Lifecycle tracking columns (migration 015); rows written before it read
+	// back as the default `open` state.
+	finding.status = row.status ?? 'open';
+	finding.statusTs = row.status_at !== null && row.status_at !== undefined && Number.isFinite(Number(row.status_at))
+		? Number(row.status_at)
+		: finding.ts;
+	finding.statusNote = row.status_note ?? '';
 	return finding;
 }
 
@@ -495,7 +503,8 @@ async function hydrateRows(client, tenant, runRows) {
 			 WHERE organization_id = $1 AND project_id = $2 AND run_id = ANY($3::uuid[])
 			 ORDER BY run_id, position`, childScope),
 		client.query(
-			`SELECT run_id, id, title, severity, category, page_url, steps, expected, actual, evidence, created_at
+			`SELECT run_id, id, title, severity, category, page_url, steps, expected, actual, evidence,
+				status, status_note, status_at, created_at
 			 FROM qa_findings
 			 WHERE organization_id = $1 AND project_id = $2 AND run_id = ANY($3::uuid[])
 			 ORDER BY run_id, ordinal`, childScope),
@@ -580,14 +589,19 @@ async function replaceChildren(client, tenant, session, fallbackDate, groups = A
 		await client.query(
 			`INSERT INTO qa_findings (
 				organization_id, project_id, run_id, id, ordinal, title, severity,
-				category, page_url, steps, expected, actual, evidence, created_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+				category, page_url, steps, expected, actual, evidence,
+				status, status_note, status_at, created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 			[
 				...scope, finding.id, ordinal, String(finding.title ?? ''),
 				finding.severity ?? 'medium', finding.category ?? 'general',
 				finding.url ?? null, Array.isArray(finding.steps) ? finding.steps.map(String) : [],
 				String(finding.expected ?? ''), String(finding.actual ?? ''),
-				finding.evidence ?? null, asDate(finding.ts, fallbackDate)
+				finding.evidence ?? null,
+				finding.status ?? 'open',
+				typeof finding.statusNote === 'string' && finding.statusNote.trim() ? finding.statusNote.trim().slice(0, 500) : null,
+				Number.isFinite(finding.statusTs) ? finding.statusTs : null,
+				asDate(finding.ts, fallbackDate)
 			]
 		);
 	}

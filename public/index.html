@@ -8,6 +8,7 @@
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="bugsView.css">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
@@ -260,10 +261,82 @@
       <span class="feature-label">Founder</span>
       <span class="feature-tooltip" id="feature-tip-founder" role="tooltip">Founder Mode product review</span>
     </button>
+    <button id="open-bugs" class="feature-action" type="button" aria-label="Open the bug tracker" aria-describedby="feature-tip-bugs" data-feature="bugs" aria-pressed="false">
+      <span class="feature-icon" aria-hidden="true">⬡</span>
+      <span class="feature-label">Bugs</span>
+      <span class="feature-tooltip" id="feature-tip-bugs" role="tooltip">Track every bug across runs</span>
+    </button>
     <span class="feature-dock-status" aria-hidden="true">03 tools</span>
   </nav>
 
 </div>
+
+<!-- ── Bug tracker ─────────────────────────────────────────────── -->
+<section class="bugs-view" id="bugs-view" hidden aria-labelledby="bugs-title">
+  <header class="bugs-head">
+    <div class="bugs-head-id">
+      <p class="bugs-eyebrow"><span aria-hidden="true">❯</span> qase bugs --all</p>
+      <h2 id="bugs-title">Bug tracker</h2>
+      <p class="subtle" id="bugs-subtitle">Every finding from every run, one backlog</p>
+    </div>
+    <div class="bugs-head-actions">
+      <button class="btn btn-ghost btn-sm" id="bugs-refresh" type="button">Refresh</button>
+      <button class="btn btn-primary btn-sm" id="bugs-close" type="button">Back to runs</button>
+    </div>
+  </header>
+
+  <div class="bugs-toolbar" role="search">
+    <div class="bugs-filter-group" role="group" aria-label="Filter by status" id="bugs-status-filter">
+      <button class="bugs-chip is-active" data-status="" type="button" aria-pressed="true">All</button>
+      <button class="bugs-chip" data-status="open" type="button" aria-pressed="false">Open</button>
+      <button class="bugs-chip" data-status="in_progress" type="button" aria-pressed="false">In progress</button>
+      <button class="bugs-chip" data-status="fixed" type="button" aria-pressed="false">Fixed</button>
+      <button class="bugs-chip" data-status="wont_fix" type="button" aria-pressed="false">Won't fix</button>
+    </div>
+    <div class="bugs-filter-group" role="group" aria-label="Filter by severity" id="bugs-severity-filter">
+      <button class="bugs-chip bugs-chip--sev" data-severity="" type="button" aria-pressed="true">Any severity</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="critical" type="button" aria-pressed="false">Critical</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="high" type="button" aria-pressed="false">High</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="medium" type="button" aria-pressed="false">Medium</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="low" type="button" aria-pressed="false">Low</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="info" type="button" aria-pressed="false">Info</button>
+    </div>
+    <label class="bugs-run-filter">
+      <span class="sr-only">Filter by run</span>
+      <select id="bugs-run-filter-select" aria-label="Filter by run">
+        <option value="">All runs</option>
+      </select>
+    </label>
+    <label class="bugs-search">
+      <span class="sr-only">Search bugs</span>
+      <input id="bugs-search-input" type="search" placeholder="Search title, category, page…" autocomplete="off" maxlength="200">
+    </label>
+  </div>
+
+  <div class="bugs-summary" id="bugs-summary" role="status" aria-live="polite"></div>
+
+  <div class="bugs-table-wrap" id="bugs-table-wrap">
+    <table class="bugs-table" id="bugs-table">
+      <thead>
+        <tr>
+          <th scope="col" class="bugs-col-sev">Severity</th>
+          <th scope="col" class="bugs-col-status">Status</th>
+          <th scope="col" class="bugs-col-title">Bug</th>
+          <th scope="col" class="bugs-col-run">Run</th>
+          <th scope="col" class="bugs-col-page">Page</th>
+          <th scope="col" class="bugs-col-found">Found</th>
+        </tr>
+      </thead>
+      <tbody id="bugs-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="bugs-empty" id="bugs-empty" hidden>
+    <span class="bugs-empty-glyph" aria-hidden="true">⬡</span>
+    <span>No bugs match the current filters</span>
+    <small>New findings appear here as the QA agent files them</small>
+  </div>
+</section>
 
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">

@@ -908,3 +908,92 @@ test('close is idempotent', async () => {
 	await first;
 	assert.equal(fake.state.endCalls, 1);
 });
+
+test('finding_status events rewrite findings and the lifecycle columns round-trip', async () => {
+	// Event-group ownership: a status transition must rewrite qa_findings (the
+	// child table carrying status), not any other group.
+	const fake = scriptedPool(call => call.text.startsWith('UPDATE qa_runs')
+		? {
+			rows: [{ lock_version: '4', updated_at: new Date(NOW), next_event_sequence: '9' }],
+			rowCount: 1
+		}
+		: { rows: [], rowCount: 1 });
+	const repository = createPostgresRunRepository({
+		pool: fake.pool, tenantContext: TENANT, now: () => NOW
+	});
+	const tracked = session({
+		findings: [{
+			id: FINDING_ID,
+			ts: NOW - 700,
+			title: 'Broken action',
+			severity: 'high',
+			category: 'forms',
+			url: 'https://studio.drytis.ai/form',
+			steps: ['Open form', 'Submit'],
+			expected: 'Saved',
+			actual: 'Failed',
+			status: 'in_progress',
+			statusTs: NOW - 100,
+			statusNote: 'assigned to platform team'
+		}]
+	});
+	await repository.save(tracked, { expectedVersion: 3, eventType: 'finding_status' });
+
+	assert.equal(
+		fake.calls.some(call => call.text.startsWith('DELETE FROM qa_findings')),
+		true,
+		'finding_status must own the findings rewrite'
+	);
+	for (const table of CHILD_TABLE_NAMES.filter(table => table !== 'qa_findings')) {
+		assert.equal(
+			fake.calls.some(call => call.text.startsWith(`DELETE FROM ${table}`)),
+			false,
+			`finding_status must not rewrite ${table}`
+		);
+	}
+	const insert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_findings'));
+	assert.ok(insert, 'finding insert recorded');
+	const paramIndex = sqlText(insert.text).split(',').map(part => part.trim()).indexOf('status');
+	assert.equal(insert.params[paramIndex], 'in_progress');
+	assert.equal(insert.params[paramIndex + 1], 'assigned to platform team');
+	assert.equal(insert.params[paramIndex + 2], NOW - 100);
+
+	// Hydration: a legacy row (no status columns yet) reads back as open; a
+	// tracked row round-trips its lifecycle exactly.
+	const hydrate = scriptedPool(call => {
+		if (call.text.includes('FROM qa_runs')) return {
+			rows: [{
+				id: RUN_ID, title: 'Run', target_url: 'https://example.com/', status: 'idle',
+				run_mode: 'qa', sqa_profiles: [], sqa_assessment: null, founder_assessment: null,
+				pending_question: null, context_usage: null, token_usage: null, secret_names: [],
+				next_event_sequence: '5', created_at: new Date(NOW - 1_000), updated_at: new Date(NOW),
+				lock_version: '6'
+			}], rowCount: 1
+		};
+		if (call.text.includes('FROM qa_findings')) return { rows: [
+			{
+				run_id: RUN_ID, id: FINDING_ID, title: 'Legacy', severity: 'medium', category: 'general',
+				page_url: null, steps: [], expected: 'x', actual: 'y', created_at: new Date(NOW - 600),
+				status: null, status_note: null, status_at: null
+			},
+			{
+				run_id: RUN_ID, id: '11111111-2222-4333-8444-555555555555', title: 'Tracked', severity: 'low',
+				category: 'ui', page_url: null, steps: [], expected: 'x', actual: 'y',
+				created_at: new Date(NOW - 500), status: 'wont_fix', status_note: 'by design',
+				status_at: String(NOW - 200)
+			}
+		] };
+		return { rows: [], rowCount: 0 };
+	});
+	const hydrated = await createPostgresRunRepository({
+		pool: hydrate.pool, tenantContext: TENANT
+	}).loadAll();
+
+	const [legacy, trackedRow] = hydrated[0].session.findings;
+	assert.equal(legacy.status, 'open');
+	assert.equal(legacy.statusNote, '');
+	assert.equal(legacy.statusTs, NOW - 600, 'legacy statusTs defaults to the filing time');
+	assert.equal(trackedRow.status, 'wont_fix');
+	assert.equal(trackedRow.statusNote, 'by design');
+	assert.equal(trackedRow.statusTs, NOW - 200);
+});

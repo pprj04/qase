@@ -58,9 +58,10 @@ export function createQaTools(session, runStore) {
 				return { success: false, error: 'report_finding requires a valid severity: critical, high, medium, low, or info.' };
 			}
 			const severity = input.severity;
+			const findingTs = Date.now();
 			const finding = redact(session.id, {
 				id: randomUUID(),
-				ts: Date.now(),
+				ts: findingTs,
 				title: boundedText(input.title, 1_000),
 				severity,
 				category: boundedText(input.category, 200, 'general'),
@@ -68,7 +69,12 @@ export function createQaTools(session, runStore) {
 				steps: boundedList(input.steps),
 				expected: boundedText(input.expected, 20_000),
 				actual: boundedText(input.actual, 20_000),
-				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined
+				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined,
+				// Every tracked bug starts open; the user moves it through the
+				// lifecycle from the Bugs view.
+				status: 'open',
+				statusTs: findingTs,
+				statusNote: ''
 			});
 
 			if (!finding.title) {

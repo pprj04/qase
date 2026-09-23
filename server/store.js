@@ -40,6 +40,35 @@ bus.emit = (sessionId, event) => {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_DRYTIS_INTEGRATION_BYTES = 1_000_000;
 
+/** Lifecycle of a tracked bug (finding). Every finding starts `open`. */
+export const FINDING_STATUSES = ['open', 'in_progress', 'fixed', 'wont_fix'];
+export const FINDING_STATUS_DEFAULT = 'open';
+export const FINDING_NOTE_MAX = 500;
+
+export function isFindingStatus(value) {
+	return FINDING_STATUSES.includes(value);
+}
+
+/** Severity display order used by the bug table (most severe first). */
+export const FINDING_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+
+/**
+ * Returns a copy of the finding with the tracking fields defaulted: every
+ * legacy finding (filed before statuses existed) reads back as `open` with a
+ * status timestamp equal to its filing time. Never mutates the input.
+ */
+export function normalizeFindingStatus(finding) {
+	if (!finding || typeof finding !== 'object') return finding;
+	const status = isFindingStatus(finding.status) ? finding.status : FINDING_STATUS_DEFAULT;
+	const note = typeof finding.statusNote === 'string' ? finding.statusNote.slice(0, FINDING_NOTE_MAX) : '';
+	return {
+		...finding,
+		status,
+		statusTs: Number.isFinite(finding.statusTs) ? finding.statusTs : (finding.ts ?? Date.now()),
+		statusNote: note
+	};
+}
+
 let saveTimer;
 
 function persistNow() {
@@ -128,6 +157,10 @@ export function loadSessions() {
 			}
 			// Earlier versions stored reasoning as a message; it is live-only now.
 			session.messages = (session.messages ?? []).filter(message => message.role !== 'thinking');
+			// Findings filed before lifecycle tracking existed read back as open.
+			if (Array.isArray(session.findings)) {
+				session.findings = session.findings.map(normalizeFindingStatus);
+			}
 			sessions.set(session.id, session);
 		}
 	} catch {
@@ -180,7 +213,7 @@ export function createSession(title = 'New test run', options = {}) {
 		deviceLandscape: options.deviceLandscape === true,
 		messages: [],
 		activities: [],
-		findings: structuredClone(options.findings ?? []),
+		findings: (options.findings ?? []).map(normalizeFindingStatus),
 		todos: [],
 		report: undefined,
 		pendingQuestion: undefined,
@@ -249,6 +282,115 @@ export function deleteSession(id, ownerUserId) {
 	const existed = sessions.delete(id);
 	persistSoon();
 	return existed;
+}
+
+/**
+ * Updates one finding's tracking lifecycle in place. Validates the status
+ * enum and note length, stamps statusTs at the transition, and persists via
+ * the caller's commit (so the change also broadcasts on the run bus).
+ * An empty note string clears an existing note.
+ */
+export function setFindingStatus(session, findingId, { status, note } = {}) {
+	const finding = (session.findings ?? []).find(candidate => candidate.id === findingId);
+	if (!finding) {
+		const error = new Error(`Finding ${findingId} does not exist on run ${session.id}.`);
+		error.code = 'QASE_FINDING_NOT_FOUND';
+		throw error;
+	}
+	if (!isFindingStatus(status)) {
+		const error = new TypeError(`Finding status must be one of: ${FINDING_STATUSES.join(', ')}.`);
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	let trimmedNote;
+	if (note !== undefined && note !== null) {
+		if (typeof note !== 'string') {
+			const error = new TypeError('Finding status note must be a string.');
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+		trimmedNote = note.trim();
+		if (trimmedNote.length > FINDING_NOTE_MAX) {
+			const error = new RangeError(`Finding status note must be at most ${FINDING_NOTE_MAX} characters.`);
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+	} else {
+		trimmedNote = finding.statusNote ?? '';
+	}
+	finding.status = status;
+	finding.statusTs = Date.now();
+	finding.statusNote = trimmedNote;
+	return finding;
+}
+
+/**
+ * Cross-run bug backlog for the standalone Bugs view. Aggregates every QA
+ * finding across the owner's runs (SQA/Founder findings are assessments, not
+ * tracked bugs), filtered by status/severity/run/free-text search, ordered
+ * severity-major then newest first.
+ */
+export function aggregateFindings({ ownerUserId, status, severity, runId, search, limit } = {}) {
+	return aggregateSessionFindings(sessions.values(), { ownerUserId, status, severity, runId, search, limit });
+}
+
+/**
+ * Store-agnostic bug backlog aggregation: takes any iterable of run sessions
+ * and returns the filtered, severity-ordered finding rows. Shared by the local
+ * JSON store and the PostgreSQL in-memory aggregate view.
+ */
+export function aggregateSessionFindings(sessionIterable, { ownerUserId, status, severity, runId, search, limit } = {}) {
+	if (status !== undefined && !isFindingStatus(status)) {
+		const error = new TypeError('Invalid finding status filter.');
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	if (severity !== undefined && !FINDING_SEVERITY_ORDER.includes(severity)) {
+		const error = new TypeError('Invalid finding severity filter.');
+		error.code = 'QASE_FINDING_SEVERITY_INVALID';
+		throw error;
+	}
+	const bounded = Number.isSafeInteger(limit) ? Math.min(500, Math.max(1, limit)) : 200;
+	const needle = typeof search === 'string' && search.trim() ? search.trim().toLowerCase() : undefined;
+	const rows = [];
+	for (const session of sessionIterable) {
+		if (ownerUserId && session.ownerUserId !== ownerUserId) continue;
+		if (session.mode !== 'qa') continue;
+		for (const finding of (session.findings ?? []).map(normalizeFindingStatus)) {
+			if (status !== undefined && finding.status !== status) continue;
+			if (severity !== undefined && finding.severity !== severity) continue;
+			if (runId !== undefined && session.id !== runId) continue;
+			if (needle) {
+				const haystack = `${finding.title ?? ''}\n${finding.category ?? ''}\n${finding.url ?? ''}`.toLowerCase();
+				if (!haystack.includes(needle)) continue;
+			}
+			rows.push({
+				id: finding.id,
+				runId: session.id,
+				runTitle: session.title,
+				runStatus: session.status,
+				targetUrl: session.targetUrl,
+				title: finding.title,
+				severity: finding.severity,
+				category: finding.category,
+				url: finding.url,
+				expected: finding.expected,
+				actual: finding.actual,
+				steps: Array.isArray(finding.steps) ? finding.steps : [],
+				evidence: finding.evidence,
+				ts: finding.ts,
+				status: finding.status,
+				statusTs: finding.statusTs,
+				statusNote: finding.statusNote
+			});
+		}
+	}
+	rows.sort((a, b) => {
+		const bySeverity = FINDING_SEVERITY_ORDER.indexOf(a.severity) - FINDING_SEVERITY_ORDER.indexOf(b.severity);
+		if (bySeverity !== 0) return bySeverity;
+		return (b.ts ?? 0) - (a.ts ?? 0);
+	});
+	return rows.slice(0, bounded);
 }
 
 /** Live handles (runtime, bridge, abort controller) for a session. */
