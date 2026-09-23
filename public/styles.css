@@ -450,6 +450,57 @@ a {
   font-weight: 500;
 }
 
+/* Anti-overlap: the meta row never overflows sideways; badges shrink last. */
+.run-meta > .dot {
+  flex: 0 0 auto;
+}
+
+.run-meta > .run-mode-badge,
+.run-meta > .run-badge,
+.run-meta > .run-device-pill {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mini progress row under the meta line — own row, never overlaps badges. */
+.run-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: -2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-progress-steps {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-weight: 640;
+  letter-spacing: 0.02em;
+}
+
+.run-progress-bar {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.run-progress-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 240ms var(--ease);
+}
+
 .dot {
   display: inline-block;
   flex: 0 0 auto;
@@ -485,6 +536,38 @@ a {
   color: #f5a1a5;
   font-size: 10.5px;
   font-weight: 700;
+}
+
+.run-badge--tokens {
+  margin-left: 0;
+  border-color: rgba(104, 119, 255, 0.22);
+  background: var(--accent-soft);
+  color: #aeb7ff;
+  font-weight: 600;
+}
+
+.usage-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid rgba(104, 119, 255, 0.25);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #aeb7ff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  cursor: default;
+  white-space: nowrap;
+}
+
+/* Waiting for the first model call's usage: dimmed, clearly not a count. */
+.usage-chip.is-pending {
+  color: var(--text-faint);
+  border-style: dashed;
 }
 
 .run-del {
@@ -550,7 +633,7 @@ a {
 
 .chat {
   display: grid;
-  grid-template-rows: 68px minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: var(--panel-chat);
 }
 
@@ -558,6 +641,141 @@ a {
   justify-content: space-between;
   gap: 16px;
   background: rgba(255, 255, 255, 0.008);
+}
+
+/* Run summary: token row + progress card as separate, non-overlapping
+   regions between the header and the transcript. */
+.run-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-chat);
+}
+
+.token-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: clamp(42px, 3.2vh, 52px);
+  min-width: 0;
+  padding: 0 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.token-glyph {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.token-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+}
+
+.live-pill {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(103, 232, 166, 0.3);
+  border-radius: 3px;
+  background: rgba(103, 232, 166, 0.1);
+  color: #67e8a6;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.token-text.is-pending {
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+
+.progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-steps,
+.progress-pct {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.progress-findings {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(239, 121, 127, 0.25);
+  border-radius: 3px;
+  background: var(--danger-soft);
+  color: #f5a0a4;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.progress-bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border-strong);
+}
+
+.progress-bar > i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 240ms var(--ease);
+}
+
+.current-activity {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.current-activity .ca-label {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.current-activity .ca-state {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-id {
@@ -583,13 +801,6 @@ a {
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.head-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
 }
 
 .status-chip {
@@ -4549,6 +4760,26 @@ body.cli-theme {
   font-weight: 600;
 }
 
+.cli-theme .run-progress {
+  gap: 7px;
+  margin-top: 0;
+  font-size: 9px;
+}
+
+.cli-theme .run-progress-steps {
+  color: #7f919e;
+}
+
+.cli-theme .run-progress-bar {
+  height: 3px;
+  border-radius: 1.5px;
+  background: #16202b;
+}
+
+.cli-theme .run-progress-bar > i {
+  background: #67e8a6;
+}
+
 .cli-theme .run.is-active .run-title { color: #eff8f4; }
 
 .cli-theme .run-meta,
@@ -4591,8 +4822,62 @@ body.cli-theme {
 /* Agent terminal */
 
 .cli-theme .chat {
-  grid-template-rows: 64px minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: #070c12;
+}
+
+/* Terminal treatment for the run-summary region: token row + progress card. */
+.cli-theme .run-summary {
+  padding: 8px 13px 9px;
+  border-bottom-color: #192530;
+  background: #0a1017;
+  gap: 8px;
+}
+
+.cli-theme .token-summary {
+  height: clamp(42px, 3.2vh, 52px);
+  padding: 0 2px;
+}
+
+.cli-theme .token-glyph {
+  color: #67e8a6;
+  font-size: 10.5px;
+}
+
+.cli-theme .token-text {
+  color: #9fb2be;
+  font-size: 10px;
+  font-weight: 640;
+}
+
+.cli-theme .progress-top {
+  gap: 7px 10px;
+}
+
+.cli-theme .progress-steps,
+.cli-theme .progress-pct {
+  color: #9fb2be;
+  font-size: 10px;
+}
+
+.cli-theme .progress-findings {
+  font-size: 9px;
+}
+
+.cli-theme .progress-bar {
+  background: #16202b;
+}
+
+.cli-theme .progress-bar > i {
+  background: #67e8a6;
+}
+
+.cli-theme .current-activity {
+  font-size: 10px;
+}
+
+.cli-theme .current-activity .ca-state {
+  color: #9fb2be;
 }
 
 .cli-theme .chat > .panel-head,
@@ -5522,7 +5807,7 @@ body.cli-theme {
   }
 
   .cli-theme .chat {
-    grid-template-rows: 60px minmax(0, 1fr) auto auto auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   }
 
   .cli-theme .viewer {
@@ -6937,17 +7222,12 @@ body.cli-theme {
 
 .cli-theme .chat-id,
 .cli-theme .urlbar,
-.cli-theme .head-actions,
 .cli-theme #browser-title {
   min-width: 0;
 }
 
 .cli-theme .chat-id {
   flex: 1 1 auto;
-}
-
-.cli-theme .head-actions {
-  max-width: 46%;
 }
 
 .cli-theme .status-chip {

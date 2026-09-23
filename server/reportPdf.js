@@ -55,6 +55,12 @@ function headerBlock(session, title, verdictText) {
 		['Updated', finished]
 	];
 	if (verdictText) rows.push(['Verdict', verdictText]);
+	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
+		const usage = session.tokenUsage;
+		const fmt = value => (Number.isFinite(value) ? value.toLocaleString('en-US') : '—');
+		rows.push(['Tokens', `${fmt(usage.inputTokens)} prompt / ${fmt(usage.outputTokens)} completion / ${fmt(usage.totalTokens)} total`
+			+ (usage.estimated === true ? ' (estimated)' : '')]);
+	}
 	return '<table class="meta"><tbody>' + rows.map(([k, v]) =>
 		'<tr><th>' + escapeHtml(k) + '</th><td>' + escapeHtml(v) + '</td></tr>'
 	).join('') + '</tbody></table>';

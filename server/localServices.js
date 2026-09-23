@@ -25,11 +25,17 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		return withUserConfiguration(settings, next => options.auth.saveSettings(userId, next), work);
 	}
 	const purgeWorkspace = options.purgeRunWorkspace ?? purgeRunWorkspace;
+	// subscribeGlobal exists only in local mode; PostgreSQL deployments
+	// fan events out through their realtime transport instead.
+	const subscribeGlobal = typeof runStore.subscribeGlobal === 'function'
+		? runStore.subscribeGlobal.bind(runStore)
+		: undefined;
 	const services = {
 		runs: runStore,
 		events: {
 			publish: runStore.publish,
-			subscribe: runStore.subscribe
+			subscribe: runStore.subscribe,
+			...(subscribeGlobal ? { subscribeGlobal } : {})
 		},
 		configuration: {
 			getPublic: () => inWorkspace(getPublicConfig),

@@ -47,6 +47,7 @@ const EVENT_CHILD_GROUPS = new Map([
 	['report', Object.freeze(['reports'])],
 	['browser', Object.freeze([])],
 	['context', Object.freeze([])],
+	['usage', Object.freeze([])],
 	['question', Object.freeze([])],
 	['run.recovered', Object.freeze([])],
 	['run.stop_requested', Object.freeze([])],
@@ -387,6 +388,7 @@ function hydrateRun(row, children) {
 		report: hydrateReport(children.reports.get(row.id)?.[0]),
 		pendingQuestion: row.pending_question ?? undefined,
 		contextUsage: row.context_usage ?? undefined,
+		tokenUsage: row.token_usage ?? undefined,
 		secretNames: names(row.secret_names),
 		ownerUserId: row.created_by_user_id ?? undefined
 	};
@@ -565,10 +567,10 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 		`INSERT INTO qa_runs (
 			id, organization_id, project_id, created_by_user_id, title, target_url,
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
-			drytis_integration, pending_question, context_usage, secret_names,
+			drytis_integration, pending_question, context_usage, token_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,$18,$19,$20)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21)
 		 RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -576,7 +578,8 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			session.status ?? 'idle', runMode(session), sqaProfiles(session),
 			runMode(session) === 'sqa' ? json(session.sqa) : null,
 			runMode(session) === 'founder' ? json(session.founder) : null,
-			json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage), names(session.secretNames),
+			json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage),
+			json(session.tokenUsage), names(session.secretNames),
 			session.messages?.length ?? 0, session.findings?.length ?? 0,
 			nextEventSequence, createdAt, updatedAt
 		]
@@ -692,7 +695,7 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 				 ORDER BY updated_at DESC, id ASC`,
@@ -709,7 +712,7 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND deleted_at IS NULL
@@ -726,7 +729,12 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, title, status, run_mode, target_url, created_at, updated_at,
-					message_count, finding_count
+					message_count, finding_count, token_usage,
+					(SELECT COUNT(*)::int FROM qa_plan_items
+						WHERE organization_id = $1 AND project_id = $2 AND run_id = id) AS todo_total,
+					(SELECT COUNT(*)::int FROM qa_plan_items
+						WHERE organization_id = $1 AND project_id = $2 AND run_id = id
+						AND status = 'completed') AS todo_completed
 					FROM qa_runs
 					WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 					AND ($4::uuid IS NULL OR created_by_user_id = $4)
@@ -743,7 +751,11 @@ export function createPostgresRunRepository({
 				createdAt: epoch(row.created_at),
 				updatedAt: epoch(row.updated_at),
 				findingCount: Number(row.finding_count ?? 0),
-				messageCount: Number(row.message_count ?? 0)
+				messageCount: Number(row.message_count ?? 0),
+				// Plan progress for the sidebar card — derived from the child table.
+				todoTotal: Number(row.todo_total ?? 0),
+				todoCompleted: Number(row.todo_completed ?? 0),
+				tokenUsage: row.token_usage ?? undefined
 			}));
 		});
 	}
@@ -841,13 +853,13 @@ export function createPostgresRunRepository({
 				`UPDATE qa_runs SET
 					title = $4, target_url = $5, status = $6, run_mode = $7,
 					sqa_profiles = $8, sqa_assessment = $9, founder_assessment = $10,
-					drytis_integration = $11, pending_question = $12, context_usage = $13, secret_names = $14,
-					message_count = $15, finding_count = $16, updated_at = $17,
+					drytis_integration = $11, pending_question = $12, context_usage = $13, token_usage = $14, secret_names = $15,
+					message_count = $16, finding_count = $17, updated_at = $18,
 					lock_version = lock_version + 1,
-					next_event_sequence = next_event_sequence + $18
+					next_event_sequence = next_event_sequence + $19
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
-					AND lock_version = $20 AND deleted_at IS NULL
-					AND ($19::uuid IS NULL OR created_by_user_id = $19)
+					AND lock_version = $21 AND deleted_at IS NULL
+					AND ($20::uuid IS NULL OR created_by_user_id = $20)
 					RETURNING lock_version, updated_at, next_event_sequence`,
 				[
 					tenant.organizationId, tenant.projectId, session.id,
@@ -855,7 +867,8 @@ export function createPostgresRunRepository({
 					session.status ?? 'idle', runMode(session), sqaProfiles(session),
 					runMode(session) === 'sqa' ? json(session.sqa) : null,
 					runMode(session) === 'founder' ? json(session.founder) : null,
-					json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage), names(session.secretNames),
+					json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage),
+					json(session.tokenUsage), names(session.secretNames),
 					session.messages?.length ?? 0, session.findings?.length ?? 0,
 					updatedAt, eventIncrement,
 					currentRequestActor()?.actorUserId ?? null,

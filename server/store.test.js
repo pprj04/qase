@@ -44,6 +44,64 @@ test('QA completion message survives a real JSON store reload', async t => {
 	second.flushSessions();
 });
 
+test('local JSON persistence round-trips token usage for a completed run', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-token-store-test-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const first = await import(`./store.js?token-write=${Date.now()}`);
+	const session = first.createSession('Token counted run');
+	const usage = {
+		inputTokens: 15_000,
+		outputTokens: 3_500,
+		totalTokens: 18_500,
+		cachedInputTokens: 900,
+		estimated: false,
+		updatedAt: 1_786_896_000_000
+	};
+	session.tokenUsage = usage;
+	first.emit(session, 'usage', { usage });
+	first.flushSessions();
+
+	const second = await import(`./store.js?token-read=${Date.now()}`);
+	second.loadSessions();
+	const restored = second.getSession(session.id);
+	assert.deepEqual(restored.tokenUsage, usage);
+	assert.deepEqual(second.listSessions()[0].tokenUsage, usage);
+	second.flushSessions();
+});
+
+test('listSessions summaries carry plan progress alongside usage totals', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-plan-store-test-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?plan=${Date.now()}`);
+
+	const planned = store.createSession('Partially planned run');
+	planned.todos = [
+		{ text: 'Load the page', status: 'completed' },
+		{ text: 'Check the form', status: 'completed' },
+		{ text: 'Check the footer', status: 'pending' },
+		{ text: 'Verify navigation', status: 'in_progress' }
+	];
+	store.emit(planned, 'todos', { todos: planned.todos });
+	const empty = store.createSession('Idle run');
+
+	const summary = Object.fromEntries(store.listSessions().map(entry => [entry.title, entry]));
+	assert.equal(summary['Partially planned run'].todoTotal, 4);
+	assert.equal(summary['Partially planned run'].todoCompleted, 2);
+	assert.equal(summary['Idle run'].todoTotal, 0);
+	assert.equal(summary['Idle run'].todoCompleted, 0);
+	store.flushSessions();
+});
+
 test('local deletion aborts and disposes the existing live record without recreating it', async t => {
 	const originalDirectory = process.cwd();
 	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-store-test-'));

@@ -2,7 +2,7 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
-import { hostOf, list, markdown, paragraph, relativeTime, section, truncate } from './uiPrimitives.js';
+import { formatTokens, hostOf, list, markdown, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
  * Qase dashboard.
@@ -29,7 +29,17 @@ const el = {
 
 	chatTitle: $('chat-title'),
 	chatTarget: $('chat-target'),
+	runSummary: $('run-summary'),
+	tokenSummary: $('token-summary'),
+	tokenText: $('token-text'),
+	livePill: $('live-pill'),
 	statusChip: $('status-chip'),
+	progressSteps: $('progress-steps'),
+	progressPct: $('progress-pct'),
+	progressFindings: $('progress-findings'),
+	progressBar: $('progress-bar'),
+	currentActivity: $('current-activity'),
+	currentActivityState: $('current-activity-state'),
 	stopRun: $('stop-run'),
 	thinkingStrip: $('thinking-strip'),
 	thinkingHead: $('thinking-head'),
@@ -195,6 +205,18 @@ async function refreshRuns() {
 	el.runList.replaceChildren(...runs.map(renderRun));
 }
 
+// Live token commits arrive up to once a second; refreshing the whole run
+// list for each is wasteful. Coalesce to at most one refetch per 5s.
+let runBadgeRefreshTimer;
+function scheduleRunBadgeRefresh() {
+	if (runBadgeRefreshTimer) return;
+	runBadgeRefreshTimer = setTimeout(() => {
+		runBadgeRefreshTimer = undefined;
+		void refreshRuns();
+	}, 5000);
+	runBadgeRefreshTimer.unref?.();
+}
+
 function renderRun(run) {
 	const row = document.createElement('div');
 	row.className = 'run-row';
@@ -236,6 +258,14 @@ function renderRun(run) {
 		badge.textContent = `${run.findingCount}`;
 		meta.append(badge);
 	}
+	if (run.tokenUsage && Number.isFinite(run.tokenUsage.totalTokens) && run.tokenUsage.totalTokens > 0) {
+		const tokens = document.createElement('span');
+		tokens.className = 'run-badge run-badge--tokens';
+		tokens.textContent = `${formatTokens(run.tokenUsage.totalTokens) ?? run.tokenUsage.totalTokens} tok`;
+		tokens.title = `${(run.tokenUsage.inputTokens ?? 0).toLocaleString()} prompt / ${(run.tokenUsage.outputTokens ?? 0).toLocaleString()} completion tokens`
+			+ (run.tokenUsage.estimated === true ? ' (estimated)' : '');
+		meta.append(tokens);
+	}
 	if (run.device && run.device !== 'desktop') {
 		const profile = deviceState.list.find(p => p.id === run.device);
 		const pill = document.createElement('span');
@@ -245,6 +275,27 @@ function renderRun(run) {
 		pill.textContent = short + (run.deviceLandscape ? ' – L' : '');
 		pill.title = (profile?.label ?? run.device) + (run.deviceLandscape ? ' (landscape)' : '');
 		meta.append(pill);
+	}
+
+	// Mini progress row: step count + slim bar, only when a plan exists.
+	let progress = null;
+	if (run.todoTotal > 0) {
+		progress = document.createElement('div');
+		progress.className = 'run-progress';
+		const steps = document.createElement('span');
+		steps.className = 'run-progress-steps';
+		steps.textContent = `${run.todoCompleted}/${run.todoTotal}`;
+		const bar = document.createElement('span');
+		bar.className = 'run-progress-bar';
+		const fill = document.createElement('i');
+		fill.style.width = `${Math.round((run.todoCompleted / run.todoTotal) * 100)}%`;
+		bar.setAttribute('role', 'progressbar');
+		bar.setAttribute('aria-valuemin', '0');
+		bar.setAttribute('aria-valuemax', '100');
+		bar.setAttribute('aria-valuenow', String(Math.round((run.todoCompleted / run.todoTotal) * 100)));
+		bar.setAttribute('aria-label', `Plan progress ${run.todoCompleted} of ${run.todoTotal} steps`);
+		bar.append(fill);
+		progress.append(steps, bar);
 	}
 
 	const remove = document.createElement('button');
@@ -265,6 +316,7 @@ function renderRun(run) {
 	};
 
 	node.append(title, meta);
+	if (progress) node.append(progress);
 	row.append(node, remove);
 	return row;
 }
@@ -403,8 +455,51 @@ async function createQaRun({ targetUrl, device, deviceLandscape }) {
 	return session;
 }
 
+/** Compact token count: 820, 15.3k, 2.01M, 3.4B. Re-exported for callers importing from app.js. */
+export { formatTokens };
+
+
+/** A run with no counted usage yet: show a pending state, never a fake 0. */
+function usageIsPending(session) {
+	const usage = session.tokenUsage;
+	const hasUsage = usage && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0;
+	return !hasUsage && session.status === 'running';
+}
+
 function renderHeader() {
 	const session = state.session;
+	const usage = session.tokenUsage;
+	const context = session.contextUsage;
+	// Token row: dedicated region below the header.
+	const hasRun = Boolean(session.targetUrl || session.title);
+	el.runSummary.hidden = !hasRun;
+	if (usageIsPending(session)) {
+		// Live run, first model call still in flight. "Pending" is honest;
+		// "0 in · 0 out" would suggest calls were counted and came back empty.
+		el.tokenText.classList.add('is-pending');
+		el.tokenText.textContent = '-- in · -- out';
+		el.tokenText.title = 'Token usage pending — waiting for the first model call to complete.';
+	} else {
+		const text = tokenSummaryText(usage)
+			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
+				? `${Math.round(context.percentage)}% ctx` : undefined);
+		el.tokenText.classList.remove('is-pending');
+		el.tokenText.textContent = text ?? '';
+		if (usage && text) {
+			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
+				? Math.round(context.percentage) : undefined;
+			el.tokenText.title = `${(usage.inputTokens ?? 0).toLocaleString()} prompt / ${(usage.outputTokens ?? 0).toLocaleString()} completion tokens`
+				+ (usage.estimated === true ? ' (estimated)' : '')
+				+ (percentage !== undefined ? ` · context ${percentage}% of window` : '');
+		} else if (text) {
+			el.tokenText.title = `model context window ${text.replace(' ctx', '')} used`;
+		} else {
+			el.tokenText.title = '';
+		}
+	}
+	// LIVE pill: only while the run is actively working.
+	el.livePill.hidden = session.status !== 'running';
+	renderProgressCard();
 	if (session.mode === 'founder') {
 		const target = session.founder?.scope?.target ?? session.founder?.report?.target ?? {};
 		const context = session.founder?.scope?.productContext ?? {};
@@ -427,12 +522,65 @@ function renderHeader() {
 	setStatus(session.status);
 }
 
+/**
+ * Step counts for the progress card. Same computation renderTodos() feeds the
+ * right-hand Plan tab, kept here once so the two can never disagree.
+ */
+function runProgress() {
+	const todos = state.session?.todos ?? [];
+	const total = todos.length;
+	const done = todos.filter(todo => todo.status === 'completed').length;
+	const percent = total > 0 ? Math.round((done / total) * 100) : undefined;
+	return { total, done, percent };
+}
+
+/**
+ * The RUNNING/DONE card: status + step count + percent + findings on the top
+ * row, the progress bar on its own row, and the current activity below it —
+ * all normal flow, no absolute positioning.
+ */
+function renderProgressCard() {
+	const session = state.session;
+	const { total, done, percent } = runProgress();
+	el.progressSteps.textContent = total > 0 ? `${done}/${total}` : '';
+	el.progressPct.textContent = percent !== undefined ? `${percent}%` : '';
+	if (percent !== undefined) {
+		el.progressBar.setAttribute('aria-valuenow', String(percent));
+		el.progressBar.firstElementChild.style.width = `${percent}%`;
+	} else {
+		el.progressBar.setAttribute('aria-valuenow', '0');
+		el.progressBar.firstElementChild.style.width = '0%';
+	}
+	const findings = session?.findings ?? [];
+	el.progressFindings.textContent = findings.length > 0 ? `Findings ${findings.length}` : '';
+	renderCurrentActivity();
+}
+
+function renderCurrentActivity() {
+	const session = state.session;
+	if (session?.status === 'running') {
+		const { text, action } = state.thinking;
+		const label = action || (text ? tailOf(text) : '');
+		el.currentActivityState.textContent = label ? `◌ ${label}` : '◌ Working…';
+		el.currentActivity.hidden = false;
+	} else if (session?.status === 'done') {
+		el.currentActivityState.textContent = '✓ Run completed';
+		el.currentActivity.hidden = false;
+	} else {
+		el.currentActivityState.textContent = '';
+		el.currentActivity.hidden = true;
+	}
+}
+
 function setStatus(status) {
 	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = status === 'awaiting_input' ? 'waiting for you' : status;
+	el.statusChip.textContent = status === 'awaiting_input'
+		? 'waiting for you'
+		: status === 'done' ? 'done ✓' : status;
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
 	el.sendBtn.disabled = running;
+	el.livePill.hidden = !running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
 	if (state.session) {
 		state.session.status = status;
@@ -544,6 +692,7 @@ function appendDelta(id, content, role) {
 	if (role === 'thinking') {
 		state.thinking.text += content;
 		updateThinkingStrip();
+		renderCurrentActivity();
 		return;
 	}
 
@@ -1875,6 +2024,7 @@ function handleEvent(event) {
 				state.thinking.action = [event.activity.label, event.activity.detail]
 					.filter(Boolean).join(' — ');
 				updateThinkingStrip();
+				renderCurrentActivity();
 			}
 			if (session.mode === 'founder') renderFounder();
 			break;
@@ -1883,11 +2033,26 @@ function handleEvent(event) {
 		case 'todos':
 			session.todos = event.todos;
 			renderTodos();
+			renderProgressCard();
+			break;
+
+		case 'context':
+			session.contextUsage = event.context;
+			renderHeader();
+			break;
+
+		case 'usage':
+			session.tokenUsage = event.usage;
+			renderHeader();
+			// Keep the sidebar's token badge in step without a full refetch;
+			// throttled so a fast series of commits stays cheap.
+			scheduleRunBadgeRefresh();
 			break;
 
 		case 'finding':
 			session.findings.push(event.finding);
 			renderFindings();
+			renderProgressCard();
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
 				toast(`${event.finding.severity.toUpperCase()}: ${event.finding.title}`, 'bad');
 			}
@@ -1973,6 +2138,7 @@ function handleEvent(event) {
 
 		case 'status':
 			setStatus(event.status);
+			renderCurrentActivity();
 			if (session.mode === 'sqa') {
 				renderSqa();
 				renderReport();

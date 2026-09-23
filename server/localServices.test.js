@@ -4,6 +4,30 @@ import { createRuntimeApplicationServices } from './localServices.js';
 
 const RUN_ID = '6bf078e0-20df-48c3-a6f8-eb74ca14b9e1';
 
+test('events surface the run store\'s global subscription when available', async () => {
+	const seen = [];
+	const runStore = {
+		publish() {},
+		subscribe() {},
+		subscribeGlobal(listener) {
+			seen.push('registered');
+			listener('session-a', { type: 'usage', usage: { totalTokens: 10 } });
+			return () => seen.push('unsubscribed');
+		}
+	};
+	const services = createRuntimeApplicationServices(runStore, {});
+	assert.equal(typeof services.events.subscribeGlobal, 'function');
+	const unsubscribe = services.events.subscribeGlobal((sessionId, event) => seen.push([sessionId, event.type]));
+	assert.deepEqual(seen, ['registered', ['session-a', 'usage']]);
+	unsubscribe();
+	assert.equal(seen.at(-1), 'unsubscribed');
+});
+
+test('events omit subscribeGlobal when the store has none', () => {
+	const services = createRuntimeApplicationServices({ publish() {}, subscribe() {} }, {});
+	assert.equal(services.events.subscribeGlobal, undefined);
+});
+
 test('artifact purge uses only non-creating live lookup and always drops the record', async () => {
 	const calls = [];
 	let record = {

@@ -32,6 +32,7 @@ function createSession(title, now, options = {}) {
 		report: undefined,
 		pendingQuestion: undefined,
 		contextUsage: undefined,
+		tokenUsage: undefined,
 		secretNames: [],
 		ownerUserId: options.ownerUserId ?? currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId
 	};
@@ -53,7 +54,8 @@ function summary(session) {
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		findingCount: session.findings.length,
-		messageCount: session.messages.length
+		messageCount: session.messages.length,
+		tokenUsage: session.tokenUsage
 	};
 }
 
@@ -391,6 +393,10 @@ export function createPostgresApplicationServices({
 	};
 
 	const services = createRuntimeApplicationServices(runStore, { auth });
+	// In PostgreSQL mode the Redis transport is the global event fan-out.
+	if (eventTransport && typeof eventTransport.subscribeGlobal === 'function') {
+		services.events.subscribeGlobal = eventTransport.subscribeGlobal.bind(eventTransport);
+	}
 	services.tenantContext = tenantContext;
 	services.realtime = eventTransport;
 	return services;

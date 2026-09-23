@@ -82,6 +82,14 @@ function session(overrides = {}) {
 		targetUrl: 'https://studio.drytis.ai/',
 		pendingQuestion: undefined,
 		contextUsage: { used: 12, limit: 100 },
+		tokenUsage: {
+			inputTokens: 15_000,
+			outputTokens: 3_500,
+			totalTokens: 18_500,
+			cachedInputTokens: 900,
+			estimated: false,
+			updatedAt: NOW
+		},
 		secretNames: ['QA_PASSWORD'],
 		messages: [{ id: MESSAGE_ID, ts: NOW - 900, role: 'user', text: 'Test this page.' }],
 		activities: [{ id: 'tool-1', ts: NOW - 800, type: 'tool', label: 'Opened page', status: 'done' }],
@@ -620,6 +628,98 @@ test('cleanup attempts are tenant-scoped, database-clocked, audited, and idempot
 	);
 });
 
+test('token usage round-trips on the run row and surfaces in list summaries', async () => {
+	const usage = {
+		inputTokens: 15_000,
+		outputTokens: 3_500,
+		totalTokens: 18_500,
+		cachedInputTokens: 900,
+		estimated: true,
+		updatedAt: NOW
+	};
+	const fake = scriptedPool(call => {
+		if (call.text.startsWith('INSERT INTO qa_runs')) {
+			return { rows: [{ lock_version: '0', updated_at: new Date(NOW) }], rowCount: 1 };
+		}
+		if (call.text.startsWith('UPDATE qa_runs SET')) {
+			return {
+				rows: [{ lock_version: '1', updated_at: new Date(NOW), next_event_sequence: '2' }],
+				rowCount: 1
+			};
+		}
+		if (call.text.includes('FROM qa_runs')) return { rows: [{
+			id: RUN_ID,
+			title: 'Counted run',
+			target_url: 'https://example.com/',
+			status: 'done',
+			pending_question: null,
+			context_usage: null,
+			token_usage: usage,
+			secret_names: [],
+			created_at: new Date(NOW - 1_000),
+			updated_at: new Date(NOW),
+			lock_version: '2'
+		}], rowCount: 1 };
+		return { rows: [], rowCount: 0 };
+	});
+	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
+
+	// create: token_usage rides in the run INSERT alongside context_usage.
+	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
+	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
+	assert.match(runInsert.text, /token_usage/);
+	assert.equal(runInsert.params[runInsert.params.length - 1].getTime(), new Date(NOW).getTime());
+
+	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
+	const saveStart = fake.calls.length;
+	await repository.save(session({ tokenUsage: usage }), {
+		expectedVersion: 0, eventType: 'usage', payload: { usage }
+	});
+	const update = fake.calls.slice(saveStart).find(call => call.text.startsWith('UPDATE qa_runs SET'));
+	assert.match(update.text, /token_usage/);
+	const usageEvent = fake.calls.slice(saveStart).find(call => call.text.startsWith('INSERT INTO qa_run_events')
+		&& call.params[4] === 'usage');
+	assert.ok(usageEvent, 'usage event is durable');
+	for (const table of CHILD_TABLE_NAMES) {
+		assert.equal(fake.calls.slice(saveStart).some(call => call.text.startsWith(`DELETE FROM ${table}`)), false);
+		assert.equal(fake.calls.slice(saveStart).some(call => call.text.startsWith(`INSERT INTO ${table}`)), false);
+	}
+
+	// hydrate: the jsonb column lands back on the session aggregate.
+	const [record] = await repository.loadAll();
+	assert.deepEqual(record.session.tokenUsage, usage);
+
+	// list: totals ride the summary payload.
+	const summaries = await repository.list();
+	assert.deepEqual(summaries[0].tokenUsage, usage);
+
+	// list: plan progress rides the summary payload, derived from the child table.
+	const listCall = fake.calls.find(call => call.text.includes('FROM qa_runs') && call.text.includes('todo_total'));
+	assert.ok(listCall, 'list SELECT derives todo counts from qa_plan_items');
+	assert.match(listCall.text, /qa_plan_items .*AND status = 'completed'/);
+
+	// Old rows without token usage hydrate to undefined — never a zero.
+	const legacy = scriptedPool(call => {
+		if (call.text.includes('FROM qa_runs')) return { rows: [{
+			id: RUN_ID,
+			title: 'Legacy run',
+			target_url: null,
+			status: 'idle',
+			pending_question: null,
+			context_usage: { used: 5 },
+			token_usage: null,
+			secret_names: [],
+			created_at: new Date(NOW - 1_000),
+			updated_at: new Date(NOW),
+			lock_version: '1'
+		}], rowCount: 1 };
+		return { rows: [], rowCount: 0 };
+	});
+	const legacyRepository = createPostgresRunRepository({ pool: legacy.pool, tenantContext: TENANT, now: () => NOW });
+	const [legacyRecord] = await legacyRepository.loadAll();
+	assert.equal(legacyRecord.session.tokenUsage, undefined);
+});
+
 test('loadAll hydrates the exact current aggregate shape and keeps version separate', async () => {
 	const fake = scriptedPool(call => {
 		if (call.text.includes('FROM qa_runs')) return { rows: [{
@@ -711,6 +811,7 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		status: 'idle',
 		pending_question: null,
 		context_usage: null,
+		token_usage: null,
 		secret_names: [],
 		created_at: new Date(NOW - 1_000),
 		updated_at: new Date(NOW),
@@ -741,7 +842,10 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		createdAt: NOW - 1_000,
 		updatedAt: NOW,
 		findingCount: 1,
-		messageCount: 3
+		messageCount: 3,
+		todoTotal: 0,
+		todoCompleted: 0,
+		tokenUsage: undefined
 	}]);
 	const scopedRunReads = fake.calls.filter(call => call.text.includes('FROM qa_runs'));
 	assert.ok(scopedRunReads.every(call => /organization_id = \$1 AND project_id = \$2/.test(call.text)));

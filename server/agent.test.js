@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { allowedToolNames, ensureRuntime, guardSqaBrowserTool, isFounderSynthesisReady, prepareFounderSynthesis, restoreWaitingSnapshot, runTurn, summariseResult } from './agent.js';
+import { attachUsageCapture, createUsageLogger } from './usageCapture.js';
 import { createBrowserTools } from './browserTools.js';
 import { createFounderReviewTodos, FOUNDER_CATEGORY_IDS } from './founderService.js';
 
@@ -44,6 +45,202 @@ function founderSynthesisFixture() {
 	fixture.record.runtime.headlessRuntime = headless;
 	return { ...fixture, headless, clearCount: () => clears };
 }
+
+test('a turn harvests provider token usage into the run and persists it once', async () => {
+	const { session, record, store, statuses } = runtimeFixture();
+	const commits = [];
+	store.commit = async (s, type, payload) => { commits.push({ type, payload }); };
+	// Real usage arrives through the wrapped logProviderReportedUsage hook...
+	record.runtime.cleanSlateService = {
+		logProviderReportedUsage(diagnostics, usage) { /* SDK original */ }
+	};
+	// ...and an estimate through the injectable logger's debug line.
+	record.runtime.run = async function* () {
+		this.logger?.debug?.('[CleanSlateService] provider=Custom API model=m stage=complete elapsedMs=1 inputChars=4000 estimatedInputTokens=1000 outputChars=800 estimatedOutputTokens=200');
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+	// The wrapper is attached in ensureRuntime, which the fixture bypasses, so
+	// attach here exactly as ensureRuntime does.
+	record.turnUsage = { reports: [], estimates: [] };
+	const release = attachUsageCapture(record.runtime.cleanSlateService, {
+		onUsage: usage => record.turnUsage.reports.push(usage)
+	});
+	record.releaseUsageCapture = release;
+	record.runtime.logger = createUsageLogger({
+		onEstimate: usage => record.turnUsage.estimates.push(usage)
+	});
+	session.findings = [{ severity: 'high', title: 'Broken form', actual: 'HTTP 500' }];
+	session.report = { ts: 456, verdict: 'fail', summary: 'Tested.' };
+
+	await runTurn(session, { task: 'Count my tokens' }, store);
+
+	assert.equal(session.status, 'done');
+	assert.ok(session.tokenUsage, 'token usage recorded');
+	assert.equal(session.tokenUsage.inputTokens, 1000);
+	assert.equal(session.tokenUsage.outputTokens, 200);
+	assert.equal(session.tokenUsage.totalTokens, 1200);
+	assert.equal(session.tokenUsage.estimated, true, 'estimate marked when no real report');
+	const usageCommits = commits.filter(commit => commit.type === 'usage');
+	assert.ok(usageCommits.length >= 1, 'usage committed at least once');
+	assert.deepEqual(usageCommits.at(-1).payload.usage, session.tokenUsage, 'last usage commit carries the final totals');
+
+	// A real provider report on a later turn supersedes estimates.
+	record.turnUsage.reports.push({ inputTokens: 500, outputTokens: 50, totalTokens: 550, cachedInputTokens: 5 });
+	record.turnUsage.estimates.length = 0;
+	record.runtime.run = async function* () {
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+	await runTurn(session, { task: 'More tokens' }, store);
+	assert.equal(session.tokenUsage.inputTokens, 1500, 'totals accumulate across turns');
+	assert.equal(session.tokenUsage.estimated, false, 'real report supersedes estimate');
+	release();
+});
+
+test('real usage commits live during the stream, before turn end', async () => {
+	const { session, record, store } = runtimeFixture();
+	const commits = [];
+	store.commit = async (s, type, payload) => { commits.push({ type, payload }); };
+	record.turnUsage = { reports: [], estimates: [] };
+
+	// Two model calls stream; the second finishes late in the stream, well
+	// before the turn (and the loop) ends. The finalizer publishes so the turn
+	// ends like a real completed run (no auto-continuation).
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 10000, outputTokens: 2000, totalTokens: 12000, callId: 'call-a', estimated: false });
+		yield { type: 'chat_text', content: 'working…' };
+		record.onUsageHarvested({ inputTokens: 5000, outputTokens: 1000, totalTokens: 6000, callId: 'call-b', estimated: false });
+		yield { type: 'chat_text', content: 'still working…' };
+		session.report = { ts: 789, verdict: 'fail', summary: 'Tested.' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+
+	await runTurn(session, { task: 'Long run' }, store);
+
+	assert.equal(session.status, 'done');
+	assert.equal(session.tokenUsage.inputTokens, 15000, 'inputs accumulate');
+	assert.equal(session.tokenUsage.outputTokens, 3000, 'outputs accumulate');
+	assert.equal(session.tokenUsage.totalTokens, 18000, 'total is in + out');
+	assert.ok(commits.some(commit => commit.type === 'usage' && commit.payload.usage.inputTokens === 10000),
+		'first call committed live before the turn ended');
+	assert.ok(commits.some(commit => commit.type === 'usage' && commit.payload.usage.inputTokens === 15000),
+		'second call committed live before the turn ended');
+});
+
+test('duplicate usage reports are idempotent — a repeated call id is never counted twice', async () => {
+	const { session, record, store } = runtimeFixture();
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 5000, outputTokens: 1000, totalTokens: 6000, callId: 'call-abc', estimated: false });
+		// The same report surfacing twice (SDK retry / event replay):
+		record.onUsageHarvested({ inputTokens: 5000, outputTokens: 1000, totalTokens: 6000, callId: 'call-abc', estimated: false });
+		// A report with no call id of its own, surfaced twice — the minted id
+		// must survive re-entry so this also counts exactly once.
+		const unIded = { inputTokens: 2000, outputTokens: 500, totalTokens: 2500, estimated: false };
+		record.onUsageHarvested(unIded);
+		record.onUsageHarvested(unIded);
+		// A published finalizer with a published artifact ends the run like a
+		// real completed turn.
+		session.report = { ts: 789, verdict: 'fail', summary: 'Tested.' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+
+	await runTurn(session, { task: 'Dupes' }, store);
+
+	assert.equal(session.tokenUsage.inputTokens, 7000, 'input counted once per call');
+	assert.equal(session.tokenUsage.outputTokens, 1500, 'output counted once per call');
+	assert.equal(session.tokenUsage.totalTokens, 8500, 'total counted once per call');
+});
+
+test('usage is preserved when a run is stopped mid-stream', async () => {
+	const { session, record, store } = runtimeFixture();
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 4000, outputTokens: 800, totalTokens: 4800, callId: 'call-stop', estimated: false });
+		yield { type: 'chat_text', content: 'working…' };
+		// Stop goes through the run's own controller (record.controller is the
+		// AbortController runTurn installed).
+		record.controller.abort();
+		const abortError = new Error('aborted');
+		abortError.name = 'AbortError';
+		throw abortError;
+	};
+
+	await runTurn(session, { task: 'Stop me' }, store);
+
+	assert.equal(session.status, 'idle', 'run reported as stopped');
+	assert.equal(session.tokenUsage.inputTokens, 4000, 'usage accumulated before the stop is kept');
+	assert.equal(session.tokenUsage.outputTokens, 800);
+});
+
+test('usage is preserved when a model call fails mid-stream', async () => {
+	const { session, record, store } = runtimeFixture();
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 2500, outputTokens: 400, totalTokens: 2900, callId: 'call-fail', estimated: false });
+		yield { type: 'chat_text', content: 'working…' };
+		throw new Error('provider exploded');
+	};
+
+	await runTurn(session, { task: 'Fail me' }, store);
+
+	assert.equal(session.status, 'error', 'run reported as failed');
+	assert.equal(session.tokenUsage.inputTokens, 2500, 'usage from calls before the failure is kept');
+	assert.equal(session.tokenUsage.outputTokens, 400);
+});
+
+test('usage ledger survives auto-continuation turns — replayed reports are not re-counted', async () => {
+	const { session, record, store } = runtimeFixture();
+	let attempt = 0;
+	// A prose-only stream triggers the automatic continuation path, which
+	// re-enters runTurn for the SAME run. The replayed call-b report must be
+	// dropped by the run-scoped ledger, not counted a second time.
+	record.runtime.run = async function* () {
+		attempt += 1;
+		if (attempt === 1) {
+			record.onUsageHarvested({ inputTokens: 5000, outputTokens: 1000, totalTokens: 6000, callId: 'call-b', estimated: false });
+			yield { type: 'chat_text', content: 'still working…' };
+			return;
+		}
+		// Same report surfacing again in the continuation turn.
+		record.onUsageHarvested({ inputTokens: 5000, outputTokens: 1000, totalTokens: 6000, callId: 'call-b', estimated: false });
+		record.onUsageHarvested({ inputTokens: 700, outputTokens: 300, totalTokens: 1000, callId: 'call-c', estimated: false });
+		session.report = { ts: 791, verdict: 'fail', summary: 'Continuation finished.' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+
+	await runTurn(session, { task: 'Run with continuation' }, store);
+
+	assert.equal(session.status, 'done');
+	assert.equal(attempt, 2, 'run went through one automatic continuation');
+	assert.equal(session.tokenUsage.inputTokens, 5700, 'replayed call-b not re-counted across continuation turns');
+	assert.equal(session.tokenUsage.outputTokens, 1300);
+	assert.equal(session.tokenUsage.totalTokens, 7000);
+});
+test('an estimate commits live and is rolled back when a real report supersedes it', async () => {
+	const { session, record, store } = runtimeFixture();
+	// Only estimates this turn: the chars/4 fallback used by providers that
+	// send no in-stream usage. They commit live, exactly like real reports.
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 1000, outputTokens: 200, estimated: true });
+		session.report = { ts: 789, verdict: 'fail', summary: 'Tested.' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+	await runTurn(session, { task: 'Estimate only' }, store);
+	assert.equal(session.status, 'done');
+	assert.equal(session.tokenUsage.inputTokens, 1000, 'estimate applied when no real report');
+	assert.equal(session.tokenUsage.estimated, true);
+
+	// A real report for the same call supersedes the committed estimate: the
+	// estimate is rolled back before the real value is applied.
+	record.runtime.run = async function* () {
+		record.onUsageHarvested({ inputTokens: 1000, outputTokens: 200, estimated: true });
+		record.onUsageHarvested({ inputTokens: 700, outputTokens: 300, callId: 'call-real', estimated: false });
+		session.report = { ts: 790, verdict: 'fail', summary: 'Tested again.' };
+		yield { type: 'tool_result', toolName: 'finish_qa_report', result: { success: true, published: true } };
+	};
+	await runTurn(session, { task: 'Real follows' }, store);
+	assert.equal(session.status, 'done');
+	assert.equal(session.tokenUsage.inputTokens, 1700, 'estimate rolled back, real report added once');
+	assert.equal(session.tokenUsage.outputTokens, 500);
+	assert.equal(session.tokenUsage.estimated, false);
+});
 
 test('each mode exposes only its own finalizer and browser capabilities', () => {
 	for (const [mode, finalizer] of [['qa', 'finish_qa_report'], ['sqa', 'finish_sqa_assessment'], ['founder', 'finish_founder_review']]) {

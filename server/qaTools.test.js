@@ -42,6 +42,22 @@ test('QA finding to Markdown workflow preserves evidence, redacts vaulted data, 
 	assert.equal(markdown.includes('qa-test-private-password'), false);
 });
 
+test('report markdown includes token usage when counted and omits the line otherwise', () => {
+	const counted = fixture({ tokenUsage: {
+		inputTokens: 15_000, outputTokens: 3_500, totalTokens: 18_500, cachedInputTokens: 900, estimated: false
+	} });
+	const markdown = buildReportMarkdown(counted.session);
+	assert.match(markdown, /\*\*Tokens:\*\* 15,000 prompt \/ 3,500 completion \/ 18,500 total/);
+
+	const estimated = fixture({ tokenUsage: {
+		inputTokens: 1_000, outputTokens: 200, totalTokens: 1_200, estimated: true
+	} });
+	assert.match(buildReportMarkdown(estimated.session), /\*\*Tokens:\*\* 1,000 prompt \/ 200 completion \/ 1,200 total \(estimated\)/);
+
+	// Uncounted runs render unchanged — never a zero line.
+	assert.doesNotMatch(buildReportMarkdown(fixture().session), /Tokens/);
+});
+
 test('QA rejects malformed model findings and reports without mutating durable state', async () => {
 	const target = fixture();
 	for (const value of [undefined, null, [], {}, { ...finding, title: {} }, { ...finding, actual: ' ' }, { ...finding, severity: 'urgent' }]) {

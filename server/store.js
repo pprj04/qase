@@ -179,6 +179,8 @@ export function createSession(title = 'New test run', options = {}) {
 		report: undefined,
 		pendingQuestion: undefined,
 		contextUsage: undefined,
+		/** Token usage recorded after each run: provider-reported or estimated. */
+		tokenUsage: undefined,
 		/** Names of secrets held for this session — never the values. */
 		secretNames: []
 	};
@@ -216,7 +218,13 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			// request actor and must see runs owned by any user.
 			ownerUserId: session.ownerUserId,
 			findingCount: session.findings.length,
-			messageCount: session.messages.length
+			messageCount: session.messages.length,
+			// Plan progress for the sidebar card — derived, never stored.
+			todoTotal: Array.isArray(session.todos) ? session.todos.length : 0,
+			todoCompleted: Array.isArray(session.todos)
+				? session.todos.filter(todo => todo?.status === 'completed').length
+				: 0,
+			tokenUsage: session.tokenUsage
 		}));
 }
 

@@ -62,6 +62,53 @@ export function truncate(text, max) {
 	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** Compact token count: 820, 15.3k, 2.01M, 3.4B. */
+export function formatTokens(value) {
+	const count = Number(value);
+	if (!Number.isFinite(count) || count <= 0) return undefined;
+	if (count < 1_000) return `${count}`;
+	if (count < 1_000_000) return `${Number((count / 1_000).toFixed(count < 100_000 ? 1 : 0))}k`;
+	if (count < 1_000_000_000) return `${Number((count / 1_000_000).toFixed(2))}M`;
+	return `${Number((count / 1_000_000_000).toFixed(2))}B`;
+}
+
+/**
+ * Compose the header usage-chip text from a run's token/context usage.
+ * `tok` belongs to each count segment (`4.76M tok in · 27.2k tok out`),
+ * never a standalone segment; `~` marks estimated counts.
+ */
+export function usageChipText(usage, context) {
+	if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens <= 0) return undefined;
+	const est = usage.estimated === true ? '~' : '';
+	const parts = [];
+	const input = formatTokens(usage.inputTokens);
+	const output = formatTokens(usage.outputTokens);
+	if (input) parts.push(`${est}${input} tok in`);
+	if (output) parts.push(`${est}${output} tok out`);
+	if (parts.length === 0) return undefined;
+	const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
+		? Math.round(context.percentage) : undefined;
+	return parts.join(' · ') + (percentage !== undefined ? ` · ${percentage}% ctx` : '');
+}
+
+/**
+ * Compose the run-summary token row: `[~]4.76M in · 27.2k out · 4.79M total`.
+ * Context % is NOT included here (it rides the tooltip) so the row stays
+ * compact at every width. `~` marks estimated counts.
+ */
+export function tokenSummaryText(usage) {
+	if (!usage) return undefined;
+	const est = usage.estimated === true ? '~' : '';
+	const parts = [];
+	const input = formatTokens(usage.inputTokens);
+	const output = formatTokens(usage.outputTokens);
+	const total = formatTokens(usage.totalTokens);
+	if (input) parts.push(`${est}${input} in`);
+	if (output) parts.push(`${est}${output} out`);
+	if (total && parts.length > 0) parts.push(`${est}${total} total`);
+	return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
 export function section(heading, body, documentRef = globalThis.document) {
 	const node = documentRef.createElement('div');
 	node.className = 'report-section';
