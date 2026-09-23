@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { escapeHtml, formatTokens, hostOf, markdown, relativeTime, tokenSummaryText, truncate, usageChipText } from '../public/uiPrimitives.js';
+import { escapeHtml, formatTokens, hostOf, markdown, relativeTime, tokenSummaryText, truncate, usageChipText, miniSummaryText } from '../public/uiPrimitives.js';
 
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 
@@ -79,8 +79,62 @@ test('token summary row composes in/out/total without ctx and marks estimates', 
 	assert.equal(tokenSummaryText({ inputTokens: 0, outputTokens: 0, totalTokens: 500 }), undefined, 'total > 0 but no formattable counts');
 });
 
-test('the application controller consumes extracted UI modules instead of redefining them', () => {
-	assert.match(app, /from '\.\/uiPrimitives\.js'/);
+test('mini summary composes the compact collapsed row segments', () => {
+	// Done run with full data — matches the requested shape: ✦ 6.39M tokens · ● DONE · 5/5 · 100% · Findings 4
+	const done = miniSummaryText({
+		usage: { inputTokens: 6_350_000, outputTokens: 31_600, totalTokens: 6_381_600 },
+		status: 'done',
+		progress: { total: 5, done: 5, percent: 100 },
+		findings: 4,
+	});
+	assert.equal(done.tokens, '✦ 6.38M tokens');
+	assert.equal(done.status, '● DONE');
+	assert.equal(done.progress, '5/5 · 100%');
+	assert.equal(done.findings, 'Findings 4');
+
+	// Running run, mid-flight — live values keep flowing into the mini row.
+	const running = miniSummaryText({
+		usage: { inputTokens: 4_790_000, outputTokens: 30_000, totalTokens: 4_820_000 },
+		status: 'running',
+		progress: { total: 16, done: 13, percent: 81 },
+		findings: 12,
+	});
+	assert.equal(running.tokens, '✦ 4.82M tokens');	assert.equal(running.status, '● RUNNING');
+	assert.equal(running.progress, '13/16 · 81%');
+	assert.equal(running.findings, 'Findings 12');
+
+	// Estimates carry the ~ marker; pending usage shows -- instead of 0.
+	const est = miniSummaryText({
+		usage: { inputTokens: 1_000, outputTokens: 200, totalTokens: 1_200, estimated: true },
+		status: 'running',
+		progress: { total: 8, done: 3, percent: 38 },
+		findings: 0,
+	});
+	assert.equal(est.tokens, '✦ ~1.2k tokens');
+	assert.equal(est.findings, '');
+
+	const pending = miniSummaryText({
+		usage: undefined,
+		status: 'running',
+		progress: { total: 0, done: 0, percent: undefined },
+		findings: 0,
+	});
+	assert.equal(pending.tokens, '✦ -- tokens');
+	assert.equal(pending.status, '● RUNNING');
+	assert.equal(pending.progress, '');
+
+	// Status mapping: awaiting_input humanized, unknown passthrough, missing → undefined.
+	assert.equal(miniSummaryText({ usage: undefined, status: 'awaiting_input', progress: undefined, findings: 0 }).status, '● waiting for you');
+	assert.equal(miniSummaryText({ usage: undefined, status: 'queued', progress: undefined, findings: 0 }).status, '● QUEUED');
+	assert.equal(miniSummaryText({ usage: undefined, status: undefined, progress: undefined, findings: 0 }).status, '');
+
+	// No usage but a countable total still shows the total.
+	const onlyTotal = miniSummaryText({ usage: { totalTokens: 500 }, status: 'done', progress: { total: 2, done: 0, percent: 0 }, findings: 1 });
+	assert.equal(onlyTotal.tokens, '✦ -- tokens', 'unformattable counts are pending-style, never fake 0');
+	assert.equal(onlyTotal.progress, '0/2 · 0%');
+});
+
+test('the application controller consumes extracted UI modules instead of redefining them', () => {	assert.match(app, /from '\.\/uiPrimitives\.js'/);
 	assert.match(app, /from '\.\/founderView\.js'/);
 	assert.match(app, /createFounderView\(\{/);
 	for (const name of ['escapeHtml', 'markdown', 'hostOf', 'relativeTime', 'truncate', 'section', 'paragraph', 'list', 'formatTokens', 'usageChipText', 'tokenSummaryText']) {

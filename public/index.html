@@ -107,25 +107,38 @@
       </div>
     </header>
 
-    <!-- Run summary: token row + progress card, separate non-overlapping regions. -->
+    <!-- Run summary: token row + progress card, separate non-overlapping regions.
+         Collapsible: toggle keeps the token row visible and swaps the detail for a
+         compact one-line mirror (see #run-summary-mini). -->
     <section class="run-summary" id="run-summary" aria-label="Run summary" hidden>
+      <div class="run-summary-mini" id="run-summary-mini" hidden>
+        <span class="mini-tokens" id="mini-tokens"></span>
+        <span class="mini-status" id="mini-status"></span>
+        <span class="mini-progress" id="mini-progress"></span>
+        <span class="mini-findings" id="mini-findings"></span>
+      </div>
       <div class="token-summary" id="token-summary">
         <span class="token-glyph" aria-hidden="true">✦</span>
         <span class="token-text" id="token-text"></span>
         <span class="live-pill" id="live-pill" hidden>LIVE</span>
+        <button id="run-summary-toggle" class="run-summary-toggle" type="button"
+                aria-expanded="true" aria-controls="run-summary-detail"
+                title="Collapse run summary">⌃</button>
       </div>
-      <div class="progress-card" id="progress-card">
-        <div class="progress-top">
-          <span class="status-chip" id="status-chip" data-status="idle" role="status" aria-live="polite" aria-atomic="true">idle</span>
-          <span class="progress-steps" id="progress-steps"></span>
-          <span class="progress-pct" id="progress-pct"></span>
-          <span class="progress-findings" id="progress-findings"></span>
-          <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
-        </div>
-        <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Run progress"><i></i></div>
-        <div class="current-activity" id="current-activity">
-          <span class="ca-label">Current activity</span>
-          <span class="ca-state" id="current-activity-state"></span>
+      <div class="run-summary-detail" id="run-summary-detail">
+        <div class="progress-card" id="progress-card">
+          <div class="progress-top">
+            <span class="status-chip" id="status-chip" data-status="idle" role="status" aria-live="polite" aria-atomic="true">idle</span>
+            <span class="progress-steps" id="progress-steps"></span>
+            <span class="progress-pct" id="progress-pct"></span>
+            <span class="progress-findings" id="progress-findings"></span>
+            <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
+          </div>
+          <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Run progress"><i></i></div>
+          <div class="current-activity" id="current-activity">
+            <span class="ca-label">Current activity</span>
+            <span class="ca-state" id="current-activity-state"></span>
+          </div>
         </div>
       </div>
     </section>

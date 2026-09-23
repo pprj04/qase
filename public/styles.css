@@ -644,7 +644,9 @@ a {
 }
 
 /* Run summary: token row + progress card as separate, non-overlapping
-   regions between the header and the transcript. */
+   regions between the header and the transcript. Collapsible — the toggle
+   hides the detail block and swaps in the compact mini row; all normal
+   flex flow, no absolute positioning. */
 .run-summary {
   display: flex;
   flex-direction: column;
@@ -652,6 +654,93 @@ a {
   padding: 10px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--panel-chat);
+  transition: padding 160ms ease, gap 160ms ease;
+}
+
+.run-summary.is-collapsed {
+  gap: 0;
+  padding-bottom: 6px;
+}
+
+.run-summary-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.run-summary.is-collapsed .run-summary-detail {
+  display: none;
+}
+
+.run-summary.is-collapsed .token-text,
+.run-summary.is-collapsed .live-pill {
+  display: none;
+}
+
+.run-summary-mini {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-summary-mini[hidden] {
+  display: none;
+}
+
+.mini-tokens,
+.mini-status,
+.mini-progress,
+.mini-findings {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+.mini-tokens {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.mini-status[data-status="running"] { color: var(--accent); }
+.mini-status[data-status="done"] { color: var(--text-secondary); }
+
+.run-summary-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.run-summary-toggle:hover,
+.run-summary-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.run-summary-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .token-summary {
@@ -4987,6 +5076,45 @@ body.cli-theme {
   border-bottom-color: #192530;
   background: #0a1017;
   gap: 8px;
+}
+
+.cli-theme .run-summary.is-collapsed {
+  padding-bottom: 5px;
+}
+
+.cli-theme .run-summary-mini {
+  min-height: 24px;
+  padding: 0 2px;
+}
+
+.cli-theme .mini-tokens,
+.cli-theme .mini-status,
+.cli-theme .mini-progress,
+.cli-theme .mini-findings {
+  color: #9fb2be;
+  font-size: 10px;
+  font-weight: 640;
+}
+
+.cli-theme .mini-tokens {
+  color: #67e8a6;
+  font-size: 10.5px;
+}
+
+.cli-theme .mini-status[data-status="running"] { color: #67e8a6; }
+
+.cli-theme .run-summary-toggle {
+  width: 24px;
+  height: 24px;
+  color: #9fb2be;
+  font-size: 12px;
+}
+
+.cli-theme .run-summary-toggle:hover,
+.cli-theme .run-summary-toggle:focus-visible {
+  background: #16202b;
+  border-color: #192530;
+  color: #d7e3ea;
 }
 
 .cli-theme .token-summary {

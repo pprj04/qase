@@ -109,6 +109,30 @@ export function tokenSummaryText(usage) {
 	return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
+/**
+ * Compose the minimized run-summary row: `✦ 6.39M tokens · ● DONE · 5/5 · 100% · Findings 4`.
+ * Returns the four segments separately (tokens / status / progress / findings) so the
+ * caller can lay them out with flex and hide empty ones. No in/out split, no bar, no
+ * activity — the expanded row carries those. Pending usage renders `--`, never a fake 0.
+ */
+export function miniSummaryText({ usage, status, progress, findings }) {
+	const est = usage && usage.estimated === true ? '~' : '';
+	const total = usage ? formatTokens(usage.totalTokens) : undefined;
+	const tokens = usage && Number.isFinite(usage.inputTokens) && Number.isFinite(usage.outputTokens) && total
+		? `✦ ${est}${total} tokens`
+		: '✦ -- tokens';
+	const statusLabels = { running: '● RUNNING', done: '● DONE', awaiting_input: '● waiting for you' };
+	const statusText = status
+		? (statusLabels[status] ?? `● ${status.toUpperCase()}`)
+		: '';
+	let progressText = '';
+	if (progress && progress.total > 0) {
+		progressText = `${progress.done}/${progress.total}` + (progress.percent !== undefined ? ` · ${progress.percent}%` : '');
+	}
+	const findingsText = Number.isFinite(findings) && findings > 0 ? `Findings ${findings}` : '';
+	return { tokens, status: statusText, progress: progressText, findings: findingsText };
+}
+
 export function section(heading, body, documentRef = globalThis.document) {
 	const node = documentRef.createElement('div');
 	node.className = 'report-section';

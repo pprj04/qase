@@ -2,7 +2,7 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
-import { formatTokens, hostOf, list, markdown, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
+import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
  * Qase dashboard.
@@ -33,6 +33,13 @@ const el = {
 	tokenSummary: $('token-summary'),
 	tokenText: $('token-text'),
 	livePill: $('live-pill'),
+	runSummaryToggle: $('run-summary-toggle'),
+	runSummaryDetail: $('run-summary-detail'),
+	runSummaryMini: $('run-summary-mini'),
+	miniTokens: $('mini-tokens'),
+	miniStatus: $('mini-status'),
+	miniProgress: $('mini-progress'),
+	miniFindings: $('mini-findings'),
 	statusChip: $('status-chip'),
 	progressSteps: $('progress-steps'),
 	progressPct: $('progress-pct'),
@@ -468,6 +475,9 @@ function applySessionSnapshot(session) {
 	applyStageDevice(session);
 
 	renderHeader();
+	// The collapse preference is UI state — reapply it on every run switch so
+	// navigating between runs never unexpectedly expands/collapses the panel.
+	setRunSummaryCollapsed(state.runSummaryCollapsed);
 	renderTranscript();
 	resetThinking();
 	renderQuestion();
@@ -516,6 +526,45 @@ function usageIsPending(session) {
 	return !hasUsage && session.status === 'running';
 }
 
+/**
+ * Collapsed/expanded state for the run-summary section. UI preference, not run
+ * state: survives run navigation and the RUNNING→DONE transition, stored in the
+ * same localStorage the other UI prefs (device, session) already use.
+ */
+const RUN_SUMMARY_COLLAPSED_KEY = 'qase.runSummaryCollapsed';
+state.runSummaryCollapsed = localStorage.getItem(RUN_SUMMARY_COLLAPSED_KEY) === '1';
+
+function setRunSummaryCollapsed(collapsed) {
+	state.runSummaryCollapsed = collapsed;
+	localStorage.setItem(RUN_SUMMARY_COLLAPSED_KEY, collapsed ? '1' : '0');
+	el.runSummary.classList.toggle('is-collapsed', collapsed);
+	el.runSummaryMini.hidden = !collapsed;
+	el.runSummaryToggle.setAttribute('aria-expanded', String(!collapsed));
+	el.runSummaryToggle.textContent = collapsed ? '⌄' : '⌃';
+	el.runSummaryToggle.title = collapsed ? 'Expand run summary' : 'Collapse run summary';
+}
+
+/**
+ * Compact mirror of the run summary for the collapsed state. Reads the exact
+ * same session state the expanded card reads (no extra fetching, no
+ * recalculation) so live updates keep flowing while minimized.
+ */
+function renderMiniSummary() {
+	const session = state.session;
+	const usage = session?.tokenUsage;
+	const mini = miniSummaryText({
+		usage,
+		status: session?.status,
+		progress: runProgress(),
+		findings: session?.findings?.length ?? 0,
+	});
+	el.miniTokens.textContent = mini.tokens;
+	el.miniStatus.textContent = mini.status;
+	el.miniStatus.dataset.status = session?.status ?? '';
+	el.miniProgress.textContent = mini.progress;
+	el.miniFindings.textContent = mini.findings;
+}
+
 function renderHeader() {
 	const session = state.session;
 	const usage = session.tokenUsage;
@@ -549,6 +598,7 @@ function renderHeader() {
 	}
 	// LIVE pill: only while the run is actively working.
 	el.livePill.hidden = session.status !== 'running';
+	renderMiniSummary();
 	renderProgressCard();
 	if (session.mode === 'founder') {
 		const target = session.founder?.scope?.target ?? session.founder?.report?.target ?? {};
@@ -603,6 +653,7 @@ function renderProgressCard() {
 	}
 	const findings = session?.findings ?? [];
 	el.progressFindings.textContent = findings.length > 0 ? `Findings ${findings.length}` : '';
+	renderMiniSummary();
 	renderCurrentActivity();
 }
 
@@ -627,6 +678,7 @@ function setStatus(status) {
 	el.statusChip.textContent = status === 'awaiting_input'
 		? 'waiting for you'
 		: status === 'done' ? 'done ✓' : status;
+	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
 	el.sendBtn.disabled = running;
@@ -3194,6 +3246,13 @@ el.composerInput.addEventListener('input', () => {
 	el.composerInput.style.height = 'auto';
 	el.composerInput.style.height = `${Math.min(el.composerInput.scrollHeight, 170)}px`;
 	el.composerInput.style.overflowY = el.composerInput.scrollHeight > 170 ? 'auto' : 'hidden';
+});
+
+// Collapse/expand the run summary. Pure UI: values already in state keep
+// flowing to the mini row — nothing is refetched or recalculated.
+el.runSummaryToggle?.addEventListener('click', () => {
+	setRunSummaryCollapsed(!state.runSummaryCollapsed);
+	renderMiniSummary();
 });
 
 el.composerInput.addEventListener('keydown', event => {
