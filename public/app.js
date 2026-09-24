@@ -58,6 +58,10 @@ const el = {
 	perfCompare: $('perf-compare'),
 	perfCompareTitle: $('perf-compare-title'),
 	perfCompareList: $('perf-compare-list'),
+	perfMinimize: $('perf-minimize'),
+	perfClose: $('perf-close'),
+	perfRestore: $('perf-restore'),
+	perfBody: $('perf-body'),
 	stopRun: $('stop-run'),
 	thinkingStrip: $('thinking-strip'),
 	thinkingHead: $('thinking-head'),
@@ -141,7 +145,9 @@ const state = {
 		skew: 0,
 		/** run id -> live duration node in the runs list. */
 		runLiveTimers: new Map()
-	}
+	},
+	/** Performance panel UI state — visibility only, never data. */
+	perfUi: { minimized: false, closed: false }
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -887,14 +893,21 @@ function perfRow(label, value) {
 /**
  * Render the Performance panel from the analytics API. Shows real aggregates
  * only; when there are no completed runs the panel stays hidden.
+ *
+ * Panel visibility is pure UI state: `state.perfUi.closed` (set by the Close
+ * button) only hides the panel — run results and stored metrics are never
+ * touched. Minimize (`state.perfUi.minimized`) collapses the body while the
+ * header stays available for restoring.
  */
 async function refreshPerformance() {
 	const aggregate = await api('/analytics/durations').catch(() => undefined);
 	if (!aggregate || !aggregate.runCount) {
 		el.perfPanel.hidden = true;
+		el.perfRestore.hidden = true;
 		return;
 	}
-	el.perfPanel.hidden = false;
+	// Update the data regardless of panel visibility so a later restore shows
+	// current numbers; visibility controls below only toggle display.
 	el.perfGrid.replaceChildren(
 		...perfRow('Completed runs', String(aggregate.runCount)),
 		...perfRow('Average execution', formatDurationShort(aggregate.avgDurationSeconds)),
@@ -907,29 +920,61 @@ async function refreshPerformance() {
 	);
 	// Same-target comparison for the currently selected run's target.
 	const session = state.session;
-	if (!session?.targetUrl || typeof session.targetUrl !== 'string') {
-		el.perfCompare.hidden = true;
-		return;
+	let showCompare = false;
+	if (session?.targetUrl && typeof session.targetUrl === 'string') {
+		const history = await api(`/analytics/targets/durations?targetUrl=${encodeURIComponent(session.targetUrl)}`)
+			.catch(() => []);
+		if (Array.isArray(history) && history.length >= 2) {
+			showCompare = true;
+			el.perfCompareTitle.textContent = `${hostOf(session.targetUrl)} — run comparison`;
+			const items = history.map((entry, index) => {
+				const li = document.createElement('li');
+				const trend = index === 0 ? '' : (
+					entry.durationSeconds < history[index - 1].durationSeconds ? ' ▼ faster'
+						: entry.durationSeconds > history[index - 1].durationSeconds ? ' ▲ slower'
+							: ' → stable');
+				li.textContent = `Run #${index + 1} · ${formatDurationShort(entry.durationSeconds)}${trend}`;
+				if (entry.id === session.id) li.classList.add('is-current');
+				return li;
+			});
+			el.perfCompareList.replaceChildren(...items);
+		}
 	}
-	const history = await api(`/analytics/targets/durations?targetUrl=${encodeURIComponent(session.targetUrl)}`)
-		.catch(() => []);
-	if (!Array.isArray(history) || history.length < 2) {
-		el.perfCompare.hidden = true;
-		return;
-	}
-	el.perfCompare.hidden = false;
-	el.perfCompareTitle.textContent = `${hostOf(session.targetUrl)} — run comparison`;
-	const items = history.map((entry, index) => {
-		const li = document.createElement('li');
-		const trend = index === 0 ? '' : (
-			entry.durationSeconds < history[index - 1].durationSeconds ? ' ▼ faster'
-				: entry.durationSeconds > history[index - 1].durationSeconds ? ' ▲ slower'
-					: ' → stable');
-		li.textContent = `Run #${index + 1} · ${formatDurationShort(entry.durationSeconds)}${trend}`;
-		if (entry.id === session.id) li.classList.add('is-current');
-		return li;
-	});
-	el.perfCompareList.replaceChildren(...items);
+	el.perfCompare.hidden = !showCompare;
+	// Close wins over show: the panel stays hidden until the user restores it.
+	el.perfPanel.hidden = state.perfUi.closed;
+	el.perfRestore.hidden = !state.perfUi.closed;
+	applyPerfMinimize();
+}
+
+/* ── Performance panel visibility controls ───────────────────────── */
+
+function applyPerfMinimize() {
+	const minimized = state.perfUi.minimized;
+	el.perfBody.hidden = minimized;
+	el.perfMinimize.textContent = minimized ? '▸' : '▾';
+	el.perfMinimize.title = minimized ? 'Restore' : 'Minimize';
+	el.perfMinimize.setAttribute('aria-expanded', minimized ? 'false' : 'true');
+	el.perfPanel.classList.toggle('is-minimized', minimized);
+}
+
+function togglePerfMinimize() {
+	state.perfUi.minimized = !state.perfUi.minimized;
+	applyPerfMinimize();
+}
+
+function closePerfPanel() {
+	// Visibility only: metrics, run results and analytics stay intact.
+	state.perfUi.closed = true;
+	el.perfPanel.hidden = true;
+	el.perfRestore.hidden = false;
+}
+
+function restorePerfPanel() {
+	state.perfUi.closed = false;
+	el.perfPanel.hidden = false;
+	el.perfRestore.hidden = true;
+	applyPerfMinimize();
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
@@ -3435,6 +3480,10 @@ async function bootWorkspace() {
 	await window.qaseEntryReady;
 	// Test Execution Timer: one shared second-hand for every live timer view.
 	startTimerInterval();
+	// Performance panel controls: minimize/restore/close are visibility-only.
+	el.perfMinimize?.addEventListener('click', togglePerfMinimize);
+	el.perfClose?.addEventListener('click', closePerfPanel);
+	el.perfRestore?.addEventListener('click', restorePerfPanel);
 	try {
 		state.user = await api('/auth/me');
 	} catch (error) {
