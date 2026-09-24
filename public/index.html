@@ -75,13 +75,22 @@
     </header>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
-      <h2 class="perf-title">⏱ Performance</h2>
-      <dl class="perf-grid" id="perf-grid"></dl>
-      <div class="perf-compare" id="perf-compare" hidden>
-        <h3 class="perf-compare-title" id="perf-compare-title">Same-target runs</h3>
-        <ol class="perf-compare-list" id="perf-compare-list"></ol>
+      <header class="perf-head">
+        <h2 class="perf-title">⏱ Performance</h2>
+        <div class="perf-actions">
+          <button class="perf-ctl" id="perf-minimize" type="button" aria-expanded="true" aria-controls="perf-body" title="Minimize">▾</button>
+          <button class="perf-ctl" id="perf-close" type="button" title="Close">✕</button>
+        </div>
+      </header>
+      <div class="perf-body" id="perf-body">
+        <dl class="perf-grid" id="perf-grid"></dl>
+        <div class="perf-compare" id="perf-compare" hidden>
+          <h3 class="perf-compare-title" id="perf-compare-title">Same-target runs</h3>
+          <ol class="perf-compare-list" id="perf-compare-list"></ol>
+        </div>
       </div>
     </section>
+    <button class="btn btn-ghost btn-sm perf-restore" id="perf-restore" type="button" title="Show performance panel" hidden>⏱ Performance</button>
     <footer class="panel-foot">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
       <span id="conn-label" role="status" aria-live="polite">connecting…</span>

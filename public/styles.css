@@ -705,11 +705,69 @@ a {
 }
 
 .perf-title {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header row: title left, controls right; wraps cleanly on narrow widths. */
+.perf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.perf-panel.is-minimized .perf-head {
+  margin-bottom: 0;
+}
+
+.perf-body[hidden] {
+  display: none;
+}
+
+.perf-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.perf-ctl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.perf-ctl:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.perf-restore {
+  margin: 10px 12px 4px;
+  align-self: flex-start;
+}
+
+.perf-restore[hidden] {
+  display: none;
 }
 
 .perf-grid {
