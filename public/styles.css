@@ -691,6 +691,10 @@ a {
   color: #aeb7ff;
 }
 
+.run-duration--paused {
+  color: #efc77f;
+}
+
 /* ── Performance panel ─────────────────────────────────────────── */
 .perf-panel {
   margin: 10px 12px 4px;

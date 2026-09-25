@@ -244,24 +244,26 @@ function renderRun(run) {
 	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
 	dot.setAttribute('aria-hidden', 'true');
 	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
-	// Per-run timer: live elapsed for running runs, stored duration for
-	// finished ones. Each row computes independently — never a shared clock.
+	// Per-run timer: live elapsed for running runs (frozen while paused),
+	// stored active duration for finished ones. Each row computes
+	// independently — never a shared clock.
 	if (Number.isFinite(run.startedAt)) {
-		const duration = Number.isFinite(run.completedAt)
-			? formatDurationShort(run.durationSeconds ?? (run.completedAt - run.startedAt) / 1000)
-			: Number.isFinite(run.startedAt)
-				? formatDurationShort(elapsedSecondsOf(run))
-				: '';
+		const pausedRow = Number.isFinite(run.pausedAt) && !Number.isFinite(run.completedAt);
+		const duration = Number.isFinite(run.completedAt) || pausedRow
+			? formatDurationShort(run.durationSeconds ?? elapsedSecondsOf(run))
+			: formatDurationShort(elapsedSecondsOf(run));
 		if (duration) {
 			const timer = document.createElement('span');
-			timer.className = `run-duration${run.status === 'running' ? ' run-duration--live' : ''}`;
+			timer.className = `run-duration${run.status === 'running' && !pausedRow ? ' run-duration--live' : ''}${pausedRow ? ' run-duration--paused' : ''}`;
 			timer.dataset.runId = run.id;
-			timer.textContent = run.status === 'running' ? `⏱ ${duration}` : `⏱ ${duration}`;
-			timer.title = run.status === 'running'
-				? `Elapsed time — started ${formatTimeOfDay(run.startedAt)}`
-				: `Total duration — completed ${formatTimeOfDay(run.completedAt)}`;
+			timer.textContent = pausedRow ? `⏸ ${duration}` : `⏱ ${duration}`;
+			timer.title = pausedRow
+				? `Paused at ${formatTimeOfDay(run.pausedAt)} — resumes from ${duration} on continue`
+				: run.status === 'running'
+					? `Elapsed time — started ${formatTimeOfDay(run.startedAt)}`
+					: `Total duration — completed ${formatTimeOfDay(run.completedAt)}`;
 			meta.append(timer);
-			if (run.status === 'running') {
+			if (run.status === 'running' && !pausedRow) {
 				state.timer.runLiveTimers.set(run.id, timer);
 			} else {
 				state.timer.runLiveTimers.delete(run.id);
@@ -540,11 +542,16 @@ function serverNowNow() {
 	return Date.now() + state.timer.skew;
 }
 
-/** Live elapsed seconds for a session-like object with server timing fields. */
+/** Live elapsed ACTIVE seconds (server-authoritative, pause time excluded). */
 function elapsedSecondsOf(session, now = serverNowNow()) {
 	if (!Number.isFinite(session?.startedAt)) return undefined;
+	const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+	// Currently paused: the clock is frozen at the pause point.
+	if (Number.isFinite(session.pausedAt)) {
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
 	const end = Number.isFinite(session.completedAt) ? session.completedAt : now;
-	return Math.max(0, Math.floor((end - session.startedAt) / 1000));
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }
 
 const TIMER_LABELS = {
@@ -570,7 +577,8 @@ function updateRunTimer() {
 	el.runTimer.hidden = false;
 	const terminal = ['done', 'error', 'interrupted'].includes(session.status)
 		|| Number.isFinite(session.completedAt);
-	const label = TIMER_LABELS[session.status] ?? 'Elapsed';
+	const paused = Number.isFinite(session.pausedAt) && !terminal;
+	const label = paused ? 'Paused' : (TIMER_LABELS[session.status] ?? 'Elapsed');
 	el.runTimerLabel.textContent = session.cancelledAt ? 'Duration (cancelled)' : label;
 	el.runTimerLabel.dataset.state = session.status;
 	if (session.status === 'done') {
@@ -582,23 +590,31 @@ function updateRunTimer() {
 	} else if (session.cancelledAt) {
 		el.runTimer.dataset.state = 'cancelled';
 		el.runTimerLabel.textContent = 'Test Cancelled';
-	} else if (session.status === 'awaiting_input') {
+	} else if (paused) {
+		// User stop = paused, not cancelled: elapsed frozen at the pause point.
 		el.runTimer.dataset.state = 'paused';
-		el.runTimerLabel.textContent = '⏸ Paused (awaiting input)';
+		el.runTimerLabel.textContent = '⏸ Paused';
 	} else if (session.status === 'running') {
 		el.runTimer.dataset.state = 'running';
 		el.runTimerLabel.textContent = '● Testing';
+	} else if (session.status === 'awaiting_input') {
+		el.runTimer.dataset.state = 'paused';
+		el.runTimerLabel.textContent = '⏸ Paused (awaiting input)';
 	}
 	const seconds = elapsedSecondsOf(session);
 	el.runTimerClock.textContent = formatClock(seconds);
-	if (terminal || session.status === 'awaiting_input') {
-		// Terminal or paused-on-question states don't need a second hand;
-		// show the completed stamp too.
-		el.runTimer.title = Number.isFinite(session.completedAt)
-			? `Test Completed: ${formatTimeOfDay(session.completedAt)}`
-			: Number.isFinite(session.startedAt)
-				? `Test Started: ${formatTimeOfDay(session.startedAt)}`
-				: '';
+	// Tick the live clock only while the run can actually advance it.
+	const live = session.status === 'running' && !terminal && !paused;
+	el.runTimer.dataset.live = live ? 'true' : 'false';
+	if (terminal || paused) {
+		// Terminal or paused states don't need a second hand; show the stamps.
+		el.runTimer.title = paused
+			? `Paused: ${formatTimeOfDay(session.pausedAt)} — resumes from ${formatClock(seconds)} on continue`
+			: Number.isFinite(session.completedAt)
+				? `Test Completed: ${formatTimeOfDay(session.completedAt)}`
+				: Number.isFinite(session.startedAt)
+					? `Test Started: ${formatTimeOfDay(session.startedAt)}`
+					: '';
 	} else {
 		el.runTimer.title = `Test Started: ${formatTimeOfDay(session.startedAt)}`;
 	}
@@ -609,15 +625,19 @@ function startTimerInterval() {
 	state.timer.interval = setInterval(() => {
 		const session = state.session;
 		if (!session || el.runTimer.hidden) return;
-		// Re-render only while a live run can advance the clock.
-		if (session.status === 'running' && !Number.isFinite(session.completedAt)) {
+		// Re-render only while a live run can advance the clock — paused and
+		// terminal states stay frozen at their server-recorded values.
+		const live = session.status === 'running'
+			&& !Number.isFinite(session.completedAt)
+			&& !Number.isFinite(session.pausedAt);
+		if (live) {
 			el.runTimerClock.textContent = formatClock(elapsedSecondsOf(session));
 		}
 		// Keep the runs list's live per-row elapsed times ticking too.
-		if (state.runLiveTimers?.size) {
-			for (const [runId, node] of state.runLiveTimers) {
+		if (state.timer.runLiveTimers?.size) {
+			for (const [runId, node] of state.timer.runLiveTimers) {
 				const run = runId === session?.id ? session : undefined;
-				if (run && run.status === 'running') {
+				if (run && run.status === 'running' && !Number.isFinite(run.pausedAt)) {
 					node.textContent = `⏱ ${formatDurationShort(elapsedSecondsOf(run))}`;
 				}
 			}
@@ -2258,6 +2278,8 @@ function handleEvent(event) {
 					startedAt: event.timing.startedAt,
 					completedAt: event.timing.completedAt,
 					cancelledAt: event.timing.cancelledAt,
+					pausedAt: event.timing.pausedAt,
+					pausedSeconds: event.timing.pausedSeconds ?? session.pausedSeconds ?? 0,
 					failureReason: event.timing.failureReason
 				});
 			}

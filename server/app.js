@@ -461,8 +461,19 @@ export function createApplication(options = {}) {
 		const session = await requireSession(request, response);
 		if (!session) return;
 		const liveState = services.agent.getLiveState(session.id);
+		// Active (pause-excluded) seconds, server-authoritative: a paused run
+		// freezes at the pause point instead of reporting undefined.
+		const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+		const durationSeconds = session.startedAt === undefined ? undefined : Math.max(
+			0,
+			Math.floor(
+				((session.pausedAt ?? session.completedAt ?? Date.now()) - session.startedAt) / 1000
+				- pausedSeconds
+			)
+		);
 		response.json({
 			...session,
+			durationSeconds,
 			secretNames: await services.secrets.names(session.id),
 			running: liveState.running,
 			frame: liveState.frame,

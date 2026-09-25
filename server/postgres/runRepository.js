@@ -233,7 +233,7 @@ function runMode(session) {
 
 /** Server-authoritative timing columns, hydrated into the run aggregate. */
 const TIMING_COLUMNS = `started_at, completed_at, queued_at, setup_started_at, setup_ended_at,
-	report_started_at, report_ended_at, cancelled_at, failure_reason`;
+	report_started_at, report_ended_at, cancelled_at, paused_at, paused_seconds, failure_reason`;
 
 function optionalDate(target, key, value) {
 	optional(target, key, value === null || value === undefined ? undefined : epoch(value));
@@ -250,6 +250,10 @@ function hydrateTiming(target, row) {
 	optionalDate(target, 'reportStartedAt', row.report_started_at);
 	optionalDate(target, 'reportEndedAt', row.report_ended_at);
 	optionalDate(target, 'cancelledAt', row.cancelled_at);
+	optionalDate(target, 'pausedAt', row.paused_at);
+	optional(target, 'pausedSeconds', row.paused_seconds === null || row.paused_seconds === undefined
+		? undefined
+		: Number(row.paused_seconds));
 	optional(target, 'failureReason', row.failure_reason ?? undefined);
 	return target;
 }
@@ -261,8 +265,16 @@ function hydrateTiming(target, row) {
  */
 function timingSelect(alias = '') {
 	const a = alias;
-	return `CASE WHEN ${a}completed_at IS NOT NULL AND ${a}started_at IS NOT NULL
-			THEN EXTRACT(EPOCH FROM (${a}completed_at - ${a}started_at)) END AS duration_seconds,
+	// duration_seconds is active execution time: total span minus accumulated
+	// paused intervals. A currently-paused run (paused_at set, no completion)
+	// is measured up to the pause point.
+	return `CASE
+			WHEN ${a}completed_at IS NOT NULL AND ${a}started_at IS NOT NULL
+				THEN GREATEST(0, EXTRACT(EPOCH FROM (${a}completed_at - ${a}started_at)) - COALESCE(${a}paused_seconds, 0))
+			WHEN ${a}paused_at IS NOT NULL AND ${a}started_at IS NOT NULL
+				THEN GREATEST(0, EXTRACT(EPOCH FROM (${a}paused_at - ${a}started_at)) - COALESCE(${a}paused_seconds, 0))
+		END AS duration_seconds,
+		COALESCE(${a}paused_seconds, 0) AS paused_seconds,
 		CASE WHEN ${a}started_at IS NOT NULL AND ${a}queued_at IS NOT NULL
 			THEN EXTRACT(EPOCH FROM (${a}started_at - ${a}queued_at)) END AS queue_duration_seconds,
 		CASE WHEN ${a}setup_started_at IS NOT NULL AND ${a}setup_ended_at IS NOT NULL
@@ -273,8 +285,18 @@ function timingSelect(alias = '') {
 
 function readTiming(row) {
 	const read = value => (value === null || value === undefined ? undefined : Number(value));
+	const pausedSeconds = row.paused_seconds === null || row.paused_seconds === undefined ? 0 : Number(row.paused_seconds);
+	// Active duration excludes paused intervals; a currently-paused run is
+	// frozen at its pause point.
+	const rawEnd = row.completed_at
+		?? row.paused_at
+		?? null;
+	const active = rawEnd && row.started_at
+		? Math.max(0, (epoch(rawEnd) - epoch(row.started_at)) / 1000 - pausedSeconds)
+		: undefined;
 	return {
-		durationSeconds: read(row.duration_seconds),
+		durationSeconds: active,
+		pausedSeconds,
 		queueDurationSeconds: read(row.queue_duration_seconds),
 		setupDurationSeconds: read(row.setup_duration_seconds),
 		reportDurationSeconds: read(row.report_duration_seconds),
@@ -282,8 +304,8 @@ function readTiming(row) {
 		// the actual test execution phase.
 		executionDurationSeconds: row.setup_ended_at && row.report_started_at
 			? Math.max(0, (epoch(row.report_started_at) - epoch(row.setup_ended_at)) / 1000)
-			: row.setup_ended_at && row.completed_at
-				? Math.max(0, (epoch(row.completed_at) - epoch(row.setup_ended_at)) / 1000)
+			: row.setup_ended_at && rawEnd
+				? Math.max(0, (epoch(rawEnd) - epoch(row.setup_ended_at)) / 1000)
 				: undefined
 	};
 }
@@ -635,8 +657,8 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
-			created_at, updated_at, queued_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,$18,$19,$20,$21)
+			created_at, updated_at, queued_at, paused_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,$18,$19,$20,$21,$22)
 		 RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -647,7 +669,8 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage), names(session.secretNames),
 			session.messages?.length ?? 0, session.findings?.length ?? 0,
 			nextEventSequence, createdAt, updatedAt,
-			asNullableDate(session.queuedAt)
+			asNullableDate(session.queuedAt),
+			asNullableDate(session.pausedAt)
 		]
 	);
 	await replaceChildren(client, tenant, session, updatedAt);
@@ -815,6 +838,7 @@ export function createPostgresRunRepository({
 				updatedAt: epoch(row.updated_at),
 				startedAt: row.started_at ? epoch(row.started_at) : undefined,
 				completedAt: row.completed_at ? epoch(row.completed_at) : undefined,
+				pausedAt: row.paused_at ? epoch(row.paused_at) : undefined,
 				...readTiming(row),
 				findingCount: Number(row.finding_count ?? 0),
 				messageCount: Number(row.message_count ?? 0)
@@ -926,6 +950,11 @@ export function createPostgresRunRepository({
 					report_started_at = COALESCE(report_started_at, $26),
 					report_ended_at = COALESCE(report_ended_at, $27),
 					cancelled_at = COALESCE(cancelled_at, $28),
+					paused_at = $30,
+					paused_seconds = CASE
+						WHEN $30 IS NULL THEN COALESCE(paused_seconds, 0) + $31
+						ELSE COALESCE(paused_seconds, 0)
+					END,
 					failure_reason = CASE WHEN $29 IS NOT NULL THEN $29 ELSE failure_reason END
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND lock_version = $20 AND deleted_at IS NULL
@@ -948,7 +977,11 @@ export function createPostgresRunRepository({
 					asNullableDate(session.queuedAt), asNullableDate(session.setupStartedAt),
 					asNullableDate(session.setupEndedAt), asNullableDate(session.reportStartedAt),
 					asNullableDate(session.reportEndedAt), asNullableDate(session.cancelledAt),
-					session.failureReason ?? null
+					session.failureReason ?? null,
+					// Pause bookkeeping: $30 pausedAt (null = resume), $31 the
+					// just-closed interval to accumulate on resume.
+					asNullableDate(session.pausedAt),
+					session.resumedPauseSeconds ?? 0
 				]
 			);
 			if (!result.rows?.length) {
@@ -1272,7 +1305,7 @@ export function createPostgresRunRepository({
 			const result = await client.query(
 				`WITH completed AS (
 					SELECT target_url, started_at, completed_at,
-						EXTRACT(EPOCH FROM (completed_at - started_at)) AS duration_seconds,
+						GREATEST(0, EXTRACT(EPOCH FROM (completed_at - started_at)) - COALESCE(paused_seconds, 0)) AS duration_seconds,
 						message_count, finding_count
 					FROM qa_runs
 					WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
@@ -1296,7 +1329,7 @@ export function createPostgresRunRepository({
 			const row = result.rows?.[0] ?? {};
 			const perTarget = await client.query(
 				`SELECT target_url, COUNT(*)::int AS run_count,
-					AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) AS avg_duration_seconds
+					AVG(GREATEST(0, EXTRACT(EPOCH FROM (completed_at - started_at)) - COALESCE(paused_seconds, 0))) AS avg_duration_seconds
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 					AND started_at IS NOT NULL AND completed_at IS NOT NULL

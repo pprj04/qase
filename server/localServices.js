@@ -156,7 +156,6 @@ export function createLocalApplicationServices(options = {}) {
 		// Duration analytics for the in-memory store: computed from loaded
 		// sessions so dev-without-Postgres still shows real numbers.
 		async durationAnalytics({ targetUrl } = {}) {
-			const now = Date.now();
 			const completed = listSessions({ limit: 100, ownerUserId: ownerUserId() })
 				.filter(candidate => {
 					const session = getSession(candidate.id, undefined);
@@ -165,13 +164,16 @@ export function createLocalApplicationServices(options = {}) {
 					return true;
 				})
 				.map(candidate => getSession(candidate.id, undefined));
-			const durations = completed.map(session => (session.completedAt - session.startedAt) / 1000).sort((a, b) => a - b);
+			// Active duration only: paused intervals are excluded.
+			const active = session =>
+				Math.max(0, (session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0));
+			const durations = completed.map(active).sort((a, b) => a - b);
 			const average = values => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined);
 			const byTargetMap = new Map();
 			for (const session of completed) {
 				const entry = byTargetMap.get(session.targetUrl) ?? { runCount: 0, total: 0 };
 				entry.runCount += 1;
-				entry.total += (session.completedAt - session.startedAt) / 1000;
+				entry.total += active(session);
 				byTargetMap.set(session.targetUrl, entry);
 			}
 			return {
@@ -188,7 +190,7 @@ export function createLocalApplicationServices(options = {}) {
 					runCount: entry.runCount,
 					avgDurationSeconds: entry.total / entry.runCount
 				})),
-				serverNow: now
+				serverNow: Date.now()
 			};
 		},
 		async targetDurationHistory(targetUrl, { limit = 20 } = {}) {
@@ -202,7 +204,10 @@ export function createLocalApplicationServices(options = {}) {
 					status: session.status,
 					startedAt: session.startedAt,
 					completedAt: session.completedAt,
-					durationSeconds: (session.completedAt - session.startedAt) / 1000
+					pausedAt: session.pausedAt,
+					pausedSeconds: session.pausedSeconds ?? 0,
+					durationSeconds: Math.max(0,
+						(session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0))
 				}));
 		},
 		/**

@@ -217,9 +217,9 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			ownerUserId: session.ownerUserId,
 			startedAt: session.startedAt,
 			completedAt: session.completedAt,
-			durationSeconds: Number.isFinite(session.startedAt)
-				? ((session.completedAt ?? Date.now()) - session.startedAt) / 1000
-				: undefined,
+			pausedAt: session.pausedAt,
+			pausedSeconds: session.pausedSeconds ?? 0,
+			durationSeconds: activeDurationSeconds(session),
 			findingCount: session.findings.length,
 			messageCount: session.messages.length
 		}));
@@ -337,8 +337,21 @@ export function applyStatusTiming(session, status) {
 				session.startedAt = now;
 				session.setupStartedAt = now;
 			}
+			// Resume from a user stop: close the pause interval and accumulate
+			// it, so paused time is excluded from active execution time.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			break;
 		case 'done':
+			// Close any open pause interval before completing.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			if (session.completedAt === undefined) session.completedAt = now;
 			if (session.reportStartedAt !== undefined && session.reportEndedAt === undefined) {
 				session.reportEndedAt = now;
@@ -347,14 +360,20 @@ export function applyStatusTiming(session, status) {
 			break;
 		case 'error':
 		case 'interrupted':
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			if (session.completedAt === undefined) session.completedAt = now;
 			break;
 		case 'idle':
-			// User stop: an idle run that was executing counts as cancelled,
-			// not completed.
+			// User stop = PAUSED, not cancelled. The elapsed clock freezes at
+			// the pause point and resumes exactly when the run continues.
+			// Cancellation is reserved for a future explicit permanent-cancel
+			// action; the Stop button never cancels the timer.
 			if (session.startedAt !== undefined && session.completedAt === undefined) {
-				session.cancelledAt = now;
-				session.completedAt = now;
+				if (session.pausedAt === undefined) session.pausedAt = now;
 			}
 			break;
 		default:
@@ -394,6 +413,23 @@ export function timingForEvent(session) {
 		reportStartedAt: session.reportStartedAt,
 		reportEndedAt: session.reportEndedAt,
 		cancelledAt: session.cancelledAt,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
 		failureReason: session.failureReason
 	};
+}
+
+/**
+ * Active execution seconds, excluding paused intervals. For a running run
+ * this is live; for a paused run it is frozen at the pause point.
+ */
+export function activeDurationSeconds(session, now = Date.now()) {
+	if (session?.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		// Currently paused: elapsed is frozen at the pause point.
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }

@@ -55,21 +55,23 @@ function summary(session) {
 		updatedAt: session.updatedAt,
 		startedAt: session.startedAt,
 		completedAt: session.completedAt,
-		durationSeconds: session.durationSeconds,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
+		durationSeconds: liveDurationSeconds(session),
 		findingCount: session.findings.length,
 		messageCount: session.messages.length
 	};
 }
 
-/** Live elapsed seconds for a still-running run, computed from server stamps. */
+/** Live active-execution seconds (paused time excluded), from server stamps. */
 export function liveDurationSeconds(session, now = Date.now()) {
-	if (session.completedAt !== undefined && session.startedAt !== undefined) {
-		return Math.max(0, Math.floor((session.completedAt - session.startedAt) / 1000));
+	if (session.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
 	}
-	if (session.startedAt !== undefined) {
-		return Math.max(0, Math.floor((now - session.startedAt) / 1000));
-	}
-	return undefined;
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }
 
 function eventActor(type, payload, tenantContext) {
@@ -370,8 +372,16 @@ export function createPostgresApplicationServices({
 			return entry;
 		},
 	async setStatus(session, status, detail) {
+		const before = { pausedAt: session.pausedAt, pausedSeconds: session.pausedSeconds ?? 0 };
 		applyStatusTiming(session, status);
 		session.status = status;
+		// On resume (pausedAt cleared), tell the repository how much pause time
+		// to accumulate into the persisted paused_seconds column.
+		if (before.pausedAt !== undefined && session.pausedAt === undefined) {
+			session.resumedPauseSeconds = Math.max(0, (Date.now() - before.pausedAt) / 1000);
+		} else {
+			session.resumedPauseSeconds = 0;
+		}
 		if (status === 'error' && detail && session.failureReason === undefined) {
 			session.failureReason = String(detail);
 		}
