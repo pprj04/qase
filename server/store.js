@@ -359,13 +359,21 @@ export function applyStatusTiming(session, status) {
 			session.failureReason = undefined;
 			break;
 		case 'error':
-		case 'interrupted':
 			if (session.pausedAt !== undefined) {
 				session.pausedSeconds = (session.pausedSeconds ?? 0)
 					+ Math.max(0, (now - session.pausedAt) / 1000);
 				session.pausedAt = undefined;
 			}
 			if (session.completedAt === undefined) session.completedAt = now;
+			break;
+		case 'interrupted':
+			// Stuck / interrupted / server pause = PAUSED, not terminal: the
+			// elapsed clock freezes at the interruption point and the run can
+			// be recovered and resumed from exactly that value. Only an error
+			// or an explicit cancel closes the timer.
+			if (session.startedAt !== undefined && session.completedAt === undefined) {
+				if (session.pausedAt === undefined) session.pausedAt = now;
+			}
 			break;
 		case 'idle':
 			// User stop = PAUSED, not cancelled. The elapsed clock freezes at

@@ -96,6 +96,27 @@ test('pause freeze: active duration does not advance while paused', async () => 
 	assert.equal(activeDurationSeconds(session), frozen, 'elapsed frozen while paused');
 });
 
+test('interrupted pauses the timer instead of closing it', async () => {
+	const session = freshSession();
+	applyStatusTiming(session, 'running');
+	await new Promise(resolve => setTimeout(resolve, 30));
+	applyStatusTiming(session, 'interrupted');
+	// Stuck / interrupted must PAUSE, not complete or cancel: elapsed is
+	// frozen at the interruption point and the run stays resumable.
+	assert.equal(session.completedAt, undefined, 'interrupted is not terminal');
+	assert.equal(session.cancelledAt, undefined, 'interrupted never cancels');
+	assert.ok(Number.isFinite(session.pausedAt), 'pausedAt set on interruption');
+	const frozen = activeDurationSeconds(session);
+	await new Promise(resolve => setTimeout(resolve, 50));
+	assert.equal(activeDurationSeconds(session), frozen, 'elapsed frozen while interrupted');
+	// Recovery resumes from the frozen value and accumulates the gap.
+	applyStatusTiming(session, 'running');
+	assert.equal(session.pausedAt, undefined);
+	assert.ok(session.pausedSeconds >= 0.05, 'interruption gap excluded from active time');
+	applyStatusTiming(session, 'done');
+	assert.ok(session.completedAt, 'completes after interruption');
+});
+
 test('timingForEvent carries pause fields', () => {
 	const session = freshSession();
 	applyStatusTiming(session, 'running');

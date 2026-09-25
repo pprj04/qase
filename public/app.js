@@ -554,14 +554,13 @@ function elapsedSecondsOf(session, now = serverNowNow()) {
 	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }
 
-const TIMER_LABELS = {
-	running: 'Elapsed',
-	awaiting_input: 'Elapsed (paused for input)',
-	done: 'Total Duration',
-	error: 'Duration Until Failure',
-	interrupted: 'Duration Until Failure',
-	idle: 'Duration'
-};
+	const TIMER_LABELS = {
+		running: 'Elapsed',
+		awaiting_input: 'Elapsed (paused for input)',
+		done: 'Total Duration',
+		error: 'Duration Until Failure',
+		idle: 'Duration'
+	};
 
 /**
  * Render the header timer for the current session and keep it ticking.
@@ -575,7 +574,7 @@ function updateRunTimer() {
 		return;
 	}
 	el.runTimer.hidden = false;
-	const terminal = ['done', 'error', 'interrupted'].includes(session.status)
+	const terminal = ['done', 'error'].includes(session.status)
 		|| Number.isFinite(session.completedAt);
 	const paused = Number.isFinite(session.pausedAt) && !terminal;
 	const label = paused ? 'Paused' : (TIMER_LABELS[session.status] ?? 'Elapsed');
@@ -584,14 +583,15 @@ function updateRunTimer() {
 	if (session.status === 'done') {
 		el.runTimer.dataset.state = 'completed';
 		el.runTimerLabel.textContent = '✓ Test Completed';
-	} else if (session.status === 'error' || session.status === 'interrupted') {
+	} else if (session.status === 'error') {
 		el.runTimer.dataset.state = 'failed';
 		el.runTimerLabel.textContent = '⚠ Test Execution Failed';
 	} else if (session.cancelledAt) {
 		el.runTimer.dataset.state = 'cancelled';
 		el.runTimerLabel.textContent = 'Test Cancelled';
 	} else if (paused) {
-		// User stop = paused, not cancelled: elapsed frozen at the pause point.
+		// User stop or system interruption = paused, not cancelled: elapsed
+		// frozen at the pause point, resuming from exactly this value.
 		el.runTimer.dataset.state = 'paused';
 		el.runTimerLabel.textContent = '⏸ Paused';
 	} else if (session.status === 'running') {
