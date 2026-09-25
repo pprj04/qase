@@ -335,7 +335,8 @@ test('save enforces optimistic lock version and rolls back without an event on c
 	);
 	const update = fake.calls.find(call => call.text.startsWith('UPDATE qa_runs'));
 	assert.deepEqual(update.params.slice(0, 3), [TENANT.organizationId, TENANT.projectId, RUN_ID]);
-	assert.equal(update.params.at(-1), 4);
+	assert.equal(update.params[19], null);
+	assert.equal(update.params[31], 4);
 	assert.equal(fake.calls.some(call => call.text.startsWith('INSERT INTO qa_run_events')), false);
 	assert.equal(fake.calls.at(-1).text, 'ROLLBACK');
 	assert.equal(fake.state.releases, 1);
@@ -665,12 +666,12 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
 
 	// create: token_usage rides in the run INSERT alongside context_usage;
-	// queuedAt (DEV timing) is the trailing write-once column.
+	// queuedAt and pausedAt (DEV timing) are the trailing write-once columns.
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
 	assert.equal(runInsert.params[runInsert.params.length - 1], null);
-	assert.equal(runInsert.params[runInsert.params.length - 2].getTime(), new Date(NOW).getTime());
+	assert.equal(runInsert.params[runInsert.params.length - 3].getTime(), new Date(NOW).getTime());
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
@@ -845,11 +846,13 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		updatedAt: NOW,
 		startedAt: undefined,
 		completedAt: undefined,
+		pausedAt: undefined,
+		pausedSeconds: 0,
+		durationSeconds: undefined,
+		queueDurationSeconds: undefined,
 		setupDurationSeconds: undefined,
 		executionDurationSeconds: undefined,
 		reportDurationSeconds: undefined,
-		queueDurationSeconds: undefined,
-		durationSeconds: undefined,
 		findingCount: 1,
 		messageCount: 3,
 		todoTotal: 0,
