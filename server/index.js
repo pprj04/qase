@@ -114,7 +114,7 @@ server = app.listen(port, host, () => {
 	}
 	console.log('');
 	if (config.problem) {
-		console.log(`  ! ${config.problem} Set it in the dashboard under Settings, or in .env.\n`);
+		console.log(`  ! ${config.problem}\n`);
 	}
 	}
 

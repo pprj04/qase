@@ -132,7 +132,7 @@ function isReady(config = getConfig()) {
 
 function describeProblem(config) {
 	if (config.provider !== 'bedrock' && !config.apiKey) {
-		return 'No API key set.';
+		return 'Required API configuration is missing: no API key. Set QASE_API_KEY in the environment, or add a key under Settings.';
 	}
 	if (NEEDS_BASE_URL.has(config.provider) && !config.baseUrl) {
 		return 'This provider needs a base URL.';
