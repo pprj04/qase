@@ -10,6 +10,10 @@ import {
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
+import {
+	closeFeedbackStore, createFeedback, deleteFeedback, feedbackStats,
+	findFeedbackForRun, getFeedback, listFeedback, updateFeedback
+} from './feedbackStore.js';
 
 /**
  * Builds the non-persistence services around a run store. Both the rollback
@@ -28,6 +32,18 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 	const purgeWorkspace = options.purgeRunWorkspace ?? purgeRunWorkspace;
 	const services = {
 		runs: runStore,
+		// Feedback is store-backed in both adapters; the local implementation
+		// (feedbackStore.js) ships with this composition, and the PostgreSQL
+		// adapter overrides it below.
+		feedback: options.feedbackStore ?? {
+			create: input => createFeedback(input),
+			get: getFeedback,
+			list: options => listFeedback(options),
+			update: (id, patch) => updateFeedback(id, patch),
+			remove: deleteFeedback,
+			stats: feedbackStats,
+			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
+		},
 		events: {
 			publish: runStore.publish,
 			subscribe: runStore.subscribe
@@ -116,6 +132,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		lifecycle: {
 			close: async () => {
 				await runStore.close?.();
+				closeFeedbackStore();
 				await options.auth?.close?.();
 				await options.close?.();
 			}
@@ -276,5 +293,5 @@ export function createLocalApplicationServices(options = {}) {
 		tenantContext: options.tenantContext,
 		file: options.authFile
 	});
-	return createRuntimeApplicationServices(runStore, { auth });
+	return createRuntimeApplicationServices(runStore, { ...options, auth: options.auth ?? auth });
 }

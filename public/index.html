@@ -91,6 +91,40 @@
       </div>
     </section>
     <button class="btn btn-ghost btn-sm perf-restore" id="perf-restore" type="button" title="Show performance panel" hidden>⏱ Performance</button>
+    <section class="perf-panel" id="feedback-panel" aria-label="Feedback review" hidden>
+      <header class="perf-head">
+        <h2 class="perf-title">💬 Feedback</h2>
+        <div class="perf-actions">
+          <button class="perf-ctl" id="feedback-minimize" type="button" aria-expanded="true" aria-controls="feedback-admin-body" title="Minimize">▾</button>
+          <button class="perf-ctl" id="feedback-close-ctl" type="button" title="Close">✕</button>
+        </div>
+      </header>
+      <div class="perf-body" id="feedback-admin-body">
+        <dl class="perf-grid" id="feedback-stats"></dl>
+        <div class="feedback-filters">
+          <input id="feedback-search" type="search" placeholder="Search Test Run ID, comment…" maxlength="200" aria-label="Search feedback">
+          <div class="feedback-filter-row">
+            <select id="feedback-filter-rating" aria-label="Filter by rating">
+              <option value="">All ratings</option>
+              <option value="5">5★</option><option value="4">4★</option><option value="3">3★</option><option value="2">2★</option><option value="1">1★</option>
+            </select>
+            <select id="feedback-filter-category" aria-label="Filter by category">
+              <option value="">All categories</option>
+            </select>
+            <select id="feedback-filter-status" aria-label="Filter by review status">
+              <option value="">All statuses</option>
+              <option value="new">New</option>
+              <option value="reviewed">Reviewed</option>
+              <option value="in_progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+        </div>
+        <ol class="feedback-list" id="feedback-list"></ol>
+      </div>
+    </section>
+    <button class="btn btn-ghost btn-sm perf-restore" id="feedback-restore" type="button" title="Show feedback review panel" hidden>💬 Feedback</button>
     <footer class="panel-foot">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
       <span id="conn-label" role="status" aria-live="polite">connecting…</span>
@@ -345,6 +379,49 @@
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="qa-cancel">Cancel</button>
       <button class="btn btn-primary" type="submit" id="qa-submit">Start QA run</button>
+    </footer>
+  </form>
+</dialog>
+
+<!-- Post-run user feedback. Opened from the report actions row; run context
+     (Test Run ID, target, status, duration) is attached server-side from the
+     finished run — the user only picks a rating, category and comments. -->
+<dialog class="modal qa-modal" id="feedback-modal" aria-labelledby="feedback-title" aria-describedby="feedback-description">
+  <form class="modal-inner" id="feedback-form">
+    <header class="modal-head" data-path="~/qase/feedback">
+      <div>
+        <h2 id="feedback-title">Provide Feedback</h2>
+        <p id="feedback-description">How was your QASE testing experience?</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="feedback-close" title="Close without submitting">Close</button>
+    </header>
+    <div class="modal-body">
+      <p class="feedback-meta" id="feedback-run-meta"></p>
+      <fieldset class="feedback-stars" id="feedback-stars">
+        <legend aria-hidden="false">Overall rating <span class="req" aria-hidden="true">*</span></legend>
+        <div class="feedback-star-row" role="radiogroup" aria-label="Overall rating" id="feedback-star-row"></div>
+      </fieldset>
+      <label class="field">
+        <span>Category</span>
+        <select id="feedback-category" required>
+          <option value="" selected disabled>Choose a category…</option>
+        </select>
+        <small>What area does your feedback relate to?</small>
+      </label>
+      <label class="field">
+        <span>Tell us about your experience <span class="req" aria-hidden="true">*</span></span>
+        <textarea id="feedback-comments" required minlength="1" maxlength="4000" rows="4" placeholder="Tell us about your experience"></textarea>
+      </label>
+      <label class="field">
+        <span>What should we improve?</span>
+        <textarea id="feedback-improvement" maxlength="4000" rows="2" placeholder="Optional — anything we could do better"></textarea>
+      </label>
+      <div class="test-result" id="feedback-error" role="alert" aria-live="assertive"></div>
+      <p class="feedback-success" id="feedback-success" role="status" aria-live="polite"></p>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" type="button" id="feedback-cancel">Cancel</button>
+      <button class="btn btn-primary" type="submit" id="feedback-submit">Submit feedback</button>
     </footer>
   </form>
 </dialog>
