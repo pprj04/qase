@@ -15,6 +15,62 @@ const TEST_TENANT = Object.freeze({
 	actorName: 'Drytis Owner'
 });
 
+/** In-memory feedback service matching the contract's feedback group. */
+function createMemoryFeedbackService() {
+	const records = new Map();
+	const clean = value => String(value ?? '').slice(0, 4000).trim();
+	return {
+		async create({ runId, submittedBy, context, ...input }) {
+			const existing = [...records.values()].find(record => record.runId === runId && record.submittedBy === submittedBy);
+			if (existing) {
+				const error = new Error('Feedback already exists for this test run.');
+				error.code = 'duplicate_feedback';
+				error.existingId = existing.id;
+				throw error;
+			}
+			const now = Date.now();
+			const record = {
+				id: randomUUID(), runId, submittedBy: submittedBy ?? null,
+				targetUrl: context?.targetUrl, runStatus: context?.runStatus,
+				durationSeconds: context?.durationSeconds,
+				rating: Number(input.rating), category: input.category,
+				comments: clean(input.comments), improvement: clean(input.improvement) || undefined,
+				status: 'new', submittedAt: now, updatedAt: now
+			};
+			records.set(record.id, record);
+			return structuredClone(record);
+		},
+		async get(id) { return records.get(id) ? structuredClone(records.get(id)) : undefined; },
+		async forRun(runId, submittedBy) {
+			const found = [...records.values()].find(record => record.runId === runId
+				&& (submittedBy === undefined || record.submittedBy === submittedBy));
+			return found ? structuredClone(found) : undefined;
+		},
+		async list(filters = {}) {
+			let rows = [...records.values()];
+			if (filters.runId !== undefined) rows = rows.filter(record => record.runId === filters.runId);
+			rows.sort((a, b) => b.submittedAt - a.submittedAt);
+			return rows.slice(0, filters.limit ?? 100).map(structuredClone);
+		},
+		async update(id, patch = {}) {
+			const record = records.get(id);
+			if (!record) throw Object.assign(new Error('Feedback not found.'), { code: 'not_found' });
+			if (patch.status) record.status = patch.status;
+			record.updatedAt = Date.now();
+			return structuredClone(record);
+		},
+		async remove(id) { return records.delete(id); },
+		async stats() {
+			const rows = [...records.values()];
+			return {
+				total: rows.length,
+				averageRating: rows.length ? rows.reduce((sum, row) => sum + row.rating, 0) / rows.length : undefined,
+				byCategory: {}, byStatus: {}, byRating: {}
+			};
+		}
+	};
+}
+
 function createMemoryServices(options = {}) {
 	const sessions = new Map();
 	const live = new Map();
@@ -81,6 +137,7 @@ function createMemoryServices(options = {}) {
 	}
 
 	const services = {
+		feedback: createMemoryFeedbackService(state),
 		runs: {
 			load() {
 				state.loadCalls++;

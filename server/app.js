@@ -389,6 +389,182 @@ export function createApplication(options = {}) {
 		response.json(await services.runs.targetDurationHistory(targetUrl));
 	});
 
+	/* ── User feedback on test runs ───────────────────────────── */
+
+	const feedbackService = () => {
+		if (!services.feedback) {
+			response.status(501).json({ error: 'Feedback is not available on this instance.' });
+			return undefined;
+		}
+		return services.feedback;
+	};
+
+	function requireFeedbackAdmin(request, response) {
+		if (request.auth?.role && !['owner', 'admin'].includes(request.auth.role)) {
+			response.status(403).json({ error: 'Feedback review requires an owner or administrator.' });
+			return false;
+		}
+		return true;
+	}
+
+	app.post('/api/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		const runId = typeof request.body?.runId === 'string' ? request.body.runId.trim() : '';
+		if (runId === '') {
+			response.status(400).json({ error: 'runId is required.' });
+			return;
+		}
+		const session = await services.runs.get(runId);
+		if (!session) {
+			response.status(404).json({ error: 'No such test run.' });
+			return;
+		}
+		// Feedback exists for finished runs — both successes and failures —
+		// never mid-execution.
+		if (!['done', 'error'].includes(session.status)) {
+			response.status(409).json({ error: 'Feedback is available once the test run has finished.' });
+			return;
+		}
+		const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+		const durationSeconds = session.startedAt === undefined ? undefined : Math.max(
+			0,
+			Math.floor(
+				((session.pausedAt ?? session.completedAt ?? Date.now()) - session.startedAt) / 1000
+				- pausedSeconds
+			)
+		);
+		try {
+			const record = await feedback.create({
+				runId,
+				submittedBy: request.auth?.userId ?? null,
+				context: {
+					targetUrl: session.targetUrl,
+					runStatus: session.status,
+					durationSeconds
+				},
+				rating: request.body?.rating,
+				category: request.body?.category,
+				comments: request.body?.comments,
+				improvement: request.body?.improvement
+			});
+			response.status(201).json(record);
+		} catch (error) {
+			if (error?.code === 'duplicate_feedback') {
+				response.status(409).json({ error: 'Feedback already exists for this test run.', existingId: error.existingId });
+				return;
+			}
+			if (error?.code === 'invalid_input') {
+				response.status(400).json({ error: 'Feedback validation failed.', fields: error.fields });
+				return;
+			}
+			throw error;
+		}
+	});
+
+	// The submitter's own feedback for a run — powers the completion UI's
+	// "edit your feedback" mode and the already-submitted state.
+	app.get('/api/sessions/:id/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const record = await feedback.forRun(session.id, request.auth?.userId ?? null);
+		response.json(record ?? null);
+	});
+
+	app.get('/api/feedback/stats', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		response.json(await feedback.stats());
+	});
+
+	app.get('/api/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const q = request.query;
+		const rating = /^\d+$/.test(String(q.rating ?? '')) ? Number(q.rating) : undefined;
+		const since = /^\d+$/.test(String(q.since ?? '')) ? Number(q.since) : undefined;
+		const until = /^\d+$/.test(String(q.until ?? '')) ? Number(q.until) : undefined;
+		const rows = await feedback.list({
+			runId: typeof q.runId === 'string' && q.runId.trim() !== '' ? q.runId.trim() : undefined,
+			targetUrl: typeof q.targetUrl === 'string' && q.targetUrl.trim() !== '' ? q.targetUrl.trim() : undefined,
+			rating,
+			category: typeof q.category === 'string' && q.category.trim() !== '' ? q.category.trim() : undefined,
+			status: typeof q.status === 'string' && q.status.trim() !== '' ? q.status.trim() : undefined,
+			since,
+			until,
+			q: typeof q.q === 'string' && q.q.trim() !== '' ? q.q.trim() : undefined,
+			limit: /^\d+$/.test(String(q.limit ?? '')) ? Number(q.limit) : undefined
+		});
+		response.json(rows);
+	});
+
+	app.get('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const record = await feedback.get(request.params.id);
+		if (!record) {
+			response.status(404).json({ error: 'No such feedback.' });
+			return;
+		}
+		// Trace back to the execution: include the run summary, never secrets.
+		const session = await services.runs.get(record.runId);
+		response.json({
+			...record,
+			run: session ? {
+				id: session.id,
+				title: session.title,
+				status: session.status,
+				targetUrl: session.targetUrl,
+				startedAt: session.startedAt,
+				completedAt: session.completedAt,
+				findingCount: Array.isArray(session.findings) ? session.findings.length : 0
+			} : undefined
+		});
+	});
+
+	app.put('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		try {
+			const record = await feedback.update(request.params.id, {
+				status: request.body?.status,
+				rating: request.body?.rating,
+				category: request.body?.category,
+				comments: request.body?.comments,
+				improvement: request.body?.improvement
+			});
+			response.json(record);
+		} catch (error) {
+			if (error?.code === 'not_found') {
+				response.status(404).json({ error: 'No such feedback.' });
+				return;
+			}
+			if (error?.code === 'invalid_input') {
+				response.status(400).json({ error: 'Feedback validation failed.', fields: error.fields });
+				return;
+			}
+			throw error;
+		}
+	});
+
+	app.delete('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const removed = await feedback.remove(request.params.id);
+		if (!removed) {
+			response.status(404).json({ error: 'No such feedback.' });
+			return;
+		}
+		response.status(204).end();
+	});
+
 	app.post('/api/sessions', async (request, response) => {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;

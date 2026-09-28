@@ -39,6 +39,15 @@ function createAnalyticsServices() {
 	const services = {
 		readiness: { check: () => ({ ready: true, checks: {} }) },
 		lifecycle: { close() {} },
+		feedback: {
+			create: async input => input,
+			get: async () => undefined,
+			list: async () => [],
+			update: async (id, patch) => ({ id, ...patch }),
+			remove: async () => true,
+			stats: async () => ({ total: 0 }),
+			forRun: async () => undefined
+		},
 		runs: {
 			load() {},
 			create: async title => ({ id: runs[0].id, title }),

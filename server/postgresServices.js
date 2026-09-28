@@ -4,6 +4,7 @@ import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
+import { createPostgresFeedbackRepository } from './postgres/feedbackRepository.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -108,7 +109,8 @@ export function createPostgresApplicationServices({
 	auth,
 	hydrateAll = true,
 	now = () => Date.now(),
-	recoverActiveRuns = true
+	recoverActiveRuns = true,
+	feedbackRepository
 }) {
 	if (!repository || typeof repository !== 'object') {
 		throw new TypeError('A PostgreSQL run repository is required.');
@@ -456,7 +458,10 @@ export function createPostgresApplicationServices({
 		}
 	};
 
-	const services = createRuntimeApplicationServices(runStore, { auth });
+	const services = createRuntimeApplicationServices(runStore, {
+		auth,
+		feedbackStore: feedbackRepository ?? createPostgresFeedbackRepository({ pool: repository.pool ?? repository, tenantContext })
+	});
 	// In PostgreSQL mode the Redis transport is the global event fan-out.
 	if (eventTransport && typeof eventTransport.subscribeGlobal === 'function') {
 		services.events.subscribeGlobal = eventTransport.subscribeGlobal.bind(eventTransport);

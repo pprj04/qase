@@ -1426,6 +1426,9 @@ export function createPostgresRunRepository({
 		durationAnalytics,
 		targetDurationHistory,
 		check,
-		close
+		close,
+		get pool() {
+			return pool;
+		}
 	};
 }
