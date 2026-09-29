@@ -60,3 +60,22 @@ Branch: MANOJ. Goal: after a run completes (done OR error), users can submit fee
 ## Non-goals
 
 - No emails/notifications, no external survey tools, no anonymous (unauthenticated) feedback, no changes to run execution/reporting.
+
+## v2 refinements (ticket #13568)
+
+- Description and category are OPTIONAL; only the rating (1–5) is required.
+  Category defaults to `overall`; empty comments are valid. `qa_run_feedback`
+  comments constraint relaxed to `0..4000` (migration 015 edited pre-deploy).
+- **Edit feedback**: `PUT /api/feedback/:id` now authorizes two roles —
+  owner/admin may change review status AND content; the SUBMITTER may edit
+  their own content (rating/category/comments/improvement) but gets 403 on
+  status changes. The modal exposes an "Edit feedback" button that unlocks
+  the submitted record; "Save changes" PUTs the same id (never a duplicate).
+- **Run-list badges**: `GET /api/feedback/mine?runs=id,id` returns the current
+  user's own feedback for the listed runs; run rows show `⭐n` with a tooltip
+  carrying the rating and comment.
+- **Admin star distribution**: stats panel now renders a 5★→1★ bar breakdown
+  from the existing `byRating` aggregate.
+- Star tooltips: "1 — Very Poor" … "5 — Excellent".
+- Success copy aligned with spec: "Thank you! Your feedback has been
+  submitted successfully."

@@ -398,22 +398,22 @@
     <div class="modal-body">
       <p class="feedback-meta" id="feedback-run-meta"></p>
       <fieldset class="feedback-stars" id="feedback-stars">
-        <legend aria-hidden="false">Overall rating <span class="req" aria-hidden="true">*</span></legend>
+        <legend aria-hidden="false">How was your QASE testing experience? <span class="req" aria-hidden="true">*</span></legend>
         <div class="feedback-star-row" role="radiogroup" aria-label="Overall rating" id="feedback-star-row"></div>
       </fieldset>
       <label class="field">
-        <span>Category</span>
-        <select id="feedback-category" required>
-          <option value="" selected disabled>Choose a category…</option>
+        <span>Category <small>(optional)</small></span>
+        <select id="feedback-category">
+          <option value="" selected>Overall Experience</option>
         </select>
         <small>What area does your feedback relate to?</small>
       </label>
       <label class="field">
-        <span>Tell us about your experience <span class="req" aria-hidden="true">*</span></span>
-        <textarea id="feedback-comments" required minlength="1" maxlength="4000" rows="4" placeholder="Tell us about your experience"></textarea>
+        <span>Tell us more <small>(optional)</small></span>
+        <textarea id="feedback-comments" maxlength="4000" rows="4" placeholder="Tell us about your testing experience, test results, accuracy, performance, or any issues you encountered..."></textarea>
       </label>
       <label class="field">
-        <span>What should we improve?</span>
+        <span>What should we improve? <small>(optional)</small></span>
         <textarea id="feedback-improvement" maxlength="4000" rows="2" placeholder="Optional — anything we could do better"></textarea>
       </label>
       <div class="test-result" id="feedback-error" role="alert" aria-live="assertive"></div>
@@ -421,6 +421,7 @@
     </div>
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="feedback-cancel">Cancel</button>
+      <button class="btn btn-ghost" type="button" id="feedback-edit" title="Edit your feedback for this test run" hidden>Edit feedback</button>
       <button class="btn btn-primary" type="submit" id="feedback-submit">Submit feedback</button>
     </footer>
   </form>
