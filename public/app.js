@@ -294,6 +294,9 @@ async function loadRunRatingBadges(runs) {
 			node.querySelector('.run-meta')?.append(badge);
 		}
 	}
+	// The report's View/Provide button and USER FEEDBACK section follow the
+	// freshly loaded records too (e.g. first paint raced the badge fetch).
+	if (state.sessionId && state.runRatings.has(state.sessionId)) renderReport();
 }
 
 function renderRun(run) {
@@ -873,6 +876,8 @@ async function syncFeedbackForSession(session) {
 		state.feedback.existing = null;
 	}
 	if (state.feedback.runId === runId) applyFeedbackSubmittedState();
+	// Report section (and View/Provide button) follow the synced record.
+	if (state.sessionId === runId) renderReport();
 }
 
 /**
@@ -1065,6 +1070,7 @@ async function submitFeedback(event) {
 			applyFeedbackSubmittedState();
 			toast('Feedback updated.', 'good');
 			void refreshRuns();
+			renderReport();
 		} else {
 			const record = await api('/feedback', {
 				method: 'POST',
@@ -1074,6 +1080,7 @@ async function submitFeedback(event) {
 			applyFeedbackSubmittedState();
 			toast('Thank you! Your feedback has been submitted successfully.', 'good');
 			void refreshRuns();
+			renderReport();
 		}
 	} catch (error) {
 		// Retry keeps every entered field — only the button returns to idle.
@@ -2007,15 +2014,61 @@ function renderReport() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
+	const rated = state.runRatings.get(state.session.id)
+		?? (state.feedback.existingLoadedFor === state.session.id ? state.feedback.existing : undefined);
 	const provideFeedback = document.createElement('button');
 	provideFeedback.className = 'btn btn-ghost btn-sm';
 	provideFeedback.type = 'button';
-	provideFeedback.textContent = 'Provide Feedback';
-	provideFeedback.title = 'Rate this QASE testing run and tell us how it went.';
+	provideFeedback.textContent = rated ? 'View Feedback' : 'Provide Feedback';
+	provideFeedback.title = rated
+		? 'View your submitted feedback for this run.'
+		: 'Rate this QASE testing run and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
 	el.reportView.append(actions);
+	renderReportFeedbackSection(rated);
+}
+
+/**
+ * USER FEEDBACK section in the QA Run Report: the submitter's exact rating
+ * and description for THIS run. Scoped by run id — another run's feedback can
+ * never render here. Rendered with textContent only (XSS-safe).
+ */
+function renderReportFeedbackSection(record) {
+	if (!record) return;
+	const section = document.createElement('section');
+	section.className = 'report-feedback';
+	section.setAttribute('aria-label', 'User feedback');
+
+	const heading = document.createElement('h3');
+	heading.className = 'report-feedback-title';
+	heading.textContent = 'USER FEEDBACK';
+
+	const stars = document.createElement('div');
+	stars.className = 'report-feedback-stars';
+	stars.textContent = '★'.repeat(record.rating) + '☆'.repeat(5 - record.rating);
+	const score = document.createElement('span');
+	score.className = 'report-feedback-score';
+	score.textContent = ` ${record.rating}/5`;
+	stars.append(score);
+
+	const description = document.createElement('p');
+	description.className = 'report-feedback-description';
+	description.textContent = record.comments?.trim()
+		? record.comments
+		: 'No description provided.';
+
+	const meta = document.createElement('p');
+	meta.className = 'report-feedback-meta';
+	const submittedBy = state.user?.displayName ?? state.user?.email ?? 'You';
+	const submittedOn = Number.isFinite(record.submittedAt)
+		? new Date(record.submittedAt).toLocaleString()
+		: '';
+	meta.textContent = `Submitted By: ${submittedBy}${submittedOn ? ` · Submitted On: ${submittedOn}` : ''}`;
+
+	section.append(heading, stars, description, meta);
+	el.reportView.append(section);
 }
 
 function renderSqaReportTab() {

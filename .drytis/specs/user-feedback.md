@@ -79,3 +79,18 @@ Branch: MANOJ. Goal: after a run completes (done OR error), users can submit fee
 - Star tooltips: "1 — Very Poor" … "5 — Excellent".
 - Success copy aligned with spec: "Thank you! Your feedback has been
   submitted successfully."
+
+## v3 — User Feedback in the QA Run Report (#13608)
+- Dedicated "USER FEEDBACK" section inside the QA Run Report (Report tab): star row,
+  n/5 score, description, "Submitted by / on" line. Rendered only when the current
+  user has submitted feedback for THAT run (state.feedback.existing/existingLoadedFor).
+- Report action button reads "View Feedback" when the user already rated the run
+  (via state.runRatings or cached existing record), otherwise "Provide Feedback".
+- syncFeedbackForSession(), submitFeedback() (create + edit), and loadRunRatingBadges()
+  re-render the report so the section and button label update live.
+- Feedback is isolated per run: unrated runs show no section and the unsubmitted
+  button label.
+- CSS: .report-feedback* in public/styles.css.
+- Verified by browser tester: 6/6 PASS (rated run display, view state, persistence
+  after refresh, isolation on unrated run, live submit + section appears, 0 console
+  errors).
