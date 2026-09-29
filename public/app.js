@@ -67,6 +67,7 @@ const el = {
 	feedbackClose: $('feedback-close'),
 	feedbackCancel: $('feedback-cancel'),
 	feedbackSubmit: $('feedback-submit'),
+	feedbackEdit: $('feedback-edit'),
 	feedbackStars: $('feedback-star-row'),
 	feedbackCategory: $('feedback-category'),
 	feedbackComments: $('feedback-comments'),
@@ -177,7 +178,7 @@ const state = {
 	 * current run (null = not submitted yet); `rating` mirrors the star row;
 	 * `submitting` guards duplicate submissions while a request is in flight.
 	 */
-	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false },
+	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false, editing: false },
 	/**
 	 * Admin feedback review panel. Visibility-only UI state plus the loaded
 	 * list/stats; `feedbackAdmin.allowed` flips true only for owner/admin.
@@ -192,7 +193,9 @@ const state = {
 		status: '',
 		records: [],
 		stats: undefined
-	}
+	},
+	/** run id -> the current user's own feedback record (run-list badges). */
+	runRatings: new Map()
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -337,6 +340,9 @@ async function refreshRuns() {
 		state.timer.runLiveTimers.clear();
 		return;
 	}
+	// Rating badges: the current user's own feedback for the visible runs.
+	// One request, matched client-side; failures just skip the badges.
+	void loadRunRatingBadges(runs);
 	el.runList.replaceChildren(...runs.map(renderRun));
 }
 
@@ -352,6 +358,27 @@ function scheduleRunBadgeRefresh() {
 	runBadgeRefreshTimer.unref?.();
 }
 
+async function loadRunRatingBadges(runs) {
+	const ids = runs.map(run => run.id).join(',');
+	try {
+		const list = await api(`/feedback/mine?runs=${ids}`);
+		state.runRatings = new Map((list ?? []).map(record => [record.runId, record]));
+	} catch {
+		state.runRatings = new Map();
+	}
+	if (runs.some(run => state.runRatings.has(run.id))) {
+		for (const node of el.runList.querySelectorAll('.run')) {
+			const rating = state.runRatings.get(node.dataset.runId);
+			if (rating === undefined) continue;
+			const badge = document.createElement('span');
+			badge.className = 'run-rating-badge';
+			badge.textContent = `⭐${rating.rating}`;
+			badge.title = `Your feedback: ${rating.rating} of 5${rating.comments ? ` — “${rating.comments}”` : ''}`;
+			node.querySelector('.run-meta')?.append(badge);
+		}
+	}
+}
+
 function renderRun(run) {
 	const row = document.createElement('div');
 	row.className = 'run-row';
@@ -362,6 +389,7 @@ function renderRun(run) {
 	node.type = 'button';
 	node.setAttribute('aria-current', run.id === state.sessionId ? 'true' : 'false');
 	node.onclick = () => selectSession(run.id);
+	node.dataset.runId = run.id;
 
 	const title = document.createElement('div');
 	title.className = 'run-title';
@@ -1070,6 +1098,15 @@ const FEEDBACK_CATEGORIES = [
 /** A run accepts feedback only once it has reached a terminal state. */
 const FEEDBACK_TERMINAL_STATUSES = new Set(['done', 'error']);
 
+/** Spec rating semantics for the star tooltips. */
+const FEEDBACK_STAR_LABELS = {
+	1: '1 — Very Poor',
+	2: '2 — Poor',
+	3: '3 — Average',
+	4: '4 — Good',
+	5: '5 — Excellent'
+};
+
 function feedbackEligible(session) {
 	return Boolean(session?.id) && FEEDBACK_TERMINAL_STATUSES.has(session.status);
 }
@@ -1102,6 +1139,7 @@ async function openFeedbackModal() {
 	if (!feedbackEligible(session)) return;
 	state.feedback.runId = session.id;
 	state.feedback.rating = 0;
+	state.feedback.editing = false;
 	// Existing submission for THIS run (and user) is server-owned truth: it
 	// decides submitted-vs-blank mode. Cached while the modal stays on the
 	// same run, re-fetched whenever a new run opens the modal.
@@ -1118,8 +1156,10 @@ async function openFeedbackModal() {
 	const failed = session.status === 'error';
 	el.feedbackSubmit.disabled = true;
 	el.feedbackSubmit.textContent = 'Submit feedback';
-	el.feedbackCategory.innerHTML = '<option value="" selected disabled>Choose a category…</option>';
+	// Optional category: blank option = Overall Experience (server default).
+	el.feedbackCategory.innerHTML = '<option value="" selected>Overall Experience</option>';
 	for (const { value, label } of FEEDBACK_CATEGORIES) {
+		if (value === 'overall') continue;
 		const option = document.createElement('option');
 		option.value = value;
 		option.textContent = label;
@@ -1161,7 +1201,7 @@ function renderFeedbackStars() {
 			const label = document.createElement('label');
 			label.htmlFor = radio.id;
 			label.className = 'feedback-star';
-			label.title = `${value} star${value === 1 ? '' : 's'}`;
+			label.title = FEEDBACK_STAR_LABELS[value];
 			label.textContent = '★';
 			label.append(radio);
 			el.feedbackStars.append(label);
@@ -1178,83 +1218,124 @@ function paintFeedbackStars(value) {
 }
 
 function updateFeedbackSubmitEnabled() {
-	const ready = state.feedback.rating > 0
-		&& el.feedbackCategory.value !== ''
-		&& el.feedbackComments.value.trim().length > 0;
-	el.feedbackSubmit.disabled = !ready || state.feedback.submitting || Boolean(state.feedback.existing);
+	// Only the rating is required — description and category are optional.
+	const ready = state.feedback.rating > 0;
+	el.feedbackSubmit.disabled = !ready || state.feedback.submitting || (Boolean(state.feedback.existing) && !state.feedback.editing);
 }
 
 /**
- * Submitted mode: form fields go read-only, the submit button is replaced by a
- * confirmation, and editing stays possible in a follow-up ticket (the API
- * supports it). Cancel becomes "Done".
+ * Submitted mode: fields go read-only with a confirmation, plus an "Edit
+ * feedback" button that unlocks the submitter's OWN record for changes (PUT
+ * re-uses the record id — never a duplicate). Cancel becomes "Done".
  */
 function applyFeedbackSubmittedState() {
 	const existing = state.feedback.existing;
 	const submitted = Boolean(existing);
+	const locked = submitted && !state.feedback.editing;
 	for (const input of [el.feedbackCategory, el.feedbackComments, el.feedbackImprovement]) {
-		input.readOnly = submitted;
-		input.disabled = submitted;
+		input.readOnly = locked;
+		input.disabled = locked;
 	}
-	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = submitted; });
+	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = locked; });
 	if (submitted) {
-		state.feedback.rating = existing.rating;
-		el.feedbackCategory.value = FEEDBACK_CATEGORIES.some(c => c.value === existing.category)
-			? existing.category : '';
-		el.feedbackComments.value = existing.comments ?? '';
-		el.feedbackImprovement.value = existing.improvement ?? '';
-		paintFeedbackStars(existing.rating);
-		el.feedbackSubmit.textContent = 'Feedback submitted ✓';
-		el.feedbackCancel.textContent = 'Done';
-		el.feedbackSuccess.textContent = 'Feedback submitted successfully. Thank you for helping us improve QASE!';
+		if (locked) {
+			state.feedback.rating = existing.rating;
+			el.feedbackCategory.value = existing.category === 'overall'
+				? ''
+				: FEEDBACK_CATEGORIES.some(c => c.value === existing.category) ? existing.category : '';
+			el.feedbackComments.value = existing.comments ?? '';
+			el.feedbackImprovement.value = existing.improvement ?? '';
+		}
+		paintFeedbackStars(state.feedback.rating);
+		if (state.feedback.editing) {
+			el.feedbackSubmit.textContent = 'Save changes';
+			el.feedbackCancel.textContent = 'Cancel editing';
+			el.feedbackSuccess.textContent = '';
+			el.feedbackEdit.hidden = false;
+		} else {
+			el.feedbackSubmit.textContent = 'Feedback submitted ✓';
+			el.feedbackCancel.textContent = 'Done';
+			el.feedbackSuccess.textContent = 'Thank you! Your feedback has been submitted successfully.';
+			el.feedbackEdit.hidden = false;
+		}
 	} else {
 		el.feedbackSubmit.textContent = 'Submit feedback';
 		el.feedbackCancel.textContent = 'Cancel';
 		el.feedbackSuccess.textContent = '';
+		el.feedbackEdit.hidden = true;
 	}
 	updateFeedbackSubmitEnabled();
 }
 
+/** Unlock the submitted record for editing (PUT on the same id). */
+function startEditFeedback() {
+	if (!state.feedback.existing) return;
+	state.feedback.editing = true;
+	el.feedbackError.textContent = '';
+	applyFeedbackSubmittedState();
+	el.feedbackStars.querySelector('input:not(:disabled)')?.focus();
+}
+
+async function cancelEditFeedback() {
+	// If the user was editing, dropping back to the submitted view discards
+	// any unsaved edits (the saved record is re-applied).
+	if (state.feedback.editing) {
+		state.feedback.editing = false;
+		applyFeedbackSubmittedState();
+		return;
+	}
+	closeFeedbackModal();
+}
+
 function closeFeedbackModal() {
+	state.feedback.editing = false;
 	el.feedbackModal.close();
 }
 
 async function submitFeedback(event) {
 	event.preventDefault();
-	if (state.feedback.submitting || state.feedback.existing) return;
+	if (state.feedback.submitting) return;
+	if (state.feedback.existing && !state.feedback.editing) return;
 	const rating = state.feedback.rating;
-	const category = el.feedbackCategory.value;
-	const comments = el.feedbackComments.value.trim();
-	if (!rating || !category || !comments) {
-		el.feedbackError.textContent = 'Please choose a rating, a category and add a comment.';
+	if (!rating) {
+		el.feedbackError.textContent = 'Please choose a rating first.';
 		return;
 	}
+	const category = el.feedbackCategory.value || undefined;
+	const comments = el.feedbackComments.value.trim();
+	const improvement = el.feedbackImprovement.value.trim() || undefined;
 	state.feedback.submitting = true;
 	el.feedbackSubmit.disabled = true;
-	el.feedbackSubmit.textContent = 'Submitting…';
+	el.feedbackSubmit.textContent = state.feedback.editing ? 'Saving…' : 'Submitting…';
 	el.feedbackError.textContent = '';
 	try {
-		const record = await api('/feedback', {
-			method: 'POST',
-			body: JSON.stringify({
-				runId: state.session.id,
-				rating,
-				category,
-				comments,
-				improvement: el.feedbackImprovement.value.trim() || undefined
-			})
-		});
-		state.feedback.existing = record;
-		applyFeedbackSubmittedState();
-		toast('Feedback submitted successfully. Thank you for helping us improve QASE!', 'good');
+		if (state.feedback.editing && state.feedback.existing) {
+			const record = await api(`/feedback/${state.feedback.existing.id}`, {
+				method: 'PUT',
+				body: JSON.stringify({ rating, category, comments, improvement })
+			});
+			state.feedback.existing = record;
+			state.feedback.editing = false;
+			applyFeedbackSubmittedState();
+			toast('Feedback updated.', 'good');
+			void refreshRuns();
+		} else {
+			const record = await api('/feedback', {
+				method: 'POST',
+				body: JSON.stringify({ runId: state.session.id, rating, category, comments, improvement })
+			});
+			state.feedback.existing = record;
+			applyFeedbackSubmittedState();
+			toast('Thank you! Your feedback has been submitted successfully.', 'good');
+			void refreshRuns();
+		}
 	} catch (error) {
 		// Retry keeps every entered field — only the button returns to idle.
 		el.feedbackError.textContent = `${error.message} Your feedback was kept — please try again.`;
-		el.feedbackSubmit.textContent = 'Retry submit';
+		el.feedbackSubmit.textContent = state.feedback.editing ? 'Retry save' : 'Retry submit';
 	} finally {
 		state.feedback.submitting = false;
 		updateFeedbackSubmitEnabled();
-		if (state.feedback.existing) el.feedbackSubmit.textContent = 'Feedback submitted ✓';
 	}
 }
 
@@ -1302,7 +1383,7 @@ function renderFeedbackAdmin() {
 	el.feedbackMinimize.textContent = admin.minimized ? '▸' : '▾';
 	el.feedbackMinimize.setAttribute('aria-expanded', String(!admin.minimized));
 
-	// Stats row: total + average + status counts.
+	// Stats row: total + average, then the per-star distribution.
 	el.feedbackStats.replaceChildren();
 	if (admin.stats) {
 		const avg = Number.isFinite(admin.stats.averageRating)
@@ -1320,6 +1401,30 @@ function renderFeedbackAdmin() {
 			div.append(b, span);
 			el.feedbackStats.append(div);
 		}
+		const byRating = admin.stats.byRating ?? {};
+		const dist = document.createElement('div');
+		dist.className = 'feedback-rating-dist';
+		for (let rating = 5; rating >= 1; rating -= 1) {
+			const row = document.createElement('div');
+			row.className = 'feedback-rating-row';
+			const stars = document.createElement('span');
+			stars.textContent = `${rating}★`;
+			stars.className = 'feedback-rating-row-stars';
+			const bar = document.createElement('span');
+			bar.className = 'feedback-rating-bar';
+			const count = Number(byRating[rating] ?? 0);
+			const total = Math.max(1, Number(admin.stats.total ?? 0));
+			const pct = Math.round((count / total) * 100);
+			const fill = document.createElement('i');
+			fill.style.width = `${pct}%`;
+			bar.append(fill);
+			const num = document.createElement('span');
+			num.textContent = count;
+			row.append(stars, bar, num);
+			row.title = `${count} × ${rating}-star feedback`;
+			dist.append(row);
+		}
+		el.feedbackStats.append(dist);
 	}
 
 	// Category filter options follow the server stats keys.
@@ -3946,7 +4051,8 @@ async function bootWorkspace() {
 	el.perfRestore?.addEventListener('click', restorePerfPanel);
 	el.feedbackForm?.addEventListener('submit', submitFeedback);
 	el.feedbackClose?.addEventListener('click', closeFeedbackModal);
-	el.feedbackCancel?.addEventListener('click', closeFeedbackModal);
+	el.feedbackCancel?.addEventListener('click', cancelEditFeedback);
+	el.feedbackEdit?.addEventListener('click', startEditFeedback);
 	el.feedbackComments?.addEventListener('input', updateFeedbackSubmitEnabled);
 	el.feedbackCategory?.addEventListener('change', updateFeedbackSubmitEnabled);
 	el.feedbackMinimize?.addEventListener('click', toggleFeedbackAdminMinimize);

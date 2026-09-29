@@ -58,14 +58,12 @@ test('duplicate feedback for the same run and user is rejected with the existing
 	assert.notEqual(second.id, first.id);
 });
 
-test('validation rejects bad ratings, categories and comments', () => {
+test('validation rejects bad ratings and categories; description is optional', () => {
 	const cases = [
 		{ rating: 0, category: 'overall', comments: 'x' },
 		{ rating: 6, category: 'overall', comments: 'x' },
 		{ rating: 2.5, category: 'overall', comments: 'x' },
-		{ rating: 3, category: 'not_a_category', comments: 'x' },
-		{ rating: 3, category: 'overall', comments: '' },
-		{ rating: 3, category: 'overall', comments: '   ' }
+		{ rating: 3, category: 'not_a_category', comments: 'x' }
 	];
 	for (const [index, input] of cases.entries()) {
 		assert.throws(
@@ -73,6 +71,16 @@ test('validation rejects bad ratings, categories and comments', () => {
 			error => error.code === 'invalid_input' && Object.keys(error.fields).length > 0,
 			JSON.stringify(input)
 		);
+	}
+	// Rating-only submissions are valid; category defaults to overall.
+	for (const [index, input] of [
+		{ rating: 4 },
+		{ rating: 2, comments: '' },
+		{ rating: 5, category: '' }
+	].entries()) {
+		const record = createFeedback({ runId: RUN_ID, submittedBy: `optional-user-${index}`, context: {}, ...input });
+		assert.equal(record.category, 'overall');
+		assert.equal(record.comments, '');
 	}
 });
 
