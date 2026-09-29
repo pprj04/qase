@@ -42,7 +42,7 @@ function createMemoryServices(options = {}) {
 		}
 	};
 
-	function createSession(title = 'New test run') {
+	function createSession(title = 'New test run', options = {}) {
 		const now = Date.now();
 		const session = {
 			id: randomUUID(),
@@ -58,6 +58,8 @@ function createMemoryServices(options = {}) {
 			report: undefined,
 			pendingQuestion: undefined,
 			contextUsage: undefined,
+			environmentId: options.environmentId,
+			environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
 			secretNames: []
 		};
 		sessions.set(session.id, session);
@@ -97,7 +99,8 @@ function createMemoryServices(options = {}) {
 					createdAt: session.createdAt,
 					updatedAt: session.updatedAt,
 					findingCount: session.findings.length,
-					messageCount: session.messages.length
+					messageCount: session.messages.length,
+					environmentSnapshot: session.environmentSnapshot
 				})),
 			delete(id) {
 				liveFor(id).dispose?.();
@@ -231,6 +234,16 @@ function createMemoryServices(options = {}) {
 				ready: state.ready,
 				checks: { testStore: state.ready ? 'ready' : 'initializing' }
 			})
+		},
+		environments: {
+			seed: async () => ({ inserted: 0 }),
+			list: async () => [],
+			get: async () => null,
+			create: async input => input,
+			update: async (envId, patch) => ({ envId, ...patch }),
+			facets: async () => ({ total: 0, platform: [], device: [], os: [], osVersion: [], browser: [], browserVersion: [], deviceType: [], executionProvider: [], isRealDevice: [], active: [] }),
+			availability: () => [],
+			catalogVersion: () => 'test'
 		},
 		lifecycle: {
 			close() {
@@ -441,6 +454,48 @@ test('run CRUD preserves summaries, derived detail fields, cleanup, and 404 beha
 	const removedAgain = await body(await fixture.request(`/api/sessions/${created.id}`, { method: 'DELETE' }));
 	assert.deepEqual(removedAgain, { deleted: false });
 	assert.equal((await fixture.request(`/api/sessions/${created.id}`)).status, 404);
+});
+
+test('run creation with an environmentId snapshots the frozen environment onto the run', async t => {
+	const fixture = await startFixture({
+		memory: createMemoryServices(),
+	});
+	const frozen = {
+		envId: 'ENV-IOS-IP15PRO-18.3-SAF-18.3', platform: 'ios', device: 'iPhone 15 Pro',
+		osVersion: '18.3', browser: 'Safari', browserVersion: '18.3',
+		deviceType: 'phone', executionProvider: 'browserstack', isRealDevice: true, active: true
+	};
+	fixture.services.environments.get = async envId => (envId === frozen.envId ? frozen : null);
+	fixture.services.environments.list = async () => [frozen];
+	t.after(() => fixture.close());
+
+	const created = await body(await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { environmentId: frozen.envId }
+	}));
+	assert.equal(created.environmentId, frozen.envId);
+	assert.equal(created.environmentSnapshot.device, 'iPhone 15 Pro');
+	assert.equal(created.environmentSnapshot.executionProvider, 'browserstack');
+
+	const summaries = await body(await fixture.request('/api/sessions'));
+	assert.equal(summaries[0].environmentSnapshot.envId, frozen.envId);
+
+	// Unknown environment → 422, never a silent legacy run.
+	const unknown = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { environmentId: 'ENV-DOES-NOT-EXIST' }
+	});
+	assert.equal(unknown.status, 422);
+
+	// Deprecated environments refuse new runs.
+	const deprecated = { ...frozen, envId: 'ENV-IOS-IP11-17.4-SAF-17.4', active: false };
+	fixture.services.environments.get = async envId => (envId === deprecated.envId ? deprecated : frozen);
+	const refused = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { environmentId: deprecated.envId }
+	});
+	assert.equal(refused.status, 422);
+	assert.match((await body(refused)).error, /inactive \(deprecated\)/);
 });
 
 test('SQA catalog and authorized scope creation stay pending until evidence is evaluated', async t => {

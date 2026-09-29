@@ -512,7 +512,11 @@ export function ensureRuntime(session, runStore) {
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
-	const bridge = attachBrowserBridge(session, service, runStore, { device: session.device, deviceLandscape: session.deviceLandscape === true });
+	const bridge = attachBrowserBridge(session, service, runStore, {
+		device: session.device,
+		deviceLandscape: session.deviceLandscape === true,
+		environment: session.environmentSnapshot
+	});
 
 	record.runtime = runtime;
 	record.bridge = bridge;

@@ -88,6 +88,10 @@
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-environments" title="Apple device &amp; browser compatibility matrix">Environments</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-device-matrix" title="Apple Device Matrix: catalog, environments &amp; coverage">Device Matrix</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-test-cases" title="Reusable QA scenarios with multi-environment assignment">Test cases</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-bulk-run" title="Launch one run per test case &times; environment">Bulk runs</button>
     </footer>
   </aside>
 
@@ -138,6 +142,23 @@
           <div class="current-activity" id="current-activity">
             <span class="ca-label">Current activity</span>
             <span class="ca-state" id="current-activity-state"></span>
+          </div>
+          <div class="run-env-block" id="run-env-block" hidden>
+            <span class="re-line" id="run-env-testcase"></span>
+            <span class="re-line" id="run-env-current"></span>
+            <span class="re-line" id="run-env-count"></span>
+          </div>
+          <div class="bulk-progress" id="bulk-progress" hidden>
+            <div class="bp-top">
+              <span class="bp-label" id="bulk-progress-label"></span>
+              <span class="bp-pct" id="bulk-progress-pct"></span>
+            </div>
+            <div class="bp-bar" id="bulk-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Bulk run progress"><i></i></div>
+            <div class="bp-counts" id="bulk-progress-counts"></div>
+            <details class="bp-list-wrap">
+              <summary>Executions</summary>
+              <ul class="bp-list" id="bulk-progress-list"></ul>
+            </details>
           </div>
         </div>
       </div>
@@ -237,9 +258,13 @@
        remain available without displacing the browser/results workspace. -->
   <nav class="feature-dock" aria-label="Qase features">
     <span class="feature-dock-title" aria-hidden="true">modes</span>
-    <div class="feature-device" title="Emulate a real mobile browser (User-Agent, viewport, touch) for the next run.">
-      <label for="device-select" class="feature-device-label">device</label>
-      <select id="device-select" class="feature-device-select" aria-label="Target device for the next run"></select>
+    <div class="feature-device" title="Choose where the next run executes (real device, OS and browser).">
+      <div id="device-chip" class="device-chip" data-ready="false">
+        <span class="device-chip-label">device</span>
+        <span id="device-chip-env" class="device-chip-env">No environment chosen</span>
+        <span class="device-chip-status" aria-hidden="true">●</span>
+        <button id="device-chip-change" class="btn btn-ghost btn-sm device-chip-change" type="button">Change</button>
+      </div>
       <label class="feature-device-landscape" title="Rotate the emulated device to landscape.">
         <input id="device-landscape" type="checkbox">
         <span>landscape</span>
@@ -265,6 +290,117 @@
 
 </div>
 
+<!-- ── Settings ─────────────────────────────────────────────────── -->
+<!-- ── Environments (Apple compatibility matrix) ────────────────── -->
+<dialog class="modal" id="environments" aria-labelledby="environments-title">
+  <form class="modal-inner" id="env-form" method="dialog">
+    <header class="modal-head">
+      <div>
+        <h2 id="environments-title">Apple environments</h2>
+        <p>iPhone · iPad · macOS × Safari, Chrome, Firefox, Edge, Opera — only BrowserStack-executable combinations.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="env-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <div class="field-row" id="env-filters">
+        <label class="field"><span>Platform</span><select id="env-filter-platform"><option value="">All</option></select></label>
+        <label class="field"><span>OS version</span><select id="env-filter-osversion"><option value="">All</option></select></label>
+        <label class="field"><span>Browser</span><select id="env-filter-browser"><option value="">All</option></select></label>
+        <label class="field"><span>Browser version</span><select id="env-filter-browserversion"><option value="">All</option></select></label>
+        <label class="field"><span>State</span>
+          <select id="env-filter-active">
+            <option value="">All</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </label>
+        <label class="field env-search"><span>Search</span><input id="env-filter-search" type="search" placeholder="ENV-IOS-IP16PRO…" autocomplete="off"></label>
+      </div>
+      <p class="env-summary" id="env-summary" aria-live="polite"></p>
+      <div class="env-table-wrap">
+        <table class="env-table" id="env-table">
+          <thead>
+            <tr>
+              <th>Environment ID</th><th>Device</th><th>OS</th><th>Browser</th><th>Version</th><th>Type</th><th>Provider</th><th>State</th>
+            </tr>
+          </thead>
+          <tbody id="env-tbody"></tbody>
+        </table>
+      </div>
+      <p class="env-detail" id="env-detail" aria-live="polite"></p>
+      <details class="env-availability">
+        <summary>Why some browsers are missing (Brave, DuckDuckGo, Firefox-on-iOS…)</summary>
+        <div id="env-availability-body">Loading availability…</div>
+      </details>
+    </div>
+  </form>
+</dialog>
+<!-- ── Apple Device Matrix ───────────────────────────────────────── -->
+<dialog class="modal dm-modal" id="device-matrix" aria-labelledby="dm-title">
+  <form class="modal-inner" method="dialog" id="dm-form">
+    <header class="modal-head">
+      <div>
+        <h2 id="dm-title">Apple Device Matrix</h2>
+        <p>Browse the device catalog, build testing environments in bulk, and extend the catalog with new devices, OS and browser versions.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm dm-close" type="button">Close</button>
+    </header>
+    <nav class="tabs dm-tabs" role="tablist" aria-label="Device Matrix views">
+      <button class="tab is-active" type="button" data-dm-tab="browse" role="tab" aria-selected="true">Catalog</button>
+      <button class="tab" type="button" data-dm-tab="builder" role="tab" aria-selected="false">Environment builder</button>
+      <button class="tab" type="button" data-dm-tab="environments" role="tab" aria-selected="false">Environments</button>
+      <button class="tab" type="button" data-dm-tab="catalogForms" role="tab" aria-selected="false">Add to catalog</button>
+    </nav>
+    <div class="modal-body">
+      <section data-dm-pane="browse" role="tabpanel" aria-label="Catalog browse">
+        <p class="dm-hint" id="dm-facet-summary" aria-live="polite">Loading catalog…</p>
+        <div class="field-row">
+          <label class="field"><span>Category</span><select id="dm-browse-category"><option value="">All categories</option></select></label>
+          <label class="field dm-search"><span>Search</span><input id="dm-browse-search" type="search" placeholder="iPhone 16 Pro…" autocomplete="off"></label>
+        </div>
+        <div class="dm-browse-list" id="dm-browse-list"></div>
+      </section>
+      <section data-dm-pane="builder" role="tabpanel" aria-label="Environment builder" hidden>
+        <p class="dm-hint">Pick devices, OS versions and browsers; every cross-combination is validated against the compatibility rules — invalid ones are skipped.</p>
+        <div class="dm-builder-grid">
+          <fieldset class="dm-picker"><legend>Devices</legend><div class="dm-check-list" id="dm-builder-devices"></div></fieldset>
+          <fieldset class="dm-picker"><legend>OS versions</legend><div class="dm-check-list" id="dm-builder-os"></div></fieldset>
+          <fieldset class="dm-picker"><legend>Browsers</legend><div class="dm-check-list" id="dm-builder-browsers"></div></fieldset>
+        </div>
+        <div class="dm-builder-preview" id="dm-builder-preview" aria-live="polite"></div>
+        <button class="btn" type="button" id="dm-builder-create" disabled>Create environments</button>
+      </section>
+      <section data-dm-pane="environments" role="tabpanel" aria-label="Environments" hidden>
+        <div class="field-row">
+          <label class="field"><span>Platform</span>
+            <select id="dm-env-platform"><option value="">All</option><option value="ios">iOS</option><option value="ipados">iPadOS</option><option value="macos">macOS</option></select>
+          </label>
+          <label class="field"><span>Browser</span><select id="dm-env-browser"><option value="">All</option></select></label>
+          <label class="field"><span>State</span>
+            <select id="dm-env-active"><option value="">All</option><option value="true">Active</option><option value="false">Inactive</option></select>
+          </label>
+          <label class="field dm-search"><span>Search</span><input id="dm-env-search" type="search" placeholder="ENV-IOS-…" autocomplete="off"></label>
+        </div>
+        <p class="env-summary" id="dm-env-summary" aria-live="polite"></p>
+        <div class="env-table-wrap">
+          <table class="env-table">
+            <thead><tr><th>Environment</th><th>Device</th><th>OS</th><th>Browser</th><th>Version</th><th>Resolution</th><th>Orientation</th><th>Provider</th><th></th></tr></thead>
+            <tbody id="dm-env-tbody"></tbody>
+          </table>
+        </div>
+        <div class="dm-pager">
+          <button class="btn btn-ghost btn-sm" type="button" id="dm-env-prev">‹ Prev</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="dm-env-next">Next ›</button>
+        </div>
+        <div class="dm-editor" id="dm-env-editor" hidden></div>
+      </section>
+      <section data-dm-pane="catalogForms" role="tabpanel" aria-label="Add to catalog" hidden>
+        <p class="dm-hint">Catalog entries are reference data shared by every environment. Adds are validated and effective immediately — no code changes.</p>
+        <div class="dm-forms" id="dm-catalog-forms"></div>
+      </section>
+    </div>
+  </form>
+</dialog>
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">
   <form method="dialog" class="modal-inner">
@@ -363,6 +499,10 @@
             <span>Landscape orientation</span>
           </label>
         </div>
+        <label class="field">
+          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+          <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+        </label>
         <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
       </fieldset>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
@@ -458,6 +598,10 @@
             <span>Landscape orientation</span>
           </label>
         </div>
+        <label class="field">
+          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+          <select id="sqa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+        </label>
         <small>Emulates a real mobile or tablet browser (User-Agent, viewport, touch) for the assessment.</small>
       </fieldset>
 
@@ -567,6 +711,10 @@
             <span>Landscape orientation</span>
           </label>
         </div>
+        <label class="field">
+          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+          <select id="founder-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+        </label>
         <small>Founder Mode uses this profile when opening the target site.</small>
       </fieldset>
 
@@ -580,7 +728,198 @@
   </form>
 </dialog>
 
+<!-- Test Cases (Phase 4): reusable QA scenarios with multi-environment assignment. -->
+<dialog class="modal" id="test-cases" aria-labelledby="test-cases-title">
+  <div class="modal-inner test-cases-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="test-cases-title">Test cases</h2>
+        <p>Create reusable QA scenarios and assign them to one or more Apple environments.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="tc-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <p class="tc-summary" id="tc-summary"></p>
+      <label class="field">
+        <span>Search</span>
+        <input id="tc-search" type="search" placeholder="TC number, title, or tag" maxlength="120">
+      </label>
+      <table class="tc-table">
+        <thead><tr><th>Case</th><th>Test</th><th>Platforms</th><th>Last run</th><th>Tags</th><th></th></tr></thead>
+        <tbody id="tc-tbody"></tbody>
+      </table>
+      <form id="tc-form" class="tc-form">
+        <h3 id="tc-form-heading">New test case</h3>
+        <label class="field"><span>Title <em>(required)</em></span><input id="tc-title" required maxlength="300"></label>
+        <label class="field"><span>Description</span><textarea id="tc-description" maxlength="4000" rows="2"></textarea></label>
+        <label class="field"><span>Steps <small>(one per line)</small></span><textarea id="tc-steps" maxlength="50000" rows="4"></textarea></label>
+        <label class="field"><span>Expected result</span><textarea id="tc-expected" maxlength="4000" rows="2"></textarea></label>
+        <label class="field"><span>Tags <small>(comma-separated)</small></span><input id="tc-tags" maxlength="200"></label>
+        <label class="field"><span>Environments <small>(Ctrl/Cmd-click for multiple)</small></span>
+          <select id="tc-environments" multiple size="6"></select>
+        </label>
+        <div class="tc-form-actions">
+          <button type="button" class="btn btn-ghost" id="tc-cancel">Reset</button>
+          <button type="submit" class="btn btn-primary" id="tc-submit">Create test case</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</dialog>
+
+<!-- Bulk run wizard (Phase 11): what → where → summary. -->
+<dialog class="modal" id="bulk-run" aria-labelledby="bulk-run-title">
+  <div class="modal-inner bulk-run-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="bulk-run-title">Launch bulk runs</h2>
+        <p>Three steps: what to run, where, then launch.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="bulk-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <ol class="bulk-steps" id="bulk-steps">
+        <li class="bulk-step is-active" data-bulk-step="1">
+          <h3>1 · What to run</h3>
+          <label class="field">
+            <span>Which tests?</span>
+            <select id="bulk-what">
+              <option value="all">All test cases</option>
+              <option value="selected">Selected test cases</option>
+              <option value="failed">Failed results only</option>
+              <option value="notRun">Not run yet</option>
+            </select>
+          </label>
+          <label class="field" id="bulk-cases-field">
+            <span>Test cases <small>(Ctrl/Cmd-click for multiple)</small></span>
+            <select id="bulk-cases" multiple size="8"></select>
+          </label>
+          <button type="button" class="btn btn-primary btn-sm bulk-next" data-bulk-next="2">Next: where →</button>
+        </li>
+        <li class="bulk-step" data-bulk-step="2" hidden>
+          <h3>2 · Where to run</h3>
+          <label class="field">
+            <span>On which devices?</span>
+            <select id="bulk-where">
+              <option value="assigned">Every environment assigned to each case</option>
+              <option value="default">The current default device</option>
+              <option value="pick">Pick environments</option>
+            </select>
+          </label>
+          <label class="field" id="bulk-envs-field" hidden>
+            <span>Environments <small>(Ctrl/Cmd-click for multiple)</small></span>
+            <select id="bulk-envs" multiple size="6"></select>
+          </label>
+          <div class="tc-form-actions">
+            <button type="button" class="btn btn-ghost btn-sm bulk-back" data-bulk-back="1">← Back</button>
+            <button type="button" class="btn btn-primary btn-sm bulk-next" data-bulk-next="3">Next: summary →</button>
+          </div>
+        </li>
+        <li class="bulk-step" data-bulk-step="3" hidden>
+          <h3>3 · Summary</h3>
+          <p class="bulk-preview" id="bulk-preview"></p>
+          <button type="button" class="btn btn-primary" id="bulk-launch">Run tests</button>
+          <button type="button" class="btn btn-ghost btn-sm bulk-back" data-bulk-back="2" style="margin-left:8px">← Back</button>
+          <pre class="bulk-result" id="bulk-result" hidden></pre>
+        </li>
+      </ol>
+    </div>
+  </div>
+</dialog>
+
+<!-- Run-target dialog (Phase 11): where should this test execute? -->
+<dialog class="modal" id="run-target" aria-labelledby="run-target-title">
+  <div class="modal-inner run-target-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="run-target-title">Where do you want to test?</h2>
+        <p id="run-target-sub">Pick the devices for this test run.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="rt-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <div class="rt-choices" role="radiogroup" aria-label="Run targets">
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="current" checked><span><strong>Current device</strong><small>Use the environment chosen in the device panel</small></span></label>
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="all"><span><strong>All selected devices</strong><small>Every environment assigned to this test</small></span></label>
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="choose"><span><strong>Choose devices</strong><small>Pick specific environments</small></span></label>
+      </div>
+      <label class="field" id="rt-envs-field" hidden>
+        <span>Devices <small>(Ctrl/Cmd-click for multiple)</small></span>
+        <select id="rt-envs" multiple size="6"></select>
+      </label>
+      <p class="form-error test-result" id="rt-error" hidden></p>
+      <div class="tc-form-actions">
+        <button type="button" class="btn btn-ghost" id="rt-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="rt-run">Run test</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<!-- Quick Actions strip (Phase 11). -->
+<div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
+  <span class="qa-strip-title">Quick actions</span>
+  <button type="button" class="qa-chip" id="qa-run-all">▶ Run all tests</button>
+  <button type="button" class="qa-chip" id="qa-run-failed">↻ Run failed tests</button>
+  <button type="button" class="qa-chip" id="qa-create-case">＋ Create test case</button>
+  <button type="button" class="qa-chip" id="qa-choose-devices">☰ Choose devices</button>
+  <button type="button" class="qa-chip" id="qa-view-results">◧ View results</button>
+  <button type="button" class="qa-chip" id="qa-create-bug">⚑ Create bug</button>
+  <label class="qa-preset-wrap">Presets
+    <select id="qa-preset" aria-label="Environment presets">
+      <option value="">Choose…</option>
+      <option value="apple-mobile">Apple Mobile</option>
+      <option value="android-mobile">Android Mobile</option>
+      <option value="windows-desktop">Windows Desktop</option>
+      <option value="all-mobile">All Mobile</option>
+      <option value="all-browsers">All Browsers</option>
+      <option value="full-regression">Full Regression</option>
+    </select>
+  </label>
+</div>
+
 <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false" inert aria-hidden="true"></div>
+
+<!-- Device Matrix drawer (Phase 10): selection surface over the catalog.
+     Overlay only — the workspace behind it keeps its full width. -->
+<dialog id="device-drawer" class="device-drawer" aria-labelledby="device-drawer-title">
+  <header class="dd-head">
+    <div>
+      <h2 id="device-drawer-title">Device matrix</h2>
+      <p class="dd-sub">Pick devices, operating systems and browsers to test on.</p>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="dd-close">Close</button>
+  </header>
+  <div class="dd-body">
+    <label class="field"><span>Search devices</span><input id="dd-search" type="search" placeholder="e.g. Galaxy S24, Pixel, Laptop…" maxlength="120"></label>
+    <div class="dd-tabs" role="tablist" aria-label="Device platform">
+      <button type="button" class="dd-tab is-active" data-dd-tab="all" aria-selected="true">All</button>
+      <button type="button" class="dd-tab" data-dd-tab="apple" aria-selected="false">Apple</button>
+      <button type="button" class="dd-tab" data-dd-tab="android" aria-selected="false">Android</button>
+      <button type="button" class="dd-tab" data-dd-tab="windows" aria-selected="false">Windows</button>
+    </div>
+    <div id="dd-sections" class="dd-sections" aria-label="Devices by manufacturer"></div>
+    <div id="dd-detail" class="dd-detail" hidden>
+      <div id="dd-detail-body"></div>
+    </div>
+    <div class="dd-selection">
+      <span id="dd-selection-summary">0 environments selected</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="dd-clear-selection" hidden>Clear</button>
+      <button type="button" class="btn btn-primary btn-sm" id="dd-apply" disabled>Save environments</button>
+    </div>
+    <section class="dd-saved-section">
+      <header class="dd-saved-head">
+        <h3>Saved environments</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="dd-saved-refresh">Refresh</button>
+      </header>
+      <ul id="dd-saved-list" class="dd-saved-list"></ul>
+    </section>
+    <details class="dd-advanced">
+      <summary id="dd-advanced-toggle" aria-expanded="false">Advanced settings</summary>
+      <div id="dd-advanced-body" hidden></div>
+    </details>
+  </div>
+</dialog>
 
 <dialog id="profile-dialog" class="account-dialog" aria-labelledby="profile-title">
   <header><div><p class="auth-eyebrow">YOUR PRIVATE WORKSPACE</p><h2 id="profile-title">My account</h2></div><button type="button" id="profile-close" class="btn btn-ghost">Close</button></header>

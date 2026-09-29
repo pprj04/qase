@@ -48,7 +48,7 @@ test('Founder frontend creates an idle scope, then starts through the existing m
 	assert.match(app, /api\('\/founder\/catalog'\)/);
 	assert.match(app, /api\('\/founder\/sessions',\s*\{\s*method:\s*'POST'/);
 	assert.match(app, /authorizationConfirmed:\s*true/);
-	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
+	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*environmentId:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
 	assert.match(app, /api\(`\/sessions\/\$\{session\.id\}\/message`,\s*\{/);
 	assert.match(app, /JSON\.stringify\(\{ text: `Review \$\{targetUrl\}` \}\)/);
 	assert.match(app, /case 'founder\.created':/);

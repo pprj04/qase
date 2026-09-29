@@ -44,16 +44,36 @@ function deviceLine(session) {
 	return profile.label + ' (' + orientation + ', ' + width + '\u00d7' + height + ', DPR ' + profile.deviceScaleFactor + ', touch)';
 }
 
+function environmentLine(session) {
+	const snapshot = session.environmentSnapshot;
+	if (!snapshot) return undefined;
+	const parts = [
+		snapshot.device ?? snapshot.deviceLabel,
+		snapshot.osVersion,
+		[snapshot.browser, snapshot.browserVersion].filter(Boolean).join(' ')
+	].filter(Boolean);
+	const label = parts.join(' \u00b7 ');
+	const provider = snapshot.executionProvider === 'browserstack'
+		? 'BrowserStack real device'
+		: snapshot.executionProvider === 'local'
+			? 'local (emulated)'
+			: snapshot.executionProvider;
+	return provider ? `${label} \u2014 ${provider}` : label;
+}
+
 function headerBlock(session, title, verdictText) {
 	const created = new Date(session.createdAt).toISOString();
 	const finished = session.updatedAt ? new Date(session.updatedAt).toISOString() : '\u2014';
-	const rows = [
-		['Run ID', session.id],
-		['Target', session.targetUrl ?? '\u2014'],
-		['Device', deviceLine(session)],
-		['Started', created],
-		['Updated', finished]
-	];
+		const rows = [
+			['Run ID', session.id],
+			['Test case', session.testCaseSnapshot?.title
+				? `${session.testCaseSnapshot.title}${session.testCaseSnapshot.caseNumber ? ` (${session.testCaseSnapshot.caseNumber})` : ''}`
+				: (session.testCaseId ?? '\u2014')],
+			['Target', session.targetUrl ?? '\u2014'],
+			['Device', environmentLine(session) ?? deviceLine(session)],
+			['Started', created],
+			['Updated', finished]
+		];
 	if (verdictText) rows.push(['Verdict', verdictText]);
 	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
 		const usage = session.tokenUsage;

@@ -24,6 +24,8 @@ import {
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
+import { createCatalogRoutes } from './catalogApi.js';
+import { createTestCaseRoutes } from './testCaseApi.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
@@ -50,6 +52,47 @@ function safeErrorResponse(request, response, error, status = 400) {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
+
+/**
+ * Resolve an optional environmentId for run creation. Returns undefined for a
+ * run without an environment (back-compat), the frozen environment record on a
+ * hit, and a 422-worthy public error for unknown or deactivated environments.
+ */
+async function resolveEnvironmentForRun(services, environmentId) {
+	if (environmentId === undefined || environmentId === null || environmentId === '') return undefined;
+	if (typeof environmentId !== 'string') {
+		throw new PublicInputError('environmentId must be a string.', 422);
+	}
+	const environment = await services.environments.get(environmentId);
+	if (!environment) {
+		throw new PublicInputError(`Unknown environment "${environmentId}".`, 422);
+	}
+	if (environment.active !== true) {
+		throw new PublicInputError(`Environment "${environmentId}" is inactive (deprecated) and cannot start new runs.`, 422);
+	}
+	return environment;
+}
+
+/**
+ * Resolve an optional testCaseId for run creation (Phase 4). Returns undefined
+ * when no case is given (back-compat). When a case IS given, the environment
+ * (if any) must be assigned to the case. Returns the case for snapshotting.
+ */
+async function resolveTestCaseForRun(services, testCaseId, environmentId) {
+	if (testCaseId === undefined || testCaseId === null || testCaseId === '') return undefined;
+	if (typeof testCaseId !== 'string') {
+		throw new PublicInputError('testCaseId must be a string.', 422);
+	}
+	const { TestCaseValidationError } = await import('./testCaseService.js');
+	try {
+		return await services.testCases.resolveForRun(testCaseId, environmentId);
+	} catch (error) {
+		if (error instanceof TestCaseValidationError) {
+			throw new PublicInputError(error.message, 422);
+		}
+		throw error;
+	}
+}
 
 /** Pulls the site under test out of whatever the user typed. */
 function extractUrl(text) {
@@ -353,6 +396,180 @@ export function createApplication(options = {}) {
 		});
 	});
 
+	// Apple compatibility matrix: list/filter environments. All facet dimensions
+	// are accepted as query params (platform, device, os, osVersion, browser,
+	// browserVersion, deviceType, executionProvider, active, isRealDevice, search,
+	// limit, offset).
+	// DB-backed catalog routes (Phase 2 of the device matrix): /api/catalog/*.
+	if (services.deviceCatalog) {
+		const { route: catalogRoutes } = createCatalogRoutes({
+			catalogBackend: services.deviceCatalog,
+			onError: safeErrorResponse
+		});
+		catalogRoutes(app);
+	}
+
+	// Test cases with multi-environment assignment (Phase 4): /api/test-cases.
+	if (services.testCases) {
+		const testCaseRoutes = createTestCaseRoutes({
+			testCases: services.testCases,
+			onError: safeErrorResponse
+		});
+		testCaseRoutes(app);
+	}
+
+	app.get('/api/environments', async (request, response) => {
+		try {
+			const query = request.query;
+			const limit = query.limit === undefined ? undefined : Number(query.limit);
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 1000.' });
+				return;
+			}
+			const offset = query.offset === undefined ? undefined : Number(query.offset);
+			if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
+				response.status(400).json({ error: 'offset must be a non-negative integer.' });
+				return;
+			}
+			const rows = await services.environments.list(query);
+			const total = (await services.environments.facets(query)).total;
+			// Read-your-write matters for the admin UI (edit → refresh must show
+			// the new value), so the environment list is never cached.
+			response.set('Cache-Control', 'no-store');
+			response.json({ total, count: rows.length, environments: rows });
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Facet counts per filter dimension for the admin UI dropdowns.
+	app.get('/api/environments/facets', async (request, response) => {
+		try {
+			response.set('Cache-Control', 'no-store');
+			response.json(await services.environments.facets(request.query));
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Browser availability per platform, including why unavailable browsers
+	// (Brave, DuckDuckGo, Firefox-on-iOS) are excluded from the matrix.
+	app.get('/api/environments/availability', (_request, response) => {
+		response.set('Cache-Control', 'private, max-age=300');
+		response.json(services.environments.availability());
+	});
+
+	// Bulk environment operations (Phase 3 device matrix UI). Mounted BEFORE
+	// /api/environments/:envId so the literal "bulk" segment isn't treated as an id.
+	app.post('/api/environments/bulk', async (request, response) => {
+		try {
+			const body = request.body ?? {};
+			const result = await services.environments.bulkCreate(body.combinations ?? []);
+			response.status(201).json(result);
+		} catch (error) {
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.post('/api/environments/bulk-toggle', async (request, response) => {
+		try {
+			const body = request.body ?? {};
+			if (!Array.isArray(body.envIds)) {
+				response.status(400).json({ error: 'envIds must be an array.' });
+				return;
+			}
+			if (body.envIds.length > 1000) {
+				response.status(400).json({ error: 'envIds is limited to 1000 entries per request.' });
+				return;
+			}
+			const active = body.active !== false;
+			const result = await services.environments.bulkToggleActive(body.envIds, active);
+			response.json(result);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.get('/api/environments/:envId', async (request, response) => {
+		try {
+			const environment_ = await services.environments.get(request.params.envId);
+			if (!environment_) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.set('Cache-Control', 'private, max-age=60');
+			response.json(environment_);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.post('/api/environments', async (request, response) => {
+		try {
+			const created = await services.environments.create(request.body ?? {});
+			response.status(201).json(created);
+		} catch (error) {
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
+			if (error?.code === 'QASE_ENVIRONMENT_CONFLICT') {
+				response.status(409).json({ error: error.message, envId: error.envId });
+				return;
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.patch('/api/environments/:envId', async (request, response) => {
+		try {
+			const patch = request.body ?? {};
+			if (typeof patch.active !== 'boolean' && patch.active !== undefined) {
+				response.status(400).json({ error: 'active must be a boolean.' });
+				return;
+			}
+			if (patch.executionProvider !== undefined && !['local', 'browserstack'].includes(patch.executionProvider)) {
+				response.status(400).json({ error: 'executionProvider must be "local" or "browserstack".' });
+				return;
+			}
+			if (patch.orientation !== undefined && patch.orientation !== null && !['portrait', 'landscape'].includes(patch.orientation)) {
+				response.status(400).json({ error: 'orientation must be "portrait" or "landscape".' });
+				return;
+			}
+			if (patch.description !== undefined && patch.description !== null && typeof patch.description !== 'string') {
+				response.status(400).json({ error: 'description must be a string.' });
+				return;
+			}
+			const updated = await services.environments.update(request.params.envId, patch);
+			if (!updated) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.json(updated);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Delete a saved environment (Phase 10 drawer). Test cases / runs keep their
+	// envId references; history is never rewritten.
+	app.delete('/api/environments/:envId', async (request, response) => {
+		try {
+			const deleted = await services.environments.remove(request.params.envId);
+			if (!deleted) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.json({ deleted: true, envId: request.params.envId });
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
 	app.get('/api/sessions', async (request, response) => {
 		const limit = request.query.limit === undefined ? 100 : Number(request.query.limit);
 		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
@@ -390,10 +607,22 @@ export function createApplication(options = {}) {
 	});
 
 	app.post('/api/sessions', async (request, response) => {
-		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
-		const deviceLandscape = request.body?.deviceLandscape === true;
-		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId });
-		response.status(201).json(session);
+		try {
+			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
+			const deviceLandscape = request.body?.deviceLandscape === true;
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			const testCase = await resolveTestCaseForRun(services, request.body?.testCaseId, environment?.envId);
+			const session = await services.runs.create(undefined, {
+				device, deviceLandscape, ownerUserId: request.auth?.userId,
+				environmentId: environment?.envId,
+				environmentSnapshot: environment,
+				testCaseId: testCase?.caseNumber,
+				testCaseSnapshot: testCase
+			});
+			response.status(201).json(session);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
 	});
 
 	app.post('/api/sqa/sessions', async (request, response) => {
@@ -402,12 +631,14 @@ export function createApplication(options = {}) {
 			const sqa = publicInput(() => createSqaState(request.body ?? {}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
-			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
-			session.mode = 'sqa';
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId, environmentId: environment?.envId, environmentSnapshot: environment });			session.mode = 'sqa';
 			session.sqa = sqa;
 			session.todos = createSqaTodoPlan(sqa);
 			session.device = device;
 			session.deviceLandscape = deviceLandscape;
+			session.environmentId = environment?.envId;
+			session.environmentSnapshot = environment;
 			// Persist the host-owned assessment plan before the metadata-only SQA
 			// creation event so PostgreSQL and local mode expose identical progress.
 			await services.runs.commit(session, 'todos', { todos: session.todos });
@@ -435,12 +666,15 @@ export function createApplication(options = {}) {
 			}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
-			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId, environmentId: environment?.envId, environmentSnapshot: environment });
 			session.mode = 'founder';
 			session.founder = founder;
 			session.todos = createFounderReviewTodos();
 			session.device = device;
 			session.deviceLandscape = deviceLandscape;
+			session.environmentId = environment?.envId;
+			session.environmentSnapshot = environment;
 			// `founder.created` intentionally skips relational child rewrites in the
 			// PostgreSQL repository. Persist the host-owned plan explicitly first so
 			// progress is visible before the model's first update_todo call.

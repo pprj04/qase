@@ -9,6 +9,12 @@ import { createPostgresExecutionQueue } from './postgres/executionQueue.js';
 import { createDistributedApiAgent } from './distributedExecution.js';
 import { createDistributedSecrets } from './distributedSecrets.js';
 import { createLocalAuthService, createPostgresAuthService } from './auth.js';
+import { createEnvironmentService, createLocalEnvironmentBackend } from './environmentService.js';
+import { createPostgresEnvironmentRepository } from './postgres/environmentRepository.js';
+import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
+import { createPostgresDeviceCatalogRepository } from './postgres/deviceCatalogRepository.js';
+import { createTestCaseService, createLocalTestCaseBackend } from './testCaseService.js';
+import { createPostgresTestCaseRepository } from './postgres/testCaseRepository.js';
 
 export const RUN_STORE_MODES = Object.freeze(['local', 'postgres']);
 export const EXECUTION_MODES = Object.freeze(['local', 'distributed']);
@@ -71,6 +77,20 @@ export async function createConfiguredApplicationServices(options = {}) {
 		services.tenantContext = tenantContext;
 		await services.auth?.load?.();
 		await services.runs.load();
+		const deviceCatalog = options.createLocalDeviceCatalog?.() ?? createLocalDeviceCatalogBackend();
+		await deviceCatalog.seed();
+		services.environments = createEnvironmentService(
+			options.createLocalEnvironmentBackend?.({ catalogBackend: deviceCatalog }) ?? createLocalEnvironmentBackend({ catalogBackend: deviceCatalog }),
+
+			{ tenantContext }
+		);
+		await services.environments.seed();
+		services.environments.attachCatalog(deviceCatalog);
+		services.deviceCatalog = deviceCatalog;
+		services.testCases = createTestCaseService(
+			options.createLocalTestCaseBackend?.() ?? createLocalTestCaseBackend(),
+			{ environments: services.environments, tenantContext }
+		);
 		return { mode, executionMode, services, tenantContext, pool: undefined };
 	}
 
@@ -112,6 +132,20 @@ export async function createConfiguredApplicationServices(options = {}) {
 		});
 		await services.runs.load();
 		await credentialVault?.load();
+		const deviceCatalog = (options.createDeviceCatalogRepository ?? createPostgresDeviceCatalogRepository)(pool);
+		await deviceCatalog.seed();
+		const environmentRepository = (options.createEnvironmentRepository ?? createPostgresEnvironmentRepository)(
+			pool,
+			{ tenantContext, catalogBackend: deviceCatalog }
+		);
+		services.environments = createEnvironmentService(environmentRepository, { tenantContext });
+		await services.environments.seed();
+		services.environments.attachCatalog(deviceCatalog);
+		services.deviceCatalog = deviceCatalog;
+		services.testCases = createTestCaseService(
+			(options.createTestCaseRepository ?? createPostgresTestCaseRepository)(pool, { tenantContext }),
+			{ environments: services.environments, tenantContext }
+		);
 		let executionQueue;
 		if (executionMode === 'distributed') {
 			executionQueue = (options.createExecutionQueue ?? createPostgresExecutionQueue)({

@@ -20,6 +20,9 @@ const REQUIRED_METHODS = {
 		'ensureRuntime', 'runTurn', 'closeBrowser', 'getLiveState',
 		'stop', 'invalidateIdleRuntimes'
 	],
+	environments: [
+		'seed', 'list', 'get', 'create', 'update', 'facets', 'availability', 'catalogVersion'
+	],
 	readiness: ['check'],
 	lifecycle: ['close']
 };

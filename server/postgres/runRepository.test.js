@@ -670,7 +670,9 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
 	assert.equal(runInsert.params[runInsert.params.length - 1], null);
-	assert.equal(runInsert.params[runInsert.params.length - 2].getTime(), new Date(NOW).getTime());
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);
+	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime());
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;

@@ -58,6 +58,33 @@ test('report markdown includes token usage when counted and omits the line other
 	assert.doesNotMatch(buildReportMarkdown(fixture().session), /Tokens/);
 });
 
+test('report markdown includes the linked test case and omits it for unlinked runs', () => {
+	const linked = fixture({ testCaseId: 'TC-0007', testCaseSnapshot: { caseNumber: 'TC-0007', title: 'Checkout completes' } });
+	assert.match(buildReportMarkdown(linked.session), /\*\*Test case:\*\* Checkout completes \(TC-0007\)/);
+
+	const idOnly = fixture({ testCaseId: 'TC-0007' });
+	assert.match(buildReportMarkdown(idOnly.session), /\*\*Test case:\*\* TC-0007/);
+
+	assert.doesNotMatch(buildReportMarkdown(fixture().session), /Test case/);
+});
+
+test('report markdown carries the environment snapshot when the run selected one', () => {
+	const withEnvironment = fixture({ environmentSnapshot: {
+		envId: 'ENV-MAC-SONOMA-CHR-140',
+		platform: 'macos',
+		device: 'MacBook Pro',
+		osVersion: 'Sonoma',
+		browser: 'Chrome',
+		browserVersion: '140',
+		executionProvider: 'browserstack'
+	} });
+	const markdown = buildReportMarkdown(withEnvironment.session);
+	assert.match(markdown, /\*\*Environment:\*\* MacBook Pro · Sonoma · Chrome 140 — BrowserStack real device/);
+
+	// Runs without an environment keep the legacy device line, never an undefined.
+	assert.doesNotMatch(buildReportMarkdown(fixture().session), /undefined/);
+});
+
 test('QA rejects malformed model findings and reports without mutating durable state', async () => {
 	const target = fixture();
 	for (const value of [undefined, null, [], {}, { ...finding, title: {} }, { ...finding, actual: ' ' }, { ...finding, severity: 'urgent' }]) {

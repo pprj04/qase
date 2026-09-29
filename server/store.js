@@ -157,6 +157,20 @@ export function createSession(title = 'New test run', options = {}) {
 	if (options.deviceLandscape !== undefined && typeof options.deviceLandscape !== 'boolean') {
 		throw new TypeError('Run creation received an invalid landscape flag.');
 	}
+	if (options.environmentId !== undefined && typeof options.environmentId !== 'string') {
+		throw new TypeError('Run creation received an invalid environment id.');
+	}
+	if (options.environmentSnapshot !== undefined
+		&& (!options.environmentSnapshot || typeof options.environmentSnapshot !== 'object' || Array.isArray(options.environmentSnapshot))) {
+		throw new TypeError('Run creation received an invalid environment snapshot.');
+	}
+	if (options.testCaseId !== undefined && typeof options.testCaseId !== 'string') {
+		throw new TypeError('Run creation received an invalid test case id.');
+	}
+	if (options.testCaseSnapshot !== undefined
+		&& (!options.testCaseSnapshot || typeof options.testCaseSnapshot !== 'object' || Array.isArray(options.testCaseSnapshot))) {
+		throw new TypeError('Run creation received an invalid test case snapshot.');
+	}
 	if (options.drytisIntegration !== undefined) {
 		if (!options.drytisIntegration || typeof options.drytisIntegration !== 'object'
 			|| Array.isArray(options.drytisIntegration)
@@ -178,6 +192,12 @@ export function createSession(title = 'New test run', options = {}) {
 		targetUrl: options.targetUrl,
 		device: isDeviceId(options.device) ? options.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: options.deviceLandscape === true,
+		/** Apple compatibility environment this run executes in (frozen snapshot). */
+		environmentId: options.environmentId,
+		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
+		/** Test case this run executes (Phase 4; frozen snapshot). */
+		testCaseId: options.testCaseId,
+		testCaseSnapshot: options.testCaseSnapshot ? structuredClone(options.testCaseSnapshot) : undefined,
 		messages: [],
 		activities: [],
 		findings: structuredClone(options.findings ?? []),

@@ -5,6 +5,7 @@ import { runMobileAudit } from './mobileAudit.js';
 import { inspectFormValidation } from './browserFormAudit.js';
 import { chromium } from 'playwright';
 import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
+import { browserstackCredentials, connectBrowserstack, environmentEmulationOptions, resolveExecution } from './browserstackProvider.js';
 
 /**
  * Makes the agent's browser watchable.
@@ -55,9 +56,18 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	const deviceId = options.device ?? session.device ?? DEFAULT_DEVICE_ID;
 	const deviceLandscape = options.deviceLandscape ?? session.deviceLandscape === true;
 	const deviceProfile = getDeviceProfile(deviceId);
-	const emulationOptions = contextOptionsFor(deviceId, { landscape: deviceLandscape });
+	const environment = options.environment ?? session.environmentSnapshot;
+	// An environment snapshot overrides the legacy device-profile emulation:
+	// BrowserStack envs execute remotely via CDP; every other env (or no env)
+	// runs local Chromium with the environment's emulation hints.
+	const execution = options.execution
+		?? resolveExecution(environment, options.browserstackCredentials ?? browserstackCredentials());
+	const emulationOptions = execution.mode === 'emulated'
+		? environmentEmulationOptions(environment)
+		: contextOptionsFor(deviceId, { landscape: deviceLandscape });
 	const bridge = {
 		service,
+		execution,
 		frameTimer: undefined,
 		frameCapture: undefined,
 		capturedInactiveFrame: false,
@@ -375,6 +385,23 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
+				if (execution.mode === 'browserstack') {
+					// Remote real device / desktop via BrowserStack CDP. The
+					// capability map comes from the environment snapshot; no
+					// local launch, no synthetic media (that is local-only).
+					service.browser = await connectBrowserstack(chromium, execution.connectOptions);
+					try {
+						service.context = service.browser.contexts()[0] ?? await service.browser.newContext();
+						syntheticMedia = false;
+						await installNetworkPolicy(service.context);
+						return service.context;
+					} catch (error) {
+						await service.browser.close().catch(() => {});
+						service.browser = undefined;
+						service.context = undefined;
+						throw error;
+					}
+				}
 				// Full Chromium supports native media on Windows; the separate
 				// headless-shell build can expose getUserMedia but reject every call.
 				const bundledExecutable = chromium.executablePath();
