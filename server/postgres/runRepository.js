@@ -710,7 +710,7 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			message_count, finding_count, lock_version, next_event_sequence,
 			engine, device, device_landscape, cohort,
 			created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
 			RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -1019,7 +1019,7 @@ export function createPostgresRunRepository({
 					setup_started_at = COALESCE(setup_started_at, $25),
 					setup_ended_at = COALESCE(setup_ended_at, $26),
 					report_started_at = COALESCE(report_started_at, $27),
-					report_ended_at = COALESCE(report_ended_at, $28),
+					report_ended_at = COALESCE(report_ended_at, $28,$29),
 					cancelled_at = COALESCE(cancelled_at, $29),
 					paused_at = $31,
 					paused_seconds = CASE

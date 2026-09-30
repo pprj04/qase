@@ -4203,7 +4203,6 @@ if (qaUi.dialog) {
 		qaUi.submit.disabled = true;
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
-			const securityAuthorization = qaSecurityAuthorization();
 			for (const engine of engines) {
 				await createQaRun({
 					targetUrl,

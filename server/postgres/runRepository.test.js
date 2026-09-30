@@ -674,6 +674,31 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
+	// Structural integrity of the INSERT: the number of target columns must
+	// equal the number of VALUES expressions, and the highest placeholder must
+	// bind every param. (A fake pool never parses SQL, so an off-by-one here
+	// would otherwise pass silently and break real Postgres at parse time.)
+	const columnList = runInsert.text.match(/INSERT INTO qa_runs \(([\s\S]*?)\)\s*VALUES/)?.[1] ?? '';
+	const columnCount = columnList.split(',').length;
+	// Expressions include literals (NULL, 0), so the real invariant is:
+	// (placeholders bound = params.length) and (columns = placeholders + literals).
+	const placeholders = [...runInsert.text.matchAll(/\$(\d+)/g)].map(match => Number(match[1]));
+	const maxPlaceholder = Math.max(...placeholders);
+	const literalCount = columnCount - placeholders.length;
+	assert.equal(
+		new Set(placeholders).size,
+		runInsert.params.length,
+		`distinct placeholders (${new Set(placeholders).size}) must equal params length (${runInsert.params.length})`
+	);
+	assert.equal(
+		maxPlaceholder,
+		runInsert.params.length,
+		`highest placeholder $${maxPlaceholder} must equal params length (${runInsert.params.length})`
+	);
+	assert.ok(
+		literalCount === 2,
+		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
+	);
 	assert.equal(runInsert.params[runInsert.params.length - 1], null);
 	assert.equal(runInsert.params[runInsert.params.length - 2], null);
 	assert.equal(runInsert.params[runInsert.params.length - 3], null);
