@@ -36,8 +36,8 @@ test('confirmed authorization rides the run request; unselected security makes i
 	const block = launcherBlock();
 	assert.match(block, /if \(!qaSecuritySelected\(\)\) return undefined;/);
 	assert.match(block, /notes \? \{ confirmed: true, notes \} : \{ confirmed: true \}/);
-	assert.match(app, /body: JSON\.stringify\(\{ device, deviceLandscape, selectedTests, \.\.\.\(securityAuthorization \? \{ securityAuthorization \} : \{\}\) \}\)/);
-	assert.match(app, /createQaRun\(\{ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization \}\)/);
+	assert.match(app, /body: JSON\.stringify\(\{[\s\S]*?device,[\s\S]*?deviceLandscape,[\s\S]*?engine,[\s\S]*?selectedTests,[\s\S]*?\.\.\.\(securityAuthorization \? \{ securityAuthorization \} : \{\}\)[\s\S]*?\}\)/);
+	assert.match(app, /createQaRun\(\{[\s\S]*?targetUrl,[\s\S]*?device,[\s\S]*?deviceLandscape,[\s\S]*?selectedTests,[\s\S]*?securityAuthorization,/);
 });
 
 test('gate styling matches Studio (soft info block, no new component system)', () => {

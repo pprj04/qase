@@ -284,6 +284,61 @@ function parseProbeUrl(baseUrl, { production }) {
 	return base;
 }
 
+/**
+ * Env-key exfiltration guard. The effective key in a merged config may be the
+ * instance's env key (env acts as the default layer when the user stored none).
+ * That key may only be sent to the env base URL host or an operator-declared
+ * QASE_ALLOWED_MODEL_HOSTS host. The decision is made on the *stored* layer,
+ * not the merged one — a merged config always folds the env key in, so the
+ * caller cannot tell the two apart by looking at config.apiKey.
+ * Returns a failure result, or undefined when the destination is allowed.
+ */
+function assertEnvKeyDestinationAllowed(config, { environment }) {
+	const envKey = String(environment.QASE_API_KEY ?? environment.ANTHROPIC_API_KEY ?? '').trim();
+	if (!envKey) {
+		return undefined; // no env key at stake on this instance
+	}
+	const storedKey = String(readStored().apiKey ?? '').trim();
+	const envKeyInUse = !storedKey || storedKey === envKey;
+	if (!envKeyInUse) {
+		return undefined; // the user stored a key of their own — theirs to point anywhere
+	}
+	if (!String(config.baseUrl ?? '').trim()) {
+		return undefined; // provider-managed endpoint (no custom base URL to guard)
+	}
+	let candidate;
+	try {
+		candidate = new URL(config.baseUrl);
+	} catch {
+		return { ok: false, error: 'The model endpoint URL is invalid.' };
+	}
+	const host = candidate.hostname.replace(/^\[|\]$/, '').toLowerCase();
+	const allowed = new Set();
+	const envBase = String(environment.QASE_BASE_URL ?? '').trim();
+	if (envBase) {
+		try { allowed.add(new URL(envBase).hostname.replace(/^\[|\]$/, '').toLowerCase()); } catch { /* bad env URL */ }
+	}
+	for (const entry of String(environment.QASE_ALLOWED_MODEL_HOSTS ?? '').split(',')) {
+		const name = entry.trim().toLowerCase();
+		if (name) allowed.add(name);
+	}
+	if (allowed.has(host)) return undefined;
+	return {
+		ok: false,
+		error: 'This instance uses a shared model key. Only allowlisted model hosts can be probed with it — add your own API key in Settings to use a different endpoint.'
+	};
+}
+
+/**
+ * Public wrapper for the agent runtime: same rule as the settings probe — if
+ * the merged config pairs the env key with a non-allowlisted host, refuse.
+ * Returns an error string or undefined.
+ */
+export function envKeyDestinationProblem(config, environment = process.env) {
+	const result = assertEnvKeyDestinationAllowed(config, { environment });
+	return result?.error;
+}
+
 async function assertSafeDestination(url, { dnsLookup, allowPrivateNetwork }) {
 	const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
 	if (!allowPrivateNetwork && RESERVED_HOST_SUFFIXES.some(suffix => hostname === suffix || hostname.endsWith(suffix))) {
@@ -389,6 +444,14 @@ export async function testConnection(candidate, options = {}) {
 		nodeEnvironment === 'development'
 			&& String(environment.QASE_ALLOW_PRIVATE_NETWORK ?? '') === 'true'
 	);
+	// Exfiltration guard: when the effective key is the instance's env key
+	// (the user supplied none of their own), the probe may only reach hosts the
+	// operator trusts — otherwise any registered user could send that key to an
+	// arbitrary host as a Bearer header.
+	const guard = assertEnvKeyDestinationAllowed(config, { environment });
+	if (guard) {
+		return guard;
+	}
 	const dnsLookup = options.dnsLookup ?? lookupDns;
 	const fetchImpl = options.fetchImpl ?? fetch;
 	const timeoutMs = Math.max(1, Math.min(30_000, Number(options.timeoutMs) || DEFAULT_PROBE_TIMEOUT_MS));

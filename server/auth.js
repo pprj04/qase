@@ -249,12 +249,15 @@ function createLocalDataStore({ tenantContext, now = () => Date.now(), file = AU
 		state.loaded = true;
 	}
 function findUser(id) { return state.data.users.find(user => user.id === id); }
-	async function createAccount({ email, password, displayName }) {
+	async function createAccount({ email, password, displayName, role }) {
 		await load();
 		return withLock(state, async () => {
 			const normalized = normalizeEmail(email);
 			if (state.data.users.some(user => user.email === normalized)) throw new AuthError('An account with that email already exists.', 'email_taken', 409);
-			const user = { id: randomUUID(), email: normalized, displayName: normalizeDisplayName(displayName || normalized.split('@')[0]), passwordHash: await passwordRecord(password), status: 'active', role: 'developer', createdAt: now(), updatedAt: now(), profile: defaultProfile() };
+			// Only the register route may propose 'pilot' (invite-admitted users);
+			// every other caller lands on the historical developer default.
+			const assignedRole = role === 'pilot' ? 'pilot' : 'developer';
+			const user = { id: randomUUID(), email: normalized, displayName: normalizeDisplayName(displayName || normalized.split('@')[0]), passwordHash: await passwordRecord(password), status: 'active', role: assignedRole, createdAt: now(), updatedAt: now(), profile: defaultProfile() };
 			state.data.users.push(user);
 			await persist();
 			return user;
@@ -350,12 +353,15 @@ export function createPostgresAuthService({ pool, tenantContext, now = () => Dat
 		async changePassword(userId, input) { return transaction(async client => { if (!await selectUser(client, userId)) throw new AuthError('Account not found.', 'not_found', 404); const result = await client.query('SELECT password_hash FROM users WHERE id = $1 FOR UPDATE', [userId]); if (!await verifyPassword(input?.currentPassword, result.rows[0]?.password_hash)) throw new AuthError('Current password is incorrect.', 'invalid_credentials', 401); const hash = await passwordRecord(input?.password); await client.query('UPDATE users SET password_hash = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [userId, hash]); await client.query('UPDATE qase_auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL', [userId]); }); },
 		async register(input) {
 			const email = normalizeEmail(input?.email); const displayName = normalizeDisplayName(input?.displayName || email.split('@')[0]); const passwordHash = await passwordRecord(input?.password);
+			// Only the register route may propose 'pilot' (invite-admitted
+			// users); every other caller lands on the historical developer default.
+			const assignedRole = input?.role === 'pilot' ? 'pilot' : 'developer';
 			return transaction(async client => {
 				const existing = await client.query('SELECT id FROM users WHERE normalized_email = $1', [email]);
 				if (existing.rows.length) throw new AuthError('An account with that email already exists.', 'email_taken', 409);
 				const id = randomUUID();
 				await client.query(`INSERT INTO users (id,email,normalized_email,display_name,password_hash,status) VALUES ($1,$2,$2,$3,$4,'active')`, [id, email, displayName, passwordHash]);
-				await client.query(`INSERT INTO organization_memberships (organization_id,user_id,role,status,created_by_user_id) VALUES ($1,$2,'developer','active',$2)`, [tenant.organizationId, id]);
+				await client.query(`INSERT INTO organization_memberships (organization_id,user_id,role,status,created_by_user_id) VALUES ($1,$2,$3,'active',$2)`, [tenant.organizationId, id, assignedRole]);
 				await client.query(`INSERT INTO qase_user_profiles (user_id,organization_id,project_id) VALUES ($1,$2,$3)`, [id, tenant.organizationId, tenant.projectId]);
 				const user = await selectUser(client, id); return issueSession(client, user);
 			});

@@ -45,7 +45,7 @@ jobs:
           }
           NODE
       - run: npm audit --omit=dev --audit-level=moderate
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run verify
       - run: npm run test:browser
       - run: npm run test:dashboard

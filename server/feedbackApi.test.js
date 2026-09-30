@@ -168,7 +168,8 @@ test('invalid payloads return field errors without echoing content', async () =>
 		const payload = await response.json();
 		assert.ok(payload.fields.rating);
 		assert.ok(payload.fields.category);
-		assert.ok(payload.fields.comments);
+		// Comments are optional now — no comments field error.
+		assert.equal(payload.fields.comments, undefined);
 		assert.equal(JSON.stringify(payload).includes('Excellent'), false);
 	} finally {
 		await fixture.close();
@@ -196,15 +197,101 @@ test('GET /api/sessions/:id/feedback returns the submitter record (or null)', as
 test('feedback admin endpoints require owner/admin role', async () => {
 	const fixture = await startServer({ auth: createFakeAuthService(), role: 'developer' });
 	try {
-		for (const [method, url] of [
-			['GET', '/api/feedback'],
-			['GET', '/api/feedback/stats'],
-			['PUT', '/api/feedback/00000000-0000-4000-8000-000000000000'],
-			['DELETE', '/api/feedback/00000000-0000-4000-8000-000000000000']
+		const session = await finishedRun(fixture.services);
+		// A record owned by a DIFFERENT user: a developer may neither read it
+		// as an admin nor edit someone else's feedback.
+		const created = await fixture.services.feedback.create({
+			runId: session.id, submittedBy: 'someone-else', context: {},
+			rating: 3, category: 'overall', comments: 'not yours'
+		});
+		for (const [method, url, init] of [
+			['GET', '/api/feedback', {}],
+			['GET', '/api/feedback/stats', {}],
+			['PUT', `/api/feedback/${created.id}`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ rating: 1 })
+			}],
+			['DELETE', `/api/feedback/${created.id}`, { method: 'DELETE' }]
 		]) {
-			const response = await fixture.call(url, { method });
+			const response = await fixture.call(url, { ...init, method });
 			assert.equal(response.status, 403, `${method} ${url}`);
 		}
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('submitter can edit their OWN feedback but not the review status', async () => {
+	const fixture = await startServer({ auth: createFakeAuthService(), role: 'developer' });
+	try {
+		const session = await finishedRun(fixture.services);
+		const created = await fixture.services.feedback.create({
+			runId: session.id, submittedBy: TENANT.actorUserId, context: {},
+			rating: 4, category: 'overall', comments: 'first take'
+		});
+		const edited = await fixture.call(`/api/feedback/${created.id}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ rating: 2, comments: 'changed my mind' })
+		});
+		assert.equal(edited.status, 200);
+		const record = await edited.json();
+		assert.equal(record.rating, 2);
+		assert.equal(record.comments, 'changed my mind');
+		// Review status is admin-only.
+		const statusChange = await fixture.call(`/api/feedback/${created.id}`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ status: 'resolved' })
+		});
+		assert.equal(statusChange.status, 403);
+		// Editing content never created a duplicate.
+		const own = await (await fixture.call(`/api/sessions/${session.id}/feedback`)).json();
+		assert.equal(own.id, created.id);
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('rating-only submission succeeds with optional fields blank', async () => {
+	const fixture = await startServer({ auth: createFakeAuthService() });
+	try {
+		const session = await finishedRun(fixture.services);
+		const response = await fixture.call('/api/feedback', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ runId: session.id, rating: 5 })
+		});
+		assert.equal(response.status, 201);
+		const record = await response.json();
+		assert.equal(record.category, 'overall');
+		assert.equal(record.comments, '');
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('GET /feedback/mine returns only the submitter records for the listed runs', async () => {
+	const fixture = await startServer({ auth: createFakeAuthService() });
+	try {
+		const sessionA = await finishedRun(fixture.services);
+		const sessionB = await finishedRun(fixture.services);
+		const sessionC = await finishedRun(fixture.services);
+		await fixture.services.feedback.create({
+			runId: sessionA.id, submittedBy: TENANT.actorUserId, context: {},
+			rating: 5, category: 'overall', comments: 'mine A'
+		});
+		await fixture.services.feedback.create({
+			runId: sessionC.id, submittedBy: 'other-user', context: {},
+			rating: 1, category: 'other', comments: 'not mine'
+		});
+		const response = await fixture.call(`/api/feedback/mine?runs=${sessionA.id},${sessionB.id},${sessionC.id}`);
+		assert.equal(response.status, 200);
+		const records = await response.json();
+		assert.equal(records.length, 1);
+		assert.equal(records[0].runId, sessionA.id);
+		assert.equal(records[0].rating, 5);
 	} finally {
 		await fixture.close();
 	}

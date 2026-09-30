@@ -1,20 +1,21 @@
-# Production deploy notes for QASE-2.1 (project 3542, domain qase.drytis.com)
+# Production deploy state — updated 2026-09-25 (#12954)
 
-- Production clones from the repository URL configured in the backend (project → repositories). Originally pointed at https://github.com/XSTOOR/QASE-2.1 — **we have NO push credentials for that GitHub repo** (push prompts for username). Team publishes go to the managed origin: `https://x:<token>@git.drytis.dev/mishal-muneer-208/qase-2-1-3542.git`.
-- 2026-09-14: repository record was switched to the managed gitea URL (branch `main`) so prod pulls the code we actually control.
-- **Prod clone is persistent and does NOT re-clone when the repo URL/branch changes in the backend.** A `restart_production` only runs `git pull` against the existing `.git/config`. After changing the remote URL, you must `prod_run_bash` a manual `git remote set-url origin <new-url-from-init.json>` + `git fetch` + `git merge --ff-only origin/main` + `bash /project-config/setup.sh` + `prod_restart_service service-bg-service-4182`.
-- Release flow: verified DEV tip is fast-forwarded to main on the managed repo (no force), then the prod pull picks it up. Releases: 1a61e1c (09-14), 01591df (09-15), **1be3796 (09-15, review-hardening release)**.
-- **Boot-time pull gotcha (hit again 09-15 on both #152 and #153):** after `restart_production`/`redeploy_production`, prod can boot still at the OLD commit — drytis-init's boot-time pull silently fails. ALWAYS verify `git rev-parse HEAD` in prod after every restart; if stale: `prod_run_bash` a manual `git fetch origin && git merge --ff-only origin/main` + `bash /project-config/setup.sh` + `procmgr restart service-bg-service-4182`.
-- After a fresh `deploy_to_production`, the pod does clone the right commit automatically (verified #153 = 1be3796 without manual fix).
-- `deploy_to_production` returns 500 while an existing deployment record exists even in stopped state; use `stop_production(keep_volume=true)` then `redeploy_production(domains=..., admin_email=...)` instead. Full teardown = `stop_production(keep_volume=false)` then `deploy_to_production` — only if volume data is expendable (it was: 0 accounts, 0 runs on 09-15).
-- Prod app runs as background service `service-bg-service-4182` (node server/index.js, port 5173, Caddy reverse_proxy at /). Logs: /var/log/services/service-bg-service-4182.log. Practice target: /demo (demo@qase.dev / demo1234).
-- **Current deployment: #153** (created 2026-09-15T16:31Z via full teardown, fresh volume, direct URL https://prod-qase-2-1-tawpkk.drytis.dev, pod curls verified: app 200 + auth-gated /api/health, pod-Caddy Host-header 200, HEAD 1be3796).
-- Sessions/test accounts on prod must be re-seeded after the fresh volume (previous auth store was empty anyway).
+Supersedes the "still blocked" conclusions of 2026-09-17/09-21 notes for routing.
 
-## qase.drytis.com edge routing — UNRESOLVED PLATFORM BUG (2026-09-15, #10927 → #10964)
-- `list_production_custom_domains` returns **[]** under every flow tried: `update_production_config`, `restart_production`, `redeploy_production` ×3 (with and without explicit domains), `stop_production(keep_volume=true)`+`redeploy`, and even full teardown (`keep_volume=false`) + first-time `deploy_to_production` (→ deployment #153). The tls-edge/gateway never writes the route row for this hostname.
-- The incumbent that previously served the domain (Pushkaraj's project 2516 deployment, fingerprint: OpenAPI 3.1 /openapi.json, `{"project":"Qase"}` /api/health) stopped serving between 09-15 14:00–15:49Z — domain went from its 200 to edge 502. So the "incumbent holds the domain" theory is dead; registration itself is failing platform-side.
-- Edge TLS cert for qase.drytis.com still valid (CN matches, issued Aug 26 2026) and edge returns its branded 502 — hostname known, unrouted.
-- DNS correct: A → 147.135.77.206 (matches apex_ips).
-- **Needs Drytis platform support: tls-edge custom-domain registration for qase.drytis.com / project 3542.** Once the edge route is fixed, deployment #153 serves immediately (pod-side verified). Verify with: /openapi.json should 401/404 (NOT the incumbent's OpenAPI), /api/health → `{"error":"Authentication required."}`.
-- Diagnosis trap: both old and new apps 302 `/`→`/login`; always fingerprint via /api/health + /openapi.json.
+## Verified end state (all checked 2026-09-25)
+- https://qase.drytis.com/ → 200 over HTTPS; /healthz → 200.
+- Prod pod branch: **PUSHKAR @ a8b271b** (repo config updated to branch PUSHKAR via update_repository id 3605).
+- Restart drill PASSED: update_production_config → restart_production → new pod (IP 10.2.145.110), volume persisted, branch stayed PUSHKAR after drytis-init pull, HTTPS still 200.
+- procmgr service name in prod: `service-bg-service-4182` (prod_restart_service 'service-bg-*' works).
+
+## Residual knowns
+- `list_production_custom_domains` still shows status "pending" with `Cloudflare API: Duplicate custom hostname found` — orphaned CF entry from an earlier deploy. **Benign**: routing + TLS work (full handshake, 200s). Do not attempt to fix by re-adding; add_production_custom_domain is what activated the route on 2026-09-21.
+- `deploy_to_production` still 500s while deployment record #153 exists. Working combo for recreation: `redeploy_production` + manual branch verify. For routine code pushes use: git gate → update_production_config → restart_production (verified working).
+- Persistent volume keeps checkout branch across pod recreation — ALWAYS verify `git branch --show-current` in the prod pod after any restart; switch manually if drifted.
+
+## Deploy runbook (code push)
+1. git_manager pre-deploy gate on PUSHKAR (dev container).
+2. Build/migrate checks on dev (npm run verify).
+3. update_production_config(3542).
+4. restart_production(3542).
+5. Verify: get_production_status healthy; prod_run_bash git branch/HEAD; curl https://qase.drytis.com/ + /healthz → 200.

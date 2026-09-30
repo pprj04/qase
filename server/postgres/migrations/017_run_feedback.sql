@@ -13,7 +13,7 @@ CREATE TABLE qa_run_feedback (
 	duration_seconds double precision,
 	rating integer NOT NULL,
 	category text NOT NULL,
-	comments text NOT NULL,
+	comments text NOT NULL DEFAULT '',
 	improvement text,
 	status text NOT NULL DEFAULT 'new',
 	submitted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -30,7 +30,7 @@ CREATE TABLE qa_run_feedback (
 	CONSTRAINT qa_run_feedback_status_valid CHECK (status IN (
 		'new', 'reviewed', 'in_progress', 'resolved', 'closed'
 	)),
-	CONSTRAINT qa_run_feedback_comments_size CHECK (char_length(comments) BETWEEN 1 AND 4000),
+	CONSTRAINT qa_run_feedback_comments_size CHECK (char_length(comments) BETWEEN 0 AND 4000),
 	CONSTRAINT qa_run_feedback_improvement_size CHECK (improvement IS NULL OR char_length(improvement) <= 4000),
 	CONSTRAINT qa_run_feedback_run_submitter_unique UNIQUE (organization_id, project_id, run_id, submitted_by_user_id)
 );

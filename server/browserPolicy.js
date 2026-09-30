@@ -270,11 +270,26 @@ export function createBrowserPolicy({
 	const allowedOrigins = splitCsv(environment.QASE_BROWSER_ALLOWED_ORIGINS)
 		.map(parseOriginRule).filter(Boolean);
 	const allowedPrivateHosts = splitCsv(environment.QASE_BROWSER_ALLOWED_PRIVATE_HOSTS);
+	// The instance's own public origin is always reachable: it is the
+	// operator's own service (the dashboard and its demo site), never an
+	// attacker-controlled target. This keeps internal E2E runs and
+	// self-testing working even when the origin resolves to reserved space.
+	const ownOriginHost = (() => {
+		const origin = String(environment.QASE_PUBLIC_URL ?? '').trim();
+		if (!origin) return undefined;
+		try {
+			return new URL(origin).hostname;
+		} catch {
+			return undefined;
+		}
+	})();
 	let pendingConfirmation;
 	let grant;
 	const observedMeetingLinks = new Set();
 
-	const privateHostAllowed = hostname => allowedPrivateHosts.some(rule => hostRuleMatches(hostname, rule));
+	const privateHostAllowed = hostname =>
+		(ownOriginHost !== undefined && cleanHost(hostname) === ownOriginHost)
+		|| allowedPrivateHosts.some(rule => hostRuleMatches(hostname, rule));
 
 	async function validatePublicDestination(url) {
 		if (privateNetworkDisabled || privateHostAllowed(url.hostname)) {

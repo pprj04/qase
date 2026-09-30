@@ -52,5 +52,5 @@ test('QA submit is disabled with no selection and selection survives configurati
 	assert.doesNotMatch(app, /openQaStart[\s\S]{0,600}qa-test-options[\s\S]{0,100}replaceChildren/);
 	// The run request carries the selection (and the security authorization
 	// gate payload when a security check is selected).
-	assert.match(app, /body: JSON\.stringify\(\{ device, deviceLandscape, selectedTests, \.\.\.\(securityAuthorization \? \{ securityAuthorization \} : \{\}\) \}\)/);
+	assert.match(app, /body: JSON\.stringify\(\{[\s\S]*?device,[\s\S]*?deviceLandscape,[\s\S]*?engine,[\s\S]*?selectedTests,[\s\S]*?\.\.\.\(securityAuthorization \? \{ securityAuthorization \} : \{\}\)[\s\S]*?\}\)/);
 });

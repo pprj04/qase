@@ -1,10 +1,14 @@
 import { hasUnresolvedPlaceholder, resolveSecrets } from './secrets.js';
-import { createBrowserPolicy } from './browserPolicy.js';
+import { createBrowserPolicy, classifyDestructiveAction } from './browserPolicy.js';
 import { contextOptionsFor, getDeviceProfile, DEFAULT_DEVICE_ID } from './deviceProfiles.js';
 import { runMobileAudit } from './mobileAudit.js';
 import { inspectFormValidation } from './browserFormAudit.js';
-import { chromium } from 'playwright';
+import { resolveEngine, ENGINE_IDS } from './browserEngines.js';
 import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
+import {
+	SECURITY_CHECK_IDS, XSS_CANARY,
+	checkResponseHeaders, checkCookies, checkXssReflection, checkSqlErrorSignature, checkMixedContent
+} from './securityChecks.js';
 
 /**
  * Makes the agent's browser watchable.
@@ -26,6 +30,58 @@ const FRAME_QUALITY = Number(process.env.QASE_FRAME_QUALITY ?? 55);
 const CURSOR_DWELL_MS = Number(process.env.QASE_CURSOR_DWELL_MS ?? 420);
 /** How long to let a click's navigation land before reporting where we are. */
 const NAV_SETTLE_MS = Number(process.env.QASE_NAV_SETTLE_MS ?? 1600);
+
+/**
+ * Submits a benign probe value through the page's own GET search-like form.
+ * Returns the resulting URL, or undefined when no usable form exists. The
+ * form's own action decides the destination — the browser policy stays in
+ * charge of every request.
+ */
+async function submitCanaryThroughForms(page, value) {
+	try {
+		const form = await page.evaluate(probe => {
+			const candidates = [...document.querySelectorAll('form')]
+				.filter(node => node.checkVisibility?.() !== false)
+				.filter(node => {
+					const method = (node.getAttribute('method') || 'get').toLowerCase();
+					if (method !== 'get') return false;
+					const input = node.querySelector('input[type="text"], input[type="search"], input:not([type])');
+					return Boolean(input);
+				});
+			const chosen = candidates[0];
+			if (!chosen) return undefined;
+			const input = chosen.querySelector('input[type="text"], input[type="search"], input:not([type])');
+			return { action: chosen.action || location.href, name: input.name };
+		}, value);
+		if (!form?.name) return undefined;
+		const target = new URL(form.action, page.url());
+		target.searchParams.set(form.name, value);
+		await page.goto(target.toString(), { waitUntil: 'domcontentloaded' });
+		await page.waitForLoadState('networkidle').catch(() => undefined);
+		return page.url();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Inspects the current DOM for the canary: `reflected` = present anywhere;
+ * `escaped` = present as text (textContent) but never as raw markup, and no
+ * probe element (img/onerror) actually exists in the document.
+ */
+async function inspectReflection(page, canary) {
+	return page.evaluate(marker => {
+		// Strip quotes from the marker: HTML serialization escapes attribute
+		// quotes, so even an unescaped reflection shows "qz7&quot;'..." — the
+		// bare marker must never contain a character the serializer would mangle.
+		const markerText = marker.slice(0, marker.indexOf('<')).replace(/["']/g, '');
+		const reflected = document.documentElement.outerHTML.includes(markerText) || document.body.innerText.includes(markerText);
+		if (!reflected) return { reflected: false, escaped: false };
+		const executable = [...document.querySelectorAll('img')].some(img => img.getAttribute('src') === 'x' && img.hasAttribute('onerror'));
+		const textOnly = document.body.innerText.includes(markerText) && !executable;
+		return { reflected: true, escaped: textOnly };
+	}, canary).catch(() => ({ reflected: false, escaped: false }));
+}
 
 export function selectSnapshotElements(elements, requestedLimit) {
 	const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.floor(requestedLimit))) : 150;
@@ -94,9 +150,38 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		subscribers: 0,
 		lastFrame: undefined,
 		securityBlocks: [],
+		destructiveLedger: new Set(Array.isArray(session.executedDestructiveActions) ? session.executedDestructiveActions : []),
 		disposed: false
 	};
 	let syntheticMedia = false;
+	// Abort race for in-flight interactions: stop() must unwind a browser
+	// action within the abort window instead of waiting out Playwright's
+	// default 30s action timeout.
+	let activeAbortSignal = null;
+
+	const raceAbort = promise => {
+		if (!activeAbortSignal) return promise;
+		const signal = activeAbortSignal;
+		if (signal.aborted) {
+			return Promise.reject(abortError());
+		}
+		const aborted = new Promise((_, reject) => {
+			const onAbort = () => {
+				clearTimeout(timer);
+				reject(abortError());
+			};
+			const timer = setTimeout(() => signal.removeEventListener('abort', onAbort), 5000);
+			signal.addEventListener('abort', onAbort, { once: true });
+		});
+		return Promise.race([promise, aborted]);
+	};
+
+	const abortError = () =>
+		Object.assign(new Error('The browser action was interrupted by a stop request.'), { name: 'AbortError' });
+
+	bridge.setAbortSignal = signal => {
+		activeAbortSignal = signal ?? null;
+	};
 
 	/*
 	 * Snapshots hand back selectors that actually identify one element.
@@ -414,25 +499,40 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
-				// Full Chromium supports native media on Windows; the separate
-				// headless-shell build can expose getUserMedia but reject every call.
-				const bundledExecutable = chromium.executablePath();
-				const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
-				// Launch ourselves because the SDK exposes no Chromium argument hook.
-				// Native getUserMedia can only receive synthetic devices in this process.
-				const launch = { headless, args: [...SYNTHETIC_MEDIA_ARGS] };
-				try {
-					service.browser = await chromium.launch({ ...launch, executablePath });
-				} catch (error) {
-					if (executablePath === bundledExecutable) throw error;
-					service.browser = await chromium.launch({ ...launch, executablePath: bundledExecutable });
+				// Multi-engine: the session's engine decides the browser type.
+				// Chromium keeps synthetic-media args; secondary engines launch
+				// plainly (synthetic media is a Chromium-only capability).
+				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
+				const engine = await resolveEngine(engineId);
+				if (!engine.available) {
+					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
+					error.code = 'ENGINE_UNAVAILABLE';
+					throw error;
+				}
+				const launch = { headless };
+				if (engine.id === 'chromium') {
+					launch.args = [...SYNTHETIC_MEDIA_ARGS];
+					// Full Chromium supports native media on Windows; the separate
+					// headless-shell build can expose getUserMedia but reject every call.
+					const bundledExecutable = engine.type.executablePath();
+					const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
+					// Launch ourselves because the SDK exposes no argument hook.
+					// Native getUserMedia can only receive synthetic devices in this process.
+					try {
+						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath });
+					} catch (error) {
+						if (executablePath === bundledExecutable) throw error;
+						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath: bundledExecutable });
+					}
+				} else {
+					service.browser = await engine.type.launch({ ...launch, ...engine.launch });
 				}
 				try {
 					service.context = await service.browser.newContext({
 						...(emulationOptions ?? { viewport: { width: 1440, height: 900 }, acceptDownloads: true }),
 						...(policy.isProduction ? { serviceWorkers: 'block' } : {})
 					});
-					syntheticMedia = true;
+					syntheticMedia = engine.id === 'chromium';
 					await installNetworkPolicy(service.context);
 					return service.context;
 				} catch (error) {
@@ -517,6 +617,99 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	};
 
 	const viewportOf = page => page?.viewportSize() ?? { width: 1440, height: 900 };
+
+	/**
+	 * Host-driven security suite (ticket #12959). Runs deterministic checks
+	 * against the current page: response headers + cookies from live state, XSS
+	 * reflection through the page's own forms (benign canary), SQL error
+	 * signatures after a benign quote payload, mixed content from diagnostics.
+	 * The network policy stays in charge of destinations — probes use the
+	 * page's own form and URL, never a new origin.
+	 */
+	bridge.runSecurityChecks = async ({ checks } = {}) => {
+		await service.ensurePage();
+		const page = currentPage();
+		const pageUrl = page.url();
+		const decision = await policy.evaluateNavigation(pageUrl);
+		if (!decision.allowed) return policy.asBlockedResult(decision);
+
+		const wanted = new Set(Array.isArray(checks) && checks.length ? checks : SECURITY_CHECK_IDS);
+		const results = [];
+
+		// Main-document response + cookies from live browser state.
+		let mainResponse;
+		try {
+			const response = await page.goto(pageUrl, { waitUntil: 'domcontentloaded' });
+			mainResponse = response ?? undefined;
+		} catch { /* keep whatever state we had */ }
+		const headerObject = {};
+		for (const [key, value] of (mainResponse?.headers?.() ? Object.entries(mainResponse.headers()) : [])) {
+			headerObject[key] = value;
+		}
+		if (wanted.has('csp') || wanted.has('hsts') || wanted.has('x_frame_options')
+			|| wanted.has('x_content_type_options') || wanted.has('referrer_policy')) {
+			results.push(...checkResponseHeaders({
+				url: pageUrl,
+				status: mainResponse?.status?.(),
+				headers: headerObject
+			}).filter(result => wanted.has(result.id)));
+		}
+		if (wanted.has('cookie_flags')) {
+			let cookies = [];
+			try { cookies = await service.context.cookies(pageUrl); } catch { /* page may have navigated */ }
+			const documentCookie = await page.evaluate(() => document.cookie).catch(() => '');
+			results.push(...checkCookies({ url: pageUrl, cookies, documentCookie }));
+		}
+
+		// XSS reflection: submit the canary through the page's own search-like form.
+		if (wanted.has('xss_reflection')) {
+			const probeUrl = await submitCanaryThroughForms(page, XSS_CANARY);
+			if (probeUrl) {
+				const reflection = await inspectReflection(page, XSS_CANARY);
+				results.push(checkXssReflection({ url: probeUrl, ...reflection }));
+			} else {
+				results.push({
+					id: 'xss_reflection', title: 'xss_reflection', category: 'security', severity: 'info',
+					status: 'info', url: pageUrl,
+					evidence: 'No text input form found to submit the reflection canary.',
+					remediation: undefined
+				});
+			}
+		}
+
+		// SQL error signatures: benign quote payload through the same forms.
+		if (wanted.has('sqli_error_signature')) {
+			const quoteUrl = await submitCanaryThroughForms(page, "'\" --qase");
+			if (quoteUrl) {
+				const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 200_000) ?? '').catch(() => '');
+				results.push(checkSqlErrorSignature({ url: quoteUrl, responseText: bodyText }));
+			} else {
+				results.push({
+					id: 'sqli_error_signature', title: 'sqli_error_signature', category: 'security', severity: 'info',
+					status: 'info', url: pageUrl,
+					evidence: 'No text input form found to submit the benign quote payload.',
+					remediation: undefined
+				});
+			}
+		}
+
+		// Mixed content from the diagnostics the page already produced.
+		if (wanted.has('mixed_content')) {
+			const diagnostics = await service.getDiagnostics('ide', {}).catch(() => undefined);
+			const requests = (diagnostics?.network ?? []).map(entry => ({ url: entry.url }));
+			results.push(...checkMixedContent({ url: pageUrl, requests }));
+		}
+
+		const report = {
+			success: true,
+			url: pageUrl,
+			checkedAt: Date.now(),
+			results,
+			limitations: 'Benign, deterministic checks only: header presence, cookie flags, reflection escaping, database error signatures, mixed content. No destructive or time-based payloads; absence of findings is not a full penetration test.'
+		};
+		await runStore.commit(session, 'security', { securityReport: report });
+		return report;
+	};
 
 	/**
 	 * Where the action is about to land, in viewport coordinates. Falls back to
@@ -713,11 +906,48 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 					return policy.asBlockedResult(navigation);
 				}
 			}
+			// Mechanical no-repeat guard. Prompt-level "do not redo"
+			// instructions are advisory; a recovery turn that re-plans from
+			// scratch could re-send a message or re-purchase. Every executed
+			// destructive action is ledgered by category + target, and an
+			// identical re-execution in the same session is refused with a
+			// verify-instead instruction. Checked against the PERSISTED ledger
+			// (session record) BEFORE the policy grant: a fresh bridge after a
+			// crash-restart has no grant left, so the policy would otherwise
+			// demand a new confirmation — and a "yes" there would re-execute.
+			const ledgerRisk = classifyDestructiveAction(method, descriptor);
+			if (ledgerRisk) {
+				const ledgerKey = `${ledgerRisk.category}::${String(descriptor.text ?? descriptor.ariaLabel ?? descriptor.label ?? descriptor.name ?? descriptor.destination ?? input?.text ?? input?.selector ?? '')}`.slice(0, 300).toLowerCase();
+				if (bridge.destructiveLedger.has(ledgerKey)) {
+					return {
+						success: false,
+						code: 'ACTION_ALREADY_EXECUTED',
+						error: `This destructive ${ledgerRisk.category} action was already executed in this session. Do NOT repeat it. Verify the result instead (snapshot, URL, or confirmation state), then continue the assessment.`
+					};
+				}
+				bridge.pendingLedgerKey = ledgerKey;
+			}
 			const authorization = policy.authorizeAction(method, descriptor, session.messages);
 			if (!authorization.allowed) {
 				recordSecurityBlock(authorization, { method });
 				return policy.asBlockedResult(authorization);
 			}
+			if (authorization.confirmationUsed && bridge.pendingLedgerKey) {
+				// Mirror the ledger into the session record so it survives a
+				// crash-restart: the bridge is rebuilt by ensureRuntime on
+				// resume, but the recovered turn must still see what was
+				// already executed. Bounded: the Set guard above prevents
+				// duplicates, and the 300-char key cap bounds each entry.
+				bridge.destructiveLedger.add(bridge.pendingLedgerKey);
+				if (!Array.isArray(session.executedDestructiveActions)) session.executedDestructiveActions = [];
+				if (!session.executedDestructiveActions.includes(bridge.pendingLedgerKey)) {
+					session.executedDestructiveActions.push(bridge.pendingLedgerKey);
+					void runStore.commit(session, 'browser', {
+						browser: { action: 'destructive_executed', category: ledgerRisk.category }
+					}).catch(() => undefined);
+				}
+			}
+			bridge.pendingLedgerKey = undefined;
 			const securityMarker = bridge.securityBlocks.length;
 
 			// Fail deterministic locator problems before Playwright spends its full
@@ -746,7 +976,7 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 
 			let result;
 			try {
-				result = await original(surface, input);
+				result = await raceAbort(original(surface, input));
 			} catch (error) {
 				const navigationBlock = bridge.securityBlocks.slice(securityMarker).find(entry => entry.topLevel);
 				if (navigationBlock) {
@@ -797,6 +1027,24 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		wrap(method, options);
 	}
 
+	/*
+	 * browser_wait clamp. The SDK schema promises "capped at 30000" for both
+	 * ms and timeoutMs but the driver passes them straight to Playwright, so a
+	 * model-supplied oversized value stalls the run indefinitely. Enforce the
+	 * documented bound here, where every implementation detail is visible.
+	 */
+	const originalWait = service.wait?.bind(service);
+	if (originalWait) {
+		const clampWaitInput = input => {
+			if (!input || typeof input !== 'object') return input;
+			const clamped = { ...input };
+			if (clamped.ms !== undefined) clamped.ms = Math.max(0, Math.min(30_000, Number(clamped.ms) || 0));
+			if (clamped.timeoutMs !== undefined) clamped.timeoutMs = Math.max(0, Math.min(30_000, Number(clamped.timeoutMs) || 0));
+			return clamped;
+		};
+		service.wait = (surface, input) => originalWait(surface, clampWaitInput(input));
+	}
+
 	// Credential placeholders become real values here, at the last moment before
 	// the keystrokes reach the page, and never anywhere the model can observe.
 	const originalFill = service.fill.bind(service);
@@ -819,10 +1067,34 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			};
 		}
 		const descriptor = await resolveActionDescriptor();
-		const authorization = policy.authorizeAction('typeText', descriptor, session.messages);
-		if (!authorization.allowed) {
-			recordSecurityBlock(authorization, { method: 'typeText' });
-			return policy.asBlockedResult(authorization);
+		// Same mechanical no-repeat guard as wrap(): the ledger check precedes
+		// the policy gate so a post-restart approval cannot re-execute a
+		// destructive action taken via typed text.
+		const ledgerRisk = classifyDestructiveAction('typeText', descriptor);
+		if (ledgerRisk) {
+			const ledgerKey = `typeText::${String(descriptor.text ?? descriptor.ariaLabel ?? descriptor.label ?? descriptor.name ?? '')}`.slice(0, 300).toLowerCase();
+			if (bridge.destructiveLedger.has(ledgerKey)) {
+				return {
+					success: false,
+					code: 'ACTION_ALREADY_EXECUTED',
+					error: `This destructive ${ledgerRisk.category} action was already executed in this session. Do NOT repeat it. Verify the result instead (snapshot, URL, or confirmation state), then continue the assessment.`
+				};
+			}
+			const authorization = policy.authorizeAction('typeText', descriptor, session.messages);
+			if (!authorization.allowed) {
+				recordSecurityBlock(authorization, { method: 'typeText' });
+				return policy.asBlockedResult(authorization);
+			}
+			if (authorization.confirmationUsed) {
+				bridge.destructiveLedger.add(ledgerKey);
+				if (!Array.isArray(session.executedDestructiveActions)) session.executedDestructiveActions = [];
+				if (!session.executedDestructiveActions.includes(ledgerKey)) {
+					session.executedDestructiveActions.push(ledgerKey);
+					void runStore.commit(session, 'browser', {
+						browser: { action: 'destructive_executed', category: ledgerRisk.category }
+					}).catch(() => undefined);
+				}
+			}
 		}
 		return originalType(surface, resolveSecrets(session.id, text));
 	};

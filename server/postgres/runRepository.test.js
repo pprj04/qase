@@ -335,8 +335,11 @@ test('save enforces optimistic lock version and rolls back without an event on c
 	);
 	const update = fake.calls.find(call => call.text.startsWith('UPDATE qa_runs'));
 	assert.deepEqual(update.params.slice(0, 3), [TENANT.organizationId, TENANT.projectId, RUN_ID]);
-	assert.equal(update.params[19], null);
-	assert.equal(update.params[31], 4);
+	// After the DEV merge the save UPDATE binds $1-$36 (feedback $19, timing
+	// $22-$32, engine/device/landscape/cohort $33-$36) and the optimistic-lock
+	// version at $37 (params[36]).
+	assert.equal(update.params[18], null, 'feedback $19 is null on plain save');
+	assert.equal(update.params[36], 4, 'expectedVersion at $37');
 	assert.equal(fake.calls.some(call => call.text.startsWith('INSERT INTO qa_run_events')), false);
 	assert.equal(fake.calls.at(-1).text, 'ROLLBACK');
 	assert.equal(fake.state.releases, 1);
@@ -845,6 +848,9 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		status: 'idle',
 		mode: 'qa',
 		targetUrl: 'https://other.example/',
+		engine: 'chromium',
+		device: 'desktop',
+		deviceLandscape: false,
 		createdAt: NOW - 1_000,
 		updatedAt: NOW,
 		startedAt: undefined,

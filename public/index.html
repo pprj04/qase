@@ -44,6 +44,8 @@
       <input id="auth-password" name="password" type="password" autocomplete="current-password" required minlength="12" maxlength="200">
       <label for="auth-display" id="auth-display-label" hidden>Display name</label>
       <input id="auth-display" name="displayName" type="text" autocomplete="name" maxlength="120" hidden>
+      <label for="auth-invite" id="auth-invite-label" hidden>Invite code</label>
+      <input id="auth-invite" name="inviteCode" type="text" autocomplete="off" maxlength="40" hidden>
       <label class="auth-show"><input id="auth-show-password" type="checkbox"> Show password</label>
       <p class="auth-hint" id="auth-password-hint">Use at least 12 characters when creating an account.</p>
       <p class="auth-error" id="auth-error" role="alert" hidden></p>
@@ -143,11 +145,18 @@
         <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
       </div>
       <div class="head-actions">
-        <span class="run-timer" id="run-timer" hidden>
+        <span class="status-chip" id="status-chip" data-status="idle" role="status" aria-live="polite" aria-atomic="true">idle</span>
+        <span class="meta-chip" id="timer-chip" hidden title="Elapsed run time">00:00</span>
+        <span class="meta-chip" id="token-chip" hidden title="Model context window used by this run">0%</span>
+        <!-- DEV run-timer: kept in the DOM for the merged timing code paths; the
+             Phase-4 #timer-chip above is the visible elapsed-time display. -->
+        <span class="run-timer" id="run-timer" hidden aria-hidden="true">
           <span class="run-timer-icon" aria-hidden="true">⏱</span>
           <span class="run-timer-label" id="run-timer-label">Elapsed</span>
           <span class="run-timer-clock" id="run-timer-clock">00:00:00</span>
         </span>
+        <button id="resume-run" class="btn btn-ghost btn-sm" hidden>Resume</button>
+        <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
       </div>
     </header>
 
@@ -195,6 +204,10 @@
         <p class="empty-note">If the site needs a login, the agent stops and asks.
            Credentials you provide stay on this machine and are swapped in at the
            keyboard — the model never sees them.</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" id="empty-start">Start a QA run</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="empty-demo">Try the demo site</button>
+        </div>
       </div>
     </div>
 
@@ -216,6 +229,7 @@
       <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
       <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
       <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+      <p class="composer-hint" id="composer-running-hint" hidden>Agent working — the message box is disabled until the run stops or asks for you.</p>
     </form>
   </main>
 
@@ -227,6 +241,7 @@
         <span class="url" id="browser-url">about:blank</span>
       </div>
       <span class="subtle" id="browser-title"></span>
+      <button id="stage-toggle" class="btn btn-sm" hidden aria-expanded="true" title="Expand or collapse the live browser view">Collapse</button>
     </header>
 
     <div class="stage" id="stage">
@@ -256,6 +271,7 @@
         <span>No browser yet</span>
         <small>The live view appears when the agent opens the site</small>
       </div>
+      <div class="stage-note" id="stage-note" hidden>Run complete — live view collapsed</div>
     </div>
 
     <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
@@ -465,7 +481,8 @@
       <label class="field">
         <span>Target URL</span>
         <input id="qa-target-url" name="targetUrl" type="url" required maxlength="2048" inputmode="url" autocomplete="url" placeholder="https://example.com" autofocus>
-        <small>Qase opens this URL immediately after the run is created.</small>
+        <small>Qase opens this URL immediately after the run is created.
+          <button type="button" class="link-btn" id="qa-demo-fill">Try the demo site</button></small>
       </label>
       <fieldset class="qa-device-fieldset">
         <legend>Target device</legend>
@@ -480,6 +497,34 @@
           </label>
         </div>
         <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+      </fieldset>
+      <fieldset class="qa-engine-fieldset">
+        <legend>Browser engines</legend>
+        <div class="scope-options" id="qa-engine-options">
+          <label class="check"><input class="qa-engine" type="checkbox" value="chromium" checked><span>Chromium (Chrome)</span></label>
+          <label class="check"><input class="qa-engine" type="checkbox" value="firefox" checked><span>Firefox</span></label>
+          <label class="check"><input class="qa-engine" type="checkbox" value="webkit" checked><span>WebKit (Safari engine)</span></label>
+        </div>
+        <small>Each checked engine starts its own run of this site. Chromium runs the full sweep; other engines focus on core flows for cross-browser comparison.</small>
+      </fieldset>
+      <fieldset class="qa-scope-fieldset">
+        <legend>What to test</legend>
+        <div class="scope-controls">
+          <label class="check scope-all">
+            <input id="qa-scope-all" type="checkbox" checked>
+            <span><strong>Select all</strong> — test everything below</span>
+          </label>
+        </div>
+        <div class="scope-options" id="qa-scope-options">
+          <label class="check"><input class="qa-scope" type="checkbox" value="desktop-layout" checked><span>Desktop layout &amp; responsive behaviour</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="mobile-layout" checked><span>Mobile layout (if device profile allows)</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="forms" checked><span>Forms &amp; input validation</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked><span>Console &amp; network errors</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked><span>Navigation &amp; links</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked><span>Accessibility basics</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="security" checked><span>Security checks (headers, XSS reflection, SQL error signs)</span></label>
+        </div>
+        <small>Everything is pre-checked so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
       </fieldset>
       <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
         <legend>Tests</legend>
@@ -544,22 +589,22 @@
     <div class="modal-body">
       <p class="feedback-meta" id="feedback-run-meta"></p>
       <fieldset class="feedback-stars" id="feedback-stars">
-        <legend aria-hidden="false">Overall rating <span class="req" aria-hidden="true">*</span></legend>
+        <legend aria-hidden="false">How was your QASE testing experience? <span class="req" aria-hidden="true">*</span></legend>
         <div class="feedback-star-row" role="radiogroup" aria-label="Overall rating" id="feedback-star-row"></div>
       </fieldset>
       <label class="field">
-        <span>Category</span>
-        <select id="feedback-category" required>
-          <option value="" selected disabled>Choose a category…</option>
+        <span>Category <small>(optional)</small></span>
+        <select id="feedback-category">
+          <option value="" selected>Overall Experience</option>
         </select>
         <small>What area does your feedback relate to?</small>
       </label>
       <label class="field">
-        <span>Tell us about your experience <span class="req" aria-hidden="true">*</span></span>
-        <textarea id="feedback-comments" required minlength="1" maxlength="4000" rows="4" placeholder="Tell us about your experience"></textarea>
+        <span>Tell us more <small>(optional)</small></span>
+        <textarea id="feedback-comments" maxlength="4000" rows="4" placeholder="Tell us about your testing experience, test results, accuracy, performance, or any issues you encountered..."></textarea>
       </label>
       <label class="field">
-        <span>What should we improve?</span>
+        <span>What should we improve? <small>(optional)</small></span>
         <textarea id="feedback-improvement" maxlength="4000" rows="2" placeholder="Optional — anything we could do better"></textarea>
       </label>
       <div class="test-result" id="feedback-error" role="alert" aria-live="assertive"></div>
@@ -567,6 +612,7 @@
     </div>
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="feedback-cancel">Cancel</button>
+      <button class="btn btn-ghost" type="button" id="feedback-edit" title="Edit your feedback for this test run" hidden>Edit feedback</button>
       <button class="btn btn-primary" type="submit" id="feedback-submit">Submit feedback</button>
     </footer>
   </form>
@@ -716,36 +762,15 @@
       </fieldset>
 
       <fieldset class="founder-fieldset">
-        <legend>Business context</legend>
-        <div class="field-row founder-context-row">
-          <label class="field">
-            <span>Business stage</span>
-            <input id="founder-stage" name="stage" maxlength="200" autocomplete="off" placeholder="Pre-seed, growth, enterprise…">
-          </label>
-          <label class="field">
-            <span>Business model</span>
-            <input id="founder-business-model" name="businessModel" maxlength="500" autocomplete="off" placeholder="B2B SaaS, usage-based…">
-          </label>
-        </div>
-        <label class="field">
-          <span>Target customer / ICP hypothesis</span>
-          <textarea id="founder-target-customer" name="targetCustomer" rows="2" maxlength="1000" placeholder="Who buys, who uses, and what urgent job are they hiring this product to do?"></textarea>
-        </label>
+        <legend>Business context <small class="founder-context-note">optional — Qase infers the rest from your site</small></legend>
         <label class="field">
           <span>Primary goal</span>
           <textarea id="founder-primary-goal" name="primaryGoal" rows="2" maxlength="1000" placeholder="The single outcome this review should optimize for…"></textarea>
         </label>
-        <div class="field-row founder-context-row">
-          <label class="field">
-            <span>Constraints</span>
-            <textarea id="founder-constraints" name="constraints" rows="3" maxlength="2000" placeholder="Team, runway, compliance, technical or launch constraints…"></textarea>
-          </label>
-          <label class="field">
-            <span>Known competitors</span>
-            <textarea id="founder-competitors" name="competitors" rows="3" maxlength="10019" aria-describedby="founder-competitors-note" placeholder="One company or product per line…"></textarea>
-            <small id="founder-competitors-note">Up to 20 entries, 500 characters each.</small>
-          </label>
-        </div>
+        <label class="field">
+          <span>Constraints</span>
+          <textarea id="founder-constraints" name="constraints" rows="3" maxlength="2000" placeholder="Team, runway, compliance, technical or launch constraints…"></textarea>
+        </label>
       </fieldset>
 
       <label class="check founder-authorization">

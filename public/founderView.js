@@ -24,6 +24,7 @@ export function createFounderView({
 	downloadReportPdf,
 	toast,
 	fail,
+	exportError = fail,
 	humanizeId
 }) {
 	const doc = documentRef;
@@ -472,7 +473,7 @@ export function createFounderView({
 				save.remove();
 				globalThis.setTimeout(() => URL.revokeObjectURL(url), 0);
 			} catch (error) {
-				fail(error);
+				exportError(error);
 			}
 		};
 
@@ -486,7 +487,7 @@ export function createFounderView({
 				await navigator.clipboard.writeText(markdownText);
 				toast('Founder report copied to the clipboard.', 'good');
 			} catch (error) {
-				fail(error);
+				exportError(error);
 			}
 		};
 
@@ -496,7 +497,7 @@ export function createFounderView({
 		pdf.textContent = 'Download PDF';
 		pdf.onclick = async () => {
 			try { await downloadReportPdf('qase-founder-review.pdf'); }
-			catch (error) { fail(error); }
+			catch (error) { exportError(error); }
 		};
 		actions.append(download, copy, pdf);
 		return actions;

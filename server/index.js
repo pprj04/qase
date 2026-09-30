@@ -10,6 +10,12 @@ import { createRunKeepalive, isRunStatusActive } from './keepalive.js';
 import { createRunResume } from './runResume.js';
 import { listRunSnapshots, loadRunSnapshot } from './agent.js';
 import { runWithRequestActor } from './requestActor.js';
+import { recordEvent, durationBucket } from './analytics.js';
+import { createInviteService } from './invites.js';
+import * as path from 'node:path';
+
+/** Local analytics counters live beside the session store. */
+const ANALYTICS_DIR = path.join(process.cwd(), '.qase', 'analytics');
 
 // Validate process-local operational limits and metrics credentials before
 // opening PostgreSQL or Redis clients.
@@ -50,8 +56,23 @@ const keepalive = createRunKeepalive({
 if (typeof services.runs.setStatus === 'function') {
 	const setStatus = services.runs.setStatus.bind(services.runs);
 	services.runs.setStatus = async (session, status, detail) => {
+		const runStartedBefore = session.runStartedAt;
 		await setStatus(session, status, detail);
 		if (isRunStatusActive(status)) keepalive.noteActive();
+		// Local usage analytics: count run starts (first turn only) and finished
+		// runs with a duration bucket so the "users don't watch the agent"
+		// hypothesis has real data.
+		try {
+			if (status === 'running' && runStartedBefore === undefined) {
+				recordEvent(ANALYTICS_DIR, 'run_started', { dimensions: { mode: session.mode, ...(session.cohort ? { cohort: session.cohort } : {}) } });
+			}
+			if (['done', 'error', 'interrupted'].includes(status)) {
+				const elapsed = typeof session.runStartedAt === 'number' ? Date.now() - session.runStartedAt : undefined;
+				recordEvent(ANALYTICS_DIR, 'run_finished', {
+					dimensions: { mode: session.mode, status, duration_bucket: durationBucket(elapsed), ...(session.cohort ? { cohort: session.cohort } : {}) }
+				});
+			}
+		} catch { /* analytics must never break the run */ }
 	};
 }
 if (typeof services.events.subscribeGlobal === 'function') {
@@ -79,7 +100,12 @@ const drytisIntegration = createConfiguredDrytisIntegration({
 let shuttingDown = false;
 const { app, demoEnabled } = createApplication({
 	services, access, executionQueue, operations, logger,
+	inviteService: createInviteService(),
 	drytisIntegrationApi: drytisIntegration?.api,
+	drytisDelivery: drytisIntegration ? {
+		deliveryClient: drytisIntegration.deliveryClient,
+		ticketsTarget: drytisIntegration.ticketsTarget
+	} : undefined,
 	isDraining: () => shuttingDown
 });
 

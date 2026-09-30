@@ -2,7 +2,9 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
+import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
 import { createBugsView } from './bugsView.js';
+import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
@@ -44,6 +46,9 @@ const el = {
 	miniProgress: $('mini-progress'),
 	miniFindings: $('mini-findings'),
 	statusChip: $('status-chip'),
+	timerChip: $('timer-chip'),
+	tokenChip: $('token-chip'),
+	resumeRun: $('resume-run'),
 	progressSteps: $('progress-steps'),
 	progressPct: $('progress-pct'),
 	progressFindings: $('progress-findings'),
@@ -67,6 +72,7 @@ const el = {
 	feedbackClose: $('feedback-close'),
 	feedbackCancel: $('feedback-cancel'),
 	feedbackSubmit: $('feedback-submit'),
+	feedbackEdit: $('feedback-edit'),
 	feedbackStars: $('feedback-star-row'),
 	feedbackCategory: $('feedback-category'),
 	feedbackComments: $('feedback-comments'),
@@ -98,12 +104,16 @@ const el = {
 	questionSlot: $('question-slot'),
 	composer: $('composer'),
 	composerInput: $('composer-input'),
+	composerHint: $('composer-running-hint'),
 	sendBtn: $('send-btn'),
 
 	browserUrl: $('browser-url'),
 	browserTitle: $('browser-title'),
 	browserDot: $('browser-dot'),
 	stage: $('stage'),
+	stageToggle: $('stage-toggle'),
+	stageNote: $('stage-note'),
+	viewer: document.querySelector('.viewer'),
 	frame: $('frame'),
 	stageInner: $('stage-inner'),
 	stageEmpty: $('stage-empty'),
@@ -158,6 +168,13 @@ const state = {
 	qaTestCatalogPromise: undefined,
 	/** Live reasoning for the current turn. Never kept once the agent replies. */
 	thinking: { text: '', action: '' },
+	runTimer: { interval: undefined, startedAt: undefined, endedAt: undefined },
+	/** Per-session expand preference after the post-run auto-collapse. */
+	stageExpanded: new Set(),
+	/** True once the welcome checklist was replaced by real content. */
+	welcomeDismissed: false,
+	/** Instance is in pilot mode (invite-only registration, beta notice). */
+	pilotMode: false,
 	user: undefined,
 	/**
 	 * Test Execution Timer state. Server-authoritative: elapsed time is always
@@ -179,7 +196,7 @@ const state = {
 	 * current run (null = not submitted yet); `rating` mirrors the star row;
 	 * `submitting` guards duplicate submissions while a request is in flight.
 	 */
-	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false },
+	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false, editing: false },
 	/**
 	 * Admin feedback review panel. Visibility-only UI state plus the loaded
 	 * list/stats; `feedbackAdmin.allowed` flips true only for owner/admin.
@@ -194,7 +211,9 @@ const state = {
 		status: '',
 		records: [],
 		stats: undefined
-	}
+	},
+	/** run id -> the current user's own feedback record (run-list badges). */
+	runRatings: new Map()
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -248,6 +267,18 @@ function toast(message, kind = '') {
 
 const fail = error => toast(error instanceof Error ? error.message : String(error), 'bad');
 
+/**
+ * Friendly export failure: a 409 from a pending report means "not finalized
+ * yet", which deserves a clear next step instead of the raw server message.
+ */
+function exportError(error, fallback) {
+	if (error?.status === 409) {
+		toast('The report is still being finalized — try again once the run completes.', 'bad');
+		return;
+	}
+	fail(error ?? new Error(fallback ?? 'The export failed.'));
+}
+
 async function downloadReportPdf(filename) {
 	const response = await apiResponse(`/sessions/${state.sessionId}/report.pdf`);
 	const blob = await response.blob();
@@ -274,6 +305,7 @@ const founderView = createFounderView({
 	downloadReportPdf,
 	toast,
 	fail,
+	exportError,
 	humanizeId: humanizeSqaId
 });
 const renderFounder = founderView.render;
@@ -339,6 +371,9 @@ async function refreshRuns() {
 		state.timer.runLiveTimers.clear();
 		return;
 	}
+	// Rating badges: the current user's own feedback for the visible runs.
+	// One request, matched client-side; failures just skip the badges.
+	void loadRunRatingBadges(runs);
 	el.runList.replaceChildren(...runs.map(renderRun));
 }
 
@@ -354,6 +389,30 @@ function scheduleRunBadgeRefresh() {
 	runBadgeRefreshTimer.unref?.();
 }
 
+async function loadRunRatingBadges(runs) {
+	const ids = runs.map(run => run.id).join(',');
+	try {
+		const list = await api(`/feedback/mine?runs=${ids}`);
+		state.runRatings = new Map((list ?? []).map(record => [record.runId, record]));
+	} catch {
+		state.runRatings = new Map();
+	}
+	if (runs.some(run => state.runRatings.has(run.id))) {
+		for (const node of el.runList.querySelectorAll('.run')) {
+			const rating = state.runRatings.get(node.dataset.runId);
+			if (rating === undefined) continue;
+			const badge = document.createElement('span');
+			badge.className = 'run-rating-badge';
+			badge.textContent = `⭐${rating.rating}`;
+			badge.title = `Your feedback: ${rating.rating} of 5${rating.comments ? ` — “${rating.comments}”` : ''}`;
+			node.querySelector('.run-meta')?.append(badge);
+		}
+	}
+	// The report's View/Provide button and USER FEEDBACK section follow the
+	// freshly loaded records too (e.g. first paint raced the badge fetch).
+	if (state.sessionId && state.runRatings.has(state.sessionId)) renderReport();
+}
+
 function renderRun(run) {
 	const row = document.createElement('div');
 	row.className = 'run-row';
@@ -364,10 +423,20 @@ function renderRun(run) {
 	node.type = 'button';
 	node.setAttribute('aria-current', run.id === state.sessionId ? 'true' : 'false');
 	node.onclick = () => selectSession(run.id);
+	node.dataset.runId = run.id;
 
 	const title = document.createElement('div');
 	title.className = 'run-title';
 	title.textContent = run.targetUrl ? hostOf(run.targetUrl) : run.title;
+	// Multi-engine fan-out creates parallel runs against the same URL —
+	// tag the title line so they stay distinguishable at a glance.
+	if (run.engine && run.engine !== 'chromium') {
+		const chip = document.createElement('span');
+		chip.className = 'run-engine-pill';
+		chip.textContent = run.engine;
+		chip.title = `Run executed on ${run.engine}`;
+		title.append(' ', chip);
+	}
 
 	const meta = document.createElement('div');
 	meta.className = 'run-meta';
@@ -439,6 +508,13 @@ function renderRun(run) {
 		pill.title = (profile?.label ?? run.device) + (run.deviceLandscape ? ' (landscape)' : '');
 		meta.append(pill);
 	}
+	if (run.engine && run.engine !== 'chromium') {
+		const pill = document.createElement('span');
+		pill.className = 'run-engine-pill';
+		pill.textContent = run.engine;
+		pill.title = `Run executed on ${run.engine}`;
+		meta.append(pill);
+	}
 
 	// Mini progress row: step count + slim bar, only when a plan exists.
 	let progress = null;
@@ -470,12 +546,21 @@ function renderRun(run) {
 	remove.onclick = async event => {
 		event.stopPropagation();
 		await api(`/sessions/${run.id}`, { method: 'DELETE' }).catch(fail);
+		localStorage.removeItem('qase.session');
 		if (run.id === state.sessionId) {
 			const remaining = await api('/sessions');
-			await (remaining[0] ? selectSession(remaining[0].id) : startRun());
-		} else {
-			await refreshRuns();
+			if (remaining[0]) {
+				await selectSession(remaining[0].id);
+			} else {
+				el.runList.replaceChildren();
+				state.sessionId = undefined;
+				state.session = undefined;
+				el.chatTitle.textContent = 'Qase';
+				el.chatTarget.textContent = 'Send a URL to begin';
+				el.transcript.replaceChildren();
+			}
 		}
+		await refreshRuns();
 	};
 
 	node.append(title, meta);
@@ -589,6 +674,7 @@ function applySessionSnapshot(session) {
 	// Refresh the clock-skew sample on every snapshot (load, resync, refresh).
 	noteServerNow(session.serverNow);
 	applyStageDevice(session);
+	resetRunMeta(session);
 
 	renderHeader();
 	// The collapse preference is UI state — reapply it on every run switch so
@@ -605,6 +691,7 @@ function applySessionSnapshot(session) {
 	renderSqa();
 	renderFounder();
 	showCompletedFounderReport();
+	renderStageCollapse();
 	updateRunTimer();
 
 	if (session.frame) {
@@ -615,20 +702,32 @@ function applySessionSnapshot(session) {
 		el.stageEmpty.hidden = false;
 		el.browserUrl.textContent = session.targetUrl ?? 'about:blank';
 		el.browserTitle.textContent = '';
+		renderStageCollapse();
 	}
 
 }
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization }) {
+async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+	state.welcomeDismissed = true;
+	void markOnboarded();
 	const session = await api('/sessions', {
 		method: 'POST',
-		body: JSON.stringify({ device, deviceLandscape, selectedTests, ...(securityAuthorization ? { securityAuthorization } : {}) })
+		body: JSON.stringify({
+			device,
+			deviceLandscape,
+			engine,
+			selectedTests,
+			...(securityAuthorization ? { securityAuthorization } : {})
+		})
 	});
 	await selectSession(session.id);
 	if (targetUrl) {
-		await api(`/sessions/${session.id}/message`, { method: 'POST', body: JSON.stringify({ text: targetUrl }) }).catch(fail);
+		const text = coreFlowsOnly && engine !== 'chromium'
+			? `${targetUrl}\nFocus: core flows and cross-browser comparison on ${engine}; full sweep runs separately on Chromium.`
+			: (kickoffText ?? targetUrl);
+		await api(`/sessions/${session.id}/message`, { method: 'POST', body: JSON.stringify({ text }) }).catch(fail);
 	}
 	el.composerInput.focus();
 	return session;
@@ -737,6 +836,15 @@ function renderHeader() {
 		return;
 	}
 	el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title;
+	// Keep the engine visible in the header for non-chromium runs (the run
+	// list already carries an engine pill in its meta row).
+	if (session.engine && session.engine !== 'chromium') {
+		const chip = document.createElement('span');
+		chip.className = 'run-engine-pill';
+		chip.textContent = session.engine;
+		chip.title = `Run executed on ${session.engine}`;
+		el.chatTitle.append(' ', chip);
+	}
 	el.chatTarget.textContent = session.targetUrl ?? 'Send a URL to begin';
 	setStatus(session.status);
 }
@@ -800,18 +908,146 @@ function setStatus(status) {
 	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
+	el.resumeRun.hidden = !((status === 'interrupted' || status === 'error') && state.sessionId);
 	el.sendBtn.disabled = running;
+	el.composerHint.hidden = !running;
 	el.livePill.hidden = !running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
 	if (state.session) {
 		state.session.status = status;
 	}
+	syncRunTimer(status);
+	syncStageCollapse(status);
 	// A question raised while the tab is in the background should be noticeable.
 	document.title = status === 'awaiting_input'
 		? 'Qase — waiting for you'
 		: 'Qase — autonomous QA agent';
 	updateRunTimer();
 	updateThinkingStrip();
+}
+
+/* ── Run meta: elapsed timer + context-window usage ──────────────── */
+
+function formatElapsed(ms) {
+	const total = Math.max(0, Math.floor(ms / 1000));
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	if (minutes >= 60) {
+		const hours = Math.floor(minutes / 60);
+		return `${hours}:${String(minutes % 60).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+	}
+	return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function runElapsedMs() {
+	const timer = state.runTimer;
+	if (typeof timer.startedAt !== 'number') return undefined;
+	return (typeof timer.endedAt === 'number' ? timer.endedAt : Date.now()) - timer.startedAt;
+}
+
+function renderTimerChip() {
+	const ms = runElapsedMs();
+	if (ms === undefined) {
+		el.timerChip.hidden = true;
+		return;
+	}
+	el.timerChip.hidden = false;
+	el.timerChip.textContent = formatElapsed(ms);
+}
+
+function renderTokenChip() {
+	const usage = state.session?.contextUsage;
+	if (!usage || typeof usage.percentage !== 'number') {
+		el.tokenChip.hidden = true;
+		return;
+	}
+	el.tokenChip.hidden = false;
+	const percent = Math.max(0, Math.min(100, Math.round(usage.percentage)));
+	el.tokenChip.textContent = `${percent}%`;
+	const used = typeof usage.used === 'number' ? usage.used.toLocaleString() : '?';
+	const windowSize = typeof usage.window === 'number' ? usage.window.toLocaleString() : '?';
+	el.tokenChip.title = `Context window: ${used} / ${windowSize} tokens (${percent}%)`;
+}
+
+function syncRunTimer(status) {
+	const timer = state.runTimer;
+	if (status === 'running') {
+		timer.endedAt = undefined;
+		if (typeof timer.startedAt !== 'number') {
+			timer.startedAt = state.session?.runStartedAt ?? Date.now();
+		}
+		if (!timer.interval) {
+			renderTimerChip();
+			timer.interval = setInterval(renderTimerChip, 1000);
+		}
+		return;
+	}
+	if (timer.interval) {
+		clearInterval(timer.interval);
+		timer.interval = undefined;
+	}
+	if (typeof timer.startedAt === 'number' && typeof timer.endedAt !== 'number') {
+		timer.endedAt = Date.now();
+	}
+	renderTimerChip();
+}
+
+function resetRunMeta(session) {
+	const timer = state.runTimer;
+	if (timer.interval) {
+		clearInterval(timer.interval);
+		timer.interval = undefined;
+	}
+	timer.startedAt = typeof session?.runStartedAt === 'number' ? session.runStartedAt : undefined;
+	timer.endedAt = typeof session?.runStartedAt === 'number' && session.status !== 'running' && session.status !== 'awaiting_input'
+		? session.updatedAt ?? Date.now()
+		: undefined;
+	renderTimerChip();
+	renderTokenChip();
+}
+
+function handleContextEvent(context) {
+	if (state.session && context) {
+		state.session.contextUsage = context;
+	}
+	renderTokenChip();
+}
+
+/* ── Post-run layout: collapse the live browser, expand the findings ── */
+
+const STAGE_COLLAPSE_STATUSES = new Set(['done', 'error', 'interrupted', 'idle']);
+
+function stageHasContent() {
+	return Boolean(state.session?.frame) || !el.stageInner.hidden;
+}
+
+function renderStageCollapse() {
+	const collapsed = STAGE_COLLAPSE_STATUSES.has(state.session?.status ?? 'idle')
+		&& stageHasContent()
+		&& !state.stageExpanded.has(state.sessionId);
+	el.viewer.classList.toggle('stage-collapsed', collapsed);
+	el.stageToggle.hidden = !stageHasContent();
+	el.stageToggle.textContent = collapsed ? 'Expand' : 'Collapse';
+	el.stageToggle.setAttribute('aria-expanded', String(!collapsed));
+	el.stageNote.hidden = !collapsed;
+	fitStageFrame();
+}
+
+function syncStageCollapse(status) {
+	if (status === 'running' || status === 'awaiting_input') {
+		// A fresh run always returns to the full live view.
+		state.stageExpanded.delete(state.sessionId);
+	}
+	renderStageCollapse();
+}
+
+function toggleStageCollapse() {
+	if (el.viewer.classList.contains('stage-collapsed')) {
+		state.stageExpanded.add(state.sessionId);
+	} else {
+		state.stageExpanded.delete(state.sessionId);
+	}
+	renderStageCollapse();
 }
 
 /* ── Test Execution Timer ────────────────────────────────────────── */
@@ -1075,6 +1311,15 @@ const FEEDBACK_CATEGORIES = [
 /** A run accepts feedback only once it has reached a terminal state. */
 const FEEDBACK_TERMINAL_STATUSES = new Set(['done', 'error']);
 
+/** Spec rating semantics for the star tooltips. */
+const FEEDBACK_STAR_LABELS = {
+	1: '1 — Very Poor',
+	2: '2 — Poor',
+	3: '3 — Average',
+	4: '4 — Good',
+	5: '5 — Excellent'
+};
+
 function feedbackEligible(session) {
 	return Boolean(session?.id) && FEEDBACK_TERMINAL_STATUSES.has(session.status);
 }
@@ -1095,6 +1340,8 @@ async function syncFeedbackForSession(session) {
 		state.feedback.existing = null;
 	}
 	if (state.feedback.runId === runId) applyFeedbackSubmittedState();
+	// Report section (and View/Provide button) follow the synced record.
+	if (state.sessionId === runId) renderReport();
 }
 
 /**
@@ -1107,6 +1354,7 @@ async function openFeedbackModal() {
 	if (!feedbackEligible(session)) return;
 	state.feedback.runId = session.id;
 	state.feedback.rating = 0;
+	state.feedback.editing = false;
 	// Existing submission for THIS run (and user) is server-owned truth: it
 	// decides submitted-vs-blank mode. Cached while the modal stays on the
 	// same run, re-fetched whenever a new run opens the modal.
@@ -1123,8 +1371,10 @@ async function openFeedbackModal() {
 	const failed = session.status === 'error';
 	el.feedbackSubmit.disabled = true;
 	el.feedbackSubmit.textContent = 'Submit feedback';
-	el.feedbackCategory.innerHTML = '<option value="" selected disabled>Choose a category…</option>';
+	// Optional category: blank option = Overall Experience (server default).
+	el.feedbackCategory.innerHTML = '<option value="" selected>Overall Experience</option>';
 	for (const { value, label } of FEEDBACK_CATEGORIES) {
+		if (value === 'overall') continue;
 		const option = document.createElement('option');
 		option.value = value;
 		option.textContent = label;
@@ -1166,7 +1416,7 @@ function renderFeedbackStars() {
 			const label = document.createElement('label');
 			label.htmlFor = radio.id;
 			label.className = 'feedback-star';
-			label.title = `${value} star${value === 1 ? '' : 's'}`;
+			label.title = FEEDBACK_STAR_LABELS[value];
 			label.textContent = '★';
 			label.append(radio);
 			el.feedbackStars.append(label);
@@ -1183,83 +1433,126 @@ function paintFeedbackStars(value) {
 }
 
 function updateFeedbackSubmitEnabled() {
-	const ready = state.feedback.rating > 0
-		&& el.feedbackCategory.value !== ''
-		&& el.feedbackComments.value.trim().length > 0;
-	el.feedbackSubmit.disabled = !ready || state.feedback.submitting || Boolean(state.feedback.existing);
+	// Only the rating is required — description and category are optional.
+	const ready = state.feedback.rating > 0;
+	el.feedbackSubmit.disabled = !ready || state.feedback.submitting || (Boolean(state.feedback.existing) && !state.feedback.editing);
 }
 
 /**
- * Submitted mode: form fields go read-only, the submit button is replaced by a
- * confirmation, and editing stays possible in a follow-up ticket (the API
- * supports it). Cancel becomes "Done".
+ * Submitted mode: fields go read-only with a confirmation, plus an "Edit
+ * feedback" button that unlocks the submitter's OWN record for changes (PUT
+ * re-uses the record id — never a duplicate). Cancel becomes "Done".
  */
 function applyFeedbackSubmittedState() {
 	const existing = state.feedback.existing;
 	const submitted = Boolean(existing);
+	const locked = submitted && !state.feedback.editing;
 	for (const input of [el.feedbackCategory, el.feedbackComments, el.feedbackImprovement]) {
-		input.readOnly = submitted;
-		input.disabled = submitted;
+		input.readOnly = locked;
+		input.disabled = locked;
 	}
-	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = submitted; });
+	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = locked; });
 	if (submitted) {
-		state.feedback.rating = existing.rating;
-		el.feedbackCategory.value = FEEDBACK_CATEGORIES.some(c => c.value === existing.category)
-			? existing.category : '';
-		el.feedbackComments.value = existing.comments ?? '';
-		el.feedbackImprovement.value = existing.improvement ?? '';
-		paintFeedbackStars(existing.rating);
-		el.feedbackSubmit.textContent = 'Feedback submitted ✓';
-		el.feedbackCancel.textContent = 'Done';
-		el.feedbackSuccess.textContent = 'Feedback submitted successfully. Thank you for helping us improve QASE!';
+		if (locked) {
+			state.feedback.rating = existing.rating;
+			el.feedbackCategory.value = existing.category === 'overall'
+				? ''
+				: FEEDBACK_CATEGORIES.some(c => c.value === existing.category) ? existing.category : '';
+			el.feedbackComments.value = existing.comments ?? '';
+			el.feedbackImprovement.value = existing.improvement ?? '';
+		}
+		paintFeedbackStars(state.feedback.rating);
+		if (state.feedback.editing) {
+			el.feedbackSubmit.textContent = 'Save changes';
+			el.feedbackCancel.textContent = 'Cancel editing';
+			el.feedbackSuccess.textContent = '';
+			el.feedbackEdit.hidden = false;
+		} else {
+			el.feedbackSubmit.textContent = 'Feedback submitted ✓';
+			el.feedbackCancel.textContent = 'Done';
+			el.feedbackSuccess.textContent = 'Thank you! Your feedback has been submitted successfully.';
+			el.feedbackEdit.hidden = false;
+		}
 	} else {
 		el.feedbackSubmit.textContent = 'Submit feedback';
 		el.feedbackCancel.textContent = 'Cancel';
 		el.feedbackSuccess.textContent = '';
+		el.feedbackEdit.hidden = true;
 	}
 	updateFeedbackSubmitEnabled();
 }
 
+/** Unlock the submitted record for editing (PUT on the same id). */
+function startEditFeedback() {
+	if (!state.feedback.existing) return;
+	state.feedback.editing = true;
+	el.feedbackError.textContent = '';
+	applyFeedbackSubmittedState();
+	el.feedbackStars.querySelector('input:not(:disabled)')?.focus();
+}
+
+async function cancelEditFeedback() {
+	// If the user was editing, dropping back to the submitted view discards
+	// any unsaved edits (the saved record is re-applied).
+	if (state.feedback.editing) {
+		state.feedback.editing = false;
+		applyFeedbackSubmittedState();
+		return;
+	}
+	closeFeedbackModal();
+}
+
 function closeFeedbackModal() {
+	state.feedback.editing = false;
 	el.feedbackModal.close();
 }
 
 async function submitFeedback(event) {
 	event.preventDefault();
-	if (state.feedback.submitting || state.feedback.existing) return;
+	if (state.feedback.submitting) return;
+	if (state.feedback.existing && !state.feedback.editing) return;
 	const rating = state.feedback.rating;
-	const category = el.feedbackCategory.value;
-	const comments = el.feedbackComments.value.trim();
-	if (!rating || !category || !comments) {
-		el.feedbackError.textContent = 'Please choose a rating, a category and add a comment.';
+	if (!rating) {
+		el.feedbackError.textContent = 'Please choose a rating first.';
 		return;
 	}
+	const category = el.feedbackCategory.value || undefined;
+	const comments = el.feedbackComments.value.trim();
+	const improvement = el.feedbackImprovement.value.trim() || undefined;
 	state.feedback.submitting = true;
 	el.feedbackSubmit.disabled = true;
-	el.feedbackSubmit.textContent = 'Submitting…';
+	el.feedbackSubmit.textContent = state.feedback.editing ? 'Saving…' : 'Submitting…';
 	el.feedbackError.textContent = '';
 	try {
-		const record = await api('/feedback', {
-			method: 'POST',
-			body: JSON.stringify({
-				runId: state.session.id,
-				rating,
-				category,
-				comments,
-				improvement: el.feedbackImprovement.value.trim() || undefined
-			})
-		});
-		state.feedback.existing = record;
-		applyFeedbackSubmittedState();
-		toast('Feedback submitted successfully. Thank you for helping us improve QASE!', 'good');
+		if (state.feedback.editing && state.feedback.existing) {
+			const record = await api(`/feedback/${state.feedback.existing.id}`, {
+				method: 'PUT',
+				body: JSON.stringify({ rating, category, comments, improvement })
+			});
+			state.feedback.existing = record;
+			state.feedback.editing = false;
+			applyFeedbackSubmittedState();
+			toast('Feedback updated.', 'good');
+			void refreshRuns();
+			renderReport();
+		} else {
+			const record = await api('/feedback', {
+				method: 'POST',
+				body: JSON.stringify({ runId: state.session.id, rating, category, comments, improvement })
+			});
+			state.feedback.existing = record;
+			applyFeedbackSubmittedState();
+			toast('Thank you! Your feedback has been submitted successfully.', 'good');
+			void refreshRuns();
+			renderReport();
+		}
 	} catch (error) {
 		// Retry keeps every entered field — only the button returns to idle.
 		el.feedbackError.textContent = `${error.message} Your feedback was kept — please try again.`;
-		el.feedbackSubmit.textContent = 'Retry submit';
+		el.feedbackSubmit.textContent = state.feedback.editing ? 'Retry save' : 'Retry submit';
 	} finally {
 		state.feedback.submitting = false;
 		updateFeedbackSubmitEnabled();
-		if (state.feedback.existing) el.feedbackSubmit.textContent = 'Feedback submitted ✓';
 	}
 }
 
@@ -1307,7 +1600,7 @@ function renderFeedbackAdmin() {
 	el.feedbackMinimize.textContent = admin.minimized ? '▸' : '▾';
 	el.feedbackMinimize.setAttribute('aria-expanded', String(!admin.minimized));
 
-	// Stats row: total + average + status counts.
+	// Stats row: total + average, then the per-star distribution.
 	el.feedbackStats.replaceChildren();
 	if (admin.stats) {
 		const avg = Number.isFinite(admin.stats.averageRating)
@@ -1325,6 +1618,30 @@ function renderFeedbackAdmin() {
 			div.append(b, span);
 			el.feedbackStats.append(div);
 		}
+		const byRating = admin.stats.byRating ?? {};
+		const dist = document.createElement('div');
+		dist.className = 'feedback-rating-dist';
+		for (let rating = 5; rating >= 1; rating -= 1) {
+			const row = document.createElement('div');
+			row.className = 'feedback-rating-row';
+			const stars = document.createElement('span');
+			stars.textContent = `${rating}★`;
+			stars.className = 'feedback-rating-row-stars';
+			const bar = document.createElement('span');
+			bar.className = 'feedback-rating-bar';
+			const count = Number(byRating[rating] ?? 0);
+			const total = Math.max(1, Number(admin.stats.total ?? 0));
+			const pct = Math.round((count / total) * 100);
+			const fill = document.createElement('i');
+			fill.style.width = `${pct}%`;
+			bar.append(fill);
+			const num = document.createElement('span');
+			num.textContent = count;
+			row.append(stars, bar, num);
+			row.title = `${count} × ${rating}-star feedback`;
+			dist.append(row);
+		}
+		el.feedbackStats.append(dist);
 	}
 
 	// Category filter options follow the server stats keys.
@@ -1436,8 +1753,10 @@ function renderTranscript() {
 	if (messages.length === 0) {
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
+		renderWelcomeChecklist();
 		return;
 	}
+	state.welcomeDismissed = true;
 	el.chatEmpty.hidden = true;
 	// Reasoning is live-only; anything stored by an earlier version is dropped.
 	for (const message of messages.filter(entry => entry.role !== 'thinking')) {
@@ -1735,6 +2054,7 @@ function applyFrame(frame) {
 	el.frame.src = `data:${frame.mimeType};base64,${frame.base64}`;
 	el.stageEmpty.hidden = true;
 	el.stageInner.hidden = false;
+	renderStageCollapse();
 	if (frame.viewport) {
 		state.viewport = frame.viewport;
 	}
@@ -1939,6 +2259,12 @@ function renderFinding(finding) {
 	const meta = document.createElement('div');
 	meta.className = 'finding-meta';
 	meta.textContent = [finding.category, finding.url].filter(Boolean).join(' · ');
+	if (finding.engine) {
+		const chip = document.createElement('span');
+		chip.className = 'engine-chip';
+		chip.textContent = finding.engine;
+		meta.append(' ', chip);
+	}
 	body.append(meta);
 
 	if (finding.steps?.length) {
@@ -2035,6 +2361,224 @@ const VERDICTS = {
 	blocked: { mark: '—', label: 'Blocked', tone: 'dim' }
 };
 
+/** "Test these next": pre-checked follow-ups that start a scoped follow-up run. */
+function renderFollowUps(targetUrl, suggestions) {
+	const wrap = document.createElement('div');
+	wrap.className = 'follow-ups';
+
+	const head = document.createElement('div');
+	head.className = 'follow-ups-head';
+	const title = document.createElement('strong');
+	title.textContent = 'Test these next';
+	const hint = document.createElement('small');
+	hint.textContent = 'Left untested or recommended by this run — start a focused follow-up';
+	const selectAll = document.createElement('label');
+	selectAll.className = 'check follow-ups-all';
+	const selectAllBox = document.createElement('input');
+	selectAllBox.type = 'checkbox';
+	selectAllBox.checked = true;
+	const selectAllText = document.createElement('span');
+	selectAllText.textContent = 'Select all';
+	selectAll.append(selectAllBox, selectAllText);
+	head.append(title, hint, selectAll);
+	wrap.append(head);
+
+	const boxes = [];
+	const listNode = document.createElement('div');
+	listNode.className = 'follow-ups-list';
+	for (const suggestion of suggestions) {
+		const row = document.createElement('label');
+		row.className = 'check';
+		const box = document.createElement('input');
+		box.type = 'checkbox';
+		box.checked = true;
+		box.dataset.suggestion = suggestion;
+		boxes.push(box);
+		const label = document.createElement('span');
+		label.textContent = suggestion;
+		row.append(box, label);
+		listNode.append(row);
+	}
+	wrap.append(listNode);
+
+	const syncSelectAll = () => {
+		selectAllBox.checked = boxes.length > 0 && boxes.every(box => box.checked);
+		selectAllBox.indeterminate = !selectAllBox.checked && boxes.some(box => box.checked);
+	};
+	selectAllBox.addEventListener('change', () => {
+		for (const box of boxes) box.checked = selectAllBox.checked;
+		syncSelectAll();
+	});
+	for (const box of boxes) box.addEventListener('change', syncSelectAll);
+
+	const run = document.createElement('button');
+	run.className = 'btn btn-primary btn-sm';
+	run.type = 'button';
+	run.textContent = 'Run selected follow-ups';
+	run.onclick = async () => {
+		const selected = boxes.filter(box => box.checked).map(box => box.dataset.suggestion);
+		const message = buildFollowUpMessage(targetUrl, selected);
+		if (!message) {
+			toast('Check at least one item to run a follow-up.', 'bad');
+			return;
+		}
+		run.disabled = true;
+		run.textContent = 'Starting…';
+		try {
+			const device = state.session?.device;
+			const deviceLandscape = state.session?.deviceLandscape === true;
+			await createQaRun({ targetUrl, device, deviceLandscape, kickoffText: message });
+			toast('Follow-up run started.', 'good');
+		} catch (error) {
+			fail(error);
+		} finally {
+			run.disabled = false;
+			run.textContent = 'Run selected follow-ups';
+		}
+	};
+	wrap.append(run);
+	return wrap;
+}
+
+/* ── Drytis board push (findings → tickets) ─────────────────────── */
+
+/** True when the current run has a Drytis review attached. */
+function drytisBoardAvailable() {
+	return Boolean(state.session?.drytisIntegration);
+}
+
+/** Render the findings→board panel: accept checkboxes + push button. */
+function renderDrytisBoard() {
+	const wrap = document.createElement('div');
+	wrap.className = 'drytis-board';
+	wrap.id = 'drytis-board';
+
+	const integration = state.session.drytisIntegration;
+	const findings = state.session.findings ?? [];
+	const pushed = integration.tickets;
+	const pushState = pushed?.status;
+
+	const title = document.createElement('h3');
+	title.className = 'drytis-board-title';
+	title.textContent = 'Push findings to the Drytis board';
+	wrap.append(title);
+
+	if (pushState === 'delivered') {
+		const done = document.createElement('p');
+		done.className = 'drytis-board-done';
+		done.textContent = `${pushed.ticketCount} ticket${pushed.ticketCount === 1 ? '' : 's'} delivered to the board${pushed.deliveredAt ? ` · ${new Date(pushed.deliveredAt).toLocaleString()}` : ''}.`;
+		wrap.append(done);
+		return wrap;
+	}
+	if (pushState === 'delivering') {
+		const busy = document.createElement('p');
+		busy.className = 'drytis-board-busy';
+		busy.textContent = 'Delivering tickets to the Drytis board…';
+		wrap.append(busy);
+		return wrap;
+	}
+	if (findings.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'drytis-board-empty';
+		empty.textContent = 'No findings to push yet — the board panel fills in once findings are filed.';
+		wrap.append(empty);
+		return wrap;
+	}
+
+	if (pushState === 'failed') {
+		const failed = document.createElement('p');
+		failed.className = 'drytis-board-failed';
+		failed.textContent = 'The last push did not complete. You can retry below.';
+		wrap.append(failed);
+	}
+
+	// Per-finding accept checkboxes — all checked by default ("accept-all first").
+	const rows = document.createElement('div');
+	rows.className = 'drytis-board-rows';
+	const boxes = [];
+	for (const finding of findings) {
+		const row = document.createElement('label');
+		row.className = 'drytis-board-row check';
+		const box = document.createElement('input');
+		box.type = 'checkbox';
+		box.checked = true;
+		box.dataset.drytisFinding = finding.id;
+		const label = document.createElement('span');
+		label.textContent = finding.title;
+		const sev = document.createElement('em');
+		sev.textContent = finding.severity;
+		row.append(box, label, sev);
+		rows.append(row);
+		boxes.push({ box, finding });
+	}
+	wrap.append(rows);
+
+	const all = document.createElement('label');
+	all.className = 'drytis-board-acceptall check';
+	const allBox = document.createElement('input');
+	allBox.type = 'checkbox';
+	allBox.checked = true;
+	allBox.id = 'drytis-accept-all';
+	const allLabel = document.createElement('span');
+	allLabel.textContent = `Accept all (${findings.length})`;
+	all.append(allBox, allLabel);
+	const syncAll = () => {
+		for (const { box } of boxes) box.checked = allBox.checked;
+	};
+	allBox.onchange = syncAll;
+	// Any single change re-derives the master state.
+	rows.addEventListener('change', () => {
+		allBox.checked = boxes.every(({ box }) => box.checked);
+	});
+	wrap.append(all);
+
+	const error = document.createElement('p');
+	error.className = 'test-result bad drytis-board-error';
+	error.id = 'drytis-board-error';
+	error.hidden = true;
+	wrap.append(error);
+
+	const push = document.createElement('button');
+	push.className = 'btn btn-primary';
+	push.type = 'button';
+	push.id = 'drytis-push-btn';
+	push.textContent = 'Push accepted findings to Drytis';
+	push.onclick = async () => {
+		const accepted = boxes.filter(({ box }) => box.checked).map(({ finding }) => finding.id);
+		if (accepted.length === 0) {
+			error.textContent = 'Check at least one finding to push.';
+			error.hidden = false;
+			return;
+		}
+		push.disabled = true;
+		push.textContent = 'Pushing…';
+		error.hidden = true;
+		try {
+			const result = await api(`/sessions/${state.session.id}/drytis/push`, {
+				method: 'POST',
+				body: JSON.stringify({ acceptedFindingIds: accepted })
+			});
+			toast(`Pushed ${result.tickets.ticketCount} ticket${result.tickets.ticketCount === 1 ? '' : 's'} to the Drytis board.`, 'good');
+			renderDrytisBoardRefresh();
+		} catch (err) {
+			error.textContent = err instanceof Error ? err.message : String(err);
+			error.hidden = false;
+		} finally {
+			push.disabled = false;
+			push.textContent = 'Push accepted findings to Drytis';
+		}
+	};
+	wrap.append(push);
+	return wrap;
+}
+
+/** Re-render the board panel in place after a push (keeps report layout). */
+function renderDrytisBoardRefresh() {
+	const host = document.getElementById('drytis-board');
+	if (!host) return;
+	host.replaceWith(renderDrytisBoard());
+}
+
 function renderReport() {
 	el.reportView.replaceChildren();
 	if (state.session?.mode === 'sqa') {
@@ -2089,6 +2633,16 @@ function renderReport() {
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
 	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
 
+	const suggestions = followUpSuggestions(report);
+	if (suggestions.length > 0 && state.session?.targetUrl) {
+		el.reportView.append(renderFollowUps(state.session.targetUrl, suggestions));
+	}
+
+	// Drytis board panel — only for sessions a Drytis review was attached to.
+	if (state.session?.drytisIntegration) {
+		el.reportView.append(renderDrytisBoard());
+	}
+
 	const actions = document.createElement('div');
 	actions.className = 'report-actions';
 	const download = document.createElement('button');
@@ -2107,7 +2661,7 @@ function renderReport() {
 			save.remove();
 			window.setTimeout(() => URL.revokeObjectURL(url), 0);
 		} catch (error) {
-			fail(error);
+			exportError(error, 'The report download failed.');
 		}
 	};
 	const copy = document.createElement('button');
@@ -2120,14 +2674,14 @@ function renderReport() {
 			await navigator.clipboard.writeText(markdownText);
 			toast('Report copied to the clipboard.', 'good');
 		} catch (error) {
-			fail(error);
+			exportError(error, 'The report copy failed.');
 		}
 	};
 	const pdf = document.createElement('button');
 	pdf.className = 'btn btn-primary btn-sm';
 	pdf.type = 'button';
 	pdf.textContent = 'Download PDF';
-	pdf.onclick = async () => { try { await downloadReportPdf('qase-qa-report.pdf'); } catch (error) { fail(error); } };
+	pdf.onclick = async () => { try { await downloadReportPdf('qase-qa-report.pdf'); } catch (error) { exportError(error, 'The PDF export failed.'); } };
 
 	const findings = Array.isArray(state.session?.findings) ? state.session.findings : [];
 	const copyFixes = document.createElement('button');
@@ -2162,15 +2716,106 @@ function renderReport() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
+	const rated = state.runRatings.get(state.session.id)
+		?? (state.feedback.existingLoadedFor === state.session.id ? state.feedback.existing : undefined);
 	const provideFeedback = document.createElement('button');
 	provideFeedback.className = 'btn btn-ghost btn-sm';
 	provideFeedback.type = 'button';
-	provideFeedback.textContent = 'Provide Feedback';
-	provideFeedback.title = 'Rate this QASE testing run and tell us how it went.';
+	provideFeedback.textContent = rated ? 'View Feedback' : 'Provide Feedback';
+	provideFeedback.title = rated
+		? 'View your submitted feedback for this run.'
+		: 'Rate this QASE testing run and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
-	el.reportView.append(actions);
+	el.reportView.append(renderFeedback());
+	renderReportFeedbackSection(rated);
+}
+
+/** Thumbs up/down feedback on the finished run; last vote wins. */
+function renderFeedback() {
+	const wrap = document.createElement('div');
+	wrap.className = 'run-feedback';
+
+	const label = document.createElement('span');
+	label.className = 'run-feedback-label';
+	label.textContent = 'How was this run?';
+	wrap.append(label);
+
+	const current = state.session?.feedback?.rating;
+	for (const rating of ['up', 'down']) {
+		const button = document.createElement('button');
+		button.type = 'button';
+		button.className = `btn btn-ghost btn-sm run-feedback-btn is-${rating}`;
+		button.textContent = rating === 'up' ? '👍' : '👎';
+		button.title = rating === 'up' ? 'This run was useful' : 'This run missed the mark';
+		button.setAttribute('aria-pressed', String(current === rating));
+		if (current === rating) button.classList.add('is-selected');
+		button.onclick = async () => {
+			button.disabled = true;
+			try {
+				const result = await api(`/sessions/${state.sessionId}/feedback`, {
+					method: 'POST',
+					body: JSON.stringify({ rating })
+				});
+				if (state.session) state.session.feedback = result?.feedback ?? { rating };
+				renderReport();
+				toast('Thanks for the feedback.', 'good');
+			} catch (error) {
+				fail(error);
+				button.disabled = false;
+			}
+		};
+		wrap.append(button);
+	}
+	if (current) {
+		const thanks = document.createElement('span');
+		thanks.className = 'run-feedback-thanks';
+		thanks.textContent = 'Thanks — noted.';
+		wrap.append(thanks);
+	}
+	return wrap;
+}
+
+/**
+ * USER FEEDBACK section in the QA Run Report: the submitter's exact rating
+ * and description for THIS run. Scoped by run id — another run's feedback can
+ * never render here. Rendered with textContent only (XSS-safe).
+ */
+function renderReportFeedbackSection(record) {
+	if (!record) return;
+	const section = document.createElement('section');
+	section.className = 'report-feedback';
+	section.setAttribute('aria-label', 'User feedback');
+
+	const heading = document.createElement('h3');
+	heading.className = 'report-feedback-title';
+	heading.textContent = 'USER FEEDBACK';
+
+	const stars = document.createElement('div');
+	stars.className = 'report-feedback-stars';
+	stars.textContent = '★'.repeat(record.rating) + '☆'.repeat(5 - record.rating);
+	const score = document.createElement('span');
+	score.className = 'report-feedback-score';
+	score.textContent = ` ${record.rating}/5`;
+	stars.append(score);
+
+	const description = document.createElement('p');
+	description.className = 'report-feedback-description';
+	description.textContent = record.comments?.trim()
+		? record.comments
+		: 'No description provided.';
+
+	const meta = document.createElement('p');
+	meta.className = 'report-feedback-meta';
+	const submittedBy = state.user?.displayName ?? state.user?.email ?? 'You';
+	const submittedOn = Number.isFinite(record.submittedAt)
+		? new Date(record.submittedAt).toLocaleString()
+		: '';
+	meta.textContent = `Submitted By: ${submittedBy}${submittedOn ? ` · Submitted On: ${submittedOn}` : ''}`;
+
+	section.append(heading, stars, description, meta);
+	el.reportView.append(section);
 }
 
 function renderSqaReportTab() {
@@ -2336,7 +2981,7 @@ function renderSqaReportActions() {
 			save.remove();
 			window.setTimeout(() => URL.revokeObjectURL(url), 0);
 		} catch (error) {
-			fail(error);
+			exportError(error, 'The SQA report download failed.');
 		}
 	};
 
@@ -2350,7 +2995,7 @@ function renderSqaReportActions() {
 			await navigator.clipboard.writeText(markdownText);
 			toast('SQA assessment copied to the clipboard.', 'good');
 		} catch (error) {
-			fail(error);
+			exportError(error, 'The SQA report copy failed.');
 		}
 	};
 
@@ -2360,9 +3005,45 @@ function renderSqaReportActions() {
 	pdf.textContent = 'Download PDF';
 	pdf.onclick = async () => {
 		try { await downloadReportPdf('qase-sqa-assessment.pdf'); }
-		catch (error) { fail(error); }
+		catch (error) { exportError(error, 'The PDF export failed.'); }
 	};
-	actions.append(download, copy, pdf);
+
+	const findings = Array.isArray(state.session?.findings) ? state.session.findings : [];
+
+	const copyFixes = document.createElement('button');
+	copyFixes.className = 'btn btn-ghost btn-sm';
+	copyFixes.type = 'button';
+	copyFixes.textContent = 'Copy fix prompts';
+	copyFixes.disabled = findings.length === 0;
+	copyFixes.title = findings.length === 0
+		? 'No findings to generate fix prompts for.'
+		: 'Copies one long markdown block containing a fix prompt for every finding.';
+	copyFixes.onclick = async () => {
+		const markdown = buildAllFixPromptsMarkdown(state.session);
+		if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		try { await navigator.clipboard.writeText(markdown); toast('All fix prompts copied.', 'good'); }
+		catch { toast('Clipboard is blocked in this browser.', 'bad'); }
+	};
+
+	const downloadFixes = document.createElement('button');
+	downloadFixes.className = 'btn btn-ghost btn-sm';
+	downloadFixes.type = 'button';
+	downloadFixes.textContent = 'Download fix prompts (.md)';
+	downloadFixes.disabled = findings.length === 0;
+	downloadFixes.onclick = () => {
+		const markdown = buildAllFixPromptsMarkdown(state.session);
+		if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+		const save = document.createElement('a');
+		save.href = url;
+		save.download = 'qase-sqa-fix-prompts.md';
+		document.body.append(save);
+		save.click();
+		save.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+	};
+
+	actions.append(download, copy, copyFixes, downloadFixes, pdf);
 	return actions;
 }
 
@@ -2977,6 +3658,10 @@ function handleEvent(event) {
 			toast('Founder brief published.', 'good');
 			break;
 
+		case 'context':
+			handleContextEvent(event.context);
+			break;
+
 		case 'question':
 			session.pendingQuestion = event.question;
 			renderQuestion();
@@ -2984,6 +3669,9 @@ function handleEvent(event) {
 
 		case 'status':
 			setStatus(event.status);
+			if (event.status === 'running' && typeof session.runStartedAt !== 'number') {
+				session.runStartedAt = event.ts ?? Date.now();
+			}
 			renderCurrentActivity();
 			// Server-authoritative timing arrives with every status event.
 			if (event.timing) {
@@ -3068,8 +3756,45 @@ const qaUi = {
 	securityNotes: $('qa-security-notes'),
 	selectAll: $('qa-select-all'),
 	deselectAll: $('qa-deselect-all'),
+	scopeAll: $('qa-scope-all'),
+	scopeOptions: $('qa-scope-options'),
+	engineOptions: $('qa-engine-options'),
 	error: $('qa-form-error')
 };
+
+function selectedQaScopeValues() {
+	if (!qaUi.scopeOptions) return undefined;
+	return [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
+		.filter(box => box.checked)
+		.map(box => box.value);
+}
+
+/** Engines checked in the launcher; chromium first when chosen. */
+function selectedQaEngines() {
+	const boxes = qaUi.engineOptions ? [...qaUi.engineOptions.querySelectorAll('.qa-engine')] : [];
+	const chosen = boxes.filter(box => box.checked && !box.disabled).map(box => box.value);
+	if (!chosen.includes('chromium') && boxes.some(box => box.value === 'chromium' && box.disabled)) return chosen;
+	return chosen.includes('chromium') ? ['chromium', ...chosen.filter(id => id !== 'chromium')] : chosen;
+}
+
+/** Mark launcher engines the server reports unavailable (greyed, unchecked). */
+async function syncEngineAvailability() {
+	if (!qaUi.engineOptions) return;
+	try {
+		const { engines } = await api('/engines');
+		for (const engine of engines ?? []) {
+			const box = qaUi.engineOptions.querySelector(`.qa-engine[value="${engine.id}"]`);
+			if (!box) continue;
+			const unavailable = engine.available === false;
+			box.disabled = unavailable;
+			if (unavailable) box.checked = false;
+			const label = box.parentElement?.querySelector('span');
+			if (label && unavailable && engine.reason) label.title = engine.reason;
+		}
+	} catch {
+		// Registry unreachable: leave the static defaults; run creation still validates.
+	}
+}
 
 function setQaFormError(message = '') {
 	if (!qaUi.error) return;
@@ -3280,6 +4005,84 @@ async function loadQaTestCatalog() {
 	return state.qaTestCatalogPromise;
 }
 
+/** The built-in deliberately-broken demo site, when this instance serves one. */
+function demoSiteUrl() {
+	return `${window.location.origin}/demo`;
+}
+
+function openQaStartWithDemo() {
+	if (!qaUi.dialog) return;
+	openQaStart();
+	if (qaUi.targetUrl) {
+		qaUi.targetUrl.value = demoSiteUrl();
+		setQaFormError('Demo site loaded — it plants real bugs on purpose (login demo@qase.dev / demo1234).');
+	}
+}
+
+/* ── First-run welcome checklist ─────────────────────────────────── */
+
+/** One-time onboarding flag; true once the user has started their first run. */
+async function markOnboarded() {
+	try {
+		await api('/profile', {
+			method: 'PUT',
+			body: JSON.stringify({ profile: { onboardingComplete: true } })
+		});
+	} catch { /* cosmetic — the checklist is advisory, not blocking */ }
+}
+
+function renderWelcomeChecklist() {
+	const host = el.chatEmpty;
+	if (!host || state.session?.id || state.welcomeDismissed) return;
+	document.getElementById('welcome-checklist')?.remove();
+	const checklist = document.createElement('div');
+	checklist.className = 'welcome-checklist';
+	checklist.id = 'welcome-checklist';
+
+	const title = document.createElement('h3');
+	title.textContent = 'Get started';
+	checklist.append(title);
+
+	const ready = state.config?.ready === true;
+	const steps = [
+		{
+			done: ready,
+			label: ready ? 'Model endpoint configured' : 'Model endpoint — configure it in Settings',
+			action: ready ? undefined : { label: 'Open Settings', run: () => { void openSettings(); } }
+		},
+		{
+			done: false,
+			label: 'Start your first run',
+			action: { label: 'Start a QA run', run: () => { void startRun(); } }
+		},
+		{
+			done: false,
+			label: '…or practice on the demo site',
+			action: { label: 'Try demo', run: openQaStartWithDemo }
+		}
+	];
+	for (const step of steps) {
+		const row = document.createElement('div');
+		row.className = 'welcome-step';
+		const mark = document.createElement('span');
+		mark.className = `welcome-mark${step.done ? ' is-done' : ''}`;
+		mark.textContent = step.done ? '✓' : '·';
+		const text = document.createElement('span');
+		text.textContent = step.label;
+		row.append(mark, text);
+		if (!step.done && step.action) {
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.className = 'btn btn-ghost btn-sm';
+			button.textContent = step.action.label;
+			button.onclick = () => step.action.run();
+			row.append(button);
+		}
+		checklist.append(row);
+	}
+	host.append(checklist);
+}
+
 function openQaStart() {
 	if (!qaUi.dialog) return;
 	setQaFormError();
@@ -3289,6 +4092,7 @@ function openQaStart() {
 	qaUi.testsFieldset.disabled = true;
 	qaUi.testsState.hidden = false;
 	qaUi.testsState.textContent = 'Loading standard tests…';
+	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
 	qaUi.submit.disabled = true;
 	qaUi.submit.textContent = 'Start test';
@@ -3314,6 +4118,32 @@ function closeQaStart() {
 if (qaUi.dialog) {
 	qaUi.close.onclick = closeQaStart;
 	qaUi.cancel.onclick = closeQaStart;
+	$('qa-demo-fill')?.addEventListener('click', () => {
+		if (qaUi.targetUrl) {
+			qaUi.targetUrl.value = demoSiteUrl();
+			setQaFormError('Demo site loaded — it plants real bugs on purpose (login demo@qase.dev / demo1234).');
+			qaUi.targetUrl.focus();
+		}
+	});
+
+	// Select-all drives the individual scope checkboxes; clearing one unchecks it.
+	if (qaUi.scopeAll && qaUi.scopeOptions) {
+		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
+		const syncSelectAll = () => {
+			const boxes = scopeBoxes();
+			qaUi.scopeAll.checked = boxes.length > 0 && boxes.every(box => box.checked);
+			qaUi.scopeAll.indeterminate = !qaUi.scopeAll.checked && boxes.some(box => box.checked);
+		};
+		qaUi.scopeAll.addEventListener('change', () => {
+			for (const box of scopeBoxes()) {
+				box.checked = qaUi.scopeAll.checked;
+			}
+			syncSelectAll();
+		});
+		for (const box of scopeBoxes()) {
+			box.addEventListener('change', syncSelectAll);
+		}
+	}
 
 	qaUi.selectAll.onclick = () => {
 		for (const input of qaSelectableInputs()) {
@@ -3333,6 +4163,7 @@ if (qaUi.dialog) {
 		event.preventDefault();
 		setQaFormError();
 		if (!qaUi.form.reportValidity()) return;
+		if (!ensureModelConfigured('QA launcher')) return;
 		let targetUrl;
 		try {
 			const parsed = new URL(qaUi.targetUrl.value.trim());
@@ -3356,11 +4187,35 @@ if (qaUi.dialog) {
 		}
 		const device = (qaUi.deviceSelect?.value) || pendingDeviceId();
 		const deviceLandscape = (qaUi.deviceLandscape?.checked) === true;
+		const scopeValues = selectedQaScopeValues();
+		const scopeMessage = buildQaKickoffMessage(scopeValues);
+		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
+			setQaFormError('Check at least one item under “What to test”.');
+			return;
+		}
+		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;
+		const engines = selectedQaEngines();
+		if (engines.length === 0) {
+			setQaFormError('Check at least one browser engine.');
+			return;
+		}
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
-		qaUi.submit.textContent = 'Starting run…';
+		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
-			await createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization });
+			const securityAuthorization = qaSecurityAuthorization();
+			for (const engine of engines) {
+				await createQaRun({
+					targetUrl,
+					device,
+					deviceLandscape,
+					selectedTests,
+					securityAuthorization,
+					kickoffText,
+					engine,
+					coreFlowsOnly: engines.length > 1
+				});
+			}
 			closeQaStart();
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
@@ -3522,6 +4377,7 @@ sqaUi.form.onsubmit = async event => {
 	event.preventDefault();
 	setSqaFormError();
 	if (!sqaUi.form.reportValidity()) return;
+	if (!ensureModelConfigured('SQA launcher')) return;
 	const target = {
 		name: sqaUi.targetName.value.trim(),
 		release: sqaUi.targetRelease.value.trim(),
@@ -3603,12 +4459,8 @@ const founderUi = {
 	targetUrl: $('founder-target-url'),
 	targetRelease: $('founder-target-release'),
 	targetEnvironment: $('founder-target-environment'),
-	stage: $('founder-stage'),
-	businessModel: $('founder-business-model'),
-	targetCustomer: $('founder-target-customer'),
 	primaryGoal: $('founder-primary-goal'),
 	constraints: $('founder-constraints'),
-	competitors: $('founder-competitors'),
 	authorization: $('founder-authorization'),
 	error: $('founder-form-error')
 };
@@ -3674,21 +4526,6 @@ function founderOptional(value) {
 	return text || undefined;
 }
 
-function readFounderCompetitors() {
-	const lines = founderUi.competitors.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
-	if (lines.length > 20) throw new TypeError('Enter no more than 20 competitors.');
-	if (lines.some(value => value.length > 500)) throw new TypeError('Each competitor must be 500 characters or fewer.');
-	const seen = new Set();
-	const unique = [];
-	for (const value of lines) {
-		const key = value.toLocaleLowerCase();
-		if (seen.has(key)) continue;
-		seen.add(key);
-		unique.push(value);
-	}
-	return unique;
-}
-
 founderUi.close.onclick = closeFounderStart;
 founderUi.cancel.onclick = closeFounderStart;
 founderUi.authorization.onchange = syncFounderSubmitState;
@@ -3697,6 +4534,7 @@ founderUi.form.onsubmit = async event => {
 	event.preventDefault();
 	setFounderFormError();
 	if (!founderUi.form.reportValidity()) return;
+	if (!ensureModelConfigured('Founder launcher')) return;
 	let targetUrl;
 	try {
 		targetUrl = new URL(founderUi.targetUrl.value.trim());
@@ -3718,14 +4556,6 @@ founderUi.form.onsubmit = async event => {
 		return;
 	}
 
-	let competitors;
-	try {
-		competitors = readFounderCompetitors();
-	} catch (error) {
-		setFounderFormError(error instanceof Error ? error.message : String(error));
-		founderUi.competitors.focus();
-		return;
-	}
 	const target = {
 		name: founderUi.targetName.value.trim(),
 		url: targetUrl,
@@ -3733,12 +4563,8 @@ founderUi.form.onsubmit = async event => {
 		...(founderOptional(founderUi.targetEnvironment.value) ? { environment: founderUi.targetEnvironment.value.trim() } : {})
 	};
 	const productContext = {
-		...(founderOptional(founderUi.stage.value) ? { stage: founderUi.stage.value.trim() } : {}),
-		...(founderOptional(founderUi.businessModel.value) ? { businessModel: founderUi.businessModel.value.trim() } : {}),
-		...(founderOptional(founderUi.targetCustomer.value) ? { targetCustomer: founderUi.targetCustomer.value.trim() } : {}),
 		...(founderOptional(founderUi.primaryGoal.value) ? { primaryGoal: founderUi.primaryGoal.value.trim() } : {}),
-		...(founderOptional(founderUi.constraints.value) ? { constraints: founderUi.constraints.value.trim() } : {}),
-		...(competitors.length ? { competitors } : {})
+		...(founderOptional(founderUi.constraints.value) ? { constraints: founderUi.constraints.value.trim() } : {})
 	};
 
 	founderUi.submit.dataset.busy = 'true';
@@ -3852,6 +4678,19 @@ function paintConfig(config) {
 		: 'Open settings to finish configuring';
 }
 
+/**
+ * Launcher gate: every run mode needs a working model endpoint. Returns true
+ * when the model is configured; otherwise steers the user to Settings.
+ */
+function ensureModelConfigured(contextLabel) {
+	if (state.config?.ready) return true;
+	const problem = state.config?.problem ?? 'The model endpoint is not configured yet.';
+	toast(`${problem} Finish setup in Settings first.`, 'bad');
+	void openSettings();
+	if (contextLabel) console.debug(`[qase] ${contextLabel} blocked: model not configured.`);
+	return false;
+}
+
 function fillSettings(config) {
 	cfg.provider.replaceChildren(...config.providers.map(name => {
 		const option = document.createElement('option');
@@ -3959,6 +4798,11 @@ function renderAuthMode() {
 		: 'Your runs, profile, and saved memory stay isolated to your account.';
 	if (el.authDisplay) { el.authDisplay.hidden = !register; el.authDisplay.required = register; }
 	if (el.authDisplayLabel) el.authDisplayLabel.hidden = !register;
+	// Invite code field: only meaningful when this instance is in pilot
+	// (invite-only) mode — surfaced when the server says so.
+	if (el.authInvite) el.authInvite.hidden = !(register && state.pilotMode);
+	if (el.authInviteLabel) el.authInviteLabel.hidden = !(register && state.pilotMode);
+	if (el.authInvite && !state.pilotMode) { el.authInvite.required = false; }
 	if (el.authPassword) { el.authPassword.autocomplete = register ? 'new-password' : 'current-password'; el.authPassword.minLength = register ? 12 : 1; }
 	if (el.authSubmit) el.authSubmit.textContent = register ? 'Create account' : 'Sign in';
 	if (el.authSwitch) el.authSwitch.textContent = register ? 'I already have an account' : 'Create an account';
@@ -3998,7 +4842,8 @@ el.authForm?.addEventListener('submit', async event => {
 			body: JSON.stringify({
 				email: el.authEmail.value.trim(),
 				password: el.authPassword.value,
-				displayName: el.authDisplay?.value.trim()
+				displayName: el.authDisplay?.value.trim(),
+				inviteCode: el.authInvite && !el.authInvite.hidden ? el.authInvite.value.trim() : undefined
 			})
 		});
 		el.authPassword.value = '';
@@ -4088,10 +4933,34 @@ el.composerInput.addEventListener('keydown', event => {
 
 window.addEventListener('resize', fitStageFrame, { passive: true });
 
+el.stageToggle.onclick = toggleStageCollapse;
+el.stage.addEventListener('click', event => {
+	if (el.viewer.classList.contains('stage-collapsed')) {
+		event.preventDefault();
+		toggleStageCollapse();
+	}
+});
+
+$('empty-start')?.addEventListener('click', () => { void startRun(); });
+$('empty-demo')?.addEventListener('click', openQaStartWithDemo);
+
 el.newRun.onclick = openQaStart;
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
 el.stopRun.onclick = () => api(`/sessions/${state.sessionId}/stop`, { method: 'POST' }).catch(fail);
+el.resumeRun.onclick = async () => {
+	el.resumeRun.disabled = true;
+	try {
+		await api(`/sessions/${state.sessionId}/message`, {
+			method: 'POST',
+			body: JSON.stringify({ text: 'continue' })
+		});
+	} catch (error) {
+		fail(error);
+	} finally {
+		el.resumeRun.disabled = false;
+	}
+};
 el.signOut?.addEventListener('click', async () => {
   el.signOut.disabled = true;
   try {
@@ -4192,6 +5061,10 @@ async function bootWorkspace() {
 	if (target) {
 		await selectSession(target.id);
 	} else {
+		// Fresh account: show the welcome checklist behind the launcher dialog.
+		el.transcript.append(el.chatEmpty);
+		el.chatEmpty.hidden = false;
+		renderWelcomeChecklist();
 		await startRun();
 	}
 	el.composerInput.focus();
@@ -4207,7 +5080,8 @@ async function bootWorkspace() {
 	el.perfRestore?.addEventListener('click', restorePerfPanel);
 	el.feedbackForm?.addEventListener('submit', submitFeedback);
 	el.feedbackClose?.addEventListener('click', closeFeedbackModal);
-	el.feedbackCancel?.addEventListener('click', closeFeedbackModal);
+	el.feedbackCancel?.addEventListener('click', cancelEditFeedback);
+	el.feedbackEdit?.addEventListener('click', startEditFeedback);
 	el.feedbackComments?.addEventListener('input', updateFeedbackSubmitEnabled);
 	el.feedbackCategory?.addEventListener('change', updateFeedbackSubmitEnabled);
 	el.feedbackMinimize?.addEventListener('click', toggleFeedbackAdminMinimize);
@@ -4230,6 +5104,13 @@ async function bootWorkspace() {
 		void refreshFeedbackAdmin();
 	});
 	try {
+		const pilot = await api('/pilot-status').catch(() => undefined);
+		if (pilot?.pilot) {
+			state.pilotMode = true;
+			renderPilotBanner();
+		}
+	} catch { /* pilot status is decorative */ }
+	try {
 		state.user = await api('/auth/me');
 	} catch (error) {
 		if (error?.status === 401) {
@@ -4246,6 +5127,27 @@ async function bootWorkspace() {
 	void initFeedbackAdmin();
 	await bootWorkspace();
 })();
+
+/** One-time honest beta notice for pilot instances. */
+function renderPilotBanner() {
+	if (localStorage.getItem('qase.pilot-banner.dismissed') === '1') return;
+	const banner = document.createElement('div');
+	banner.className = 'pilot-banner';
+	banner.setAttribute('role', 'note');
+	const text = document.createElement('span');
+	text.textContent = 'Qase pilot — you are testing a beta build. Runs may be slower and reports may contain errors. Your thumbs feedback goes straight to the team.';
+	const dismiss = document.createElement('button');
+	dismiss.type = 'button';
+	dismiss.className = 'btn btn-ghost';
+	dismiss.textContent = 'Got it';
+	dismiss.onclick = () => {
+		localStorage.setItem('qase.pilot-banner.dismissed', '1');
+		banner.remove();
+	};
+	banner.append(text, dismiss);
+	const app = document.querySelector('.app');
+	app?.prepend(banner);
+}
 
 $('auth-show-password').onchange = event => { el.authPassword.type = event.target.checked ? 'text' : 'password'; };
 const profileDialog = $('profile-dialog');

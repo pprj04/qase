@@ -191,6 +191,41 @@ test('private targets are blocked by default everywhere; dev must opt in, produc
 	assert.equal((await production.evaluateNavigation('http://127.0.0.1:5173/demo')).allowed, true);
 });
 
+test('the instance own public origin is reachable even when it resolves to reserved space', async () => {
+	const own = createBrowserPolicy({
+		getTargetUrl: () => 'https://qase-2-1-vbvclu.drytis.dev/',
+		environment: { NODE_ENV: 'production', QASE_PUBLIC_URL: 'https://qase-2-1-vbvclu.drytis.dev/' },
+		resolveHost: async () => [{ address: '10.2.145.7' }]
+	});
+	assert.equal((await own.evaluateNavigation('https://qase-2-1-vbvclu.drytis.dev/demo')).allowed, true,
+		'own origin must be allowed despite the reserved address');
+
+	// Look-alikes must NOT inherit the allowance (suffix/substring is not a match).
+	const lookalike = createBrowserPolicy({
+		getTargetUrl: () => 'https://evil-qase-2-1-vbvclu.drytis.dev.attacker.example/',
+		environment: { NODE_ENV: 'production', QASE_PUBLIC_URL: 'https://qase-2-1-vbvclu.drytis.dev/' },
+		resolveHost: async () => [{ address: '10.0.0.5' }]
+	});
+	assert.equal((await lookalike.evaluateNavigation('https://evil-qase-2-1-vbvclu.drytis.dev.attacker.example/demo')).allowed, false,
+		'only the exact own-origin hostname is allowed');
+
+	// Other private hosts stay blocked even when the own origin is configured.
+	const other = createBrowserPolicy({
+		getTargetUrl: () => 'https://internal.corp.example/',
+		environment: { NODE_ENV: 'production', QASE_PUBLIC_URL: 'https://qase-2-1-vbvclu.drytis.dev/' },
+		resolveHost: async host => [{ address: host === 'internal.corp.example' ? '10.9.9.9' : '93.184.216.34' }]
+	});
+	assert.equal((await other.evaluateNavigation('https://internal.corp.example/')).allowed, false,
+		'unrelated private hosts remain blocked');
+
+	// A malformed QASE_PUBLIC_URL must not open anything up.
+	const malformed = createBrowserPolicy({
+		getTargetUrl: () => 'http://10.0.0.9/',
+		environment: { NODE_ENV: 'production', QASE_PUBLIC_URL: 'not a url' }
+	});
+	assert.equal((await malformed.evaluateNavigation('http://10.0.0.9/')).allowed, false);
+});
+
 test('fails closed when production DNS cannot prove a destination is public', async () => {
 	const policy = productionPolicy({ resolveHost: async () => { throw new Error('offline'); } });
 	assert.equal(

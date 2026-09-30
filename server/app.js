@@ -1,8 +1,11 @@
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createInstanceAccess, securityHeaders } from './instanceAccess.js';
 import { isDeviceId, DEFAULT_DEVICE_ID, publicDeviceProfile, DEVICE_PROFILES } from './deviceProfiles.js';
+import { engineRegistryResolved, isEngineId } from './browserEngines.js';
+import { probeTargetReachability } from './targetReachability.js';
 import { assertApplicationServices } from './contracts.js';
 import { mountDemoSite } from './demoSite.js';
 import { createOperationalControls } from './operations.js';
@@ -30,6 +33,7 @@ import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaS
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { PublicInputError, publicInput } from './publicErrors.js';
+import { recordEvent, summarize, durationBucket } from './analytics.js';
 import {
 	AuthError,
 	clearAuthCookies,
@@ -52,6 +56,19 @@ function safeErrorResponse(request, response, error, status = 400) {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
+
+/** Local analytics counters live beside the session store. */
+const ANALYTICS_DIR = path.join(process.cwd(), '.qase', 'analytics');
+
+/** Fire-and-forget analytics; a counter failure must never break a request. */
+function track(name, dimensions) {
+	try { recordEvent(ANALYTICS_DIR, name, { dimensions }); } catch { /* best-effort */ }
+}
+
+/** Cohort dimension: pilot users' events carry cohort='pilot'. */
+function cohortFor(authRole) {
+	return authRole === 'pilot' ? { cohort: 'pilot' } : {};
+}
 
 /** Pulls the site under test out of whatever the user typed. */
 function extractUrl(text) {
@@ -98,6 +115,7 @@ function configuredFrameAncestors(environment) {
 export function createApplication(options = {}) {
 	const services = assertApplicationServices(options.services);
 	const environment = options.environment ?? process.env;
+	const isProduction = String(environment.NODE_ENV ?? '').toLowerCase() === 'production';
 	const access = options.access ?? createInstanceAccess({
 		tenantContext: options.tenantContext ?? services.tenantContext
 	});
@@ -113,6 +131,16 @@ export function createApplication(options = {}) {
 	const drytisIntegrationApi = options.drytisIntegrationApi;
 	if (drytisIntegrationApi !== undefined && typeof drytisIntegrationApi?.mount !== 'function') {
 		throw new TypeError('Drytis integration API must provide mount(app).');
+	}
+	const drytisDelivery = options.drytisDelivery;
+	if (drytisDelivery !== undefined) {
+		if ((drytisDelivery.deliveryClient === undefined) !== (drytisDelivery.ticketsTarget === undefined)) {
+			throw new TypeError('Drytis delivery client and tickets target must be configured together.');
+		}
+		if (drytisDelivery.deliveryClient !== undefined
+			&& typeof drytisDelivery.deliveryClient?.deliver !== 'function') {
+			throw new TypeError('Drytis delivery client must provide deliver().');
+		}
 	}
 
 	const app = express();
@@ -173,7 +201,7 @@ export function createApplication(options = {}) {
 		next();
 	});
 	app.use('/api', (request, response, next) => {
-		const publicAuthRoute = request.path === '/auth/register' || request.path === '/auth/login';
+		const publicAuthRoute = request.path === '/auth/register' || request.path === '/auth/login' || request.path === '/pilot-status';
 		if (!authService || !authRequired || publicAuthRoute) {
 			return runWithRequestActor({ ...request.auth, requestId: request.qaseRequestId }, next);
 		}
@@ -200,13 +228,33 @@ export function createApplication(options = {}) {
 		const status = error instanceof AuthError ? error.status : 500;
 		response.status(status).json({ error: error instanceof AuthError ? error.message : 'Authentication is temporarily unavailable. Please try again.' });
 	}
+
+	// Operator endpoints: pilot-role users (invite-admitted beta users) are
+	// excluded; owner/admin/developer are trusted on this single-tenant
+	// instance where the bootstrap developer IS the operator.
+	function requireOperator(request, response) {
+		if (request.auth?.role === 'pilot') {
+			response.status(403).json({ error: 'This action is limited to instance operators.' });
+			return false;
+		}
+		return true;
+	}
+
+	app.get('/api/pilot-status', (_request, response) => {
+		response.json({ pilot: String(environment.QASE_PILOT_MODE ?? '') === 'true' });
+	});
 	const fallbackAuthThrottle = createAuthThrottle();
 	app.use('/api/auth', async (request, response, next) => {
 		if (request.method !== 'POST' || !['/login', '/register', '/password'].includes(request.path)) return next();
 		const consume = authService?.consumeAuthAttempt ?? fallbackAuthThrottle;
 		try {
 			const ipAllowed = await consume(authThrottleKey(`ip:${request.ip}`), 40);
-			const accountAllowed = await consume(authThrottleKey(`account:${request.auth?.userId ?? String(request.body?.email ?? '').trim().toLowerCase()}`), 10);
+			// instanceAccess pre-populates request.auth with the instance owner for
+			// every /api route, so request.auth.userId would throttle ALL accounts
+			// as one. The submitted email is the real per-account key.
+			const submittedEmail = String(request.body?.email ?? '').trim().toLowerCase();
+			const accountKey = submittedEmail || 'no-email';
+			const accountAllowed = await consume(authThrottleKey(`account:${accountKey}`), 10);
 			if (!ipAllowed || !accountAllowed) { response.set('Retry-After', '900').status(429).json({ error: 'Too many attempts. Please try again in 15 minutes.' }); return; }
 			next();
 		} catch (error) { authFailure(response, error); }
@@ -214,8 +262,53 @@ export function createApplication(options = {}) {
 
 	app.post('/api/auth/register', async (request, response) => {
 		if (!authService) { response.status(404).json({ error: 'Authentication is not configured.' }); return; }
+		// Registration is open in dev/pilot instances, but a production instance
+		// must opt in explicitly — open registration plus a shared env model key
+		// would let anyone reach the instance's paid endpoint. A valid unused
+		// invite code is the third state: one operator-minted code admits
+		// exactly one pilot user while registration stays closed to everyone else.
+		const registrationOpen = String(environment.QASE_OPEN_REGISTRATION ?? '') === 'true';
+		let invited = false;
+		const inviteService = options.inviteService;
+		const inviteCode = request.body?.inviteCode;
+		const inviteRequired = authRequired && isProduction && !registrationOpen;
+		if (inviteRequired && !inviteService) {
+			response.status(403).json({ error: 'Registration is closed on this instance. Ask the operator for an account.' });
+			return;
+		}
+		if (inviteRequired && (typeof inviteCode !== 'string' || inviteCode.trim() === '')) {
+			response.status(403).json({ error: 'Registration is invite-only on this instance. Enter an invite code.' });
+			return;
+		}
+		// Validate the code up front (so closed mode rejects invalid codes with
+		// a uniform 403 before any account work), but only CONSUME it after
+		// registration succeeds — a failed registration (weak password, dupe
+		// email, throttle) must not burn the operator's invite.
+		if (inviteCode !== undefined && String(inviteCode).trim() !== '') {
+			try {
+				await inviteService.validate(inviteCode);
+				invited = true;
+			} catch (error) {
+				if (inviteRequired) {
+					// Uniform 403 for invalid, expired and used codes — no oracle.
+					response.status(403).json({ error: 'Registration is invite-only on this instance. Enter a valid invite code.' });
+					return;
+				}
+				invited = false;
+			}
+		}
 		try {
-			const result = await authService.register(request.body ?? {});
+			const result = await authService.register({ ...(request.body ?? {}), ...(invited ? { role: 'pilot' } : {}) });
+			if (invited) {
+				// Only now is the admission final — mark the code used with the
+				// registrant's email. On a race (someone else consumed it in the
+				// validation window) we keep the account but log the anomaly.
+				try {
+					await inviteService.consume(inviteCode, String(request.body?.email ?? '').trim().toLowerCase());
+				} catch (error) {
+					options.logger?.error?.('invite consumption failed after registration', { error: error instanceof Error ? error.message : String(error) });
+				}
+			}
 			setAuthCookies(response, result.token, result.csrf, { secure: safeCookies(request) });
 			response.status(201).json(result.user);
 		} catch (error) { authFailure(response, error); }
@@ -357,6 +450,13 @@ export function createApplication(options = {}) {
 		response.json({
 			default: DEFAULT_DEVICE_ID,
 			devices: DEVICE_PROFILES.map(profile => publicDeviceProfile(profile.id))
+		});
+	});
+
+	app.get('/api/engines', async (_request, response) => {
+		response.json({
+			default: 'chromium',
+			engines: await engineRegistryResolved()
 		});
 	});
 
@@ -509,6 +609,22 @@ export function createApplication(options = {}) {
 		response.json(rows);
 	});
 
+	app.get('/api/feedback/mine', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		// The submitter's own feedback across runs — powers run-list badges.
+		const runs = String(request.query.runs ?? '')
+			.split(',')
+			.map(id => id.trim())
+			.filter(Boolean)
+			.slice(0, 100);
+		const all = await feedback.list({
+			submittedBy: request.auth?.userId ?? null,
+			limit: 500
+		});
+		response.json(runs.length === 0 ? all : all.filter(record => runs.includes(record.runId)));
+	});
+
 	app.get('/api/feedback/:id', async (request, response) => {
 		const feedback = feedbackService();
 		if (!feedback) return;
@@ -537,10 +653,29 @@ export function createApplication(options = {}) {
 	app.put('/api/feedback/:id', async (request, response) => {
 		const feedback = feedbackService();
 		if (!feedback) return;
-		if (!requireFeedbackAdmin(request, response)) return;
+		// Two authorizations share this route: an owner/admin may change the
+		// review status AND content; the submitter may edit their OWN content
+		// (rating/category/comments/improvement) but never a review status.
+		const identity = request.auth;
+		const isAdmin = !identity?.role || ['owner', 'admin'].includes(identity.role);
+		if (!isAdmin) {
+			const existing = await feedback.get(request.params.id);
+			if (!existing) {
+				response.status(404).json({ error: 'No such feedback.' });
+				return;
+			}
+			if (existing.submittedBy !== identity?.userId) {
+				response.status(403).json({ error: 'You can only edit your own feedback.' });
+				return;
+			}
+			if (request.body?.status !== undefined) {
+				response.status(403).json({ error: 'Review status can only be changed by an owner or administrator.' });
+				return;
+			}
+		}
 		try {
 			const record = await feedback.update(request.params.id, {
-				status: request.body?.status,
+				status: isAdmin ? request.body?.status : undefined,
 				rating: request.body?.rating,
 				category: request.body?.category,
 				comments: request.body?.comments,
@@ -575,6 +710,7 @@ export function createApplication(options = {}) {
 	app.post('/api/sessions', async (request, response) => {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
+		const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
 		let selectedTests;
 		let securityAuthorization;
 		try {
@@ -584,7 +720,12 @@ export function createApplication(options = {}) {
 			response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
 			return;
 		}
-		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId, selectedTests, securityAuthorization });
+		const cohort = cohortFor(request.auth?.role).cohort;
+		const session = await services.runs.create(
+			engine === 'chromium' ? undefined : `QA — ${engine}`,
+			{ device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, selectedTests, securityAuthorization }
+		);
+		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
 		response.status(201).json(session);
 	});
 
@@ -594,7 +735,8 @@ export function createApplication(options = {}) {
 			const sqa = publicInput(() => createSqaState(request.body ?? {}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
-			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
+			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
+			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort });
 			session.mode = 'sqa';
 			session.sqa = sqa;
 			session.todos = createSqaTodoPlan(sqa);
@@ -627,7 +769,8 @@ export function createApplication(options = {}) {
 			}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
-			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, ownerUserId: request.auth?.userId });
+			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
+			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort });
 			session.mode = 'founder';
 			session.founder = founder;
 			session.todos = createFounderReviewTodos();
@@ -810,11 +953,45 @@ export function createApplication(options = {}) {
 		await services.runs.addMessage(session, { role: 'user', text });
 		if (url && !session.targetUrl) {
 			session.targetUrl = url;
-			session.title = new URL(url).host;
+			// Keep the engine tag when the host-based default title replaces it later.
+			const engineSuffix = isEngineId(session.engine) && session.engine !== 'chromium' ? ` (${session.engine})` : '';
+			session.title = `${new URL(url).host}${engineSuffix}`;
 			if (session.mode === 'founder' && session.founder?.scope?.target) {
 				session.founder.scope.target.url = url;
 				session.founder.updatedAt = new Date().toISOString();
 			}
+
+			// Environmental pre-flight: detect split-horizon DNS (the run
+			// container resolving a public hostname, or a name in its CNAME
+			// chain, to a private endpoint with a mismatched certificate)
+			// BEFORE the agent navigates. Without this, a browser that lands
+			// on the internal endpoint reports a certificate error and the
+			// run concludes "site unreachable" with a false CRITICAL —
+			// observed for www.drytis.com behind a public CNAME pointing at
+			// internal infrastructure. The note tells the agent (and the
+			// report reader) that any TLS/connect failure for this host is
+			// the environment's, not the site's.
+			try {
+				const probe = await probeTargetReachability(url);
+				if (!probe.ok && probe.unreachable) {
+					await services.runs.addMessage(session, {
+						role: 'system',
+						text: `Pre-flight check: ${url} is not reachable from this environment (${probe.reason}). If every navigation attempt fails, record the run as blocked by network conditions rather than filing a site-unreachable defect, unless you can independently verify the site is down for the public internet.`,
+						kind: 'warning'
+					});
+				} else if (probe.note === 'split-horizon-dns') {
+					session.environmentNotes = [
+						...(session.environmentNotes ?? []),
+						{ host: new URL(url).hostname, note: 'split-horizon-dns', detail: probe.detail, ts: Date.now() }
+					];
+					await services.runs.addMessage(session, {
+						role: 'system',
+						text: `Environment note: ${probe.detail} If a browser shows a certificate error or connection failure for this host, treat it as an environmental limitation, do not file it as a site defect, and state the limitation in the final report.`,
+						kind: 'warning'
+					});
+				}
+			} catch { /* pre-flight must never block a run */ }
+
 			await services.runs.commit(
 				session,
 				session.mode === 'founder' ? 'founder.target_bound' : 'session',
@@ -838,6 +1015,11 @@ export function createApplication(options = {}) {
 
 		const pending = session.pendingQuestion;
 		startTurn(session, pending ? { resumeAnswer: text } : { task: text });
+		if (!pending) {
+			// Launcher hypothesis: do users deselect scope options or hit select-all?
+			const scopeSelection = /focusing on:/i.test(text) ? 'focused' : 'default';
+			track('run_launched', { mode: session.mode, scope_selection: scopeSelection, ...cohortFor(request.auth?.role) });
+		}
 		response.json({ ok: true });
 	});
 
@@ -963,6 +1145,191 @@ export function createApplication(options = {}) {
 				return response.status(503).json({ error: 'PDF rendering is temporarily unavailable.' });
 			}
 			safeErrorResponse(request, response, error, 500);
+		}
+	});
+
+	const FEEDBACK_RATINGS = new Set(['up', 'down']);
+
+	/** Thumbs up/down on a run. Last rating wins; owner-only. */
+	app.post('/api/sessions/:id/feedback', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const rating = request.body?.rating;
+		if (!FEEDBACK_RATINGS.has(rating)) {
+			response.status(400).json({ error: 'rating must be "up" or "down".' });
+			return;
+		}
+		const note = String(request.body?.note ?? '').trim().slice(0, 2000) || undefined;
+		session.feedback = { rating, ...(note ? { note } : {}), updatedAt: Date.now() };
+		await services.runs.commit(session, 'feedback', { feedback: session.feedback });
+		track('feedback', { rating, mode: session.mode, ...cohortFor(request.auth?.role) });
+		response.json({ ok: true, feedback: session.feedback });
+	});
+
+	/** Drytis board push (dashboard side): accepts finding selection and pushes
+	 *  signed tickets via the same delivery client the internal API uses. */
+	app.post('/api/sessions/:id/drytis/push', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		if (!drytisDelivery?.deliveryClient) {
+			response.status(409).json({ error: 'Drytis ticket push is not configured on this instance.' });
+			return;
+		}
+		if (!session.drytisIntegration) {
+			response.status(409).json({ error: 'This run has no Drytis review attached.' });
+			return;
+		}
+		const acceptedFindingIds = request.body?.acceptedFindingIds;
+		if (!Array.isArray(acceptedFindingIds)
+			|| acceptedFindingIds.some(id => typeof id !== 'string' || id.length === 0 || id.length > 200)) {
+			response.status(400).json({ error: 'acceptedFindingIds must be an array of finding ids.' });
+			return;
+		}
+		const state = session.drytisIntegration;
+		const requestedAt = new Date().toISOString();
+		const acceptedSet = new Set(acceptedFindingIds);
+		const tickets = (session.findings ?? [])
+			.filter(finding => acceptedSet.has(finding.id))
+			.map(finding => ({
+				id: finding.id,
+				title: finding.title,
+				body: [
+					finding.actual ? `**Actual:** ${finding.actual}` : null,
+					finding.expected ? `**Expected:** ${finding.expected}` : null,
+					finding.steps?.length ? `**Steps:**\n${finding.steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}` : null,
+					finding.evidence ? `**Evidence:** ${finding.evidence}` : null
+				].filter(Boolean).join('\n\n'),
+				severity: finding.severity,
+				...(finding.engine ? { engine: finding.engine } : {}),
+				...(finding.url ? { url: finding.url } : {}),
+				...(finding.category ? { category: finding.category } : {})
+			}));
+		if (tickets.length === 0) {
+			response.status(400).json({ error: 'No accepted findings to push.' });
+			return;
+		}
+		const payload = {
+			schemaVersion: 1,
+			reviewId: state.externalReviewId,
+			project: state.project,
+			pushedAt: requestedAt,
+			tickets
+		};
+		state.tickets = {
+			acceptedFindingIds: [...acceptedSet],
+			status: 'delivering',
+			requestedAt
+		};
+		state.updatedAt = requestedAt;
+		await services.runs.commit(session, 'drytis.tickets.requested', {
+			accepted: tickets.length, origin: 'dashboard'
+		});
+		try {
+			const receipt = await drytisDelivery.deliveryClient.deliver(drytisDelivery.ticketsTarget, payload, {
+				idempotencyKey: `tickets-${session.id}-${tickets.map(ticket => ticket.id).sort().join(',')}`.slice(0, 128),
+				correlationId: randomUUID()
+			});
+			const deliveredAt = new Date().toISOString();
+			state.tickets = {
+				acceptedFindingIds: [...acceptedSet],
+				status: 'delivered',
+				deliveredAt,
+				ticketCount: tickets.length,
+				...(Number.isInteger(receipt?.status) ? { upstreamStatus: receipt.status } : {})
+			};
+			state.updatedAt = deliveredAt;
+			await services.runs.commit(session, 'drytis.tickets.completed', {
+				ticketCount: tickets.length, origin: 'dashboard'
+			});
+			track('drytis_ticket_push', { tickets: tickets.length, mode: session.mode });
+			response.json({ ok: true, tickets: state.tickets });
+		} catch (error) {
+			const failedAt = new Date().toISOString();
+			state.tickets = {
+				acceptedFindingIds: [...acceptedSet],
+				status: 'failed',
+				failedAt,
+				error: { code: 'ticket_push_failed', message: 'The Drytis push did not complete.', retryable: true }
+			};
+			state.updatedAt = failedAt;
+			await services.runs.commit(session, 'drytis.tickets.failed', { origin: 'dashboard' });
+			response.status(502).json({ error: 'The Drytis push did not complete. Try again.' });
+		}
+	});
+
+	/** Aggregated local usage counters. No PII. */
+	app.get('/api/analytics/summary', (_request, response) => {
+		try {
+			response.json(summarize(ANALYTICS_DIR));
+		} catch {
+			response.json({ schemaVersion: 1, totalEvents: 0, events: {} });		}
+	});
+
+	// Operator invite minting — registered after the auth middleware so
+	// request.auth carries the caller's role.
+	const inviteService = options.inviteService;
+	if (inviteService) {
+		// Per-operator rate limit on minting — spec controlled-pilot.md. Small
+		// fixed budget: an operator never legitimately needs more than a
+		// handful of codes per window; a hot loop minting thousands is a
+		// script or a bug.
+		const inviteMintThrottle = createAuthThrottle();
+		app.post('/api/auth/invites', async (request, response, next) => {
+			try {
+				const operatorKey = request.auth?.userId ?? 'anonymous';
+				const allowed = await inviteMintThrottle(authThrottleKey(`invite-mint:${operatorKey}`), 30);
+				if (!allowed) { response.set('Retry-After', '900').status(429).json({ error: 'Too many invites minted in this window. Try again in 15 minutes.' }); return; }
+				next();
+			} catch (error) { authFailure(response, error); }
+		});
+		app.post('/api/auth/invites', async (request, response) => {
+			if (!authRequired) { response.status(404).json({ error: 'Authentication is not configured.' }); return; }
+			if (!requireOperator(request, response)) return;
+			try {
+				const invite = await inviteService.create({ note: request.body?.note, createdBy: request.auth?.userId });
+				response.status(201).json(invite);
+			} catch (error) {
+				response.status(error?.status ?? 500).json({ error: error instanceof Error ? error.message : 'Could not create an invite.' });
+			}
+		});
+		app.get('/api/auth/invites', async (request, response) => {
+			if (!authRequired) { response.status(404).json({ error: 'Authentication is not configured.' }); return; }
+			if (!requireOperator(request, response)) return;
+			response.json({ invites: await inviteService.list() });
+		});
+	}
+
+	// Operator-only pilot feedback review: every rating across all sessions,
+	// newest first, with the optional note the user chose to type. This is the
+	// review surface for the pilot gate (spec: controlled-pilot.md).
+	app.get('/api/analytics/feedback', async (request, response) => {
+		if (!requireOperator(request, response)) return;
+		try {
+			// listAll/getAny deliberately bypass per-user owner scoping — the
+			// whole point of this endpoint is cross-user pilot feedback review,
+			// already gated by the operator role check above.
+			const listAll = services.runs.listAll ?? services.runs.list.bind(services.runs);
+			const sessions = await listAll({ limit: 100 });
+			const feedback = [];
+			for (const summary of sessions) {
+				const getAny = services.runs.getAny?.bind(services.runs) ?? services.runs.get.bind(services.runs);
+				const session = await getAny(summary.id);
+				if (session?.feedback?.rating) {
+					feedback.push({
+						sessionId: session.id,
+						title: session.title,
+						mode: session.mode,
+						targetUrl: session.targetUrl,
+						rating: session.feedback.rating,
+						note: session.feedback.note,
+						updatedAt: session.feedback.updatedAt
+					});
+				}
+			}
+			feedback.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+			response.json({ feedback });
+		} catch {
+			response.status(500).json({ error: 'Could not read feedback.' });
 		}
 	});
 
