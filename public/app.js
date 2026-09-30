@@ -2814,6 +2814,9 @@ function renderReport() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
+	// Re-run with the same device-matrix environment when the run has one
+	// (environmentSnapshot carries envId for createQaRun).
+	const snapshot = state.session?.environmentSnapshot;
 	if (snapshot) {
 		const rerun = document.createElement('button');
 		rerun.className = 'btn btn-ghost btn-sm';
@@ -2935,25 +2938,6 @@ function renderReportFeedbackSection(record) {
 	section.append(heading, stars, description, meta);
 	el.reportView.append(section);
 }
-	if (snapshot) {
-		const rerun = document.createElement('button');
-		rerun.className = 'btn btn-ghost btn-sm';
-		rerun.type = 'button';
-		rerun.textContent = 'Re-run with same environment';
-		rerun.title = `Starts a fresh run against ${snapshot.device ?? snapshot.deviceLabel} · ${snapshot.osVersion} · ${snapshot.browser} ${snapshot.browserVersion}`;
-		rerun.onclick = async () => {
-			const target = state.session?.targetUrl;
-			if (!target) { toast('This run has no target URL to reproduce.', 'bad'); return; }
-			try {
-				await createQaRun({ targetUrl: target, environmentId: snapshot.envId });
-				toast(`New run started on ${snapshot.envId}.`, 'good');
-			} catch (error) {
-				toast(error?.message ?? 'Could not start the re-run.', 'bad');
-			}
-		};
-		actions.append(rerun);
-	}
-
 
 function renderSqaReportTab() {
 	const sqa = state.session?.sqa ?? {};
