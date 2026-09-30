@@ -16,6 +16,7 @@ import {
   type SessionEvent,
   type SessionStreamHandle,
 } from '../api/sse';
+import { useAuth } from './authStore';
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -162,6 +163,7 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   });
   const streamRef = useRef<SessionStreamHandle | null>(null);
   const [, forceTick] = useState(0);
+  const { status: authStatus } = useAuth();
 
   // 1s tick so live run timers advance between server updates.
   useEffect(() => {
@@ -183,6 +185,14 @@ export function SessionStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshRuns();
   }, [refreshRuns]);
+
+  // Re-fetch the run list when the user signs in AFTER mount (auth gate login
+  // happens without a reload; the initial fetch ran pre-auth and 401'd to []).
+  useEffect(() => {
+    if (authStatus === 'signed-in') {
+      void refreshRuns();
+    }
+  }, [authStatus, refreshRuns]);
 
   const applyEventToRuns = useCallback((event: SessionEvent) => {
     if (event.type === 'status') {

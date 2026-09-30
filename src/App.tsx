@@ -2,23 +2,38 @@ import { useState } from 'react';
 import { ThemeToggle } from './theme/ThemeToggle';
 import { RunList } from './components/RunList';
 import { SessionStoreProvider, useSessionStore } from './state/sessionStore';
+import { AuthProvider, useAuth } from './state/authStore';
+import { ToastProvider, useToast } from './state/toastStore';
+import { AuthGate } from './components/AuthGate';
+import { SettingsDialog } from './components/SettingsDialog';
+import { ProfileDialog } from './components/ProfileDialog';
 
 export function App() {
   return (
-    <SessionStoreProvider>
-      <AppShell />
-    </SessionStoreProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <SessionStoreProvider>
+          <AppShell />
+        </SessionStoreProvider>
+      </AuthProvider>
+    </ToastProvider>
   );
 }
 
 function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewerOpen, setViewerOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const { connection, runs } = useSessionStore();
+  const { status, user, signOut } = useAuth();
+  const { toast } = useToast();
+  const authed = status === 'signed-in';
   const connLabel = connection === 'connected' ? 'connected'
     : connection === 'reconnecting' ? 'reconnecting…'
     : 'connecting…';
   const runningCount = runs.filter((run) => run.status === 'running').length;
+  const initials = (user?.displayName || user?.email || '?').trim().slice(0, 1).toUpperCase();
 
   return (
     <div className="app-shell" data-app="qase-react">
@@ -43,6 +58,19 @@ function AppShell() {
         </div>
         <div className="topbar-right">
           <span className="env-pill" data-testid="env-pill">QA agent</span>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Open settings"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+            data-testid="open-settings"
+          >
+            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <circle cx="10" cy="10" r="2.5" />
+              <path d="M10 2.5v1.6M10 15.9v1.6M2.5 10h1.6M15.9 10h1.6M4.7 4.7l1.1 1.1M14.2 14.2l1.1 1.1M15.3 4.7l-1.1 1.1M5.8 14.2l-1.1 1.1" />
+            </svg>
+          </button>
           <ThemeToggle />
         </div>
       </header>
@@ -59,10 +87,38 @@ function AppShell() {
             <RunList />
           </div>
           <div className="sidebar-foot">
-            <div className="avatar" title="Signed out">?</div>
-            <div className="sidebar-foot-text">
-              <span className="sidebar-foot-name">Not signed in</span>
-            </div>
+            {authed ? (
+              <>
+                <button
+                  type="button"
+                  className="avatar avatar-btn"
+                  title="Open profile"
+                  aria-label="Open profile"
+                  onClick={() => setProfileOpen(true)}
+                  data-testid="open-profile"
+                >
+                  {initials}
+                </button>
+                <div className="sidebar-foot-text">
+                  <span className="sidebar-foot-name">{user?.displayName || user?.email}</span>
+                  <button
+                    type="button"
+                    className="sign-out"
+                    onClick={() => void signOut().catch((e) => toast(e.message, 'bad'))}
+                    data-testid="sign-out"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="avatar" title="Signed out">?</div>
+                <div className="sidebar-foot-text">
+                  <span className="sidebar-foot-name">Not signed in</span>
+                </div>
+              </>
+            )}
           </div>
         </aside>
 
@@ -132,6 +188,10 @@ function AppShell() {
           {runningCount > 0 ? `${runningCount} run${runningCount > 1 ? 's' : ''} in progress · ` : ''}{connLabel}
         </span>
       </footer>
+
+      <AuthGate />
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
     </div>
   );
 }

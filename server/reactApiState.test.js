@@ -60,6 +60,8 @@ test('phase 2: session store implements server-authoritative timers', () => {
   assert.match(store, /setInterval/);
   // terminal status triggers list refresh
   assert.match(store, /event\.status !== 'running'/);
+  // run list refetches after in-place login (auth gate login without reload)
+  assert.match(store, /authStatus === 'signed-in'/);
 });
 
 test('phase 2: run list renders live badges (engine, mode, device, tokens, progress)', () => {
