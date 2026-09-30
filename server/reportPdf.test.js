@@ -185,3 +185,19 @@ test('Device line reflects landscape orientation swap', () => {
 	const html = buildReportHtml(makeSession({ device: 'ipad-pro-11', deviceLandscape: true }));
 	assert.match(html, /iPad Pro 11(&quot;|").*landscape, 1194/);
 });
+
+test('Environment snapshot replaces the device line and labels the provider', () => {
+	const snapshot = {
+		envId: 'ENV-IOS-IP15PRO-18.3-SAF-18.3',
+		platform: 'ios',
+		device: 'iPhone 15 Pro',
+		osVersion: '18.3',
+		browser: 'Safari',
+		browserVersion: '18.3',
+		executionProvider: 'browserstack'
+	};
+	const html = buildReportHtml(makeSession({ environmentSnapshot: snapshot }));
+	assert.match(html, /iPhone 15 Pro &#183;|iPhone 15 Pro \u00b7/);
+	assert.match(html, /BrowserStack real device/);
+	assert.doesNotMatch(html, /portrait, 393/);
+});

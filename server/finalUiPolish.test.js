@@ -37,7 +37,8 @@ test('final workspace polish keeps all functional surfaces and prevents compact 
 		'new-run',
 		'new-sqa',
 		'new-founder',
-		'device-select',
+		'device-chip',
+		'device-chip-change',
 		'settings'
 	]) assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1, `${id} should remain unique`);
 

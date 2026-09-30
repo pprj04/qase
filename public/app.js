@@ -5,6 +5,19 @@ import { createFounderView } from './founderView.js';
 import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
 import { createBugsView } from './bugsView.js';
 import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
+import { createDeviceMatrixView } from './deviceMatrixView.js';
+import { createTestCaseView } from './testCaseView.js';
+import { createBulkRunView } from './bulkRunView.js';
+import { createDeviceDrawer, chipLabel } from './deviceDrawer.js';
+import {
+	lastRunByCase, caseStatus, platformsOf, caseEnvLines,
+	filterCasesForWizard, resolveRunPairs,
+	environmentsForPreset, buildBugMarkdown
+} from './qaWorkflows.js';
+import {
+	loadBatches, recordBatch, aggregateBatch,
+	createBatchTracker
+} from './bulkProgress.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
@@ -513,6 +526,15 @@ function renderRun(run) {
 		pill.title = `Run executed on ${run.engine}`;
 		meta.append(pill);
 	}
+	if (run.environmentSnapshot) {
+		const snap = run.environmentSnapshot;
+		const pill = document.createElement('span');
+		pill.className = 'run-device-pill';
+		pill.dataset.deviceKind = snap.platform === 'macos' ? 'desktop' : 'mobile';
+		pill.textContent = `${snap.device} · ${snap.browser} ${snap.browserVersion}`;
+		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'BrowserStack real device' : 'local (emulated)'}`;
+		meta.append(pill);
+	}
 
 	// Mini progress row: step count + slim bar, only when a plan exists.
 	let progress = null;
@@ -613,6 +635,87 @@ function pendingDeviceId() {
 	return (el.deviceSelect && el.deviceSelect.value) || localStorage.getItem(DEVICE_PREF_KEY) || deviceState.defaultId;
 }
 
+/* ── Apple compatibility environments ────────────────────────────── */
+
+const ENV_PREF_KEY = 'qase.environmentId';
+const envState = { list: [], loaded: false };
+
+function envLabel(env) {
+	return `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
+}
+
+/** Grouped optgroups: Platform → Device → OS version → browser + version. */
+function envOptionGroups(list) {
+	const groups = new Map();
+	for (const env of list) {
+		const platformKey = env.platformLabel;
+		if (!groups.has(platformKey)) groups.set(platformKey, new Map());
+		const byDevice = groups.get(platformKey);
+		if (!byDevice.has(env.device)) byDevice.set(env.device, []);
+		byDevice.get(env.device).push(env);
+	}
+	return [...groups.entries()].map(([platform, byDevice]) => ({
+		platform,
+		devices: [...byDevice.entries()].map(([device, envs]) => ({
+			device,
+			envs: envs.sort((a, b) => b.osVersion.localeCompare(a.osVersion, undefined, { numeric: true })
+				|| a.browser.localeCompare(b.browser)
+				|| Number(b.browserVersion) - Number(a.browserVersion))
+		}))
+	}));
+}
+
+async function loadEnvironments() {
+	if (envState.loaded) return envState.list;
+	try {
+		const payload = await api('/environments?active=true&limit=1000');
+		envState.list = Array.isArray(payload?.environments) ? payload.environments : [];
+		envState.loaded = true;
+	} catch {
+		envState.list = [];
+		envState.loaded = true;
+	}
+	return envState.list;
+}
+
+function pendingEnvironmentId() {
+	return localStorage.getItem(ENV_PREF_KEY) || '';
+}
+
+/** Fill a start-dialog environment select with grouped, active environments only. */
+function populateEnvironmentSelect(select) {
+	if (!select) return;
+	select.innerHTML = '';
+	const none = document.createElement('option');
+	none.value = '';
+	none.textContent = 'Emulate locally (no BrowserStack env)';
+	select.append(none);
+	const saved = pendingEnvironmentId();
+	let savedFound = false;
+	for (const group of envOptionGroups(envState.list)) {
+		const optgroup = document.createElement('optgroup');
+		optgroup.label = group.platform;
+		for (const { device, envs } of group.devices) {
+			for (const env of envs) {
+				const option = document.createElement('option');
+				option.value = env.envId;
+				option.textContent = `${device} · ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
+				if (env.envId === saved) {
+					option.selected = true;
+					savedFound = true;
+				}
+				optgroup.append(option);
+			}
+		}
+		select.append(optgroup);
+	}
+	if (!savedFound) select.value = '';
+	select.addEventListener('change', () => {
+		if (select.value) localStorage.setItem(ENV_PREF_KEY, select.value);
+		else localStorage.removeItem(ENV_PREF_KEY);
+	});
+}
+
 const DEVICE_LANDSCAPE_KEY = 'qase.deviceLandscape';
 function pendingLandscape() {
 	if (el.deviceLandscape) return Boolean(el.deviceLandscape.checked);
@@ -665,6 +768,9 @@ async function selectSession(id) {
 	void refreshPerformance();
 }
 
+let _runEnvHook = null;
+function setRunEnvHook(fn) { _runEnvHook = fn; }
+
 function applySessionSnapshot(session) {
 	const changedSession = state.session?.id !== session.id;
 	state.bubbles.clear();
@@ -691,6 +797,7 @@ function applySessionSnapshot(session) {
 	showCompletedFounderReport();
 	renderStageCollapse();
 	updateRunTimer();
+	if (_runEnvHook) _runEnvHook(session);
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -707,10 +814,12 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId }) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
-	const session = await api('/sessions', { method: 'POST', body: JSON.stringify({ device, deviceLandscape, engine }) });
+	const session = await api('/sessions', { method: 'POST', body: JSON.stringify({
+		device, deviceLandscape, engine, ...(environmentId ? { environmentId } : {})
+	}) });
 	await selectSession(session.id);
 	if (targetUrl) {
 		const text = coreFlowsOnly && engine !== 'chromium'
@@ -2705,6 +2814,25 @@ function renderReport() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
+	if (snapshot) {
+		const rerun = document.createElement('button');
+		rerun.className = 'btn btn-ghost btn-sm';
+		rerun.type = 'button';
+		rerun.textContent = 'Re-run with same environment';
+		rerun.title = `Starts a fresh run against ${snapshot.device ?? snapshot.deviceLabel} · ${snapshot.osVersion} · ${snapshot.browser} ${snapshot.browserVersion}`;
+		rerun.onclick = async () => {
+			const target = state.session?.targetUrl;
+			if (!target) { toast('This run has no target URL to reproduce.', 'bad'); return; }
+			try {
+				await createQaRun({ targetUrl: target, environmentId: snapshot.envId });
+				toast(`New run started on ${snapshot.envId}.`, 'good');
+			} catch (error) {
+				toast(error?.message ?? 'Could not start the re-run.', 'bad');
+			}
+		};
+		actions.append(rerun);
+	}
+
 	const rated = state.runRatings.get(state.session.id)
 		?? (state.feedback.existingLoadedFor === state.session.id ? state.feedback.existing : undefined);
 	const provideFeedback = document.createElement('button');
@@ -2717,6 +2845,7 @@ function renderReport() {
 	provideFeedback.onclick = () => openFeedbackModal();
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	el.reportView.append(actions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
 }
@@ -2806,6 +2935,25 @@ function renderReportFeedbackSection(record) {
 	section.append(heading, stars, description, meta);
 	el.reportView.append(section);
 }
+	if (snapshot) {
+		const rerun = document.createElement('button');
+		rerun.className = 'btn btn-ghost btn-sm';
+		rerun.type = 'button';
+		rerun.textContent = 'Re-run with same environment';
+		rerun.title = `Starts a fresh run against ${snapshot.device ?? snapshot.deviceLabel} · ${snapshot.osVersion} · ${snapshot.browser} ${snapshot.browserVersion}`;
+		rerun.onclick = async () => {
+			const target = state.session?.targetUrl;
+			if (!target) { toast('This run has no target URL to reproduce.', 'bad'); return; }
+			try {
+				await createQaRun({ targetUrl: target, environmentId: snapshot.envId });
+				toast(`New run started on ${snapshot.envId}.`, 'good');
+			} catch (error) {
+				toast(error?.message ?? 'Could not start the re-run.', 'bad');
+			}
+		};
+		actions.append(rerun);
+	}
+
 
 function renderSqaReportTab() {
 	const sqa = state.session?.sqa ?? {};
@@ -3735,6 +3883,7 @@ const qaUi = {
 	scopeAll: $('qa-scope-all'),
 	scopeOptions: $('qa-scope-options'),
 	engineOptions: $('qa-engine-options'),
+	environmentSelect: $('qa-environment-select'),
 	error: $('qa-form-error')
 };
 
@@ -3861,11 +4010,20 @@ function openQaStart() {
 	setQaFormError();
 	qaUi.form.reset();
 	populateDeviceSelect(qaUi.deviceSelect, pendingDeviceId());
+	qaUi.environmentSelect && populateEnvironmentSelect(qaUi.environmentSelect);
 	if (qaUi.deviceLandscape) qaUi.deviceLandscape.checked = pendingLandscape();
 	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
 	qaUi.submit.disabled = false;
 	qaUi.submit.textContent = 'Start QA run';
+	if (qaUi.environmentSelect) {
+		delete qaUi.environmentSelect._testCaseId;
+		delete qaUi.environmentSelect._testCaseSnapshot;
+		for (const option of qaUi.environmentSelect.options) {
+			option.disabled = false;
+			option.hidden = false;
+		}
+	}
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	setTimeout(() => qaUi.targetUrl?.focus(), 0);
 }
@@ -3933,12 +4091,14 @@ if (qaUi.dialog) {
 			setQaFormError('Check at least one browser engine.');
 			return;
 		}
+		const environmentId = (qaUi.environmentSelect?.value) || '';
+		const testCaseId = qaUi.environmentSelect?._testCaseId || undefined;
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
 			for (const engine of engines) {
-				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1 });
+				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1, environmentId: environmentId || undefined, testCaseId });
 			}
 			closeQaStart();
 		} catch (error) {
@@ -3964,6 +4124,7 @@ const sqaUi = {
 	disclaimer: $('sqa-catalog-disclaimer'),
 	deviceSelect: $('sqa-device-select'),
 	deviceLandscape: $('sqa-device-landscape'),
+	environmentSelect: $('sqa-environment-select'),
 	profilesFieldset: $('sqa-profiles-fieldset'),
 	attributesFieldset: $('sqa-attributes-fieldset'),
 	profileOptions: $('sqa-profile-options'),
@@ -4070,6 +4231,7 @@ async function openSqaStart() {
 	setSqaFormError();
 	sqaUi.form.reset();
 	populateDeviceSelect(sqaUi.deviceSelect, pendingDeviceId());
+	sqaUi.environmentSelect && populateEnvironmentSelect(sqaUi.environmentSelect);
 	if (sqaUi.deviceLandscape) sqaUi.deviceLandscape.checked = pendingLandscape();
 	sqaUi.profilesFieldset.disabled = true;
 	sqaUi.attributesFieldset.disabled = true;
@@ -4144,7 +4306,8 @@ sqaUi.form.onsubmit = async event => {
 				scopeNotes: sqaUi.scopeNotes.value.trim(),
 				authorizationConfirmed: true,
 				device: (sqaUi.deviceSelect?.value) || pendingDeviceId(),
-				deviceLandscape: (sqaUi.deviceLandscape?.checked) === true
+				deviceLandscape: (sqaUi.deviceLandscape?.checked) === true,
+				environmentId: (sqaUi.environmentSelect?.value) || undefined
 			})
 		});
 		const session = result?.session ?? result;
@@ -4178,6 +4341,7 @@ const founderUi = {
 	catalogMeta: $('founder-catalog-meta'),
 	deviceSelect: $('founder-device-select'),
 	deviceLandscape: $('founder-device-landscape'),
+	environmentSelect: $('founder-environment-select'),
 	targetName: $('founder-target-name'),
 	targetUrl: $('founder-target-url'),
 	targetRelease: $('founder-target-release'),
@@ -4227,6 +4391,7 @@ async function openFounderStart() {
 	setFounderFormError();
 	founderUi.form.reset();
 	populateDeviceSelect(founderUi.deviceSelect, pendingDeviceId());
+	founderUi.environmentSelect && populateEnvironmentSelect(founderUi.environmentSelect);
 	if (founderUi.deviceLandscape) founderUi.deviceLandscape.checked = pendingLandscape();
 	founderUi.submit.dataset.busy = 'false';
 	founderUi.catalogMeta.textContent = 'Loading review catalog…';
@@ -4302,6 +4467,7 @@ founderUi.form.onsubmit = async event => {
 				target,
 				device: (founderUi.deviceSelect?.value) || pendingDeviceId(),
 				deviceLandscape: (founderUi.deviceLandscape?.checked) === true,
+				environmentId: (founderUi.environmentSelect?.value) || undefined,
 				...(Object.keys(productContext).length ? { productContext } : {})
 			})
 		});
@@ -4542,7 +4708,7 @@ function showAuthGate() {
 
 function hideAuthGate() {
 	if (el.authGate) el.authGate.hidden = true;
-	for (const node of document.querySelectorAll('.app, .skip-link, #settings, #toasts')) { node.inert = false; node.removeAttribute('aria-hidden'); }
+	for (const node of document.querySelectorAll('.app, .skip-link, #settings, #environments, #toasts')) { node.inert = false; node.removeAttribute('aria-hidden'); }
 }
 
 el.authSwitch?.addEventListener('click', () => {
@@ -4586,7 +4752,567 @@ el.authForm?.addEventListener('submit', async event => {
 });
 
 $('open-settings').onclick = openSettings;
-el.modelBadge.onclick = openSettings;
+
+/* ── Environments admin modal ────────────────────────────────────── */
+
+const envUi = {
+	dialog: $('environments'),
+	close: $('env-close'),
+	filters: {
+		platform: $('env-filter-platform'),
+		osVersion: $('env-filter-osversion'),
+		browser: $('env-filter-browser'),
+		browserVersion: $('env-filter-browserversion'),
+		active: $('env-filter-active'),
+		search: $('env-filter-search')
+	},
+	summary: $('env-summary'),
+	tbody: $('env-tbody'),
+	detail: $('env-detail'),
+	availabilityBody: $('env-availability-body')
+};
+
+function fillEnvFilterOptions(select, values) {
+	if (!select) return;
+	const current = select.value;
+	select.innerHTML = '';
+	const all = document.createElement('option');
+	all.value = '';
+	all.textContent = 'All';
+	select.append(all);
+	for (const value of values) {
+		const option = document.createElement('option');
+		option.value = String(value);
+		option.textContent = String(value);
+		select.append(option);
+	}
+	if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function envActiveQuery() {
+	const filters = {};
+	for (const [key, select] of Object.entries(envUi.filters)) {
+		if (!select || !select.value) continue;
+		filters[key === 'osVersion' ? 'osVersion' : key === 'browserVersion' ? 'browserVersion' : key] = select.value;
+	}
+	return filters;
+}
+
+async function refreshEnvTable() {
+	if (!envUi.tbody) return;
+	const filters = envActiveQuery();
+	const params = new URLSearchParams(filters);
+	params.set('limit', '300');
+	const payload = await api(`/environments?${params.toString()}`).catch(() => ({ total: 0, environments: [] }));
+	const rows = payload.environments ?? [];
+	envUi.tbody.innerHTML = '';
+	for (const env of rows) {
+		const tr = document.createElement('tr');
+		tr.dataset.envId = env.envId;
+		tr.className = env.active ? '' : 'env-inactive';
+		const cells = [
+			env.envId,
+			env.device,
+			`${env.os} ${env.osVersion}`,
+			env.browser,
+			env.browserVersion,
+			env.deviceType,
+			env.executionProvider === 'browserstack' ? 'BrowserStack' : env.executionProvider,
+			env.active ? 'active' : 'inactive'
+		];
+		for (const [index, text] of cells.entries()) {
+			const td = document.createElement('td');
+			td.textContent = String(text);
+			if (index === 7) td.dataset.state = env.active ? 'active' : 'inactive';
+			tr.append(td);
+		}
+		tr.title = `${env.screenSize}${env.isRealDevice ? ' · real device' : ' · desktop VM'} — click to inspect capabilities`;
+		tr.onclick = () => {
+			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.browserstackCapabilities)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`;
+		};
+		envUi.tbody.append(tr);
+	}
+	envUi.summary.textContent = `${payload.total} environment${payload.total === 1 ? '' : 's'} match the current filters (showing first ${rows.length}).`;
+}
+
+async function refreshEnvFacets() {
+	const payload = await api(`/environments/facets?${new URLSearchParams(envActiveQuery()).toString()}`).catch(() => null);
+	if (!payload) return;
+	fillEnvFilterOptions(envUi.filters.platform, payload.platform.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.osVersion, payload.osVersion.map(entry => entry.value).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
+	fillEnvFilterOptions(envUi.filters.browser, payload.browser.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.browserVersion, payload.browserVersion.map(entry => entry.value).sort((a, b) => Number(b) - Number(a)));
+}
+
+async function openEnvironments() {
+	if (!envUi.dialog) return;
+	if (!envUi.dialog.open) envUi.dialog.showModal();
+	await Promise.all([refreshEnvFacets(), refreshEnvTable()]);
+	if (envUi.availabilityBody && !envUi.availabilityBody.dataset.filled) {
+		const report = await api('/environments/availability').catch(() => []);
+		envUi.availabilityBody.innerHTML = '';
+		for (const entry of report) {
+			const p = document.createElement('p');
+			const strong = document.createElement('strong');
+			strong.textContent = entry.platformLabel;
+			p.append(strong, ` — available: ${entry.available.join(', ') || 'none'}.`);
+			if (entry.unavailable.length) {
+				const ul = document.createElement('ul');
+				for (const { browser, reason } of entry.unavailable) {
+					const li = document.createElement('li');
+					li.textContent = `${browser}: ${reason}`;
+					ul.append(li);
+				}
+				p.append(ul);
+			}
+			envUi.availabilityBody.append(p);
+		}
+		envUi.availabilityBody.dataset.filled = '1';
+	}
+}
+
+if (envUi.dialog) {
+	envUi.close.onclick = () => envUi.dialog.close();
+	for (const select of Object.values(envUi.filters)) {
+		select?.addEventListener('change', () => {
+			void refreshEnvFacets();
+			void refreshEnvTable();
+		});
+	}
+	envUi.filters.search?.addEventListener('input', () => {
+		clearTimeout(envUi.filters.search._timer);
+		envUi.filters.search._timer = setTimeout(() => void refreshEnvTable(), 250);
+	});
+}
+const openEnvironmentsButton = $('open-environments');
+if (openEnvironmentsButton) openEnvironmentsButton.onclick = openEnvironments;
+
+/* ── Apple Device Matrix (Phase 3) ──────────────────────────────── */
+const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({
+	api,
+	toast,
+	fail,
+	elements: {
+		dialog: $('device-matrix'),
+		navButton: $('open-device-matrix'),
+		tabs: [...document.querySelectorAll('#device-matrix [data-dm-tab]')],
+		browseList: $('dm-browse-list'),
+		browseSearch: $('dm-browse-search'),
+		browseCategory: $('dm-browse-category'),
+		builderDevices: $('dm-builder-devices'),
+		builderOs: $('dm-builder-os'),
+		builderBrowsers: $('dm-builder-browsers'),
+		builderPreview: $('dm-builder-preview'),
+		builderCreate: $('dm-builder-create'),
+		envTbody: $('dm-env-tbody'),
+		envSummary: $('dm-env-summary'),
+		envFilterPlatform: $('dm-env-platform'),
+		envFilterBrowser: $('dm-env-browser'),
+		envFilterActive: $('dm-env-active'),
+		envFilterSearch: $('dm-env-search'),
+		envPrev: $('dm-env-prev'),
+		envNext: $('dm-env-next'),
+		envEditor: $('dm-env-editor'),
+		catalogForms: $('dm-catalog-forms'),
+		facetSummary: $('dm-facet-summary')
+	}
+}) : null;
+
+/* ── Test cases (Phase 4) ───────────────────────────────────────── */
+function startRunForTestCase(testCase) {
+	openQaStart();
+	const select = $('qa-environment-select');
+	if (select) {
+		const assigned = new Set(testCase.environmentIds ?? []);
+		for (const option of select.options) {
+			if (!option.value) continue;
+			option.disabled = !assigned.has(option.value);
+			option.hidden = !assigned.has(option.value);
+		}
+		const first = [...select.options].find((option) => option.value && assigned.has(option.value));
+		if (first) select.value = first.value;
+		select._testCaseId = testCase.caseNumber;
+		select._testCaseSnapshot = testCase;
+	}
+	el.composerInput.placeholder = `Run ${testCase.caseNumber} — ${testCase.title}`;
+}
+
+function createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId }) {
+	if (!testCaseId) return createQaRun({ targetUrl, device, deviceLandscape, environmentId });
+	return api('/sessions', { method: 'POST', body: JSON.stringify({
+		device, deviceLandscape, ...(environmentId ? { environmentId } : {}), testCaseId
+	}) }).then(async (session) => {
+		await selectSession(session.id);
+		if (targetUrl) {
+			await api(`/sessions/${session.id}/message`, { method: 'POST', body: JSON.stringify({ text: targetUrl }) }).catch(fail);
+		}
+		return session;
+	});
+}
+
+const quickRunState = { testCase: null };
+
+const workflow = {
+	lastRunByCase,
+	caseStatus,
+	platformsOf,
+	caseEnvLines,
+	oneClickRun(testCase) {
+		const assigned = testCase.environmentIds ?? [];
+		if (!assigned.length) {
+			// Zero assigned environments → current device emulation with a note.
+			openRunTarget(testCase);
+			return;
+		}
+		if (assigned.length === 1) {
+			// One-click: no configuration steps.
+			void launchPairs([{ testCase, envId: assigned[0] }], `${testCase.caseNumber}: `);
+			return;
+		}
+		openRunTarget(testCase);
+	}
+};
+
+const testCaseView = $('test-cases') ? createTestCaseView({
+	api, toast, fail,
+	onStartRun: startRunForTestCase,
+	workflow,
+	elements: {
+		dialog: $('test-cases'),
+		navButton: $('open-test-cases'),
+		list: $('tc-tbody'),
+		search: $('tc-search'),
+		form: $('tc-form'),
+		formTitle: $('tc-title'),
+		formDescription: $('tc-description'),
+		formExpected: $('tc-expected'),
+		formSteps: $('tc-steps'),
+		formTags: $('tc-tags'),
+		formEnvironments: $('tc-environments'),
+		submitBtn: $('tc-submit'),
+		formCancel: $('tc-cancel'),
+		closeButton: $('tc-close'),
+		editorSummary: $('tc-summary')
+	}
+}) : null;
+
+const bulkRunView = $('bulk-run') ? createBulkRunView({
+	api, toast, fail,
+	elements: {
+		dialog: $('bulk-run'),
+		navButton: $('open-bulk-run'),
+		close: $('bulk-close'),
+		what: $('bulk-what'),
+		casesField: $('bulk-cases-field'),
+		casesSelect: $('bulk-cases'),
+		where: $('bulk-where'),
+		envsField: $('bulk-envs-field'),
+		envsSelect: $('bulk-envs'),
+		preview: $('bulk-preview'),
+		launchBtn: $('bulk-launch'),
+		result: $('bulk-result'),
+		steps: [...document.querySelectorAll('#bulk-run [data-bulk-step]')]
+	}
+}) : null;
+if (bulkRunView) {
+	bulkRunView.setWizardFilter((mode) => filterCasesForWizard(bulkRunView.state.cases, mode, bulkRunView.state.lastRuns));
+	bulkRunView.setLastRunIndex(lastRunByCase);
+}
+
+/* ── Phase 11: run-target dialog + quick actions + presets ────────── */
+
+const runTarget = $('run-target') ? {
+	dialog: $('run-target'),
+	close: $('rt-close'),
+	cancel: $('rt-cancel'),
+	runBtn: $('rt-run'),
+	envsField: $('rt-envs-field'),
+	envs: $('rt-envs'),
+	error: $('rt-error'),
+	sub: $('run-target-sub')
+} : null;
+
+
+async function defaultEnvironmentId() {
+	return localStorage.getItem('qase.environmentId') || '';
+}
+
+async function launchPairs(pairs, sourceLabel = '') {
+	let created = 0;
+	const failures = [];
+	const sessionIds = [];
+	const testCaseTitles = {};
+	for (const { testCase, envId } of pairs) {
+		try {
+			const session = await createQaRunWithCase({ testCaseId: testCase.caseNumber, environmentId: envId });
+			created += 1;
+			if (session?.id) {
+				sessionIds.push(session.id);
+				testCaseTitles[session.id] = `${testCase.caseNumber} ${testCase.title ?? ''}`.trim();
+			}
+		} catch (error) {
+			failures.push(`${testCase.caseNumber} @ ${envId}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	if (batchTracker && sessionIds.length) {
+		batchTracker.track(recordBatch({ label: sourceLabel.trim() || 'Bulk run', sessionIds, testCaseTitles }));
+	}
+	toast(
+		created && !failures.length
+			? `${sourceLabel}${created} run${created === 1 ? '' : 's'} launched.`
+			: failures.length ? `${created} launched, ${failures.length} failed.` : 'Nothing launched.',
+		failures.length ? 'bad' : ''
+	);
+	return { created, failures };
+}
+
+function openRunTarget(testCase) {
+	if (!runTarget) return;
+	quickRunState.testCase = testCase;
+	runTarget.error.hidden = true;
+	runTarget.error.textContent = '';
+	const assigned = testCase.environmentIds ?? [];
+	if (runTarget.sub) {
+		runTarget.sub.textContent = assigned.length
+			? `${assigned.length} environment${assigned.length === 1 ? '' : 's'} assigned to this test.`
+			: 'This test has no assigned environments — it will run on the current device emulation.';
+	}
+	if (runTarget.envs) {
+		runTarget.envs.innerHTML = '';
+		const envById = new Map((testCaseView?.state.environments ?? []).map((e) => [e.envId, e]));
+		for (const envId of assigned) {
+			const env = envById.get(envId);
+			const option = document.createElement('option');
+			option.value = envId;
+			option.textContent = env ? `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}` : envId;
+			option.selected = true;
+			runTarget.envs.append(option);
+		}
+		runTarget.envsField.hidden = true;
+	}
+	for (const radio of runTarget.dialog.querySelectorAll('input[name="rt-choice"]')) radio.checked = radio.value === 'current';
+	runTarget.dialog.querySelectorAll('input[name="rt-choice"]').forEach((radio) => {
+		radio.onchange = () => { if (runTarget.envsField) runTarget.envsField.hidden = radio.value !== 'choose' || !radio.checked; };
+	});
+	if (!runTarget.dialog.open) runTarget.dialog.showModal();
+}
+
+async function submitRunTarget() {
+	if (!runTarget || !quickRunState.testCase) return;
+	const choice = runTarget.dialog.querySelector('input[name="rt-choice"]:checked')?.value ?? 'current';
+	const testCase = quickRunState.testCase;
+	const pairs = resolveRunPairs([testCase], choice, {
+		defaultEnvId: await defaultEnvironmentId(),
+		chosenEnvIds: [...(runTarget.envs?.selectedOptions ?? [])].map((o) => o.value)
+	});
+	runTarget.error.hidden = true;
+	if (!pairs.length) {
+		if (choice === 'current' && !(await defaultEnvironmentId())) {
+			runTarget.error.hidden = false;
+			runTarget.error.textContent = 'No current device chosen — open the device panel and pick one, or choose "All selected devices".';
+			return;
+		}
+		runTarget.error.hidden = false;
+		runTarget.error.textContent = 'Pick at least one device to run on.';
+		return;
+	}
+	runTarget.dialog.close();
+	await launchPairs(pairs, `${testCase.caseNumber}: `);
+}
+
+async function loadSessionsForFilters() {
+	try {
+		const sessions = await api('/sessions?limit=100');
+		return Array.isArray(sessions) ? sessions : [];
+	} catch {
+		return [];
+	}
+}
+
+async function runAllTests() {
+	if (!bulkRunView) return;
+	const sessions = await loadSessionsForFilters();
+	bulkRunView.state.lastRuns = lastRunByCase(sessions);
+	bulkRunView.state.cases = (await api('/test-cases').then((p) => p.testCases ?? []).catch(() => []));
+	const pairs = resolveRunPairs(bulkRunView.state.cases, 'all');
+	if (!pairs.length) {
+		toast('No test cases with assigned environments yet — create one first.');
+		return;
+	}
+	await launchPairs(pairs, 'Run all: ');
+}
+
+async function runFailedTests() {
+	const sessions = await loadSessionsForFilters();
+	const lastRuns = lastRunByCase(sessions);
+	const cases = (await api('/test-cases').then((p) => p.testCases ?? []).catch(() => []));
+	const failed = filterCasesForWizard(cases, 'failed', lastRuns);
+	if (!failed.length) {
+		toast('No failed runs to re-run — nice and green.');
+		return;
+	}
+	await launchPairs(resolveRunPairs(failed, 'all'), 'Re-run failed: ');
+}
+
+async function createBugReport() {
+	const sessions = await loadSessionsForFilters();
+	const failed = sessions
+		.filter((s) => s.mode !== 'sqa' && s.mode !== 'founder' && Array.isArray(s.findings) && s.findings.length)
+		.sort((a, b) => (Date.parse(b.updatedAt ?? b.createdAt ?? '') || 0) - (Date.parse(a.updatedAt ?? a.createdAt ?? '') || 0));
+	if (!failed.length) {
+		toast('No findings recorded yet — nothing to report.');
+		return;
+	}
+	const session = failed[0];
+	const env = session.environmentSnapshot
+		?? (session.environmentId ? (await api(`/environments/${encodeURIComponent(session.environmentId)}`).catch(() => null)) : null);
+	const markdown = buildBugMarkdown(session, env);
+	try {
+		await navigator.clipboard.writeText(markdown);
+		toast('Bug report copied to the clipboard.');
+	} catch {
+		toast('Bug report generated (clipboard blocked) — downloading instead.');
+	}
+	const blob = new Blob([markdown], { type: 'text/markdown' });
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement('a');
+	link.href = url;
+	link.download = `bug-${session.id?.slice(0, 8) ?? 'report'}.md`;
+	link.click();
+	URL.revokeObjectURL(url);
+}
+
+const quickActions = $('quick-actions') ? {
+	strip: $('quick-actions'),
+	runAll: $('qa-run-all'),
+	runFailed: $('qa-run-failed'),
+	createCase: $('qa-create-case'),
+	chooseDevices: $('qa-choose-devices'),
+	viewResults: $('qa-view-results'),
+	createBug: $('qa-create-bug'),
+	preset: $('qa-preset')
+} : null;
+
+if (quickActions) {
+	quickActions.runAll?.addEventListener('click', () => void runAllTests());
+	quickActions.runFailed?.addEventListener('click', () => void runFailedTests());
+	quickActions.createCase?.addEventListener('click', () => testCaseView?.open?.());
+	quickActions.chooseDevices?.addEventListener('click', () => deviceDrawer?.open?.());
+	quickActions.viewResults?.addEventListener('click', () => document.querySelector('.panel-foot .foot-btn')?.click?.() ?? window.qaseShowTab?.('runs'));
+	quickActions.createBug?.addEventListener('click', () => void createBugReport());
+	quickActions.preset?.addEventListener('change', async () => {
+		const presetId = quickActions.preset.value;
+		if (!presetId || !bulkRunView) return;
+		const environments = (await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []));
+		if (bulkRunView.runPreset(presetId, { environmentsFor: (id) => environmentsForPreset(id, environments) })) {
+			toast(`${quickActions.preset.selectedOptions[0]?.textContent ?? 'Preset'} ready — review the summary and run.`);
+		}
+		quickActions.preset.value = '';
+	});
+}
+
+if (runTarget) {
+	runTarget.close?.addEventListener('click', () => runTarget.dialog.close());
+	runTarget.cancel?.addEventListener('click', () => runTarget.dialog.close());
+	runTarget.runBtn?.addEventListener('click', () => void submitRunTarget());
+}
+
+/* ── Phase 12: run-screen environment block + bulk progress ───────── */
+
+const batchTracker = $('bulk-progress') ? createBatchTracker({
+	api,
+	elements: {
+		block: $('bulk-progress'),
+		label: $('bulk-progress-label'),
+		pct: $('bulk-progress-pct'),
+		bar: $('bulk-progress-bar'),
+		counts: $('bulk-progress-counts'),
+		list: $('bulk-progress-list')
+	}
+}) : null;
+
+// Environment block inside #run-summary-detail: test-case title, current
+// environment, batch size — driven from the selected session's snapshot.
+setRunEnvHook(renderRunEnvBlock);
+
+// Restore a persisted batch after reload so mid-batch progress reappears.
+if (batchTracker) {
+	const restored = loadBatches().at(-1);
+	if (restored?.sessionIds?.length) batchTracker.track(restored);
+}
+
+function renderRunEnvBlock(session) {
+	const block = $('run-env-block');
+	if (!block) return;
+	const testcaseLine = $('run-env-testcase');
+	const currentLine = $('run-env-current');
+	const countLine = $('run-env-count');
+	const snap = session?.environmentSnapshot;
+	const hasEnv = Boolean(snap || session?.environmentId);
+	block.hidden = !hasEnv && !session?.testCaseId;
+	if (testcaseLine) {
+		const title = session?.testCaseSnapshot?.title ?? session?.testCaseId;
+		testcaseLine.textContent = title ? `Test case: ${title}` : '';
+		testcaseLine.hidden = !title;
+	}
+	if (currentLine) {
+		currentLine.textContent = snap
+			? `Environment: ${[snap.device, [snap.os, snap.osVersion].filter(Boolean).join(' '), [snap.browser, snap.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ')}`
+			: session?.environmentId ? `Environment: ${session.environmentId}` : '';
+		currentLine.hidden = !currentLine.textContent;
+	}
+	if (countLine) {
+		const batch = batchTracker?.current;
+		countLine.textContent = batch && batch.sessionIds.length > 1
+			? `${batch.sessionIds.length} environments in this batch`
+			: hasEnv ? '1 environment' : '';
+		countLine.hidden = !countLine.textContent;
+	}
+}
+
+// Paint on every snapshot and restore any persisted batch on load.
+// Re-render the env block on every snapshot without redefining the hoisted
+// function: a small post-hook invoked from applySessionSnapshot itself.
+
+/* ── Device Matrix drawer (Phase 10) ─────────────────────────────── */
+const deviceDrawer = $('device-drawer') ? createDeviceDrawer({
+	api, toast, fail,
+	onApplied: (created) => {
+		if (created?.length && testCaseView) testCaseView.refresh?.();
+	},
+	elements: {
+		drawer: $('device-drawer'),
+		chip: $('device-chip'),
+		chipChange: $('device-chip-change'),
+		chipLabel: $('device-chip-env'),
+		search: $('dd-search'),
+		tabs: [...document.querySelectorAll('#device-drawer [data-dd-tab]')],
+		sections: $('dd-sections'),
+		detail: $('dd-detail'),
+		detailBody: $('dd-detail-body'),
+		selectionSummary: $('dd-selection-summary'),
+		applyBtn: $('dd-apply'),
+		clearSelection: $('dd-clear-selection'),
+		savedList: $('dd-saved-list'),
+		savedRefresh: $('dd-saved-refresh'),
+		closeBtn: $('dd-close'),
+		advancedToggle: $('dd-advanced-toggle'),
+		advancedBody: $('dd-advanced-body')
+	}
+}) : null;
+
+// Paint the collapsed chip once environments are loaded (and refresh the
+// saved list so Run/Set-default actions target real envIds).
+void (async () => {
+	if (!deviceDrawer) return;
+	await deviceDrawer.refreshEnvironments();
+	deviceDrawer.paintChip();
+	if (deviceDrawer.state.environments.length) {
+		deviceDrawer.state.defaultEnvId = localStorage.getItem('qase.environmentId')
+			|| deviceDrawer.state.environments[0].envId;
+		deviceDrawer.paintChip();
+	}
+})();
 
 cfg.testBtn.onclick = async () => {
 	await probeModelEndpoint();
@@ -4758,6 +5484,7 @@ async function bootWorkspace() {
 	}
 
 	await loadDevices();
+	void loadEnvironments();
 
 	const runs = await api('/sessions').catch(() => []);
 	const launchParameters = new URLSearchParams(window.location.search);

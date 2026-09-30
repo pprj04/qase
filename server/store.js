@@ -194,6 +194,20 @@ export function createSession(title = 'New test run', options = {}) {
 	if (options.engine !== undefined && !isEngineId(options.engine)) {
 		throw new TypeError('Run creation received an unknown browser engine.');
 	}
+	if (options.environmentId !== undefined && typeof options.environmentId !== 'string') {
+		throw new TypeError('Run creation received an invalid environment id.');
+	}
+	if (options.environmentSnapshot !== undefined
+		&& (!options.environmentSnapshot || typeof options.environmentSnapshot !== 'object' || Array.isArray(options.environmentSnapshot))) {
+		throw new TypeError('Run creation received an invalid environment snapshot.');
+	}
+	if (options.testCaseId !== undefined && typeof options.testCaseId !== 'string') {
+		throw new TypeError('Run creation received an invalid test case id.');
+	}
+	if (options.testCaseSnapshot !== undefined
+		&& (!options.testCaseSnapshot || typeof options.testCaseSnapshot !== 'object' || Array.isArray(options.testCaseSnapshot))) {
+		throw new TypeError('Run creation received an invalid test case snapshot.');
+	}
 	if (options.drytisIntegration !== undefined) {
 		if (!options.drytisIntegration || typeof options.drytisIntegration !== 'object'
 			|| Array.isArray(options.drytisIntegration)
@@ -219,6 +233,12 @@ export function createSession(title = 'New test run', options = {}) {
 		/** Analytics cohort ('pilot' for invite-admitted users) — read by the
 		 *  run_started/run_finished status hook, which has no request context. */
 		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
+		/** Apple compatibility environment this run executes in (frozen snapshot). */
+		environmentId: options.environmentId,
+		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
+		/** Test case this run executes (Phase 4; frozen snapshot). */
+		testCaseId: options.testCaseId,
+		testCaseSnapshot: options.testCaseSnapshot ? structuredClone(options.testCaseSnapshot) : undefined,
 		messages: [],
 		activities: [],
 		findings: (options.findings ?? []).map(normalizeFindingStatus),

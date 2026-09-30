@@ -673,8 +673,13 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
-	assert.equal(runInsert.params[runInsert.params.length - 1], null);
-	assert.equal(runInsert.params[runInsert.params.length - 3].getTime(), new Date(NOW).getTime());
+	// Merged insert tail: ... createdAt, updatedAt, queuedAt, environmentId,
+	// environmentSnapshot, testCaseId — timestamps then three env/case params.
+	assert.equal(runInsert.params[runInsert.params.length - 1], null, 'testCaseId tail');
+	assert.equal(runInsert.params[runInsert.params.length - 2], null, 'environmentSnapshot tail');
+	assert.equal(runInsert.params[runInsert.params.length - 3], null, 'environmentId tail');
+	assert.equal(runInsert.params[runInsert.params.length - 4], null, 'queuedAt tail (unset)');
+	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime(), 'updatedAt');
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
