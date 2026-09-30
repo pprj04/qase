@@ -200,6 +200,25 @@ export function createSession(title = 'New test run', options = {}) {
 	if (options.findings !== undefined && !Array.isArray(options.findings)) {
 		throw new TypeError('Initial run findings must be an array.');
 	}
+	// Standard-QA test selection: validated at the API boundary
+	// (appQaSelection.js). undefined = full coverage (legacy behavior).
+	if (options.selectedTests !== undefined) {
+		if (!Array.isArray(options.selectedTests)
+			|| options.selectedTests.length === 0
+			|| options.selectedTests.some(id => typeof id !== 'string')) {
+			throw new TypeError('Run test selection must be a non-empty array of test ids.');
+		}
+	}
+	// Security testing authorization: required whenever the selection includes
+	// a security-category check (enforced at the API boundary).
+	if (options.securityAuthorization !== undefined) {
+		const auth = options.securityAuthorization;
+		if (typeof auth !== 'object' || Array.isArray(auth)
+			|| typeof auth.confirmed !== 'boolean'
+			|| (auth.notes !== undefined && typeof auth.notes !== 'string')) {
+			throw new TypeError('Security authorization must be { confirmed: boolean, notes?: string }.');
+		}
+	}
 	const timestamp = Date.now();
 	const session = {
 		id,
@@ -217,6 +236,12 @@ export function createSession(title = 'New test run', options = {}) {
 		todos: [],
 		report: undefined,
 		pendingQuestion: undefined,
+		/** Selected standard QA test ids; undefined = full coverage. */
+		selectedTests: options.selectedTests ? [...options.selectedTests] : undefined,
+		/** Security testing authorization for runs with security checks. */
+		securityAuthorization: options.securityAuthorization
+			? structuredClone(options.securityAuthorization)
+			: undefined,
 		contextUsage: undefined,
 		/** Token usage recorded after each run: provider-reported or estimated. */
 		tokenUsage: undefined,

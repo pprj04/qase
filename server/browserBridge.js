@@ -33,6 +33,36 @@ export function selectSnapshotElements(elements, requestedLimit) {
 }
 
 /**
+ * Bounds one browser operation. A wedged browser-service call (dead renderer,
+ * hung MCP round-trip) must never strand a run in 'running' with no way back —
+ * Stop only breaks the model stream, not an awaited tool promise. On timeout
+ * the agent receives a retryable error result it can act on instead of
+ * silence. Accepts a thunk or an already-started promise so both call shapes
+ * are safe.
+ */
+export function withBrowserOperationTimeout(work, timeoutMs, operation = 'browser operation') {
+	const run = typeof work === 'function' ? () => Promise.resolve().then(work) : () => Promise.resolve(work);
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return run();
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			const error = new Error(`${operation} timed out after ${timeoutMs} ms. The browser may be unresponsive — retry once, then report the affected check as not tested with a reason.`);
+			error.name = 'BrowserOperationTimeout';
+			error.timedOut = true;
+			reject(error);
+		}, timeoutMs);
+		run().then(
+			result => { clearTimeout(timer); resolve(result); },
+			error => { clearTimeout(timer); reject(error); }
+		);
+	});
+}
+
+/** Back-compat alias for the snapshot-bound tests and callers. */
+export function withSnapshotTimeout(work, timeoutMs) {
+	return withBrowserOperationTimeout(work, timeoutMs, 'browser_snapshot');
+}
+
+/**
  * Methods that move the pointer somewhere the user should see it move.
  * `navigates` marks the ones that can change the page, and whose reported URL
  * therefore has to wait for the router.
@@ -82,66 +112,75 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	 * the page: the path is computed from the tree as it already stands.
 	 */
 	const originalSnapshot = service.snapshot.bind(service);
+	// A hung MCP snapshot (or the DOM pass below) must never wedge a run in
+	// 'running' forever — bound the whole operation like every other browser
+	// call (see withBrowserOperationTimeout). On timeout the agent gets a
+	// retryable error instead of silence, which it already knows how to
+	// handle ("inspect the resulting state and retry once with a different
+	// verified locator; then continue the plan").
+	const SNAPSHOT_TIMEOUT_MS = Math.max(5000, Number(process.env.QASE_SNAPSHOT_TIMEOUT_MS ?? 30_000));
 	service.snapshot = async (surface, options) => {
-		const snapshot = await originalSnapshot(surface, options);
-		const page = currentPage();
-		if (!page || !Array.isArray(snapshot.elements)) {
+		const work = (async () => {
+			const snapshot = await originalSnapshot(surface, options);
+			const page = currentPage();
+			if (!page || !Array.isArray(snapshot.elements)) {
+				return snapshot;
+			}
+
+			try {
+				// The same node list the snapshot enumerated, in the same order, so
+				// an element's `eN` id indexes straight into these paths.
+				const elements = await page.locator('body *:visible').evaluateAll(nodes => nodes.flatMap((node, index) => {
+					const rect = node.getBoundingClientRect();
+					if (rect.width < 1 || rect.height < 1) return [];
+					let selector;
+					if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) selector = `#${CSS.escape(node.id)}`;
+					for (const attribute of ['data-testid', 'data-test', 'data-cy']) {
+						const value = node.getAttribute(attribute);
+						if (!selector && value) {
+							const candidate = `[${attribute}="${CSS.escape(value)}"]`;
+							if (document.querySelectorAll(candidate).length === 1) selector = candidate;
+						}
+					}
+					const steps = [];
+					for (let element = selector ? undefined : node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
+						const tag = element.tagName.toLowerCase();
+						if (element.id && document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1) {
+							steps.unshift(`#${CSS.escape(element.id)}`);
+							break;
+						}
+						const siblings = [...(element.parentElement?.children ?? [])]
+							.filter(sibling => sibling.tagName === element.tagName);
+						steps.unshift(siblings.length > 1
+							? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})`
+							: tag);
+					}
+					return [{
+						id: `e${index + 1}`, tagName: node.tagName.toLowerCase(), selector: selector || steps.join(' > '),
+						interactive: node.matches('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[role="tab"],[role="slider"],[role="combobox"],[contenteditable="true"],[tabindex]:not([tabindex="-1"]),[onclick]'),
+						testId: node.getAttribute('data-testid') || undefined,
+						role: node.getAttribute('role') || undefined,
+						name: node.getAttribute('aria-label') || node.getAttribute('title') || undefined,
+						text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) || undefined,
+						ariaLabel: node.getAttribute('aria-label') || undefined,
+						placeholder: node.getAttribute('placeholder') || undefined,
+						href: node.href || undefined, type: node.getAttribute('type') || undefined,
+						checked: 'checked' in node ? Boolean(node.checked) : undefined,
+						disabled: 'disabled' in node ? Boolean(node.disabled) : undefined,
+						boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+					}];
+				}));
+				snapshot.elements = selectSnapshotElements(elements, options?.limit);
+				snapshot.elementCoverage = { total: elements.length, returned: snapshot.elements.length, omitted: elements.length - snapshot.elements.length };
+				snapshot.guidance = 'Controls are listed before layout elements. Use the supplied unique selector or a semantic locator; coordinates are viewport-relative and become stale after scrolling. If an action has no effect, inspect the resulting state and retry once with a different verified locator. Then record the observed defect or unresolved coverage and continue the plan; do not repeat the same attempt or claim untested checks passed.';
+			} catch {
+				// A snapshot with the SDK's selectors beats no snapshot at all.
+			}
+
 			return snapshot;
-		}
-
-		try {
-			// The same node list the snapshot enumerated, in the same order, so
-			// an element's `eN` id indexes straight into these paths.
-			const elements = await page.locator('body *:visible').evaluateAll(nodes => nodes.flatMap((node, index) => {
-				const rect = node.getBoundingClientRect();
-				if (rect.width < 1 || rect.height < 1) return [];
-				let selector;
-				if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) selector = `#${CSS.escape(node.id)}`;
-				for (const attribute of ['data-testid', 'data-test', 'data-cy']) {
-					const value = node.getAttribute(attribute);
-					if (!selector && value) {
-						const candidate = `[${attribute}="${CSS.escape(value)}"]`;
-						if (document.querySelectorAll(candidate).length === 1) selector = candidate;
-					}
-				}
-				const steps = [];
-				for (let element = selector ? undefined : node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
-					const tag = element.tagName.toLowerCase();
-					if (element.id && document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1) {
-						steps.unshift(`#${CSS.escape(element.id)}`);
-						break;
-					}
-					const siblings = [...(element.parentElement?.children ?? [])]
-						.filter(sibling => sibling.tagName === element.tagName);
-					steps.unshift(siblings.length > 1
-						? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})`
-						: tag);
-				}
-				return [{
-					id: `e${index + 1}`, tagName: node.tagName.toLowerCase(), selector: selector || steps.join(' > '),
-					interactive: node.matches('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[role="tab"],[role="slider"],[role="combobox"],[contenteditable="true"],[tabindex]:not([tabindex="-1"]),[onclick]'),
-					testId: node.getAttribute('data-testid') || undefined,
-					role: node.getAttribute('role') || undefined,
-					name: node.getAttribute('aria-label') || node.getAttribute('title') || undefined,
-					text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) || undefined,
-					ariaLabel: node.getAttribute('aria-label') || undefined,
-					placeholder: node.getAttribute('placeholder') || undefined,
-					href: node.href || undefined, type: node.getAttribute('type') || undefined,
-					checked: 'checked' in node ? Boolean(node.checked) : undefined,
-					disabled: 'disabled' in node ? Boolean(node.disabled) : undefined,
-					boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-				}];
-			}));
-			snapshot.elements = selectSnapshotElements(elements, options?.limit);
-			snapshot.elementCoverage = { total: elements.length, returned: snapshot.elements.length, omitted: elements.length - snapshot.elements.length };
-			snapshot.guidance = 'Controls are listed before layout elements. Use the supplied unique selector or a semantic locator; coordinates are viewport-relative and become stale after scrolling. If an action has no effect, inspect the resulting state and retry once with a different verified locator. Then record the observed defect or unresolved coverage and continue the plan; do not repeat the same attempt or claim untested checks passed.';
-		} catch {
-			// A snapshot with the SDK's selectors beats no snapshot at all.
-		}
-
-		return snapshot;
+		})();
+		return await withSnapshotTimeout(work, SNAPSHOT_TIMEOUT_MS);
 	};
-
 	/*
 	 * Locators resolve to visible elements only.
 	 *
@@ -842,20 +881,24 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	// Qase deliberately blocked that asset from reaching a private address.
 	const originalDiagnostics = service.getDiagnostics?.bind(service);
 	if (originalDiagnostics) {
-		service.getDiagnostics = async (surface, diagnosticOptions = {}) => {
-			const result = await originalDiagnostics(surface, diagnosticOptions);
-			const securityBlocks = bridge.securityBlocks.map(entry => ({ ...entry }));
-			if (diagnosticOptions.clear) bridge.securityBlocks.length = 0;
-			// A live mobile/tablet run gets a bounded DOM-only audit attached so the
-			// agent sees viewport-meta, overflow, and tap-target evidence alongside
-			// console/network. Desktop runs skip the audit entirely.
-			let mobileAudit;
-			if (deviceProfile?.kind && deviceProfile.kind !== 'desktop') {
-				mobileAudit = await runMobileAudit(currentPage());
-			}
-			const formValidation = await inspectFormValidation(currentPage());
-			return { ...result, securityBlocks, ...(mobileAudit ? { mobileAudit } : {}), ...(formValidation ? { formValidation } : {}) };
-		};
+		// getDiagnostics reaches into the live page (state(), plus the form and
+		// mobile audits below). A dead renderer wedges page.title() forever, so
+		// bound the whole operation like every other browser call.
+		service.getDiagnostics = (surface, diagnosticOptions = {}) =>
+			withBrowserOperationTimeout(async () => {
+				const result = await originalDiagnostics(surface, diagnosticOptions);
+				const securityBlocks = bridge.securityBlocks.map(entry => ({ ...entry }));
+				if (diagnosticOptions.clear) bridge.securityBlocks.length = 0;
+				// A live mobile/tablet run gets a bounded DOM-only audit attached so the
+				// agent sees viewport-meta, overflow, and tap-target evidence alongside
+				// console/network. Desktop runs skip the audit entirely.
+				let mobileAudit;
+				if (deviceProfile?.kind && deviceProfile.kind !== 'desktop') {
+					mobileAudit = await runMobileAudit(currentPage());
+				}
+				const formValidation = await inspectFormValidation(currentPage());
+				return { ...result, securityBlocks, ...(mobileAudit ? { mobileAudit } : {}), ...(formValidation ? { formValidation } : {}) };
+			}, SNAPSHOT_TIMEOUT_MS, 'browser_diagnostics');
 	}
 
 	const sameFrame = (left, right) => Boolean(left && right &&

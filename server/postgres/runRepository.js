@@ -486,6 +486,8 @@ function hydrateRun(row, children) {
 		contextUsage: row.context_usage ?? undefined,
 		tokenUsage: row.token_usage ?? undefined,
 		secretNames: names(row.secret_names),
+		selectedTests: row.selected_tests?.length ? [...row.selected_tests] : undefined,
+		securityAuthorization: row.security_authorization ?? undefined,
 		ownerUserId: row.created_by_user_id ?? undefined
 	};
 	if (session.mode === 'sqa') {
@@ -673,8 +675,8 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, token_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
-			created_at, updated_at, queued_at, paused_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22)
+			created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24)
 			RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -687,7 +689,9 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			session.messages?.length ?? 0, session.findings?.length ?? 0,
 			nextEventSequence, createdAt, updatedAt,
 			asNullableDate(session.queuedAt),
-			asNullableDate(session.pausedAt)
+			asNullableDate(session.pausedAt),
+			session.selectedTests?.length ? [...session.selectedTests] : null,
+			session.securityAuthorization ? json(session.securityAuthorization) : null
 		]
 	);
 	await replaceChildren(client, tenant, session, updatedAt);
@@ -801,7 +805,7 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version,
+					pending_question, context_usage, token_usage, secret_names, selected_tests, security_authorization, created_at, updated_at, lock_version,
 					${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
@@ -819,7 +823,7 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, created_at, updated_at, lock_version,
+					pending_question, context_usage, token_usage, secret_names, selected_tests, security_authorization, created_at, updated_at, lock_version,
 					${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3

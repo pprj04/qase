@@ -1,4 +1,5 @@
 import express from 'express';
+import { mountSecurityFixtures } from './demoSecurityFixtures.js';
 
 /**
  * A deliberately broken practice site, mounted at /demo.
@@ -154,6 +155,10 @@ export function mountDemoSite(app) {
 	demo.get('/app/reports', (_request, response) => {
 		response.status(404).send(shell('Not found', `${nav}<main><h1>404 — Not found</h1></main>`));
 	});
+
+	// Security-check fixtures (safe + intentionally vulnerable variants) mount
+	// before the 404 catch-all so their routes resolve.
+	mountSecurityFixtures(demo);
 
 	demo.use((_request, response) => {
 		response.status(404).send(shell('Not found', '<main><h1>404 — Not found</h1></main>'));

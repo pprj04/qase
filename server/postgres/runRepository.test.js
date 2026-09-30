@@ -666,12 +666,15 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
 
 	// create: token_usage rides in the run INSERT alongside context_usage;
-	// queuedAt and pausedAt (DEV timing) are the trailing write-once columns.
+	// pausedAt, selected_tests (standard-QA test selection) and
+	// security_authorization are the trailing write-once columns.
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
 	assert.equal(runInsert.params[runInsert.params.length - 1], null);
-	assert.equal(runInsert.params[runInsert.params.length - 3].getTime(), new Date(NOW).getTime());
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);
+	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime());
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;

@@ -481,11 +481,50 @@
         </div>
         <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
       </fieldset>
+      <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
+        <legend>Tests</legend>
+        <div class="qa-tests-toolbar">
+          <span class="qa-tests-count" id="qa-tests-count" aria-live="polite"></span>
+          <span class="qa-tests-bulk">
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-select-all">Select all</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-deselect-all">Deselect all</button>
+          </span>
+        </div>
+        <div class="sqa-catalog-state" id="qa-tests-state" role="status" aria-live="polite">Loading standard tests…</div>
+        <section class="qa-category" id="qa-category-standard">
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-standard-toggle" checked>
+              <span>Standard tests</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-test-options"></div>
+        </section>
+        <section class="qa-category" id="qa-category-security" hidden>
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-security-toggle" checked>
+              <span>Security testing</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-security-options"></div>
+          <div class="qa-security-auth" id="qa-security-auth" hidden>
+            <label class="check qa-security-auth-confirm">
+              <input type="checkbox" id="qa-security-authorized">
+              <span>I confirm the target is an explicitly authorized, isolated test environment for security testing.</span>
+            </label>
+            <label class="field qa-security-auth-scope">
+              <span>Scope notes (optional)</span>
+              <textarea id="qa-security-notes" rows="2" placeholder="e.g. isolated staging copy, no production data"></textarea>
+            </label>
+          </div>
+        </section>
+      </fieldset>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
     </div>
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="qa-cancel">Cancel</button>
-      <button class="btn btn-primary" type="submit" id="qa-submit">Start QA run</button>
+      <button class="btn btn-primary" type="submit" id="qa-submit">Start test</button>
     </footer>
   </form>
 </dialog>

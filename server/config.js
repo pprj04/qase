@@ -59,7 +59,12 @@ function fromEnv() {
 		model: process.env.QASE_MODEL,
 		reasoning: process.env.QASE_REASONING,
 		maxTurns: process.env.QASE_MAX_TURNS ? Number(process.env.QASE_MAX_TURNS) : undefined,
-		headless: process.env.QASE_HEADLESS === undefined ? undefined : process.env.QASE_HEADLESS !== 'false'
+		headless: process.env.QASE_HEADLESS === undefined ? undefined : process.env.QASE_HEADLESS !== 'false',
+		/** Per-turn cap on intrusive security payloads (input-validation /
+		 *  SQLi probing) so a security run can never flood the target. */
+		securityPayloadLimit: process.env.QASE_SECURITY_PAYLOAD_LIMIT
+			? Number(process.env.QASE_SECURITY_PAYLOAD_LIMIT)
+			: undefined
 	};
 }
 
@@ -70,7 +75,8 @@ const DEFAULTS = {
 	model: 'claude-opus-5',
 	reasoning: 'medium',
 	maxTurns: 120,
-	headless: true
+	headless: true,
+	securityPayloadLimit: 40
 };
 
 /** Default model per provider when none is configured. */
@@ -83,6 +89,14 @@ const STALE_MODELS = new Set(['gpt-4.1']);
 
 function defaultModelFor(provider) {
 	return DEFAULT_MODELS[provider];
+}
+
+/** The security payload limit is a safety cap, not a tuning knob: keep it in a
+ *  sane bounded range so a bad env value can't disable the flood protection. */
+export function clampSecurityPayloadLimit(value) {
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULTS.securityPayloadLimit;
+	return Math.min(200, Math.floor(parsed));
 }
 
 /** The effective settings the agent runs with. Includes the key — server only. */
@@ -117,6 +131,7 @@ export function getPublicConfig() {
 		reasoning: config.reasoning,
 		maxTurns: config.maxTurns,
 		headless: config.headless,
+		securityPayloadLimit: clampSecurityPayloadLimit(config.securityPayloadLimit),
 		hasApiKey: Boolean(config.apiKey),
 		apiKeyHint: config.apiKey ? `••••${config.apiKey.slice(-4)}` : '',
 		apiKeyFromEnv: Boolean(fromEnv().apiKey) && !readStored().apiKey,

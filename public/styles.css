@@ -6978,6 +6978,138 @@ body.cli-theme {
   grid-template-columns: 1.35fr 1fr 1fr;
 }
 
+/* QA test-selection grid — reuses the sqa option tiles, adds a toolbar row
+   with the live count and the bulk Select/Deselect controls. */
+.qa-tests-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.qa-tests-count {
+  color: var(--text-faint);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8.5px;
+}
+
+.qa-tests-bulk {
+  display: flex;
+  gap: 6px;
+}
+
+.qa-tests-fieldset .sqa-catalog-state {
+  margin-bottom: 10px;
+}
+
+/* Category groups inside the QA test-selection fieldset. Each section gets a
+   tri-state header toggle and reuses the sqa option grid below it. */
+.qa-category {
+  margin-bottom: 12px;
+}
+
+.qa-category:last-child {
+  margin-bottom: 0;
+}
+
+.qa-category-heading {
+  margin: 0 0 7px;
+}
+
+.qa-category-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.qa-category-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--info);
+}
+
+.qa-category-toggle input:indeterminate {
+  accent-color: var(--info);
+}
+
+/* Unavailable checks: visible for honesty, visually muted, not interactive. */
+.sqa-option.is-unavailable {
+  cursor: default;
+  opacity: 0.62;
+  border-style: dashed;
+  background: transparent;
+}
+
+.sqa-option.is-unavailable:has(input:checked) {
+  border-color: var(--border);
+  background: transparent;
+}
+
+.qa-unavailable-reason {
+  display: block;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* Security testing authorization gate — shown only when a security check is
+   selected. Required confirmation + optional scope notes ride the run. */
+.qa-security-auth {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(105, 184, 235, 0.22);
+  border-radius: 8px;
+  background: rgba(105, 184, 235, 0.045);
+}
+
+.qa-security-auth-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.qa-security-auth-confirm input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  accent-color: var(--info);
+}
+
+.qa-security-auth-confirm span {
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.qa-security-auth-scope span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 8.5px;
+  margin-bottom: 3px;
+}
+
+.qa-security-auth-scope textarea {
+  width: 100%;
+  min-height: 44px;
+  resize: vertical;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #090c11;
+  color: var(--text);
+  outline: 0;
+}
+
 .sqa-modal .field textarea {
   width: 100%;
   min-height: 78px;

@@ -25,6 +25,8 @@ import {
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
+import { publicQaTestCatalog } from './qaTestCatalog.js';
+import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { PublicInputError, publicInput } from './publicErrors.js';
@@ -321,6 +323,11 @@ export function createApplication(options = {}) {
 		response.json(publicSqaCatalog());
 	});
 
+	app.get('/api/qa/catalog', (_request, response) => {
+		response.set('Cache-Control', 'private, max-age=300');
+		response.json(publicQaTestCatalog());
+	});
+
 	app.get('/api/founder/catalog', (_request, response) => {
 		response.set('Cache-Control', 'private, max-age=300');
 		response.json({
@@ -568,7 +575,16 @@ export function createApplication(options = {}) {
 	app.post('/api/sessions', async (request, response) => {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
-		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId });
+		let selectedTests;
+		let securityAuthorization;
+		try {
+			selectedTests = validateQaSelectedTests(request.body?.selectedTests);
+			securityAuthorization = validateSecurityAuthorization(request.body?.securityAuthorization, selectedTests);
+		} catch (error) {
+			response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
+			return;
+		}
+		const session = await services.runs.create(undefined, { device, deviceLandscape, ownerUserId: request.auth?.userId, selectedTests, securityAuthorization });
 		response.status(201).json(session);
 	});
 

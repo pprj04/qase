@@ -99,7 +99,7 @@ function createMemoryServices(options = {}) {
 		}
 	};
 
-	function createSession(title = 'New test run') {
+	function createSession(title = 'New test run', options = {}) {
 		const now = Date.now();
 		const session = {
 			id: randomUUID(),
@@ -115,7 +115,8 @@ function createMemoryServices(options = {}) {
 			report: undefined,
 			pendingQuestion: undefined,
 			contextUsage: undefined,
-			secretNames: []
+			secretNames: [],
+			...options
 		};
 		sessions.set(session.id, session);
 		return session;
@@ -408,6 +409,93 @@ test('health and readiness are public, minimal, and reflect the injected readine
 	const unavailable = await fixture.request('/readyz');
 	assert.equal(unavailable.status, 503);
 	assert.deepEqual(await body(unavailable), { status: 'not_ready' });
+});
+
+test('standard QA run creation accepts a catalog-validated test selection', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+
+	// A valid subset from the catalog is accepted and persisted on the session.
+	const created = await body(await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { selectedTests: ['navigation', 'forms'] }
+	}));
+	assert.deepEqual(created.selectedTests, ['navigation', 'forms']);
+
+	// No selection keeps the historical full-coverage behavior.
+	const full = await body(await fixture.request('/api/sessions', { method: 'POST' }));
+	assert.equal(full.selectedTests, undefined);
+
+	// Empty, unknown, and duplicate selections are rejected at the route.
+	const empty = await fixture.request('/api/sessions', { method: 'POST', json: { selectedTests: [] } });
+	assert.equal(empty.status, 400);
+	assert.match((await body(empty)).error, /Select at least one standard test\./);
+	const unknown = await fixture.request('/api/sessions', { method: 'POST', json: { selectedTests: ['navigation', 'nonexistent'] } });
+	assert.equal(unknown.status, 400);
+	assert.match((await body(unknown)).error, /Unknown standard test/);
+	const duplicate = await fixture.request('/api/sessions', { method: 'POST', json: { selectedTests: ['navigation', 'navigation'] } });
+	assert.equal(duplicate.status, 400);
+	assert.match((await body(duplicate)).error, /Duplicate standard test/);
+});
+
+test('security test selections require explicit authorization at the route', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+
+	// Security check without authorization → 400, no session created.
+	const unconfirmed = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { selectedTests: ['security_authentication'] }
+	});
+	assert.equal(unconfirmed.status, 400);
+	assert.match((await body(unconfirmed)).error, /requires explicit authorization/);
+
+	// Explicitly false is equally rejected.
+	const refused = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { selectedTests: ['security_authentication'], securityAuthorization: { confirmed: false } }
+	});
+	assert.equal(refused.status, 400);
+	assert.match((await body(refused)).error, /requires explicit authorization/);
+
+	// Confirmed authorization → created, with selection + authorization persisted.
+	const authorized = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: {
+			selectedTests: ['navigation', 'security_authentication', 'security_sql_injection'],
+			securityAuthorization: { confirmed: true, notes: 'isolated staging fixture' }
+		}
+	});
+	assert.equal(authorized.status, 201);
+	const session = await body(authorized);
+	assert.deepEqual(session.selectedTests, ['navigation', 'security_authentication', 'security_sql_injection']);
+	assert.deepEqual(session.securityAuthorization, { confirmed: true, notes: 'isolated staging fixture' });
+	// Round-trips through the store.
+	const fetched = await body(await fixture.request(`/api/sessions/${session.id}`));
+	assert.deepEqual(fetched.securityAuthorization, { confirmed: true, notes: 'isolated staging fixture' });
+
+	// Authorization without a security selection: inert but persisted shape-safe.
+	const inert = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { selectedTests: ['navigation'], securityAuthorization: { confirmed: true } }
+	});
+	assert.equal(inert.status, 201);
+
+	// Unavailable checks are rejected regardless of authorization.
+	for (const id of ['security_mitm', 'security_dos']) {
+		const blocked = await fixture.request('/api/sessions', {
+			method: 'POST',
+			json: { selectedTests: [id], securityAuthorization: { confirmed: true } }
+		});
+		assert.equal(blocked.status, 400);
+		assert.match((await body(blocked)).error, /Not implemented — requires an agreed, configured/);
+	}
+	const mixed = await fixture.request('/api/sessions', {
+		method: 'POST',
+		json: { selectedTests: ['navigation', 'security_dos'], securityAuthorization: { confirmed: true } }
+	});
+	assert.equal(mixed.status, 400);
+	assert.match((await body(mixed)).error, /DoS scenario/);
 });
 
 test('embedded instance APIs need no Qase login and reject cross-origin browser mutations', async t => {
