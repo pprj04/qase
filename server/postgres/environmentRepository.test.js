@@ -72,7 +72,7 @@ test('create validates through the catalog validator before touching the databas
 		() => repo.create(TENANT, { platform: 'macos', device: 'macOS Sonoma', osVersion: 'Sonoma', browser: 'brave' }),
 		(error) => {
 			assert.ok(error instanceof EnvironmentValidationError);
-			assert.match(error.message, /not available on macOS/);
+			assert.match(error.message, /not supported on macOS/);
 			return true;
 		}
 	);

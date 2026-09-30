@@ -6,6 +6,12 @@ import { inspectFormValidation } from './browserFormAudit.js';
 import { chromium } from 'playwright';
 import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
 import { browserstackCredentials, connectBrowserstack, environmentEmulationOptions, resolveExecution } from './browserstackProvider.js';
+import {
+	userAgentFor,
+	resolveExecutionLevel,
+	platformRuntimeProfile,
+	EXECUTION_LEVELS
+} from './deviceRuntimeProfiles.js';
 
 /**
  * Makes the agent's browser watchable.
@@ -62,13 +68,32 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	// runs local Chromium with the environment's emulation hints.
 	const execution = options.execution
 		?? resolveExecution(environment, options.browserstackCredentials ?? browserstackCredentials());
+	// Phase 20: structured runtime profile + honest execution level + the
+	// emulation's UA (real mobile UA for the selected OS/browser — not desktop
+	// Chromium's). Only the SIMULATED path uses userAgentFor; a remote runtime
+	// records the page's genuine UA instead.
+	const runtimeProfile = platformRuntimeProfile(environment?.platform);
+	const executionLevel = resolveExecutionLevel({ mode: execution.mode });
+	const emulatedUserAgent = execution.mode === 'emulated' && environment
+		? userAgentFor(environment.platform, environment.osVersion, environment.browserCode)
+		: null;
+	const permissionScenario = environment?.permissionScenario ?? null;
+	const orientationScenario = environment?.orientationScenario ?? null;
 	const emulationOptions = execution.mode === 'emulated'
 		? environmentEmulationOptions(environment)
 		: contextOptionsFor(deviceId, { landscape: deviceLandscape });
 	const bridge = {
 		service,
-		execution,
+		execution: {
+			...execution,
+			level: executionLevel,
+			levelLabel: executionLevel,
+			provider: execution.mode === 'environment' ? 'environment' : 'local',
+			runtimeProfile,
+			emulatedUserAgent
+		},
 		frameTimer: undefined,
+		runtimeFacts: undefined,
 		frameCapture: undefined,
 		capturedInactiveFrame: false,
 		subscribers: 0,
@@ -385,7 +410,7 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
-				if (execution.mode === 'browserstack') {
+				if (execution.mode === 'environment') {
 					// Remote real device / desktop via BrowserStack CDP. The
 					// capability map comes from the environment snapshot; no
 					// local launch, no synthetic media (that is local-only).
@@ -394,6 +419,22 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						service.context = service.browser.contexts()[0] ?? await service.browser.newContext();
 						syntheticMedia = false;
 						await installNetworkPolicy(service.context);
+						// Remote runtime facts: read the genuine UA/viewport from the
+						// provider's page — REAL_DEVICE/VIRTUAL_DEVICE facts are never
+						// synthesized locally.
+						try {
+							const probe = await service.context.newPage();
+							bridge.runtimeFacts = await probe.evaluate(() => ({
+								userAgent: navigator.userAgent,
+								viewport: { width: window.innerWidth, height: window.innerHeight },
+								devicePixelRatio: window.devicePixelRatio,
+								maxTouchPoints: navigator.maxTouchPoints,
+								platform: navigator.platform
+							}));
+							await probe.close().catch(() => {});
+						} catch {
+							bridge.runtimeFacts = null;
+						}
 						return service.context;
 					} catch (error) {
 						await service.browser.close().catch(() => {});
@@ -416,12 +457,52 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 					service.browser = await chromium.launch({ ...launch, executablePath: bundledExecutable });
 				}
 				try {
-					service.context = await service.browser.newContext({
+					// Phase 20: the emulated context applies the environment's
+					// real mobile UA on top of the catalog emulation hints, so the
+					// site under test receives a genuine mobile request (not
+					// desktop Chromium with a resized viewport).
+					const contextOptions = {
 						...(emulationOptions ?? { viewport: { width: 1440, height: 900 }, acceptDownloads: true }),
+						...(emulatedUserAgent ? { userAgent: emulatedUserAgent } : {}),
 						...(policy.isProduction ? { serviceWorkers: 'block' } : {})
-					});
+					};
+					// Orientation scenario: landscape swaps the emulation viewport.
+					if (orientationScenario === 'landscape' && contextOptions.viewport) {
+						contextOptions.viewport = {
+							width: Math.max(contextOptions.viewport.width, contextOptions.viewport.height),
+							height: Math.min(contextOptions.viewport.width, contextOptions.viewport.height)
+						};
+					}
+					service.context = await service.browser.newContext(contextOptions);
+					// Permission scenario: allow → grant; deny/ask left to CDP or
+					// the natural prompt. Never silently coerced.
+					if (permissionScenario && service.context.grantPermissions) {
+						const grantable = Object.entries(permissionScenario)
+							.filter(([, decision]) => decision === 'allow')
+							.map(([name]) => name)
+							.filter((name) => runtimeProfile?.chromiumPermissions?.includes(name));
+						if (grantable.length) {
+							await service.context.grantPermissions(grantable).catch(() => {});
+						}
+					}
 					syntheticMedia = true;
 					await installNetworkPolicy(service.context);
+					// Runtime facts: read back what the browser ACTUALLY got —
+					// the UA the page sees and the viewport in use — so the run
+					// record can store observed truth, not wishful hints.
+					try {
+						const probe = await service.context.newPage();
+						bridge.runtimeFacts = await probe.evaluate(() => ({
+							userAgent: navigator.userAgent,
+							viewport: { width: window.innerWidth, height: window.innerHeight },
+							devicePixelRatio: window.devicePixelRatio,
+							maxTouchPoints: navigator.maxTouchPoints,
+							platform: navigator.platform
+						}));
+						await probe.close().catch(() => {});
+					} catch {
+						bridge.runtimeFacts = null;
+					}
 					return service.context;
 				} catch (error) {
 					await service.browser.close().catch(() => {});
@@ -443,6 +524,27 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		await installNetworkPolicy(service.context);
 		await restoreSession();
 		return currentPage() ?? page;
+	};
+
+	// Lazy facts reader: the context exists only after the first browser tool,
+	// so callers (agent) pull facts when they need them instead of caching at
+	// turn start. Reads live from the real page — never from catalog hints.
+	bridge.readRuntimeFacts = async () => {
+		try {
+			const page = service.activePage ?? service.context?.pages?.()[0];
+			if (page) {
+				return await page.evaluate(() => ({
+					userAgent: navigator.userAgent,
+					viewport: { width: window.innerWidth, height: window.innerHeight },
+					devicePixelRatio: window.devicePixelRatio,
+					maxTouchPoints: navigator.maxTouchPoints,
+					platform: navigator.platform
+				}));
+			}
+		} catch {
+			// Fall through to the cached context-creation facts.
+		}
+		return bridge.runtimeFacts ?? null;
 	};
 
 	bridge.media = async (input = {}) => {

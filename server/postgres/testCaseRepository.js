@@ -6,7 +6,8 @@
 import { randomUUID } from 'node:crypto';
 
 const CASE_COLUMNS = [
-	'case_number', 'title', 'description', 'steps', 'expected', 'tags', 'environment_ids', 'deleted'
+	'case_number', 'title', 'description', 'steps', 'expected', 'tags', 'environment_ids', 'deleted',
+	'source', 'source_run_id', 'source_url'
 ];
 
 function requireTenant(tenant) {
@@ -58,6 +59,14 @@ export function createPostgresTestCaseRepository(pool, { tenantContext } = {}) {
 					params.push(String(filters.environmentId));
 					clauses.push(`$${params.length} = ANY(environment_ids)`);
 				}
+				if (filters.source) {
+					params.push(String(filters.source));
+					clauses.push(`source = $${params.length}`);
+				}
+				if (filters.sourceRunId) {
+					params.push(String(filters.sourceRunId));
+					clauses.push(`source_run_id = $${params.length}`);
+				}
 				const result = await client.query(
 					`SELECT * FROM test_cases
 					 WHERE organization_id = $1 AND project_id = $2 AND ${clauses.join(' AND ')}
@@ -93,9 +102,11 @@ export function createPostgresTestCaseRepository(pool, { tenantContext } = {}) {
 				const params = [randomUUID(), resolved.organizationId, resolved.projectId, caseNumber,
 					input.title, input.description ?? null,
 					JSON.stringify(input.steps ?? []), input.expected ?? null,
-					input.tags ?? [], input.environmentIds ?? []];
+					input.tags ?? [], input.environmentIds ?? [],
+					input.source === 'auto' ? 'auto' : 'manual',
+					input.sourceRunId ?? null, input.sourceUrl ?? null];
 				const result = await client.query(
-					`INSERT INTO test_cases (id, organization_id, project_id, case_number, title, description, steps, expected, tags, environment_ids)
+					`INSERT INTO test_cases (id, organization_id, project_id, case_number, title, description, steps, expected, tags, environment_ids, source, source_run_id, source_url)
 					 VALUES (${params.map((_, i) => `$${i + 1}`).join(', ')})
 					 RETURNING *`,
 					params

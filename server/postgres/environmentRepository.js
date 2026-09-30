@@ -27,7 +27,8 @@ const ENV_COLUMNS = [
 	'platform', 'platform_label', 'device', 'os', 'os_version', 'browser',
 	'browser_code', 'browser_version', 'device_type', 'screen_size',
 	'screen_resolution', 'orientation', 'description',
-	'execution_provider', 'is_real_device', 'active', 'browserstack_capabilities'
+	'execution_provider', 'is_real_device', 'active', 'browserstack_capabilities',
+	'permission_scenario', 'orientation_scenario', 'execution_level_requested'
 ];
 
 export { EnvironmentConflictError };
@@ -99,7 +100,12 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 					orientation: env.orientation ?? null,
 					description: env.description ?? null
 				};
-				for (const column of ENV_COLUMNS) params.push(seeded[column]);
+				for (const column of ENV_COLUMNS) {
+				const value = seeded[column];
+				params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
+					? (value === undefined || value === null ? null : JSON.stringify(value))
+					: (value === undefined ? null : value));
+			}
 				const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
 				const updates = refreshed.map((column) => `${column} = EXCLUDED.${column}`).join(', ');
 				await client.query(
@@ -173,7 +179,12 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 				throw new EnvironmentConflictError(record.envId);
 			}
 			const params = [randomUUID(), resolved.organizationId, resolved.projectId, record.envId];
-			for (const column of ENV_COLUMNS) params.push(record[column]);
+			for (const column of ENV_COLUMNS) {
+				const value = record[column];
+				params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
+					? (value === undefined || value === null ? null : JSON.stringify(value))
+					: (value === undefined ? null : value));
+			}
 			const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
 			const result = await client.query(
 				`INSERT INTO environments (id, organization_id, project_id, env_id, ${ENV_COLUMNS.join(', ')})
@@ -190,24 +201,29 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 		}
 	}
 
-	/** Patchable fields only: active (deprecate/reactivate), execution_provider. env_id is immutable. */
-	async function update(tenant, envId, patch) {
-		const resolved = requireTenant(tenant ?? tenantContext);
-		const columnMap = {
-			active: 'active',
-			executionProvider: 'execution_provider',
-			screenResolution: 'screen_resolution',
-			orientation: 'orientation',
-			description: 'description'
-		};
+		/** Patchable fields only: active, execution_provider, scenarios. env_id is immutable. */
+		async function update(tenant, envId, patch) {
+			const resolved = requireTenant(tenant ?? tenantContext);
+			const columnMap = {
+				active: 'active',
+				executionProvider: 'execution_provider',
+				screenResolution: 'screen_resolution',
+				orientation: 'orientation',
+				description: 'description',
+				permissionScenario: 'permission_scenario',
+				orientationScenario: 'orientation_scenario',
+				executionLevelRequested: 'execution_level_requested'
+			};
 		const columns = [];
 		const params = [];
-		for (const [key, value] of Object.entries(patch ?? {})) {
-			const column = columnMap[key];
-			if (!column) continue;
-			columns.push(`${column} = $${params.length + 1}`);
-			params.push(value);
-		}
+			for (const [key, value] of Object.entries(patch ?? {})) {
+				const column = columnMap[key];
+				if (!column) continue;
+				columns.push(`${column} = $${params.length + 1}`);
+				params.push(column === 'permission_scenario' && value !== null && value !== undefined
+					? JSON.stringify(value)
+					: (value === undefined ? null : value));
+			}
 		if (columns.length === 0) return get(tenant, envId);
 		params.push(envId);
 		const client = await pool.connect();
@@ -254,6 +270,10 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			conditions.push(`${column} = $${params.length}`);
 		};
 		if (filters.platform) add('platform', filters.platform);
+		if (filters.platformGroup?.length) {
+			params.push(filters.platformGroup);
+			conditions.push(`platform = ANY($${params.length})`);
+		}
 		if (filters.device) add('device', filters.device);
 		if (filters.os) add('os', filters.os);
 		if (filters.osVersion) add('os_version', filters.osVersion);
@@ -262,6 +282,8 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 		if (filters.browserVersion) add('browser_version', filters.browserVersion);
 		if (filters.deviceType) add('device_type', filters.deviceType);
 		if (filters.executionProvider) add('execution_provider', filters.executionProvider);
+		if (filters.orientationScenario) add('orientation_scenario', filters.orientationScenario);
+		if (filters.executionLevelRequested) add('execution_level_requested', filters.executionLevelRequested);
 		if (filters.isRealDevice !== undefined && filters.isRealDevice !== null && filters.isRealDevice !== '') {
 			add('is_real_device', filters.isRealDevice === true || filters.isRealDevice === 'true');
 		}

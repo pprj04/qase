@@ -633,9 +633,20 @@ a {
 
 .chat {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  /* head | run-summary | transcript | thinking | question | quick-actions | composer */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
   background: var(--panel-chat);
 }
+
+/* Hidden siblings must not shift later children into the 1fr track: pin each
+   chat child to its declared row so the transcript always gets the flex row. */
+.chat > .panel-head { grid-row: 1; }
+.chat > .run-summary { grid-row: 2; }
+.chat > .transcript { grid-row: 3; }
+.chat > .thinking-strip { grid-row: 4; }
+.chat > .question-slot { grid-row: 5; }
+.chat > .quick-actions { grid-row: 6; }
+.chat > .composer { grid-row: 7; }
 
 .chat > .panel-head {
   justify-content: space-between;
@@ -1015,8 +1026,9 @@ a {
 .perf-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 3px 12px;
+  gap: 5px 12px;
   margin: 0;
+  align-items: baseline;
 }
 
 .perf-grid dt {
@@ -1616,7 +1628,7 @@ a {
 
 .viewer {
   display: grid;
-  grid-template-rows: 68px minmax(270px, 52%) 54px minmax(0, 1fr);
+  grid-template-rows: auto minmax(270px, 52%) 54px minmax(0, 1fr);
   background: var(--panel-viewer);
 }
 
@@ -2914,7 +2926,7 @@ a {
 
   .viewer {
     grid-row: 3;
-    grid-template-rows: 68px minmax(320px, 53%) 54px minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 53%) 54px minmax(0, 1fr);
   }
 
   .runs .panel-head {
@@ -2965,11 +2977,11 @@ a {
   }
 
   .chat {
-    grid-template-rows: 62px minmax(0, 1fr) auto auto auto;
+    grid-template-rows: 62px minmax(0, 1fr) auto auto auto auto;
   }
 
   .viewer {
-    grid-template-rows: 62px minmax(300px, 52%) auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(300px, 52%) auto minmax(0, 1fr);
   }
 
   .chat-target,
@@ -5066,7 +5078,8 @@ body.cli-theme {
 /* Agent terminal */
 
 .cli-theme .chat {
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  /* head | run-summary | transcript | thinking | question | quick-actions | composer */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
   background: #070c12;
 }
 
@@ -5462,7 +5475,7 @@ body.cli-theme {
 /* Browser preview and diagnostics */
 
 .cli-theme .viewer {
-  grid-template-rows: 64px minmax(270px, 52%) 43px minmax(0, 1fr);
+  grid-template-rows: auto minmax(270px, 52%) 43px minmax(0, 1fr);
   background: #070c12;
 }
 
@@ -5495,15 +5508,7 @@ body.cli-theme {
 }
 
 .cli-theme .stage::before {
-  position: absolute;
-  z-index: 2;
-  top: 14px;
-  left: 16px;
-  content: "LIVE_VIEW";
-  color: rgba(103, 232, 166, 0.36);
-  font-size: 8px;
-  letter-spacing: 0.08em;
-  pointer-events: none;
+  display: none;
 }
 
 .cli-theme .stage::after {
@@ -6090,11 +6095,11 @@ body.cli-theme {
   }
 
   .cli-theme .chat {
-    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
   }
 
   .cli-theme .viewer {
-    grid-template-rows: 60px minmax(300px, 52%) auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(300px, 52%) auto minmax(0, 1fr);
   }
 
   .cli-theme .msg,
@@ -7263,6 +7268,11 @@ body.cli-theme {
   .cli-theme .app {
     grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
   }
+
+  /* Desktop rail is 58px wide — the six-row panel cannot fit, but the Change
+   * shortcut to THE picker must stay reachable. */
+  .feature-dock > .feature-device .device-chip-change { display: inline-flex; min-height: 34px; }
+  .feature-dock > .feature-device .device-chip-details { display: none; }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
@@ -7450,6 +7460,35 @@ body.cli-theme {
 	color: #c4b5fd;
 	border-color: #4c1d95;
 }
+/* Phase 22: honest execution-level badge on run cards. Color encodes the
+ * level; the text never lies — SIMULATED can never be styled as REAL. */
+.run-exec-level-badge {
+	display: inline-block;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	padding: 1px 6px;
+	border-radius: 999px;
+	margin-left: 6px;
+	background: var(--panel-2, #0b1220);
+	border: 1px solid var(--border, #2a3346);
+	color: var(--fg-muted, #9aa3b2);
+}
+.run-exec-level-badge[data-level="real_device"] {
+	color: #34d399;
+	border-color: #065f46;
+	background: rgba(6, 95, 70, 0.18);
+}
+.run-exec-level-badge[data-level="virtualized"] {
+	color: #c4b5fd;
+	border-color: #4c1d95;
+	background: rgba(76, 29, 149, 0.18);
+}
+.run-exec-level-badge[data-level="simulated"] {
+	color: #9aa3b2;
+	border-color: #2a3346;
+}
 
 /* Final workspace fit and finish ----------------------------------------
  * These rules deliberately preserve the established terminal palette and
@@ -7487,6 +7526,27 @@ body.cli-theme {
 
 .feature-dock > .feature-device {
   width: 46px;
+  overflow: visible;
+}
+
+/* Narrow mode-dock rail: the full six-row device panel cannot fit without
+   clipping. Collapse it to a compact launcher (still opens the same device
+   drawer); the complete panel appears wherever the rail is wide enough. */
+.feature-dock > .feature-device .device-chip-rows { display: none; }
+.feature-dock > .feature-device .device-chip-change { display: none; }
+.feature-dock > .feature-device .device-chip {
+  padding: 6px 3px;
+  gap: 4px;
+}
+.feature-dock > .feature-device .device-chip-details {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 4px 2px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  white-space: normal;
+  line-height: 1.3;
+  word-break: break-word;
 }
 
 .feature-dock > .feature-device .feature-device-landscape span {
@@ -7533,25 +7593,31 @@ body.cli-theme {
 }
 
 .cli-theme .panel-foot {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   padding-right: 7px;
-  padding-left: 10px;
+  padding-left: 7px;
 }
-
-.cli-theme .panel-foot .foot-btn {
-  margin-left: 0;
-  grid-column: auto;
-}
-
-.cli-theme .panel-foot .btn {
-  min-width: 0;
-  padding-inline: 8px;
-}
-
 .cli-theme .panel-foot #conn-label {
+  flex: 1 1 100%;
+  order: 9;
   min-width: 0;
+}
+.cli-theme .panel-foot .foot-btn {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 0;
+  margin-left: 0;
+  padding-inline: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .cli-theme .transcript {
@@ -7624,6 +7690,11 @@ body.cli-theme {
   .cli-theme .app {
     grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
   }
+
+  /* Desktop rail is 58px wide — the six-row panel cannot fit, but the Change
+   * shortcut to THE picker must stay reachable. */
+  .feature-dock > .feature-device .device-chip-change { display: inline-flex; min-height: 34px; }
+  .feature-dock > .feature-device .device-chip-details { display: none; }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
@@ -7685,6 +7756,17 @@ body.cli-theme {
     padding: 0 8px 0 2px;
     border-right: 1px dashed #263540;
     border-bottom: 0;
+    overflow: hidden;
+  }
+
+  /* Medium rail: restore the full six-row panel and the Change shortcut. */
+  .feature-dock > .feature-device .device-chip-rows { display: flex; }
+  .feature-dock > .feature-device .device-chip { padding: 8px 6px; }
+  .feature-dock > .feature-device .device-chip-change { display: inline-flex; }
+  .feature-dock > .feature-device .device-chip-details {
+    min-height: 26px;
+    font-size: 10px;
+    white-space: nowrap;
   }
 
   .feature-device-label {
@@ -7841,6 +7923,17 @@ body.cli-theme {
     flex-basis: 94px;
     gap: 3px;
     padding-right: 4px;
+    overflow: visible;
+  }
+
+  /* Small rail: compact launcher only (same drawer behind it). */
+  .feature-dock > .feature-device .device-chip-rows { display: none; }
+  .feature-dock > .feature-device .device-chip-change { display: none; }
+  .feature-dock > .feature-device .device-chip { padding: 6px 3px; }
+  .feature-dock > .feature-device .device-chip-details {
+    min-height: 34px;
+    font-size: 11px;
+    white-space: normal;
   }
 
   .feature-device-select {
@@ -7945,7 +8038,13 @@ body.cli-theme {
 .foot-btn { cursor:pointer; }
 
 /* ── Apple Device Matrix (Phase 3) ───────────────────────────────── */
-.dm-modal .modal-inner { max-width:960px; width:min(960px,94vw); }
+.dm-modal { width:min(960px,94vw); max-width:960px; }
+.dm-modal .modal-inner { width:100%; max-width:none; }
+/* Grid column must be content-constrained, or wide tables (coverage matrix
+ * with 900+ environment columns) blow the pane out to max-content width. */
+.dm-modal .modal-body { grid-template-columns: minmax(0, 1fr); }
+.dm-modal [data-dm-pane] { min-width: 0; max-width: 100%; }
+.cov-matrix-wrap, .env-table-wrap, .dm-browse-list { max-width: 100%; min-width: 0; }
 .dm-tabs { display:flex; gap:6px; margin:14px 0 4px; flex-wrap:wrap; }
 .dm-hint { color:#899bb1; font-size:12.5px; margin:8px 0; }
 .dm-browse-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:10px; margin-top:10px; max-height:46vh; overflow:auto; }
@@ -7983,13 +8082,36 @@ body.cli-theme {
 .bulk-preview { color:#aebdd0; font-size:13px; margin:8px 0; }
 .bulk-result { white-space:pre-wrap; font-size:12px; background:#141a24; border:1px solid #263243; border-radius:8px; padding:10px; margin:8px 0; max-height:180px; overflow:auto; }
 
-/* ── Device chip + Device Matrix drawer (Phase 10) ───────────────────────── */
-.device-chip { display:flex; flex-direction:column; gap:4px; padding:8px 10px; border:1px solid #263243; border-radius:8px; background:#141a24; }
-.device-chip-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#899bb1; }
-.device-chip-env { font-size:12px; line-height:1.35; color:#e7eef7; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-.device-chip-status { display:none; }
-.device-chip[data-ready="true"] .device-chip-label::after { content:' ●'; color:#3fd68f; }
-.device-chip-change { align-self:flex-start; }
+/* ── Device chip + Device Matrix drawer (Phase 10 / D5 panel) ──────────── */
+/* Compact readable device panel for the feature-dock rail. Rows never clip
+   the device name: the panel expands to fit and values wrap, never truncate. */
+.device-chip { display:flex; flex-direction:column; align-items:stretch; gap:6px; width:100%; max-width:100%; padding:8px 6px; border:1px solid #263243; border-radius:6px; background:#141a24; }
+.device-chip-rows { display:flex; flex-direction:column; gap:4px; }
+.device-chip-row { display:flex; gap:6px; align-items:baseline; }
+.device-chip-label { flex:0 0 auto; min-width:62px; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:#899bb1; }
+.device-chip-env { font-size:11px; line-height:1.35; color:#e7eef7; word-break:break-word; }
+.device-chip-value { font-size:11px; line-height:1.35; color:#c7d5e5; word-break:break-word; }
+.device-chip-exec { color:#e7eef7; font-weight:600; }
+.device-chip-status-label { color:#3fd68f; }
+.device-chip-session { font-size:10px; color:#899bb1; }
+.device-chip[data-ready="false"] .device-chip-status-label { color:#899bb1; }
+.device-chip-actions { display:flex; gap:4px; }
+.device-chip-change, .device-chip-details { flex:1 1 0; justify-content:center; min-height:0; padding:2px 4px; font-size:10px; white-space:nowrap; }
+@media (max-width: 1500px) {
+	/* Narrow rail: collapse to two-column compact rows, still readable. */
+	.device-chip-row { flex-direction:column; gap:1px; }
+}
+
+/* ── LIVE DEVICE VIEW preview header (Phase D5) ─────────────────────── */
+.live-device-view-head { display:flex; align-items:baseline; gap:8px; width:100%; flex-wrap:wrap; }
+.ldv-title { font-size:9.5px; letter-spacing:0.1em; text-transform:uppercase; color:#899bb1; }
+.ldv-device { font-size:11px; color:#e7eef7; word-break:break-word; }
+.ldv-badges { display:flex; gap:6px; margin-left:auto; }
+.ldv-badge { font-size:9.5px; letter-spacing:0.06em; padding:1px 7px; border:1px solid #263243; border-radius:999px; color:#c7d5e5; white-space:nowrap; }
+.ldv-badge[data-exec="REAL_DEVICE"] { color:#3fd68f; border-color:#2b5e46; }
+.ldv-badge[data-exec="VIRTUAL_DEVICE"] { color:#7fb2e5; border-color:#2b4a66; }
+.ldv-badge[data-exec="SIMULATED"] { color:#d9b64a; border-color:#5e512b; }
+.ldv-badge.ldv-live[data-live="true"] { color:#3fd68f; }
 
 .device-drawer { position:fixed; inset:0 0 0 auto; margin:0; margin-left:auto; height:100dvh; max-height:none; width:min(440px, 100vw); max-width:100vw; border:1px solid #263243; border-left-width:1px; border-radius:0; background:#0d131d; color:#e7eef7; padding:0; }
 .device-drawer::backdrop { background:rgba(4,8,14,0.55); }
@@ -7999,7 +8121,7 @@ body.cli-theme {
 .dd-body { display:flex; flex-direction:column; gap:12px; padding:14px 18px 24px; overflow-y:auto; height:calc(100dvh - 70px); }
 .dd-tabs { display:flex; gap:6px; flex-wrap:wrap; }
 .dd-tab { border:1px solid #263243; background:#141a24; color:#c7d5e5; border-radius:999px; padding:4px 14px; font-size:12.5px; cursor:pointer; }
-.dd-tab.is-active { background:#1d2b3d; color:#fff; border-color:#3a5yco; border-color:#3a5470; }
+.dd-tab.is-active { background:#1d2b3d; color:#fff; border-color:#3a5470; }
 .dd-sections { display:flex; flex-direction:column; gap:8px; max-height:34vh; overflow-y:auto; }
 .dd-section { border:1px solid #263243; border-radius:8px; background:#141a24; }
 .dd-section summary { cursor:pointer; padding:9px 12px; font-size:13px; font-weight:600; }
@@ -8034,11 +8156,23 @@ body.cli-theme {
 }
 
 /* ── Quick Actions + run-target + bulk wizard (Phase 11) ─────────────────── */
-.quick-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 12px; border:1px solid #263243; border-radius:10px; background:#0f151f; }
-.qa-strip-title { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#899bb1; margin-right:4px; }
-.qa-chip { border:1px solid #263243; background:#141a24; color:#c7d5e5; border-radius:999px; padding:5px 12px; font-size:12.5px; cursor:pointer; }
+/* In-flow toolbar directly above the composer inside the chat panel. It
+   occupies grid space, so it can never push content below the fold. */
+.quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin: 0 9px;
+  padding: 5px 8px;
+  border: 1px solid #263243;
+  border-radius: 10px;
+  background: #0f151f;
+}
+.qa-strip-title { flex: 0 0 auto; font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#899bb1; margin-right:2px; }
+.qa-chip { flex: 0 0 auto; border:1px solid #263243; background:#141a24; color:#c7d5e5; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; white-space:nowrap; }
 .qa-chip:hover { border-color:#3a5470; color:#fff; }
-.qa-preset-wrap { display:flex; align-items:center; gap:6px; font-size:11.5px; color:#899bb1; margin-left:auto; }
+.qa-preset-wrap { display:flex; flex:0 0 auto; align-items:center; gap:6px; font-size:11.5px; color:#899bb1; margin-left:auto; padding-left:8px; }
 .qa-preset-wrap select { background:#141a24; color:#e7eef7; border:1px solid #263243; border-radius:6px; padding:4px 8px; font-size:12.5px; }
 .rt-choices { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
 .rt-choice { display:flex; gap:10px; align-items:flex-start; border:1px solid #263243; border-radius:8px; padding:10px 12px; cursor:pointer; background:#141a24; }
@@ -8059,7 +8193,7 @@ body.cli-theme {
 .tc-status-running { color:#e8b56b; border-color:#e8b56b55; }
 .tc-status-not-run { color:#899bb1; }
 @media (max-width:720px) {
-  .quick-actions { position:static; }
+  .quick-actions { margin-inline: 4px; flex-wrap: wrap; }
   .qa-preset-wrap { margin-left:0; width:100%; }
 }
 
@@ -8083,3 +8217,452 @@ body.cli-theme {
 .bp-row-passed span:last-child { color:#3fd68f; }
 .bp-row-running span:last-child { color:#e8b56b; }
 .bp-row-pending span:last-child { color:#899bb1; }
+
+/* ── Phase 20: scenario pickers + honest capability chips (device drawer) ── */
+.dd-capability-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.dd-capability-chip {
+	font-size: 11px; letter-spacing: 0.02em; text-transform: uppercase;
+	padding: 3px 8px; border-radius: 10px; border: 1px solid var(--border, #d0d4dc);
+	color: var(--muted, #667085); background: transparent; cursor: default;
+}
+.dd-capability-chip[data-support="yes"] { border-color: #2e9e5b; color: #1c7a44; }
+.dd-capability-chip[data-support="limited"] { border-color: #c9930a; color: #9a6f08; }
+.dd-capability-chip[data-support="no"] { border-color: #c0392b; color: #a5281b; }
+
+.dd-scenario { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.dd-scenario-label { font-size: 12px; font-weight: 600; color: var(--muted, #667085); }
+.dd-perm-select, .dd-orient-select {
+	font-size: 12px; padding: 3px 6px; border-radius: 6px;
+	border: 1px solid var(--border, #d0d4dc); background: var(--surface, #fff);
+}
+
+/* ── Phase 23 · Device Matrix control layer ─────────────────────── */
+.avail-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 2px; vertical-align: middle; }
+.avail-dot.avail-ok { background: #12b76a; }
+.avail-dot.avail-busy { background: #f79009; }
+.avail-dot.avail-offline { background: #98a2b3; }
+.avail-queue { color: var(--muted, #667085); font-size: 12px; }
+.env-table td[data-result] { font-weight: 600; }
+.env-table td[data-result="done"], .env-table td[data-result="pass"], .env-table td[data-result="passed"] { color: #12b76a; }
+.env-table td[data-result="failed"], .env-table td[data-result="fail"] { color: #f04438; }
+.env-table td[data-result="running"] { color: #f79009; }
+
+.dd-avail { font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-left: 6px; white-space: nowrap; }
+.dd-avail.avail-ok { background: rgba(18, 183, 106, 0.12); color: #0b9156; }
+.dd-avail.avail-busy { background: rgba(247, 144, 9, 0.14); color: #b54708; }
+.dd-avail.avail-offline { background: rgba(152, 162, 179, 0.18); color: #5d6b7e; }
+
+/* Execution fallback dialog (Phase 23) */
+.exec-fallback-options { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.exec-fallback-option {
+	display: flex; flex-direction: column; gap: 2px; text-align: left;
+	padding: 10px 14px; border-radius: 10px; cursor: pointer;
+	border: 1px solid var(--border, #d0d4dc); background: var(--surface, #fff);
+}
+.exec-fallback-option:hover { border-color: var(--accent, #4f46e5); background: rgba(79, 70, 229, 0.04); }
+.exec-fallback-option small { color: var(--muted, #667085); }
+.exec-fallback-note { margin-top: 12px; font-style: italic; }
+
+/* Device queue panel in the run header (Phase 23) */
+.run-queue-panel {
+	display: flex; align-items: center; gap: 10px; margin-top: 8px;
+	padding: 8px 12px; border-radius: 10px;
+	background: rgba(247, 144, 9, 0.10); border: 1px solid rgba(247, 144, 9, 0.35);
+}
+.rq-dot { width: 9px; height: 9px; border-radius: 50%; background: #f79009; animation: rq-pulse 1.6s ease-in-out infinite; }
+@keyframes rq-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.rq-label { font-weight: 600; font-size: 13px; color: #b54708; }
+.rq-detail { color: var(--muted, #667085); font-size: 13px; flex: 1; }
+
+@media (max-width: 1280px) {
+	.env-table th:nth-child(6), .env-table td:nth-child(6),
+	.env-table th:nth-child(7), .env-table td:nth-child(7) { display: none; }
+}
+@media (max-width: 768px) {
+	.env-table th:nth-child(4), .env-table td:nth-child(4),
+	.env-table th:nth-child(5), .env-table td:nth-child(5),
+	.env-table th:nth-child(8), .env-table td:nth-child(8) { display: none; }
+	.run-queue-panel { flex-wrap: wrap; }
+}
+
+/* ── Bugs tab (Phase 6) ─────────────────────────────────────────── */
+
+.bug-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 15px 0;
+}
+
+.bug-filter-bar input[type="search"] {
+  flex: 1 1 150px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.bug-filter-bar select {
+  min-height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.bug {
+  border-bottom: 1px solid var(--border);
+}
+
+.bug .finding-head {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.bug[data-sev="critical"] .sev {
+  border-color: rgba(239, 108, 154, 0.25);
+  background: var(--critical-soft);
+  color: #f5a0be;
+}
+
+.bug[data-sev="high"] .sev {
+  border-color: rgba(239, 121, 127, 0.24);
+  background: var(--danger-soft);
+  color: #f5a1a5;
+}
+
+.bug[data-sev="medium"] .sev {
+  border-color: rgba(232, 181, 95, 0.24);
+  background: var(--warning-soft);
+  color: #edc47a;
+}
+
+.bug[data-sev="low"] .sev {
+  border-color: rgba(105, 184, 235, 0.22);
+  background: var(--info-soft);
+  color: #9bd0f0;
+}
+
+.bug-status {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bug.is-open .bug-status,
+.bug.is-open .finding-chevron {
+  display: inline-flex;
+}
+
+.bug-block {
+  margin: 0 0 11px;
+}
+
+.bug-steps {
+  margin: 0 0 13px;
+  padding-left: 20px;
+}
+
+.bug-steps li + li {
+  margin-top: 5px;
+}
+
+.bug-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+
+.bug-jump {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.bug-jump:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.bug-status-select {
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  font-size: 11px;
+}
+
+/* ── Coverage tab (Phase 7) ─────────────────────────────────────── */
+.dm-coverage-metrics { font-size:.92rem; color:var(--muted,#8a94a6); margin:0 0 10px; }
+.cov-matrix-wrap { overflow:auto; max-height:52vh; border:1px solid var(--border,#232a3a); border-radius:8px; }
+.cov-matrix { border-collapse:collapse; width:100%; font-size:.85rem; }
+.cov-matrix th, .cov-matrix td { padding:6px 10px; border-bottom:1px solid var(--border,#232a3a); border-right:1px solid var(--border,#232a3a); text-align:left; white-space:nowrap; }
+.cov-matrix thead th { position:sticky; top:0; background:var(--panel,#141a28); z-index:1; }
+.cov-matrix tbody th[scope=row] { position:sticky; left:0; background:var(--panel,#141a28); max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+.cov-cell { text-align:center !important; cursor:pointer; min-width:44px; font-weight:600; }
+.cov-cell:focus-visible { outline:2px solid var(--accent,#4f8cff); outline-offset:-2px; }
+.cov-none { color:var(--muted,#4a5266); background:transparent; }
+.cov-pass { color:#3ddc84; }
+.cov-pass-warn { color:#f5b95a; }
+.cov-fail { color:#ff6b6b; }
+.cov-blocked { color:#9aa4b5; }
+.cov-exec { color:#c7d0de; }
+.cov-live { color:#4f8cff; animation:cov-pulse 1.6s ease-in-out infinite; }
+@keyframes cov-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+.cov-unassigned { border-left:2px dashed var(--muted,#8a94a6); }
+.dm-cov-detail { margin-top:12px; padding:12px; border:1px solid var(--border,#232a3a); border-radius:8px; }
+.dm-cov-detail h3 { margin:0 0 8px; font-size:1rem; }
+.cov-detail-list { margin:0 0 10px; padding-left:18px; }
+.cov-idle { color:#6b7385; }
+
+/* ── Agent-generated test case provenance (autogen) ─────────────── */
+.tc-auto-pill {
+	display: inline-block;
+	margin-left: 4px;
+	padding: 0 6px;
+	border: 1px solid #2b4a66;
+	border-radius: 999px;
+	background: rgba(105, 184, 235, 0.1);
+	color: #86cff4;
+	font-size: 8.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	vertical-align: middle;
+}
+.tc-source-field { max-width: 200px; }
+.tc-view-run { white-space: nowrap; }
+
+/* ── Test cases dialog: scrollable body (form must never clip) ────── */
+.test-cases-inner { max-height: min(820px, calc(100dvh - 32px)); }
+.test-cases-inner .modal-body { overflow: auto; min-height: 0; }
+
+/* ── LDV Phase 2: dynamic device frame, browser chrome, env card ──── */
+.browser-chrome {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 7px 12px;
+	background: #10161f;
+	border-bottom: 1px solid #263243;
+	font-size: 11px;
+	color: #c7d5e5;
+	box-sizing: border-box;
+}
+.browser-chrome[hidden] { display: none; }
+.chrome-brand-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.chrome-brand { font-weight: 600; letter-spacing: 0.04em; flex: none; }
+.chrome-nav { color: #66788c; letter-spacing: 3px; flex: none; }
+.chrome-lock { font-size: 10px; flex: none; }
+.chrome-url { color: #93a4af; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Frame proportions from the ACTIVE environment's real resolution.
+   --ldv-aspect is set from resolution+orientation by app.js; the fallback
+   per kind keeps a sane shape when the env has no declared resolution. */
+#stage[data-device-kind="phone"] #stage-inner,
+#stage[data-device-kind="tablet"] #stage-inner {
+	aspect-ratio: var(--ldv-aspect, 9 / 19.5);
+	max-height: min(78dvh, 780px);
+	width: auto;
+	max-width: min(100%, 420px);
+}
+#stage[data-device-kind="tablet"] #stage-inner {
+	max-width: min(100%, 660px);
+	aspect-ratio: var(--ldv-aspect, 3 / 4);
+}
+#stage[data-device-kind="phone"][data-device-orientation="landscape"] #stage-inner,
+#stage[data-device-kind="tablet"][data-device-orientation="landscape"] #stage-inner {
+	max-width: min(100%, 820px);
+}
+/* Distinct Android accents vs iPhone (corner + chin). */
+#stage[data-browser-key="chrome"] #stage-inner,
+#stage[data-browser-key="firefox"] #stage-inner,
+#stage[data-browser-key="edge"] #stage-inner,
+#stage[data-browser-key="brave"] #stage-inner,
+#stage[data-browser-key="opera"] #stage-inner,
+#stage[data-browser-key="duckduckgo"] #stage-inner {
+	border-radius: 18px;
+	box-shadow: 0 0 0 6px #0f141c, 0 0 0 8px #1c2431, inset 0 -14px 0 #0b1018, 0 20px 50px rgba(0,0,0,0.55);
+}
+/* Desktop: browser-window frame, always landscape. */
+#stage[data-device-kind="desktop"] #stage-inner {
+	border-radius: 8px;
+	box-shadow: 0 0 0 1px #263243, 0 20px 50px rgba(0,0,0,0.55);
+	border-top: 22px solid #131a25;
+	position: relative;
+}
+#stage[data-device-kind="desktop"]::before {
+	content: '● ● ●';
+	position: absolute;
+	top: 4px;
+	left: 14px;
+	font-size: 8px;
+	letter-spacing: 3px;
+	color: #3a4a5e;
+	z-index: 2;
+}
+
+/* Environment card (right panel). */
+.ldv-env-card {
+	width: 100%;
+	margin-top: 8px;
+	padding: 10px 12px;
+	border: 1px solid #263243;
+	border-radius: 10px;
+	background: #10161f;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	box-sizing: border-box;
+}
+.ldv-env-card[hidden] { display: none; }
+.ldv-env-kicker { font-size: 9px; letter-spacing: 0.12em; color: #7d92a8; text-transform: uppercase; }
+.ldv-env-name { font-size: 14px; font-weight: 600; color: #eef4fb; word-break: break-word; }
+.ldv-env-line { font-size: 11.5px; color: #aebdd0; }
+.ldv-env-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.ldv-env-runtime { font-size: 10.5px; color: #8fa3b8; }
+.ldv-env-runtime code { color: #c7d5e5; }
+.ldv-env-card-actions { display: flex; gap: 8px; margin-top: 6px; }
+
+/* Unavailable state — honest panel, no fake preview. */
+.ldv-unavailable {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 28px 18px;
+	text-align: center;
+	color: #c7d5e5;
+	width: 100%;
+}
+.ldv-unavailable[hidden] { display: none; }
+.ldv-unavailable-title { color: #ff8b6b; font-size: 12px; letter-spacing: 0.08em; }
+.ldv-unavailable-env { font-size: 12.5px; color: #eef4fb; }
+.ldv-unavailable-reason { font-size: 11px; color: #8fa3b8; max-width: 320px; }
+.ldv-unavailable-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* Status badge variants for the full lifecycle vocabulary. */
+.ldv-badge[data-exec="none"] { color: #66788c; }
+.ldv-live[data-live="false"] { color: #8fa3b8; }
+
+/* Viewer panel head must grow with the environment card (no clipping). */
+.panel.viewer .panel-head {
+	flex-wrap: wrap;
+	height: auto;
+	min-height: 0;
+	max-height: none;
+	align-content: flex-start;
+}
+.panel.viewer .panel-head .ldv-env-card-actions .btn {
+	white-space: nowrap;
+}
+
+/* Viewer head: the env card needs vertical room — override the fixed-height
+   theme rules (they win on specificity over the base fix above). */
+.cli-theme .panel.viewer .panel-head,
+.cli-theme .panel-head.panel-head.viewer-fix,
+.panel.viewer > header.panel-head {
+	height: auto !important;
+	max-height: none !important;
+	flex-wrap: wrap;
+	align-content: flex-start;
+}
+
+/* ── LDV Phase 3: execution targeting block (TARGET / TESTING / COMPLETED) ── */
+.exec-target-host { padding: 0 18px; }
+.exec-target-host[hidden] { display: none; }
+.exec-target {
+	border: 1px solid #263243;
+	border-left: 3px solid #3a4a5e;
+	border-radius: 8px;
+	background: #0d141d;
+	padding: 9px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-bottom: 10px;
+}
+.exec-target-head { font-size: 9px; letter-spacing: 0.12em; color: #7d92a8; }
+.exec-target-env { font-size: 12.5px; color: #eef4fb; font-weight: 600; word-break: break-word; }
+.exec-target-meta { font-size: 10px; color: #8fa3b8; white-space: pre-wrap; }
+.exec-target-testing { font-size: 11px; color: #3fd68f; }
+.exec-target-done { font-size: 11px; color: #7fb2e5; }
+.exec-target-failed { font-size: 11px; color: #ff8b6b; }
+.exec-target--running { border-left-color: #3fd68f; }
+.exec-target--completed { border-left-color: #7fb2e5; }
+.exec-target--failed, .exec-target--device_unavailable { border-left-color: #ff8b6b; }
+
+/* ── LDV Phase 4: bulk active marker + evidence provenance ────────── */
+.bp-row-active { outline: 1px solid #2b5e46; background: rgba(63, 214, 143, 0.06); border-radius: 6px; }
+.evidence-section { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.evidence-section h3 { margin: 0; font-size: 12px; color: #c3cfdf; }
+.evidence-card { border: 1px solid #263243; border-radius: 8px; padding: 8px 10px; background: #10161f; display: flex; flex-direction: column; gap: 3px; }
+.evidence-head { font-size: 11.5px; color: #eef4fb; font-weight: 600; }
+.evidence-prov { font-size: 10.5px; color: #8fa3b8; word-break: break-word; }
+
+/* ── ONE Device Picker (DX Phase 1) ─────────────────────────────── */
+.dp-modal .modal-inner { width: min(720px, 94vw); }
+.dp-body { display: flex; flex-direction: column; gap: 12px; }
+.dp-sub { margin: 4px 0 0; color: #8fa3b8; font-size: 11.5px; letter-spacing: 0.02em; }
+.dp-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.dp-chip { font: inherit; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: #c3cfdf; background: #10161f; border: 1px solid #263243; border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.dp-chip.is-active { color: #0b0f16; background: #7dd3fc; border-color: #7dd3fc; font-weight: 700; }
+.dp-cards { display: flex; flex-direction: column; gap: 6px; max-height: min(420px, calc(100dvh - 320px)); overflow: auto; min-height: 0; }
+.dp-group { font-size: 10px; letter-spacing: 0.12em; color: #6d8095; margin: 8px 0 2px; }
+.dp-group:first-child { margin-top: 0; }
+.dp-card { display: flex; align-items: center; gap: 12px; border: 1px solid #263243; border-radius: 8px; padding: 8px 12px; background: #10161f; flex-wrap: wrap; }
+.dp-card.is-selected { border-color: #7dd3fc; box-shadow: 0 0 0 1px #7dd3fc inset; }
+.dp-card-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.dp-card-name { font-size: 13px; font-weight: 600; color: #eef4fb; }
+.dp-card-sub { font-size: 11px; color: #8fa3b8; }
+.dp-card-badge { font-size: 10px; letter-spacing: 0.05em; color: #7dd3fc; }
+.dp-card-badge:has(+ .dp-select-btn) { align-self: flex-start; }
+.dp-select-btn { flex-shrink: 0; }
+.dp-card-options { width: 100%; display: flex; gap: 8px; flex-wrap: wrap; padding-top: 8px; border-top: 1px dashed #263243; }
+.dp-select { font: inherit; font-size: 11.5px; color: #eef4fb; background: #0b0f16; border: 1px solid #263243; border-radius: 6px; padding: 4px 8px; }
+.dp-empty { color: #8fa3b8; font-size: 12px; padding: 16px 0; text-align: center; }
+.dp-summary { margin: 0; padding: 8px 10px; border: 1px solid #263243; border-radius: 8px; background: #10161f; font-size: 11px; letter-spacing: 0.04em; color: #c3cfdf; word-break: break-word; }
+.dp-summary[data-empty='true'] { color: #fbbf24; font-weight: 700; letter-spacing: 0.08em; }
+
+/* ── CURRENT TEST DEVICE card + empty state (DX Phase 2) ────────── */
+.ldv-env-card-empty { align-items: flex-start; gap: 10px; }
+.ldv-env-prompt { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: #fbbf24; }
+
+/* ── TEST ON block in start dialogs (DX Phase 3) ─────────────────── */
+.test-on-fieldset { display: flex; flex-direction: column; gap: 8px; }
+.test-on-summary { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid #263243; border-radius: 8px; background: #10161f; min-height: 58px; justify-content: center; }
+.test-on-summary[data-empty='true'] { border-style: dashed; border-color: #b45309; }
+.test-on-prompt { color: #fbbf24; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; }
+.test-on-device { font-size: 14px; font-weight: 700; color: #eef4fb; }
+.test-on-line { font-size: 12px; color: #c3cfdf; }
+.test-on-meta { font-size: 10.5px; letter-spacing: 0.05em; color: #7dd3fc; }
+.test-on-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* ── TEST ON DEVICES chip lists (DX Phase 4) ─────────────────────── */
+.tc-devices-field { display: flex; flex-direction: column; gap: 6px; }
+.dcl-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; min-height: 40px; border: 1px solid #263243; border-radius: 8px; background: #10161f; }
+.dcl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 10px; border: 1px solid #2f4d63; border-radius: 999px; background: #0b1520; font-size: 11px; color: #c3cfdf; }
+.dcl-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+.dcl-remove { font: inherit; font-size: 13px; line-height: 1; color: #8fa3b8; background: none; border: none; cursor: pointer; padding: 0 4px; }
+.dcl-remove:hover { color: #f87171; }
+.dcl-empty { font-size: 11px; color: #6d8095; align-self: center; }
+.dcl-add { align-self: flex-start; }

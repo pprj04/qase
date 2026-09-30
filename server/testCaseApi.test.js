@@ -29,14 +29,14 @@ const SAMPLE_ENV = {
 	browserVersion: '140',
 	deviceType: 'mobile',
 	screenSize: '1179x2556',
-	executionProvider: 'browserstack',
+	executionProvider: 'environment',
 	isRealDevice: true,
 	active: true,
 	catalogVersion: 'test',
-	browserstackCapabilities: {}
+	runtimeCapabilities: {}
 };
 
-async function startFixture() {
+async function startFixture(overrides = {}) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qase-testcase-api-'));
 	const deviceCatalog = createLocalDeviceCatalogBackend({ stateDir: dir, stateFile: path.join(dir, 'catalog.json') });
 	await deviceCatalog.seed();
@@ -55,7 +55,7 @@ async function startFixture() {
 	}), { environments: envService });
 
 	const services = {
-		runs: {
+		runs: overrides.runs || {
 			load: async () => undefined,
 			list: async () => [],
 			create: async (title, options) => ({ id: 'dbg-session', title, ...options }),
@@ -82,7 +82,8 @@ async function startFixture() {
 		lifecycle: { close: async () => undefined },
 		deviceCatalog,
 		environments: envService,
-		testCases
+		testCases,
+		...(overrides.autogen ? { testCaseAutogen: overrides.autogen } : {})
 	};
 	const application = createApplication({
 		services,
@@ -201,6 +202,80 @@ test('POST /api/sessions with testCaseId links the run; unassigned env → 422; 
 		assert.ok(linked.body, 'response body must parse as JSON');
 		assert.equal(linked.body.testCaseId, caseNumber);
 		assert.equal(linked.body.testCaseSnapshot.title, 'Linked');
+	} finally {
+		await fx.close();
+	}
+});
+
+test('list forwards source and sourceRunId filters; manual POST defaults to source manual', async () => {
+	const fx = await startFixture();
+	try {
+		const manual = await fx.json('/api/test-cases', { method: 'POST', json: { title: 'Manual case' } });
+		assert.equal(manual.status, 201);
+		assert.equal(manual.body.source, 'manual');
+
+		// Insert an auto-sourced case directly through the service to avoid depending on the LLM.
+		await fx.services.testCases.create({ title: 'Auto case', source: 'auto', sourceRunId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' });
+
+		const manualOnly = await fx.json('/api/test-cases?source=manual');
+		assert.equal(manualOnly.body.total, 1);
+		assert.equal(manualOnly.body.testCases[0].source, 'manual');
+
+		const autoOnly = await fx.json('/api/test-cases?source=auto');
+		assert.equal(autoOnly.body.total, 1);
+		assert.equal(autoOnly.body.testCases[0].source, 'auto');
+		assert.equal(autoOnly.body.testCases[0].sourceRunId, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+
+		const byRun = await fx.json('/api/test-cases?sourceRunId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+		assert.equal(byRun.body.total, 1);
+		assert.equal(byRun.body.testCases[0].title, 'Auto case');
+
+		const byMiss = await fx.json('/api/test-cases?sourceRunId=00000000-0000-4000-8000-000000000000');
+		assert.equal(byMiss.body.total, 0);
+	} finally {
+		await fx.close();
+	}
+});
+
+test('POST /api/test-cases/generate generates from a completed run and reports created cases', async () => {
+	let calls = 0;
+	let callArgs = null;
+	const autogen = {
+		generateForRun: async (run) => {
+			calls += 1;
+			callArgs = run;
+			return { created: ['TC-0001', 'TC-0002', 'TC-0003'], skipped: 0 };
+		}
+	};
+	const fx = await startFixture({ autogen });
+	try {
+		const missing = await fx.json('/api/test-cases/generate', { method: 'POST', json: { runId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } });
+		assert.equal(missing.status, 404);
+
+		const session = await fx.services.runs.create({ url: 'https://example.com', targetUrl: 'https://example.com', instruction: 'Smoke the checkout' });
+		const sessionId = session.id;
+		const stored = { id: sessionId, report: { verdict: 'PASS', summary: 'ok' } };
+		fx.services.runs.get = async (id) => (id === sessionId ? stored : null);
+		await fx.services.runs.commit(sessionId, 'report', {
+			verdict: 'PASS',
+			summary: 'Checkout smoke passed on production.',
+			todos: [
+				{ text: 'Add item to cart', done: true },
+				{ text: 'Complete payment with test card', done: true }
+			]
+		});
+		await fx.services.runs.setStatus(sessionId, 'done');
+
+		const gen = await fx.json('/api/test-cases/generate', { method: 'POST', json: { runId: sessionId } });
+		assert.equal(gen.status, 200);
+		assert.equal(gen.body.count, 3);
+		assert.deepEqual(gen.body.created, ['TC-0001', 'TC-0002', 'TC-0003']);
+		assert.equal(callArgs.id, sessionId);
+		assert.equal(calls, 1);
+		assert.ok(callArgs.report);
+
+		const noBody = await fx.json('/api/test-cases/generate', { method: 'POST', json: {} });
+		assert.equal(noBody.status, 422);
 	} finally {
 		await fx.close();
 	}

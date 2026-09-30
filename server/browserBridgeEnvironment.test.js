@@ -63,15 +63,15 @@ test('a browserstack environment resolves remote execution and never launches lo
 	const fake = fakeService();
 
 	const execution = resolveExecution(snapshot, { username: 'u', accessKey: 'k' });
-	assert.equal(execution.mode, 'browserstack');
+	assert.equal(execution.mode, 'environment');
 
 	// The bridge surfaces the execution plan for the UI/reports.
 	const bridge = attachBrowserBridge(session, fake.service, stubStore(), {
 		execution,
 		environment: snapshot
 	});
-	assert.equal(bridge.execution.mode, 'browserstack');
-	assert.match(bridge.execution.label, /BrowserStack real device/);
+	assert.equal(bridge.execution.mode, 'environment');
+	assert.match(bridge.execution.label, /environment runtime/);
 	t.after(() => bridge.dispose());
 });
 
@@ -86,7 +86,7 @@ test('without credentials the same environment downgrades to emulated with the d
 		browserstackCredentials: null
 	});
 	assert.equal(bridge.execution.mode, 'emulated');
-	assert.match(bridge.execution.label, /local \(emulated; BrowserStack credentials not configured\)/);
+	assert.match(bridge.execution.label, /local \(emulated; remote runtime not configured\)/);
 	t.after(() => bridge.dispose());
 });
 

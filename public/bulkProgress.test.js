@@ -71,3 +71,15 @@ describe('bulkProgress · aggregation math', () => {
 		assert.equal(rows[1].state, 'Running');
 	});
 });
+
+test('batchRows carries the honest execution level per environment record', () => {
+	const batch = { sessionIds: ['s1', 's2'], testCaseTitles: {} };
+	const sessions = new Map([
+		['s1', { id: 's1', status: 'done', findingCount: 0, executionLevel: 'SIMULATED', environmentSnapshot: { device: 'iPhone 16 Pro' } }],
+		['s2', { id: 's2', status: 'done', findingCount: 2, executionLevel: 'REAL_DEVICE', environmentSnapshot: { device: 'Galaxy S24' } }]
+	]);
+	const rows = batchRows(batch, sessions);
+	assert.equal(rows[0].executionLevel, 'SIMULATED');
+	assert.equal(rows[1].executionLevel, 'REAL_DEVICE');
+	assert.equal(rows[1].state, 'Failed');
+});

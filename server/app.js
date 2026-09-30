@@ -26,6 +26,7 @@ import {
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { createCatalogRoutes } from './catalogApi.js';
 import { createTestCaseRoutes } from './testCaseApi.js';
+import { createBugRoutes } from './bugApi.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
@@ -337,7 +338,12 @@ export function createApplication(options = {}) {
 	function startTurn(session, turnOptions) {
 		let turn;
 		try {
-			turn = Promise.resolve(services.agent.runTurn(session, turnOptions));
+			turn = Promise.resolve(services.agent.runTurn(
+				session,
+				turnOptions,
+				services.runs,
+				services.deviceRuntime
+			));
 		} catch (error) {
 			turn = Promise.reject(error);
 		}
@@ -409,13 +415,96 @@ export function createApplication(options = {}) {
 		catalogRoutes(app);
 	}
 
+	// Device runtime control plane (Phase 21): availability board, sessions,
+	// queue, honest fallbacks. Never downgrades a level silently.
+	if (services.deviceRuntime) {
+		const runtime = services.deviceRuntime;
+		// Pre-register every environment on the availability board so the UI
+		// can show honest execution type / availability before first use.
+		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
+			void Promise.resolve(services.environments.list({ limit: 10000 }))
+				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? []))
+				.catch(() => { /* board fills lazily via sessions */ });
+		}
+		app.get('/api/device-runtime/devices', (request, response) => {
+			response.json({
+				devices: runtime.deviceBoard(),
+				providers: runtime.providers
+			});
+		});
+		app.post('/api/device-runtime/sessions', async (request, response) => {
+			try {
+				const body = request.body ?? {};
+				let environment = body.environment ?? null;
+				if (!environment && typeof body.environmentId === 'string') {
+					environment = await services.environments.get(body.environmentId).catch(() => null);
+				}
+				const result = await runtime.requestSession({
+					environment,
+					requestedLevel: body.requestedLevel,
+					linkedRunId: body.linkedRunId,
+					linkedTestCaseId: body.linkedTestCaseId,
+					allowQueue: body.allowQueue !== false
+				});
+				const statusByResult = { started: 201, queued: 202, busy: 409, not_available: 503, failed: 500 };
+				response.status(statusByResult[result.status] ?? 200).json(result);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+		app.get('/api/device-runtime/sessions', (request, response) => {
+			response.json({ sessions: services.deviceRuntime.listSessions({ status: request.query?.status }) });
+		});
+		app.get('/api/device-runtime/sessions/:id', (request, response) => {
+			const session = runtime.getSession(request.params.id);
+			if (!session) {
+				response.status(404).json({ error: 'Unknown device session.' });
+				return;
+			}
+			response.json(session);
+		});
+		app.post('/api/device-runtime/sessions/:id/cancel', async (request, response) => {
+			const result = await runtime.cancelSession(request.params.id);
+			if (!result.cancelled) {
+				response.status(409).json(result);
+				return;
+			}
+			response.json(result);
+		});
+	}
+
 	// Test cases with multi-environment assignment (Phase 4): /api/test-cases.
 	if (services.testCases) {
 		const testCaseRoutes = createTestCaseRoutes({
 			testCases: services.testCases,
+			runs: services.runs,
+			autogen: services.testCaseAutogen ?? null,
 			onError: safeErrorResponse
 		});
 		testCaseRoutes(app);
+	}
+
+	// Bug reports with BUG-XXXX ids + auto environment association (Phase 6).
+	if (services.bugs) {
+		createBugRoutes({
+			bugs: services.bugs,
+			onError: safeErrorResponse
+		})(app);
+	}
+
+	// Coverage dashboard aggregation (Phase 7): cases × environments × runs.
+	if (services.coverage) {
+		app.get('/api/coverage', async (request, response) => {
+			try {
+				const payload = await services.coverage.snapshot();
+				// Read-your-write matters for the dashboard (a run just finished
+				// must appear immediately), so never cache the snapshot.
+				response.set('Cache-Control', 'no-store');
+				response.json(payload);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 	}
 
 	app.get('/api/environments', async (request, response) => {
@@ -533,7 +622,12 @@ export function createApplication(options = {}) {
 				return;
 			}
 			if (patch.executionProvider !== undefined && !['local', 'browserstack'].includes(patch.executionProvider)) {
-				response.status(400).json({ error: 'executionProvider must be "local" or "browserstack".' });
+				response.status(400).json({ error: 'executionProvider must be "environment" or "local".' });
+				return;
+			}
+			if (patch.executionLevelRequested !== undefined && patch.executionLevelRequested !== null
+				&& !['REAL_DEVICE', 'VIRTUAL_DEVICE', 'SIMULATED'].includes(patch.executionLevelRequested)) {
+				response.status(400).json({ error: 'executionLevelRequested must be REAL_DEVICE, VIRTUAL_DEVICE or SIMULATED.' });
 				return;
 			}
 			if (patch.orientation !== undefined && patch.orientation !== null && !['portrait', 'landscape'].includes(patch.orientation)) {
@@ -551,6 +645,11 @@ export function createApplication(options = {}) {
 			}
 			response.json(updated);
 		} catch (error) {
+			// Phase 20 scenario validation errors are user input errors, not 500s.
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
 			safeErrorResponse(request, response, error);
 		}
 	});
@@ -730,8 +829,7 @@ export function createApplication(options = {}) {
 		}
 	});
 
-	app.delete('/api/sessions/:id', async (request, response) => {
-		const session = await services.runs.get(request.params.id);
+	app.delete('/api/sessions/:id', async (request, response) => {		const session = await services.runs.get(request.params.id);
 		if (!session) {
 			response.json({ deleted: false });
 			return;
@@ -741,6 +839,7 @@ export function createApplication(options = {}) {
 		if (deleted) {
 			const cleanup = await Promise.allSettled([
 				Promise.resolve().then(() => services.secrets.clear(session.id)),
+				Promise.resolve().then(() => services.artifacts?.removeAll(session.id)),
 				Promise.resolve().then(() => services.agent.purgeArtifacts?.(session.id))
 			]);
 			const failed = cleanup
@@ -899,6 +998,27 @@ export function createApplication(options = {}) {
 		await services.runs.commit(session, 'run.stop_requested');
 		await services.agent.stop(session.id);
 		response.json({ ok: true });
+	});
+
+	// Phase 22: evidence artifacts with environment + execution-level metadata.
+	app.get('/api/sessions/:id/artifacts', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		response.json({ artifacts: services.artifacts?.list(session.id) ?? [] });
+	});
+
+	app.get('/api/sessions/:id/artifacts/:artifactId', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const found = services.artifacts?.get(session.id, request.params.artifactId);
+		if (!found) {
+			response.status(404).json({ error: 'Unknown artifact.' });
+			return;
+		}
+		response.set('Content-Type', found.meta.contentType);
+		response.set('X-Qase-Execution-Level', found.meta.executionLevel ?? 'UNKNOWN');
+		response.set('X-Qase-Execution-Provider', found.meta.executionProvider ?? 'unknown');
+		response.send(found.bytes);
 	});
 
 	app.get('/api/sessions/:id/report.md', async (request, response) => {

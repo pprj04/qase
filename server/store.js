@@ -69,6 +69,8 @@ function persistSoon() {
 	saveTimer.unref?.();
 }
 
+export { persistSoon };
+
 /** Flushes pending local history before the process exits. */
 export function flushSessions() {
 	clearTimeout(saveTimer);
@@ -207,6 +209,10 @@ export function createSession(title = 'New test run', options = {}) {
 		contextUsage: undefined,
 		/** Token usage recorded after each run: provider-reported or estimated. */
 		tokenUsage: undefined,
+		/** Phase 20: honest execution level actually used (SIMULATED/VIRTUAL_DEVICE/REAL_DEVICE), observed runtime facts. */
+		executionLevel: options.executionLevel,
+		executionProviderActual: options.executionProviderActual,
+		runtimeFacts: options.runtimeFacts ? structuredClone(options.runtimeFacts) : undefined,
 		/** Names of secrets held for this session — never the values. */
 		secretNames: []
 	};
@@ -238,6 +244,9 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			targetUrl: session.targetUrl,
 			device: isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID,
 			deviceLandscape: session.deviceLandscape === true,
+			// Test-case join key (Phase 11 bulk flows): last-run aggregation
+			// and per-environment records map runs to cases without full loads.
+			testCaseId: session.testCaseId ?? undefined,
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			// Needed by boot-time recovery (runResume), which runs without a
@@ -255,8 +264,25 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			todoCompleted: Array.isArray(session.todos)
 				? session.todos.filter(todo => todo?.status === 'completed').length
 				: 0,
-			tokenUsage: session.tokenUsage
+			tokenUsage: session.tokenUsage,
+			executionLevel: session.executionLevel,
+			executionProviderActual: session.executionProviderActual,
+			// Environment join keys (Phase 23): let the UI map runs to devices
+			// without loading each full session.
+			environmentId: session.environmentId ?? session.environmentSnapshot?.envId ?? undefined,
+			environmentSnapshot: session.environmentSnapshot
+				? { envId: session.environmentSnapshot.envId, device: session.environmentSnapshot.device }
+				: undefined
 		}));
+}
+
+/**
+ * All sessions, unscoped and capped only by memory — full records. Used by
+ * coverage aggregation (Phase 7), which needs every case×environment pair's
+ * latest run; request-scoped list() caps at 100 and filters by owner.
+ */
+export function allSessions() {
+	return [...sessions.values()];
 }
 
 export function deleteSession(id, ownerUserId) {

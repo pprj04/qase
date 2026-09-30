@@ -13,6 +13,17 @@ import {
 	ENVIRONMENT_CATALOG_VERSION
 } from './environmentCatalog.js';
 
+/** Index of the frozen catalog by envId for metadata lookups. */
+const CATALOG_BY_ENV_ID = new Map(generateEnvironments().map((env) => [env.envId, env]));
+function findCatalogEnvironment(envId) {
+	return CATALOG_BY_ENV_ID.get(envId) ?? null;
+}
+import {
+	normalizePermissionScenario,
+	normalizeOrientationScenario,
+	platformRuntimeProfile
+} from './deviceRuntimeProfiles.js';
+
 /**
  * Environment application service.
  *
@@ -90,6 +101,25 @@ export async function normalizeEnvironmentInput(input, options = {}) {
 			? `${device.emulation.viewport.width}x${device.emulation.viewport.height}`
 			: null);
 
+	// Phase 20 permission + orientation scenarios: whitelisted values only,
+	// validated against the platform profile (rotate-during-test needs touch).
+	const deviceTypeForScenario = device.deviceType;
+	let permissionScenario;
+	try {
+		permissionScenario = normalizePermissionScenario(input.permissionScenario);
+	} catch (error) {
+		throw new EnvironmentValidationError(error.message);
+	}
+	let orientationScenario;
+	try {
+		orientationScenario = normalizeOrientationScenario(input.orientationScenario, { deviceType: deviceTypeForScenario });
+	} catch (error) {
+		throw new EnvironmentValidationError(error.message);
+	}
+	const requestedLevel = ['REAL_DEVICE', 'VIRTUAL_DEVICE', 'SIMULATED'].includes(input.executionLevelRequested)
+		? input.executionLevelRequested
+		: null;
+
 	return {
 		envId: options.envId ?? buildEnvId(platformId, device.slug, osVersion, browser.envCode, resolvedVersion),
 		platform: platformId,
@@ -108,7 +138,10 @@ export async function normalizeEnvironmentInput(input, options = {}) {
 		executionProvider,
 		isRealDevice: device.isRealDevice && executionProvider === 'browserstack',
 		active: true,
-		browserstackCapabilities: capabilitiesFor(device, platformId, osVersion, browser, resolvedVersion)
+		permissionScenario,
+		orientationScenario,
+		executionLevelRequested: requestedLevel,
+		runtimeCapabilities: capabilitiesFor(device, platformId, osVersion, browser, resolvedVersion)
 	};
 }
 
@@ -175,9 +208,80 @@ export function rowToEnvironment(row) {
 		executionProvider: row.execution_provider ?? row.executionProvider,
 		isRealDevice: row.is_real_device ?? row.isRealDevice,
 		active: row.active,
-		browserstackCapabilities: row.browserstack_capabilities ?? row.browserstackCapabilities,
+		permissionScenario: row.permission_scenario ?? row.permissionScenario ?? null,
+		orientationScenario: row.orientation_scenario ?? row.orientationScenario ?? null,
+		executionLevelRequested: row.execution_level_requested ?? row.executionLevelRequested ?? null,
+		runtimeCapabilities: row.browserstack_capabilities ?? row.runtimeCapabilities ?? row.runtimeCapabilities,
 		createdAt: row.created_at ?? row.createdAt,
 		updatedAt: row.updated_at ?? row.updatedAt
+	};
+}
+
+/**
+ * Phase D1 · Strict execution-type + device metadata contract.
+ * Every environment handed to the UI/API carries exactly one of
+ * REAL_DEVICE / VIRTUAL_DEVICE / SIMULATED plus the full metadata field set
+ * the device panel and matrix render. Nothing here invents hardware: the
+ * execution type is derived from the runtime manager's honest level, never
+ * from a device name or profile flag.
+ */
+
+/** Runtime metadata attached per environment. `runtimeSessionId`/`runtimeStatus`
+ * are null until a runtime session exists for this environment. */
+const RUNTIME_PLACEHOLDER = Object.freeze({
+	runtimeSessionId: null,
+	runtimeStatus: 'AVAILABLE',
+	lastTested: null,
+	lastResult: null
+});
+
+/** Derive device_pixel_ratio / resolution from the frozen catalog emulation. */
+function emulationMetadata(env) {
+	const catalogEntry = findCatalogEnvironment(env.envId);
+	const dpr = catalogEntry?.emulation?.deviceScaleFactor
+		?? env.devicePixelRatio
+		?? (env.deviceType === 'desktop' ? 1 : 2);
+	const resolution = env.screenResolution
+		?? (catalogEntry?.emulation?.viewport
+			? `${catalogEntry.emulation.viewport.width}×${catalogEntry.emulation.viewport.height}`
+			: null);
+	return { devicePixelRatio: dpr, resolution };
+}
+
+/** Enrich an environment record with execution_type and metadata fields. */
+export function withExecutionMetadata(env) {
+	if (!env || typeof env !== 'object') return env;
+	const level = env.executionLevelRequested === 'REAL_DEVICE' && env.isRealDevice
+		? 'REAL_DEVICE'
+		: env.executionLevelRequested === 'SIMULATED'
+			? 'SIMULATED'
+			: 'VIRTUAL_DEVICE';
+	const { devicePixelRatio, resolution } = emulationMetadata(env);
+	return {
+		...env,
+		executionType: level,
+		deviceId: env.deviceModelSlug ?? env.envId,
+		deviceManufacturer: env.platform === 'ios' || env.platform === 'macos'
+			? 'Apple'
+			: env.platform === 'android' ? env.device?.split(' ')[0] ?? 'Android' : 'Microsoft',
+		deviceModel: env.device,
+		hardwareIdentifier: env.hardwareIdentifier ?? env.deviceModelSlug ?? null,
+		os: env.os,
+		osVersion: env.osVersion,
+		browser: env.browser,
+		browserVersion: env.browserVersion,
+		resolution,
+		devicePixelRatio,
+		orientation: env.orientation ?? (env.deviceType === 'desktop' ? 'landscape' : 'portrait'),
+		touchSupport: env.deviceType !== 'desktop',
+		cameraSupport: env.deviceType !== 'desktop',
+		microphoneSupport: true,
+		screenCaptureSupport: env.deviceType === 'desktop' || env.platform === 'macos',
+		gpsSupport: env.deviceType !== 'desktop',
+		networkProfile: env.networkProfile ?? 'default',
+		availability: env.active ? RUNTIME_PLACEHOLDER.runtimeStatus : 'OFFLINE',
+		...RUNTIME_PLACEHOLDER,
+		...(env.runtimeSessionId !== undefined ? { runtimeSessionId: env.runtimeSessionId } : {})
 	};
 }
 
@@ -223,6 +327,7 @@ export function createLocalEnvironmentBackend(options = {}) {
 		const term = filters.search ? String(filters.search).toLowerCase() : '';
 		return [...byEnvId.values()].filter((record) => {
 			if (filters.platform && record.platform !== filters.platform) return false;
+			if (filters.platformGroup && !filters.platformGroup.includes(record.platform)) return false;
 			if (filters.device && record.device !== filters.device) return false;
 			if (filters.os && record.os !== filters.os) return false;
 			if (filters.osVersion && record.osVersion !== filters.osVersion) return false;
@@ -231,6 +336,8 @@ export function createLocalEnvironmentBackend(options = {}) {
 			if (filters.browserVersion && record.browserVersion !== String(filters.browserVersion)) return false;
 			if (filters.deviceType && record.deviceType !== filters.deviceType) return false;
 			if (filters.executionProvider && record.executionProvider !== filters.executionProvider) return false;
+			if (filters.orientationScenario && (record.orientationScenario ?? '') !== filters.orientationScenario) return false;
+			if (filters.executionLevelRequested && (record.executionLevelRequested ?? '') !== filters.executionLevelRequested) return false;
 			if (filters.isRealDevice !== undefined && filters.isRealDevice !== null && filters.isRealDevice !== '') {
 				if (record.isRealDevice !== (filters.isRealDevice === true || filters.isRealDevice === 'true')) return false;
 			}
@@ -293,6 +400,25 @@ export function createLocalEnvironmentBackend(options = {}) {
 			if (patch && typeof patch.description === 'string') {
 				record.description = patch.description.trim();
 			}
+			// Phase 20 scenarios: validated patches only — an invalid scenario
+			// value is rejected, never silently ignored. Explicit null clears.
+			if (patch && patch.permissionScenario !== undefined) {
+				try {
+					const scenario = normalizePermissionScenario(patch.permissionScenario);
+					record.permissionScenario = scenario ?? null;
+				} catch (error) {
+					throw new EnvironmentValidationError(error.message);
+				}
+			}
+			if (patch && patch.orientationScenario !== undefined) {
+				try {
+					record.orientationScenario = normalizeOrientationScenario(patch.orientationScenario, {
+						deviceType: record.deviceType
+					});
+				} catch (error) {
+					throw new EnvironmentValidationError(error.message);
+				}
+			}
 			record.updatedAt = new Date().toISOString();
 			persistNow();
 			return record;
@@ -313,7 +439,8 @@ export function createLocalEnvironmentBackend(options = {}) {
 
 const FILTER_KEYS = [
 	'platform', 'device', 'os', 'osVersion', 'browser', 'browserCode', 'browserVersion',
-	'deviceType', 'executionProvider', 'isRealDevice', 'active', 'search', 'limit', 'offset'
+	'deviceType', 'executionProvider', 'isRealDevice', 'active', 'search', 'limit', 'offset',
+	'orientationScenario', 'executionLevelRequested'
 ];
 
 export function sanitizeFilters(query = {}) {
@@ -322,6 +449,12 @@ export function sanitizeFilters(query = {}) {
 		const value = query[key];
 		if (value === undefined || value === null || value === '') continue;
 		filters[key] = value;
+	}
+	// Phase D4: platform group (Apple/Android/Windows) expands to its OS
+	// platforms; the UI sends a comma list.
+	if (typeof filters.platform === 'string' && filters.platform.includes(',')) {
+		filters.platformGroup = filters.platform.split(',').map((item) => item.trim()).filter(Boolean);
+		delete filters.platform;
 	}
 	return filters;
 }
@@ -334,19 +467,19 @@ export function createEnvironmentService(backend, options = {}) {
 
 	async function list(filters = {}) {
 		const rows = await backend.list(withTenant(), sanitizeFilters(filters));
-		return rows.map(rowToEnvironment);
+		return rows.map((row) => withExecutionMetadata(rowToEnvironment(row)));
 	}
 
 	async function get(envId) {
-		return rowToEnvironment(await backend.get(withTenant(), envId));
+		return withExecutionMetadata(rowToEnvironment(await backend.get(withTenant(), envId)));
 	}
 
 	async function create(input) {
-		return rowToEnvironment(await backend.create(withTenant(), input));
+		return withExecutionMetadata(rowToEnvironment(await backend.create(withTenant(), input)));
 	}
 
 	async function update(envId, patch) {
-		return rowToEnvironment(await backend.update(withTenant(), envId, patch));
+		return withExecutionMetadata(rowToEnvironment(await backend.update(withTenant(), envId, patch)));
 	}
 
 	async function remove(envId) {

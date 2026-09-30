@@ -69,7 +69,20 @@ export function normalizeTestCaseInput(input = {}) {
 	if (environmentIds.length > MAX_ENVIRONMENTS) {
 		throw new TestCaseValidationError(`environmentIds is limited to ${MAX_ENVIRONMENTS} entries.`);
 	}
-	return { title, description, expected, steps, tags, environmentIds };
+	return {
+		title,
+		description,
+		expected,
+		steps,
+		tags,
+		environmentIds,
+		// Provenance: 'manual' (default) vs 'auto' (agent-generated from a run).
+		// The public API can only create manual records; the autogen engine sets
+		// these through testCases.create with source passed explicitly.
+		source: input.source === 'auto' ? 'auto' : 'manual',
+		sourceRunId: typeof input.sourceRunId === 'string' ? input.sourceRunId.slice(0, 128) : null,
+		sourceUrl: typeof input.sourceUrl === 'string' ? input.sourceUrl.slice(0, 2048) : null
+	};
 }
 
 function nextCaseNumber(records) {
@@ -92,6 +105,9 @@ function rowToTestCase(row) {
 		expected: row.expected ?? null,
 		tags: row.tags ?? [],
 		environmentIds: row.environment_ids ?? row.environmentIds ?? [],
+		source: row.source ?? 'manual',
+		sourceRunId: row.source_run_id ?? row.sourceRunId ?? null,
+		sourceUrl: row.source_url ?? row.sourceUrl ?? null,
 		deleted: Boolean(row.deleted),
 		createdAt: row.created_at ?? row.createdAt ?? null,
 		updatedAt: row.updated_at ?? row.updatedAt ?? null
@@ -162,6 +178,8 @@ export function createLocalTestCaseBackend(options = {}) {
 					: true))
 				.filter((record) => (tag ? (record.tags ?? []).includes(tag) : true))
 				.filter((record) => (environmentId ? (record.environmentIds ?? []).includes(environmentId) : true))
+				.filter((record) => (filters.source ? (record.source ?? 'manual') === filters.source : true))
+				.filter((record) => (filters.sourceRunId ? record.sourceRunId === filters.sourceRunId : true))
 				.sort((left, right) => String(left.caseNumber).localeCompare(String(right.caseNumber)));
 		},
 		async get(_tenant, caseNumber) {

@@ -12,6 +12,19 @@
  * (Phase 3) keeps catalog CRUD. Pure helpers are exported for unit tests.
  */
 
+/**
+ * Phase 20 runtime capability display data — mirrors the server's
+ * PLATFORM_RUNTIME_PROFILES honestly. Display only; the server re-validates
+ * every capability answer before recording it.
+ */
+export const RUNTIME_PROFILES = {
+	ios: { media: { camera: { supported: true }, microphone: { supported: true }, screenShare: { supported: 'limited' } }, input: ['touch'] },
+	ipados: { media: { camera: { supported: true }, microphone: { supported: true }, screenShare: { supported: 'limited' } }, input: ['touch', 'keyboard', 'pen'] },
+	macos: { media: { camera: { supported: true }, microphone: { supported: true }, screenShare: { supported: true } }, input: ['mouse', 'keyboard'] },
+	android: { media: { camera: { supported: true }, microphone: { supported: true }, screenShare: { supported: 'limited' } }, input: ['touch'] },
+	windows: { media: { camera: { supported: true }, microphone: { supported: true }, screenShare: { supported: true } }, input: ['mouse', 'keyboard', 'touch'] }
+};
+
 /** Human category name → drawer tab. Windows categories are Laptop/Desktop/Tablet. */
 export function platformForCategory(categoryDisplay = '') {
 	const name = String(categoryDisplay).toLowerCase();
@@ -52,13 +65,15 @@ export function selectionCountLabel(count) {
 
 /** Short label for the collapsed chip: "Galaxy S24 · Android 15 — Chrome 141". */
 export function chipLabel(env) {
-	if (!env) return 'No environment chosen';
+	if (!env) return 'none yet';
 	const os = env.osLabel ?? [env.os, env.osVersion].filter(Boolean).join(' ');
 	const browser = env.browserLabel ?? [env.browser, env.browserVersion].filter(Boolean).join(' ');
 	return [env.device, os, browser].filter(Boolean).join(' — ');
 }
 
-export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
+import { availabilityMeta, executionTypeLabel } from './deviceRuntimeUi.js';
+
+export function createDeviceDrawer({ api, toast, fail, onApplied, onRunEnvironment, onOpenPicker, elements }) {
 	const {
 		drawer, chip, chipChange, chipLabel: chipLabelEl,
 		search, tabs, sections, detail, detailBody,
@@ -74,6 +89,7 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 		compatCache: new Map(), // modelId → [{ slug, display, osVersionId }]
 		selection: new Map(),   // comboKey → { label, body }
 		environments: [],
+		board: new Map(),       // envId → device-runtime board entry (Phase 23)
 		defaultEnvId: localStorage.getItem('qase.environmentId') || ''
 	};
 
@@ -111,8 +127,12 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 	}
 
 	async function refreshEnvironments() {
-		const payload = await api('/environments?active=true&limit=1000').catch(() => ({ environments: [] }));
+		const [payload, boardPayload] = await Promise.all([
+			api('/environments?active=true&limit=1000').catch(() => ({ environments: [] })),
+			api('/device-runtime/devices').catch(() => null)
+		]);
 		state.environments = payload.environments ?? [];
+		state.board = new Map((boardPayload?.devices ?? []).map((d) => [d.envId, d]));
 	}
 
 	// ── Chip (collapsed indicator) ──────────────────────────────────────────
@@ -121,8 +141,25 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 		const env = state.environments.find((e) => e.envId === state.defaultEnvId)
 			?? state.environments.find((e) => e.envId === localStorage.getItem('qase.environmentId'))
 			?? null;
-		chipLabelEl.textContent = chipLabel(env);
-		if (chip) chip.dataset.ready = env ? 'true' : 'false';
+		chipLabelEl.textContent = env ? env.device : 'none yet';
+		chipLabelEl.title = env ? chipLabel(env) : 'Open the device matrix to choose a test environment';
+		// Phase D5: full compact panel — all six labeled fields, no truncation.
+		const osEl = document.getElementById('device-chip-os');
+		const browserEl = document.getElementById('device-chip-browser');
+		const execEl = document.getElementById('device-chip-exec');
+		const statusEl = document.getElementById('device-chip-status');
+		const sessionEl = document.getElementById('device-chip-session');
+		if (osEl) osEl.textContent = env ? [env.os, env.osVersion].filter(Boolean).join(' ') : '—';
+		if (browserEl) browserEl.textContent = env ? [env.browser, env.browserVersion].filter(Boolean).join(' ') : '—';
+		if (execEl) execEl.textContent = env ? executionTypeLabel(env.executionType === 'SIMULATED' ? 'SIMULATED' : env.isRealDevice ? 'VIRTUAL_DEVICE' : null).toUpperCase() : '—';
+		if (statusEl) {
+			statusEl.textContent = env ? '● Available' : '○ Not selected';
+		}
+		if (sessionEl) sessionEl.textContent = env?.runtimeSessionId ?? '—';
+		if (chip) {
+			chip.dataset.ready = env ? 'true' : 'false';
+			chip.title = chipLabelEl.title;
+		}
 	}
 
 	// ── Drawer sections ─────────────────────────────────────────────────────
@@ -257,6 +294,71 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 			else toast('Pick at least one browser version.');
 		};
 		detailBody.append(addBtn);
+
+		// ── Phase 20: permission + orientation scenario pickers ──────────────
+		// Honest capabilities first: what this platform can actually do in the
+		// local runtime (never invented). Then the per-run permission scenario.
+		const runtime = RUNTIME_PROFILES[platform] ?? null;
+		if (runtime) {
+			const chips = document.createElement('div');
+			chips.className = 'dd-capability-chips';
+			for (const [name, cap] of Object.entries(runtime.media)) {
+				const chipEl = document.createElement('span');
+				chipEl.className = 'dd-capability-chip';
+				const supportedLabel = cap.supported === true ? 'SUPPORTED (simulated locally)'
+					: cap.supported === 'limited' ? 'LIMITED' : 'NOT SUPPORTED';
+				chipEl.textContent = `${name}: ${supportedLabel}`;
+				if (cap.supported === true) chipEl.dataset.support = 'yes';
+				else if (cap.supported === 'limited') chipEl.dataset.support = 'limited';
+				else chipEl.dataset.support = 'no';
+				chipEl.title = cap.note ?? '';
+				chips.append(chipEl);
+			}
+			detailBody.append(chips);
+		}
+
+		const permRow = document.createElement('div');
+		permRow.className = 'dd-scenario';
+		permRow.append(Object.assign(document.createElement('span'), {
+			className: 'dd-scenario-label',
+			textContent: 'Permissions during test'
+		}));
+		for (const perm of ['camera', 'microphone', 'notifications', 'geolocation']) {
+			const sel = document.createElement('select');
+			sel.className = 'dd-perm-select';
+			sel.dataset.permission = perm;
+			sel.setAttribute('aria-label', `${perm} permission`);
+			for (const [value, label] of [['ask', `${perm}: ask`], ['allow', `${perm}: allow`], ['deny', `${perm}: deny`]]) {
+				const option = document.createElement('option');
+				option.value = value;
+				option.textContent = label;
+				sel.append(option);
+			}
+			permRow.append(sel);
+		}
+		detailBody.append(permRow);
+
+		const orientRow = document.createElement('div');
+		orientRow.className = 'dd-scenario';
+		orientRow.append(Object.assign(document.createElement('span'), {
+			className: 'dd-scenario-label',
+			textContent: 'Orientation'
+		}));
+		const orientSelect = document.createElement('select');
+		orientSelect.className = 'dd-orient-select';
+		const touchDevice = model.device_type !== 'desktop';
+		for (const [value, label] of [
+			['portrait', 'Portrait'],
+			['landscape', 'Landscape'],
+			...(touchDevice ? [['rotate-during-test', 'Rotate during test']] : [])
+		]) {
+			const option = document.createElement('option');
+			option.value = value;
+			option.textContent = label;
+			orientSelect.append(option);
+		}
+		orientRow.append(orientSelect);
+		detailBody.append(orientRow);
 	}
 
 	function browserAvailableOn(browser, platform) {
@@ -273,6 +375,14 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 		const key = comboKey(model, os, browser, version);
 		const label = [model.display_name, os?.display, browser.display_name, version ? String(version) : '']
 			.filter(Boolean).join(' · ');
+		// Phase 20: the scenario pickers ride along with the selection so the
+		// created environments carry permission/orientation scenarios.
+		const permissionScenario = {};
+		for (const sel of detailBody?.querySelectorAll('.dd-perm-select') ?? []) {
+			if (sel.value !== 'ask') permissionScenario[sel.dataset.permission] = sel.value;
+		}
+		const orientSel = detailBody?.querySelector('.dd-orient-select');
+		const orientationScenario = orientSel && orientSel.value !== 'portrait' ? orientSel.value : null;
 		state.selection.set(key, {
 			label,
 			body: {
@@ -280,7 +390,9 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 				platform: (os?.osVersionId ?? '').split(':')[0],
 				osVersion: (os?.osVersionId ?? '').split(':').slice(1).join(':'),
 				browser: browser.id,
-				...(version ? { browserVersion: String(version) } : {})
+				...(version ? { browserVersion: String(version) } : {}),
+				...(Object.keys(permissionScenario).length ? { permissionScenario } : {}),
+				...(orientationScenario ? { orientationScenario } : {})
 			}
 		});
 		paintSelection();
@@ -342,6 +454,16 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 			label.textContent = chipLabel(env);
 			li.append(label);
 
+			const boardEntry = state.board.get(env.envId) ?? null;
+			if (boardEntry) {
+				const meta = availabilityMeta(boardEntry.status);
+				const badge = document.createElement('span');
+				badge.className = `dd-avail avail-${meta.dot}`;
+				badge.textContent = `${meta.label} · ${executionTypeLabel(boardEntry.maximumLevel)}`;
+				badge.title = meta.title;
+				li.append(badge);
+			}
+
 			const actions = document.createElement('span');
 			actions.className = 'dd-saved-actions';
 
@@ -355,7 +477,13 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 				localStorage.setItem('qase.environmentId', env.envId);
 				paintChip();
 				renderSaved();
-				toast(`${chipLabel(env)} is ready for your next run.`);
+				if (typeof onRunEnvironment === 'function') {
+					// Phase 23: Run starts a real one-click run (with honest
+					// fallbacks), not just a default-environment switch.
+					void onRunEnvironment(env);
+				} else {
+					toast(`${chipLabel(env)} is ready for your next run.`);
+				}
 			};
 
 			const makeDefault = document.createElement('button');
@@ -433,7 +561,11 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 	function closeDrawer() { if (drawer.open) drawer.close(); }
 
 	function wire() {
-		chipChange?.addEventListener('click', openDrawer);
+		// DX Phase 2: the ONE picker is the single selection surface. The chip's
+		// [Change] opens it; the drawer stays reachable via Device Management.
+		if (chipChange) chipChange.addEventListener('click', () => { if (onOpenPicker) onOpenPicker(); else openDrawer(); });
+		// Phase D5: "Device details" opens the same drawer scrolled to details.
+		document.getElementById('device-chip-details')?.addEventListener('click', openDrawer);
 		closeBtn?.addEventListener('click', closeDrawer);
 		search?.addEventListener('input', () => {
 			clearTimeout(search._timer);

@@ -138,3 +138,20 @@ describe('qaWorkflows · bug report', () => {
 		assert.equal(buildBugMarkdown(null), '');
 	});
 });
+
+test('caseStatus uses findingCount when findings array is absent (list payload)', () => {
+	assert.equal(caseStatus({}, { status: 'done', findingCount: 2 }), 'Failed');
+	assert.equal(caseStatus({}, { status: 'done', findingCount: 0 }), 'Passed');
+	// Full array still wins when present.
+	assert.equal(caseStatus({}, { status: 'done', findings: [], findingCount: 3 }), 'Passed');
+	assert.equal(caseStatus({}, { status: 'done', findings: [{ id: 1 }], findingCount: 0 }), 'Failed');
+});
+
+test('listSessions-style payloads join to cases via testCaseId', () => {
+	const runs = lastRunByCase([
+		{ id: 'a', testCaseId: 'TC-1', mode: 'qa', status: 'done', findingCount: 1, updatedAt: '2026-01-02T00:00:00Z' },
+		{ id: 'b', testCaseId: 'TC-1', mode: 'qa', status: 'done', findingCount: 0, updatedAt: '2026-01-01T00:00:00Z' }
+	]);
+	assert.equal(runs.get('TC-1').id, 'a');
+	assert.equal(caseStatus({}, runs.get('TC-1')), 'Failed');
+});

@@ -102,6 +102,7 @@ function eventActor(type, payload, tenantContext) {
 export function createPostgresApplicationServices({
 	repository,
 	tenantContext,
+	deviceRuntime,
 	eventTransport,
 	auth,
 	hydrateAll = true,
@@ -307,6 +308,19 @@ export function createPostgresApplicationServices({
 				.slice(0, Math.min(100, Math.max(1, Number(options?.limit) || 100)))
 				.map(summary);
 		},
+		/**
+		 * Unscoped full-record list for coverage aggregation (Phase 7). list()
+		 * caps at 100 and filters by owner; the coverage matrix needs every
+		 * case×environment pair's latest run. PostgreSQL is authoritative:
+		 * repository.loadAll() hydrates full records for the tenant.
+		 */
+		async listAll() {
+			if (typeof repository.loadAll === 'function') {
+				const records = await repository.loadAll();
+				return records.map(record => record.session).filter(Boolean);
+			}
+			return [...sessions.values()];
+		},
 		async delete(id) {
 			const session = sessions.get(id);
 			if (!session) return false;
@@ -385,6 +399,24 @@ export function createPostgresApplicationServices({
 	markExecutionStarted(session) {
 		markExecutionStarted(session);
 	},
+	/** Persist execution-level facts on a run by mutating session + committing. */
+	async persistExecutionFacts(runId, { executionLevel, executionProviderActual, runtimeFacts } = {}) {
+		const session = sessions.get(runId);
+		if (!session) return null;
+		if (executionLevel !== undefined) session.executionLevel = executionLevel;
+		if (executionProviderActual !== undefined) session.executionProviderActual = executionProviderActual;
+		if (runtimeFacts !== undefined) session.runtimeFacts = runtimeFacts;
+		try {
+			await commit(session, 'execution_facts', {
+				executionLevel: session.executionLevel,
+				executionProviderActual: session.executionProviderActual,
+				runtimeFacts: session.runtimeFacts
+			});
+		} catch (error) {
+			console.warn('[qase] failed to persist execution facts:', error?.message ?? error);
+		}
+		return session;
+	},
 		publish,
 		subscribe(sessionId, listener) {
 			if (eventTransport) return eventTransport.subscribe(sessionId, listener);
@@ -429,7 +461,7 @@ export function createPostgresApplicationServices({
 		}
 	};
 
-	const services = createRuntimeApplicationServices(runStore, { auth });
+	const services = createRuntimeApplicationServices(runStore, { auth, deviceRuntime });
 	// In PostgreSQL mode the Redis transport is the global event fan-out.
 	if (eventTransport && typeof eventTransport.subscribeGlobal === 'function') {
 		services.events.subscribeGlobal = eventTransport.subscribeGlobal.bind(eventTransport);

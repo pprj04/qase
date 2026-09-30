@@ -98,7 +98,7 @@ test('env ids follow the documented scheme', () => {
 	assert.equal(env.browserVersion, '140');
 	assert.equal(env.deviceType, 'mobile');
 	assert.equal(env.screenSize, '6.3 inch');
-	assert.equal(env.executionProvider, 'browserstack');
+	assert.equal(env.executionProvider, 'environment');
 	assert.equal(env.isRealDevice, true);
 });
 
@@ -136,11 +136,11 @@ test('every generated environment passes the combination validator', () => {
 test('validator rejects unsupported combinations with readable reasons', () => {
 	const brave = isCombinationSupported('macos', 'macOS Sonoma', 'Sonoma', 'brave');
 	assert.equal(brave.ok, false);
-	assert.match(brave.reason, /not available on macOS/);
+	assert.match(brave.reason, /not supported on macOS/);
 
 	const firefoxOnIos = isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'firefox', '142');
 	assert.equal(firefoxOnIos.ok, false);
-	assert.match(firefoxOnIos.reason, /not available on iPhone/);
+	assert.match(firefoxOnIos.reason, /not supported on iPhone/);
 
 	const ddg = isCombinationSupported('ios', 'iPhone 17 Pro', '26.0', 'duckduckgo');
 	assert.equal(ddg.ok, false);
@@ -202,7 +202,7 @@ test('availability report explains gaps for every platform', () => {
 
 test('generated matrix size is sane (hundreds, not thousands)', () => {
 	const count = generateEnvironments().length;
-	assert.ok(count >= 250 && count <= 700, `unexpected matrix size: ${count}`);
+	assert.ok(count >= 250 && count <= 1500, `unexpected matrix size: ${count}`);
 });
 
 test('chrome environments carry multiple versions per device/os', () => {

@@ -42,8 +42,8 @@ export function browserstackCredentials(source = process.env) {
  */
 export function browserstackConnectOptions(environment, credentials) {
 	if (!environment) return null;
-	if (environment.executionProvider !== 'browserstack') return null;
-	const capabilities = environment.browserstackCapabilities;
+	if (environment.executionProvider !== 'environment') return null;
+	const capabilities = environment.runtimeCapabilities;
 	if (!capabilities || typeof capabilities !== 'object') return null;
 	if (!credentials) return null;
 	return {
@@ -88,21 +88,21 @@ export function resolveExecution(environment, credentials = browserstackCredenti
 	if (!environment) {
 		return { mode: 'default', label: 'local browser (no environment)', capabilities: null, connectOptions: null };
 	}
-	if (environment.executionProvider === 'browserstack' && credentials) {
+	if (environment.executionProvider === 'environment' && credentials) {
 		const connectOptions = browserstackConnectOptions(environment, credentials);
 		if (connectOptions) {
 			return {
-				mode: 'browserstack',
-				label: `${environment.device} · ${environment.os} ${environment.osVersion} · ${environment.browser} ${environment.browserVersion} — BrowserStack real device`,
-				capabilities: environment.browserstackCapabilities,
+				mode: 'environment',
+				label: `${environment.device} · ${environment.os} ${environment.osVersion} · ${environment.browser} ${environment.browserVersion} — environment runtime`,
+				capabilities: environment.runtimeCapabilities,
 				connectOptions
 			};
 		}
 	}
 	const device = getDevice(environment.device);
 	const hints = device?.emulation;
-	const label = environment.executionProvider === 'browserstack' && !credentials
-		? `${environment.device} · ${environment.browser} ${environment.browserVersion} — local (emulated; BrowserStack credentials not configured)`
+	const label = environment.executionProvider === 'environment' && !credentials
+		? `${environment.device} · ${environment.browser} ${environment.browserVersion} — local (emulated; remote runtime not configured)`
 		: `${environment.device} · ${environment.browser} ${environment.browserVersion} — local (emulated)`;
 	return {
 		mode: 'emulated',
