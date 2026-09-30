@@ -1440,7 +1440,10 @@ function applyFeedbackSubmittedState() {
 		input.readOnly = locked;
 		input.disabled = locked;
 	}
-	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = locked; });
+	el.feedbackStars.querySelectorAll('input').forEach(radio => {
+		radio.disabled = locked;
+		if (locked) radio.checked = false; // submitted view never shows an unsaved selection
+	});
 	if (submitted) {
 		if (locked) {
 			state.feedback.rating = existing.rating;
@@ -1489,6 +1492,11 @@ async function cancelEditFeedback() {
 		return;
 	}
 	closeFeedbackModal();
+}
+
+function clearFeedbackRating() {
+	state.feedback.rating = 0;
+	paintFeedbackStars(0);
 }
 
 function closeFeedbackModal() {
@@ -2717,8 +2725,105 @@ function renderReport() {
 	provideFeedback.onclick = () => openFeedbackModal();
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	el.reportView.append(actions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
+	el.reportView.append(renderFilesSection(findings));
+}
+
+/**
+ * Files section — the run's downloadable artifacts, grouped in one place at
+ * the end of the report. Only real exports the run actually supports are
+ * listed; runs without artifacts get an empty state, never fabricated rows.
+ */
+function renderFilesSection(findings = []) {
+	const wrap = document.createElement('section');
+	wrap.className = 'files-section';
+	wrap.setAttribute('aria-label', 'Files');
+
+	const title = document.createElement('h3');
+	title.className = 'files-title';
+	title.textContent = 'FILES';
+	wrap.append(title);
+
+	const runId = state.sessionId;
+	const rows = [];
+	const addRow = (icon, name, description, enabled, handler, disabledTitle) => {
+		const row = document.createElement('div');
+		row.className = 'file-row';
+		const glyph = document.createElement('span');
+		glyph.className = 'file-icon';
+		glyph.textContent = icon;
+		glyph.setAttribute('aria-hidden', 'true');
+		const info = document.createElement('div');
+		info.className = 'file-info';
+		const label = document.createElement('span');
+		label.className = 'file-name';
+		label.textContent = name;
+		const desc = document.createElement('span');
+		desc.className = 'file-desc';
+		desc.textContent = description;
+		info.append(label, desc);
+		const get = document.createElement('button');
+		get.type = 'button';
+		get.className = 'btn btn-ghost btn-sm';
+		get.textContent = 'Download';
+		get.disabled = !enabled;
+		if (!enabled) get.title = disabledTitle ?? 'Not available for this run.';
+		else get.onclick = handler;
+		row.append(glyph, info, get);
+		rows.push(row);
+	};
+
+	addRow(
+		'🗎', 'QA report (PDF)', 'Full test report as a printable PDF.',
+		true,
+		async () => { try { await downloadReportPdf('qase-qa-report.pdf'); } catch (error) { exportError(error, 'The PDF export failed.'); } }
+	);
+	addRow(
+		'▤', 'QA report (Markdown)', 'Plain-text report for notes and diffs.',
+		true,
+		async () => {
+			try {
+				const markdownText = await apiText(`/sessions/${runId}/report.md`);
+				const url = URL.createObjectURL(new Blob([markdownText], { type: 'text/markdown;charset=utf-8' }));
+				const save = document.createElement('a');
+				save.href = url;
+				save.download = 'qase-report.md';
+				document.body.append(save);
+				save.click();
+				save.remove();
+				window.setTimeout(() => URL.revokeObjectURL(url), 0);
+			} catch (error) { exportError(error, 'The report download failed.'); }
+		}
+	);
+	addRow(
+		'🛠', 'Fix prompts (Markdown)', 'One fix prompt per finding for your engineers.',
+		findings.length > 0,
+		() => {
+			const markdown = buildAllFixPromptsMarkdown(state.session);
+			if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+			const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+			const save = document.createElement('a');
+			save.href = url;
+			save.download = 'qase-fix-prompts.md';
+			document.body.append(save);
+			save.click();
+			save.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
+		},
+		'No findings to generate fix prompts for.'
+	);
+
+	if (rows.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'files-empty';
+		empty.textContent = 'No files available for this run yet.';
+		wrap.append(empty);
+	} else {
+		wrap.append(...rows);
+	}
+	return wrap;
 }
 
 /** Thumbs up/down feedback on the finished run; last vote wins. */
