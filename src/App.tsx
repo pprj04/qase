@@ -1,9 +1,24 @@
 import { useState } from 'react';
 import { ThemeToggle } from './theme/ThemeToggle';
+import { RunList } from './components/RunList';
+import { SessionStoreProvider, useSessionStore } from './state/sessionStore';
 
 export function App() {
+  return (
+    <SessionStoreProvider>
+      <AppShell />
+    </SessionStoreProvider>
+  );
+}
+
+function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewerOpen, setViewerOpen] = useState(true);
+  const { connection, runs } = useSessionStore();
+  const connLabel = connection === 'connected' ? 'connected'
+    : connection === 'reconnecting' ? 'reconnecting…'
+    : 'connecting…';
+  const runningCount = runs.filter((run) => run.status === 'running').length;
 
   return (
     <div className="app-shell" data-app="qase-react">
@@ -40,8 +55,8 @@ export function App() {
               New run
             </button>
           </div>
-          <div className="sidebar-list" data-testid="run-list" role="list">
-            <div className="empty-hint">No runs yet — start one from the composer.</div>
+          <div className="sidebar-list" data-testid="run-list-container">
+            <RunList />
           </div>
           <div className="sidebar-foot">
             <div className="avatar" title="Signed out">?</div>
@@ -109,8 +124,13 @@ export function App() {
       </div>
 
       <footer className="status-bar" data-testid="status-bar">
-        <span className="conn-dot" data-testid="conn-dot" />
-        <span className="status-text" data-testid="status-text">Ready</span>
+        <span
+          className={`conn-dot${connection === 'connected' ? '' : connection === 'reconnecting' ? ' is-warn' : ' is-idle'}`}
+          data-testid="conn-dot"
+        />
+        <span className="status-text" data-testid="status-text">
+          {runningCount > 0 ? `${runningCount} run${runningCount > 1 ? 's' : ''} in progress · ` : ''}{connLabel}
+        </span>
       </footer>
     </div>
   );
