@@ -1019,7 +1019,7 @@ export function createPostgresRunRepository({
 					setup_started_at = COALESCE(setup_started_at, $25),
 					setup_ended_at = COALESCE(setup_ended_at, $26),
 					report_started_at = COALESCE(report_started_at, $27),
-					report_ended_at = COALESCE(report_ended_at, $28,$29),
+					report_ended_at = COALESCE(report_ended_at, $28),
 					cancelled_at = COALESCE(cancelled_at, $29),
 					paused_at = $31,
 					paused_seconds = CASE

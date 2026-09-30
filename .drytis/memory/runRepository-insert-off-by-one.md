@@ -1,22 +1,17 @@
-# runRepository.js INSERT off-by-one (pre-existing, carried through merge f01e01c)
+Update to runRepository-insert-off-by-one.md finding — fixed in commit ae382b2 on DEV.
 
-Found during merge-reconciliation review of f01e01c (2026-09-30).
+FIXED (verified 2026-09-30 re-review):
+- insertAggregate now 31 columns / 31 VALUES expressions / 29 distinct placeholders, max $29; $29 binds security_authorization (json). Balanced.
+- Structural guard added in runRepository.test.js 'token usage round-trips' test: distinct placeholders === params.length, max placeholder === params.length, exactly 2 literal expressions (NULL, 0). Correctly fails if off-by-one recurs.
+- Shadowed `const securityAuthorization` removed from public/app.js submit handler (single declaration at line 4182).
+- Suite 758/738/0 fail/20 skipped; healthz 200 local, preview 200.
 
-`insertAggregate` in `server/postgres/runRepository.js` builds an INSERT whose
-column list, VALUES list, placeholder numbering and JS params array disagree:
+NEW WARN (ae382b2, undocumented): the same commit also changed save()'s UPDATE:
+`report_ended_at = COALESCE(report_ended_at, $28)` → `COALESCE(report_ended_at, $28,$29)`
+($28 = reportEndedAt, $29 = cancelledAt). Not mentioned in the commit message. Plausibly an
+accidental leftover from hand-editing placeholders. Semantics: cancelledAt now written into
+report_ended_at when reportEndedAt is null. Params stay bound (no SQL break) and no test covers
+this. Recommend reverting unless intentional.
 
-At HEAD (f01e01c): 31 columns, 30 value expressions (max placeholder $28),
-29-element params array. `security_authorization` has NO placeholder — the
-trailing `securityAuthorization` param is unbound. Against real Postgres this
-fails at parse ("INSERT has more target columns than expressions") — **run
-creation is broken in QASE_RUN_STORE=postgres mode.**
-
-Not a merge regression: the imbalance was introduced at merge 3f0d437 (paused_at
-was the orphan then); both parents (affd691, af7c65c) each carried it forward
-(off by one each) and f01e01c inherited it. Undetected because:
-- this env runs `QASE_RUN_STORE=local`
-- runRepository tests use a fake pool that never parses SQL
-
-Fix (when taken): add `$29` for `security_authorization` in the VALUES clause.
-Also worth an assertion in runRepository.test.js that
-`placeholderCount === params.length` and `cols === value expressions`.
+Still-open prior gap: no populated-security_authorization round-trip test in runRepository.test.js
+(trailing param assertions check nulls only).
