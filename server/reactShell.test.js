@@ -41,14 +41,24 @@ test('phase 1: theme system — tokens for light and dark, toggle, no-flash scri
   const provider = read('src/theme/ThemeProvider.tsx');
   assert.match(provider, /prefers-color-scheme/);
   assert.match(provider, /qase-theme/);
+  // Self-heal: stored/OS theme is re-applied on mount even when the
+  // bootstrap script was blocked (CSP) — reload with qase-theme=dark
+  // must not render light.
+  assert.match(provider, /Self-heal/);
   const toggle = read('src/theme/ThemeToggle.tsx');
   assert.match(toggle, /aria-label/);
 
   const html = read('index-react.html');
-  // no-flash inline bootstrap must run before the module script
-  const bootIdx = html.indexOf('qase-theme');
+  // no-flash bootstrap must load synchronously before the app script and be
+  // CSP-safe (external file — inline scripts are blocked by script-src 'self')
+  assert.ok(!/<script>\s*\(\s*function/.test(html), 'no inline scripts in index-react.html');
+  const bootIdx = html.indexOf('theme-bootstrap.js');
   const scriptIdx = html.indexOf('/src/main.tsx');
   assert.ok(bootIdx > -1 && scriptIdx > bootIdx, 'theme bootstrap precedes app script');
+  assert.ok(
+    fs.existsSync(path.join(root, 'public/app-react/theme-bootstrap.js')),
+    'external theme bootstrap file exists in build output',
+  );
 });
 
 test('phase 1: server serves the react bundle at /app-react/ without touching legacy routes', () => {

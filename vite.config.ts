@@ -18,6 +18,10 @@ export default defineConfig({
       input: fileURLToPath(new URL('./index-react.html', import.meta.url)),
     },
   },
+  // theme-bootstrap.js is a plain static file copied verbatim (never bundled):
+  // it must load synchronously before the React bundle to avoid a theme flash,
+  // and as an external file it satisfies the app CSP (script-src 'self').
+  publicDir: false,
   server: {
     port: 5173,
     proxy: { '/api': 'http://localhost:3000' },

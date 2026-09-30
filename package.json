@@ -7,7 +7,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "build:react": "tsc --noEmit && vite build && mv public/app-react/index-react.html public/app-react/index.html",
+    "build:react": "tsc --noEmit && vite build && cp public/app-react/index-react.html public/app-react/index.html && rm public/app-react/index-react.html && cp scripts/theme-bootstrap.js public/app-react/theme-bootstrap.js",
     "typecheck": "tsc --noEmit",
     "dev": "node --watch server/index.js",
     "worker": "node server/worker.js",

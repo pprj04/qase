@@ -4,21 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QASE — new UI</title>
-    <script>
-      // No-flash theme bootstrap: apply persisted theme (or system preference)
-      // before first paint. Mirrors src/theme/ThemeProvider.tsx logic.
-      (function () {
-        try {
-          var t = localStorage.getItem('qase-theme');
-          if (t !== 'light' && t !== 'dark') {
-            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-          }
-          var root = document.documentElement;
-          root.classList.toggle('dark', t === 'dark');
-          root.style.colorScheme = t;
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/app-react/theme-bootstrap.js"></script>
   </head>
   <body>
     <div id="root"></div>

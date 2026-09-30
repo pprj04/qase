@@ -32,8 +32,30 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(resolveInitialTheme);
 
+  // Self-heal: if the bootstrap script was blocked (CSP) or never ran,
+  // re-derive the theme from storage / OS preference on mount.
+  useEffect(() => {
+    let stored: Theme | null = null;
+    try {
+      const raw = localStorage.getItem(THEME_STORAGE_KEY);
+      if (raw === 'light' || raw === 'dark') stored = raw;
+    } catch {
+      stored = null;
+    }
+    const osTheme: Theme = window.matchMedia?.('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
+    const next = stored ?? osTheme;
+    if (next !== theme) {
+      setThemeState(next);
+      const root = document.documentElement;
+      root.classList.toggle('dark', next === 'dark');
+      root.style.colorScheme = next;
+    }
+  }, []); // initial mount only
+
   // Follow the OS preference live while the user has no persisted override
-  // (mirrors the no-flash bootstrap script in index-react.html).
+  // (mirrors the no-flash bootstrap script).
   useEffect(() => {
     if (typeof window === 'undefined' || !window.matchMedia) return;
     let stored: string | null = null;
