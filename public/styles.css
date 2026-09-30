@@ -5040,9 +5040,21 @@ html.entry-active body {
   --radius-lg: 14px;
   --radius-xl: 20px;
   --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+  --font-ui: "Geist", "Geist Sans", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
+  .cli-theme .btn-primary {
+    border-color: #fafafa;
+    background: #fafafa;
+    color: #171717;
+  }
+
+  .cli-theme .btn-primary:hover {
+    border-color: #ffffff;
+    box-shadow: var(--accent-glow, 0 6px 18px rgba(91, 123, 239, 0.30));
+  }
+
   :root {
     color-scheme: dark;
     --bg: #101012;
@@ -5086,16 +5098,18 @@ body.cli-theme {
     radial-gradient(900px 520px at 50% -20%, rgba(47, 91, 234, 0.06), transparent 68%),
     var(--bg);
   color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  letter-spacing: -0.012em;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
 }
 
 .cli-theme button,
 .cli-theme input,
 .cli-theme select,
 .cli-theme textarea {
-  font-family: var(--font-mono);
+  font-family: inherit;
 }
 
 .cli-theme ::selection {
@@ -5195,39 +5209,49 @@ body.cli-theme {
 
 .cli-theme .subtle {
   color: var(--text-muted);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 10.5px;
 }
 
 /* Commands */
 
 .cli-theme .btn {
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: -0.006em;
   box-shadow: none;
+  transition: box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
 .cli-theme .btn-primary {
-  border-color: rgba(47, 91, 234, 0.45);
-  background: var(--accent-softer);
-  box-shadow: 0 0 0 1px rgba(47, 91, 234, 0.025) inset;
-  color: #91f2bd;
+  border-color: #171717;
+  background: #171717;
+  color: #ffffff;
+}
+
+.cli-theme .btn-primary:hover {
+  border-color: #000000;
+  box-shadow: var(--accent-glow, 0 6px 18px rgba(47, 91, 234, 0.35));
 }
 
 .cli-theme .btn-ghost {
-  border-color: #22303c;
-  background:var(--surface-1);
-  color: #8fa0ab;
+  border-color: var(--border, #e5e5e5);
+  background: var(--surface-1, #ffffff);
+  color: var(--text-secondary, #3f3f46);
+}
+
+.cli-theme .btn-ghost:hover {
+  border-color: var(--border-strong, #d4d4d8);
+  background: var(--surface-hover, #f4f4f5);
 }
 
 .cli-theme .btn-danger {
-  border-color: rgba(255, 123, 114, 0.36);
-  background: rgba(255, 123, 114, 0.075);
-  color: var(--danger);
+  border-color: var(--danger, #dc2626);
+  background: transparent;
+  color: var(--danger, #dc2626);
 }
 
 @media (hover: hover) {
@@ -5386,7 +5410,7 @@ body.cli-theme {
 
 .cli-theme .run-meta,
 .cli-theme .run-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 9px;
 }
 
@@ -5602,7 +5626,7 @@ body.cli-theme {
   background: #0a1714;
   box-shadow: none;
   color: #73e3a8;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 13px;
   letter-spacing: -0.12em;
 }
@@ -5677,7 +5701,7 @@ body.cli-theme {
   background: rgba(12, 19, 27, 0.8);
   box-shadow: none;
   color: var(--text-secondary);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 11.5px;
   line-height: 1.68;
 }
@@ -5805,16 +5829,16 @@ body.cli-theme {
 }
 
 .cli-theme .composer textarea {
-  min-height: 38px;
-  padding: 9px 9px 8px 29px;
+  min-height: 48px;
+  padding: 12px 12px 12px 34px;
   color: var(--text);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-family: var(--font-ui);
+  font-size: 14px;
 }
 
 .cli-theme .composer .btn {
-  min-width: 62px;
-  min-height: 36px;
+  min-width: 72px;
+  min-height: 40px;
 }
 
 /* Browser preview and diagnostics */
@@ -6087,18 +6111,20 @@ body.cli-theme {
 
 .cli-theme .field input,
 .cli-theme .field select {
-  min-height: 38px;
-  border-color: var(--text-muted);
-  border-radius: 3px;
-  background:var(--canvas);
-  font-size: 11px;
+  min-height: 44px;
+  border-color: var(--border-strong, #d4d4d8);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-1, #ffffff);
+  font-size: 14px;
+  font-family: var(--font-ui);
+  color: var(--text);
 }
 
 .cli-theme .field input:focus,
 .cli-theme .field select:focus {
-  border-color: rgba(47, 91, 234, 0.5);
-  background: #050b0f;
-  box-shadow: 0 0 0 2px rgba(47, 91, 234, 0.08);
+  border-color: var(--accent);
+  background: var(--surface-1, #ffffff);
+  box-shadow: 0 0 0 3px var(--accent-softer, rgba(47, 91, 234, 0.12));
 }
 
 .cli-theme .check,
@@ -6109,7 +6135,7 @@ body.cli-theme {
 
 .cli-theme .check input { accent-color: var(--accent); }
 
-.cli-theme .toasts { font-family: var(--font-mono); }
+.cli-theme .toasts { font-family: var(--font-ui); }
 .cli-theme .toast { border-radius: 4px; background: #0a1219; }
 
 /* Terminal boot entry */
@@ -6123,7 +6149,7 @@ body.cli-theme {
   --entry-accent-bright: var(--accent-hover);
   --entry-cyan: var(--info);
   background: var(--canvas);
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
 }
 
 .cli-theme .entry-experience::before {
@@ -6238,7 +6264,7 @@ body.cli-theme {
     #0a1016;
   content: attr(data-terminal-title);
   color: #566975;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 8.5px;
   letter-spacing: 0.02em;
 }
