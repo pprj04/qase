@@ -76,6 +76,21 @@
       </div>
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
+    <nav class="sidebar-nav" aria-label="Workspace">
+      <span class="sidebar-nav-label">Workspace</span>
+      <button class="sidebar-nav-btn" id="nav-test-cases" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">▤</span> Test cases
+      </button>
+      <button class="sidebar-nav-btn" id="nav-device-matrix" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">◧</span> Device matrix
+      </button>
+      <button class="sidebar-nav-btn" id="nav-bulk-runs" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span> Bulk runs
+      </button>
+      <button class="sidebar-nav-btn" id="nav-environments" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
+      </button>
+    </nav>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
       <header class="perf-head">
@@ -321,9 +336,9 @@
     <div class="feature-device" title="Choose where the next run executes (real device, OS and browser).">
       <div id="device-chip" class="device-chip" data-ready="false">
         <span class="device-chip-label">device</span>
-        <span id="device-chip-env" class="device-chip-env">No environment chosen</span>
+        <span id="device-chip-env" class="device-chip-env">None yet</span>
         <span class="device-chip-status" aria-hidden="true">●</span>
-        <button id="device-chip-change" class="btn btn-ghost btn-sm device-chip-change" type="button">Change</button>
+        <button id="device-chip-change" class="btn btn-ghost btn-sm device-chip-change" type="button" title="Change device environment">Set</button>
       </div>
       <label class="feature-device-landscape" title="Rotate the emulated device to landscape.">
         <input id="device-landscape" type="checkbox">

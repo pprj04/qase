@@ -52,7 +52,7 @@ export function selectionCountLabel(count) {
 
 /** Short label for the collapsed chip: "Galaxy S24 · Android 15 — Chrome 141". */
 export function chipLabel(env) {
-	if (!env) return 'No environment chosen';
+	if (!env) return 'None yet';
 	const os = env.osLabel ?? [env.os, env.osVersion].filter(Boolean).join(' ');
 	const browser = env.browserLabel ?? [env.browser, env.browserVersion].filter(Boolean).join(' ');
 	return [env.device, os, browser].filter(Boolean).join(' — ');

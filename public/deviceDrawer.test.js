@@ -60,7 +60,7 @@ describe('deviceDrawer helpers', () => {
 	});
 
 	test('chipLabel composes device, OS and browser from env or a friendly default', () => {
-		assert.equal(chipLabel(null), 'No environment chosen');
+		assert.equal(chipLabel(null), 'None yet');
 		assert.equal(
 			chipLabel({ device: 'Galaxy S24', os: 'android', osVersion: '15', browser: 'chrome', browserVersion: '141' }),
 			'Galaxy S24 — android 15 — chrome 141'

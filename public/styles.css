@@ -3344,7 +3344,7 @@ a {
 /* Feature dock + Founder Mode ------------------------------------------- */
 
 .cli-theme .app {
-  grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
+  grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;
 }
 
 .run-explorer-label {
@@ -3417,15 +3417,20 @@ a {
   place-items: center;
   align-content: center;
   gap: 3px;
-  width: 46px;
-  min-height: 54px;
+  width: 58px;
+  min-height: 56px;
   padding: 5px 2px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
-  color: #748895;
-  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
   transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.feature-action:hover {
+  background: var(--surface-hover, #f4f4f5);
+  color: var(--text);
 }
 
 .feature-action::after {
@@ -3481,14 +3486,15 @@ a {
   right: calc(100% + 9px);
   width: max-content;
   max-width: 220px;
-  padding: 7px 9px;
-  border: 1px solid #293a47;
-  border-radius: 3px;
-  background: #0d151e;
-  box-shadow: 0 9px 28px rgba(0, 0, 0, 0.42);
-  color: #c6d5dd;
-  font-size: 8.5px;
-  font-weight: 550;
+  padding: 8px 11px;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-1, #ffffff);
+  box-shadow: var(--shadow-float, 0 24px 80px rgba(0, 0, 0, 0.18));
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   line-height: 1.35;
   pointer-events: none;
   opacity: 0;
@@ -3934,7 +3940,7 @@ a {
 
 @media (max-width: 1280px) and (min-width: 1101px) {
   .cli-theme .app {
-    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 56px;
+    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;
   }
 }
 
@@ -7652,13 +7658,13 @@ body.cli-theme {
 
 @media (min-width: 1281px) {
   .cli-theme .app {
-    grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
+    grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;
   }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
   .cli-theme .app {
-    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 56px;
+    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;
   }
 }
 
@@ -7877,7 +7883,8 @@ body.cli-theme {
 }
 
 .feature-dock > .feature-device {
-  width: 46px;
+  width: 64px !important;
+  flex: 0 0 64px !important;
 }
 
 .feature-dock > .feature-device .feature-device-landscape span {
@@ -8048,13 +8055,13 @@ body.cli-theme {
 
 @media (min-width: 1281px) {
   .cli-theme .app {
-    grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
+    grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;
   }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
   .cli-theme .app {
-    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 56px;
+    grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;
     gap: 4px;
     padding: 38px 5px 5px;
   }
@@ -8824,3 +8831,155 @@ body.cli-theme {
 .bp-row-passed span:last-child { color:var(--success); }
 .bp-row-running span:last-child { color:var(--warning); }
 .bp-row-pending span:last-child { color:var(--text-muted); }
+
+/* ════════════════════════════════════════════════════════════════
+   UX U2 · Sidebar workspace nav + Studio feature-dock rail
+   ════════════════════════════════════════════════════════════════ */
+.sidebar-nav {
+	display:flex; flex-direction:column; gap:2px;
+	padding:6px 10px 10px;
+	border-bottom:1px solid var(--border, #e5e5e5);
+}
+.sidebar-nav-label {
+	font:600 11px/1 var(--font-ui, sans-serif);
+	letter-spacing:.08em; text-transform:uppercase;
+	color:var(--text-muted, #71717a);
+	padding:6px 10px 4px;
+}
+.sidebar-nav-btn {
+	display:flex; align-items:center; gap:9px;
+	width:100%; padding:8px 10px;
+	border:0; border-radius:8px;
+	background:transparent; cursor:pointer;
+	font:500 13px/1 var(--font-ui, sans-serif);
+	color:var(--text, #171717);
+	text-align:left;
+	transition:background .12s ease, color .12s ease;
+}
+.sidebar-nav-btn:hover { background:var(--surface-2, #f4f4f5); }
+.sidebar-nav-btn:active { background:rgba(47,91,234,.10); color:#2F5BEA; }
+.sidebar-nav-btn .sidebar-nav-icon {
+	width:18px; text-align:center;
+	font:600 13px/1 var(--font-mono, monospace);
+	color:var(--text-muted, #71717a);
+}
+.sidebar-nav-btn:hover .sidebar-nav-icon { color:inherit; }
+
+/* Studio feature-dock rail: full labels, no clipping */
+.feature-dock .feature-action {
+	justify-content:center;
+}
+.feature-dock .feature-action[title]::after {
+	content:attr(title);
+	font:500 11px/1.2 var(--font-ui, sans-serif);
+	color:var(--text-muted, #71717a);
+	text-overflow:ellipsis; overflow:hidden;
+	white-space:nowrap; max-width:96px;
+}
+/* UX U2 · Studio feature-dock rail reskin (after pinned seam rules) */
+.cli-theme .feature-dock,
+.feature-dock {
+  padding: 10px 6px 8px;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 10px;
+  background: var(--surface, #ffffff);
+  color: var(--text-muted, #71717a);
+  font-family: var(--font-ui, sans-serif);
+}
+.feature-dock::before {
+  content: "modes";
+  color: var(--text-faint, #a1a1aa);
+  font: 600 9px/1 var(--font-ui, sans-serif);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.feature-dock-title,
+.feature-dock-status {
+  color: var(--text-faint, #a1a1aa);
+  font: 600 9px/1 var(--font-ui, sans-serif);
+}
+.feature-action {
+  gap: 4px;
+  border-radius: 8px;
+}
+.feature-action .feature-icon {
+  font-size: 15px;
+}
+/* icon-only by default; Studio tooltip on hover/focus (existing rules kept) */
+.feature-action .feature-label,
+.feature-action span:not(.feature-icon) {
+  display: none;
+}
+.feature-action.is-active {
+  border-color: rgba(47, 91, 234, 0.28);
+  background: rgba(47, 91, 234, 0.07);
+  color: #2F5BEA;
+}
+.feature-action.is-active .feature-icon {
+  color: #2F5BEA;
+}
+.feature-action--founder .feature-icon {
+  color: #7c5cd6;
+}
+.feature-action::after {
+  background: #2F5BEA;
+}
+
+/* UX U2 · footer button text fit (cli-theme wins on specificity) */
+.panel-foot button,
+.cli-theme .panel-foot .foot-btn {
+  font-size: 11.5px;
+  letter-spacing: -0.01em;
+  padding: 0 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* UX U2 · device chip fits the narrow Studio rail */
+.feature-dock > .feature-device {
+  width: auto;
+  align-self: stretch;
+  padding: 6px 6px 8px;
+  border-bottom: 1px solid var(--border, #e5e5e5);
+}
+.feature-dock > .feature-device .device-chip {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+  gap: 3px;
+}
+.feature-dock > .feature-device .device-chip-label {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+.feature-dock > .feature-device .device-chip-env {
+  font-size: 9px;
+  line-height: 1.25;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  hyphens: none;
+}
+.feature-dock > .feature-device .device-chip-change {
+  font-size: 10px !important;
+  line-height: 1.2;
+  padding: 3px 4px !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  align-self: stretch;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* UX U2 · avoid doubled "modes" label: the explicit title wins */
+.cli-theme .feature-dock::before {
+  content: none;
+}

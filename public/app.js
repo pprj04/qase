@@ -4871,6 +4871,18 @@ if (envUi.dialog) {
 const openEnvironmentsButton = $('open-environments');
 if (openEnvironmentsButton) openEnvironmentsButton.onclick = openEnvironments;
 
+/* ── Sidebar workspace nav (UX U2) ─────────────────────────────── */
+const sidebarNav = [
+	['nav-environments', openEnvironments],
+	['nav-device-matrix', () => deviceMatrix?.open()],
+	['nav-test-cases', () => testCaseView?.open?.()],
+	['nav-bulk-runs', () => bulkRunView?.open?.()]
+];
+for (const [id, opener] of sidebarNav) {
+	const btn = $(id);
+	if (btn) btn.onclick = () => opener();
+}
+
 /* ── Apple Device Matrix (Phase 3) ──────────────────────────────── */
 const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({
 	api,
