@@ -34,8 +34,11 @@ export function caseStatus(testCase, lastRun) {
 	const status = String(lastRun.status ?? '').toLowerCase();
 	if (['running', 'queued', 'starting', 'awaiting_input', 'resuming'].includes(status)) return 'Running';
 	if (status !== 'done') return 'Not run';
-	const findings = Array.isArray(lastRun.findings) ? lastRun.findings : [];
-	return findings.length ? 'Failed' : 'Passed';
+	// List payloads carry findingCount (not the findings array) — accept both.
+	const findings = Array.isArray(lastRun.findings) ? lastRun.findings : null;
+	if (findings) return findings.length ? 'Failed' : 'Passed';
+	const count = Number(lastRun.findingCount ?? 0);
+	return count > 0 ? 'Failed' : 'Passed';
 }
 
 /** Sorted status rank for display ordering. */

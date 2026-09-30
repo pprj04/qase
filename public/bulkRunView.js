@@ -20,16 +20,25 @@ export function pairsToRun(cases, environmentSelection) {
 	return pairs;
 }
 
-export function createBulkRunView({ api, toast, fail, elements, presets }) {
+import { createDeviceChipList } from './devicePicker.js';
+
+export function createBulkRunView({ api, toast, fail, elements, presets, onLaunch }) {
 	const {
 		dialog, navButton, close,
-		what, casesField, casesSelect, where, envsField, envsSelect,
+		what, casesField, casesSelect, where, envsField, deviceChips, addDeviceBtn,
 		preview, launchBtn, result,
 		steps
 	} = elements;
 	if (!dialog) return { open() {}, refresh() {} };
 
-	const state = { cases: [], environments: [], lastRuns: new Map(), step: 1 };
+	/** TEST ON DEVICES chip list (DX Phase 4) — replaces the Ctrl/Cmd multi-select. */
+	const state = { cases: [], environments: [], environmentsById: new Map(), lastRuns: new Map(), step: 1 };
+	const deviceList = createDeviceChipList({
+		container: deviceChips,
+		addBtn: addDeviceBtn,
+		environmentsById: (id) => state.environmentsById.get(id),
+		onChange: () => renderPreview()
+	});
 
 	function showStep(n) {
 		state.step = n;
@@ -57,12 +66,13 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			]);
 			state.cases = Array.isArray(casePayload?.testCases) ? casePayload.testCases : [];
 			state.environments = Array.isArray(envPayload?.environments) ? envPayload.environments : [];
+			state.environmentsById = new Map(state.environments.map((e) => [e.envId, e]));
 			const sessions = Array.isArray(sessionPayload) ? sessionPayload : [];
 			// Rebuild the case → last-run map from qaWorkflows (imported lazily
 			// through the module-level binding set by app.js wiring).
 			state.lastRuns = lastRunIndex(sessions);
 			renderCases();
-			renderEnvs();
+			deviceList.set(deviceList.ids); // re-resolve chip labels against fresh envs
 			renderPreview();
 		} catch (error) {
 			fail(error);
@@ -94,7 +104,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			const envId = state.defaultEnvId ?? '';
 			return envId ? cases.flatMap((testCase) => (testCase.environmentIds ?? []).includes(envId) ? [{ testCase, envId }] : []) : [];
 		}
-		const chosen = [...(envsSelect?.selectedOptions ?? [])].map((o) => o.value);
+		const chosen = deviceList.ids;
 		return cases.flatMap((testCase) => chosen.filter((id) => (testCase.environmentIds ?? []).includes(id)).map((envId) => ({ testCase, envId })));
 	}
 
@@ -111,19 +121,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		}
 	}
 
-	function renderEnvs() {
-		if (!envsSelect) return;
-		const selected = new Set([...envsSelect.selectedOptions].map((o) => o.value));
-		envsSelect.innerHTML = '';
-		for (const env of state.environments) {
-			const option = document.createElement('option');
-			option.value = env.envId;
-			option.textContent = `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
-			option.selected = selected.has(env.envId);
-			envsSelect.append(option);
-		}
-	}
-
+	// DX Phase 4: renderEnvs() replaced by the TEST ON DEVICES chip list.
 	function renderPreview() {
 		if (!preview) return;
 		const pairs = resolvedPairs();
@@ -166,7 +164,6 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		});
 	}
 	if (casesSelect) casesSelect.addEventListener('change', renderPreview);
-	if (envsSelect) envsSelect.addEventListener('change', renderPreview);
 	for (const next of dialog.querySelectorAll('[data-bulk-next]')) {
 		next.addEventListener('click', () => showStep(Number(next.dataset.bulkNext)));
 	}
@@ -178,6 +175,25 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		const pairs = resolvedPairs();
 		if (!pairs.length) {
 			toast('Nothing selected — pick at least one test case and device.', 'bad');
+			return;
+		}
+		// Delegate to the shared launcher when available: it records the batch
+		// for per-environment progress (executions list with honest levels).
+		if (typeof onLaunch === 'function') {
+			launchBtn.disabled = true;
+			launchBtn.textContent = `Launching ${pairs.length} runs…`;
+			try {
+				const { created, failures } = await onLaunch(pairs, 'Bulk run: ');
+				if (result) {
+					result.hidden = false;
+					result.textContent = failures.length
+						? `${created} created, ${failures.length} failed:\n${failures.join('\n')}`
+						: `${created} run${created === 1 ? '' : 's'} created.`;
+				}
+			} finally {
+				launchBtn.disabled = false;
+				renderPreview();
+			}
 			return;
 		}
 		launchBtn.disabled = true;
@@ -214,8 +230,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			where.value = 'pick';
 			if (envsField) envsField.hidden = false;
 		}
-		renderEnvs();
-		for (const option of envsSelect?.options ?? []) option.selected = envs.some((e) => e.envId === option.value);
+		deviceList.set(envs.map((e) => e.envId));
 		if (what) what.value = 'all';
 		if (casesField) casesField.hidden = true;
 		renderPreview();
@@ -229,7 +244,8 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		runPreset: applyPreset,
 		setWizardFilter, setLastRunIndex,
 		setDefaultEnvId(envId) { state.defaultEnvId = envId; },
-		get state() { return state; }
+		get state() { return state; },
+		get deviceList() { return deviceList; }
 	};
 }
 

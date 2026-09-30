@@ -29,7 +29,7 @@ test('connect options carry the environment capability map verbatim', () => {
 	const options = browserstackConnectOptions(iPhone, CREDENTIALS);
 	assert.equal(options.endpointURL, 'https://cdp.browserstack.com/playwright');
 	assert.deepEqual(options.httpCredentials, { username: 'qase_user', password: 'qase_key' });
-	assert.deepEqual(options.capabilities, iPhone.browserstackCapabilities);
+	assert.deepEqual(options.capabilities, iPhone.runtimeCapabilities);
 	assert.equal(options.capabilities.deviceName, 'iPhone 16 Pro');
 	assert.equal(options.capabilities.realMobile, true);
 });
@@ -37,9 +37,9 @@ test('connect options carry the environment capability map verbatim', () => {
 test('connect options refuse environments that cannot execute on BrowserStack', () => {
 	assert.equal(browserstackConnectOptions(null, CREDENTIALS), null);
 	assert.equal(browserstackConnectOptions({ executionProvider: 'local' }, CREDENTIALS), null);
-	assert.equal(browserstackConnectOptions({ executionProvider: 'browserstack' }, null), null);
+	assert.equal(browserstackConnectOptions({ executionProvider: 'environment' }, null), null);
 	assert.equal(
-		browserstackConnectOptions({ executionProvider: 'browserstack', browserstackCapabilities: null }, CREDENTIALS),
+		browserstackConnectOptions({ executionProvider: 'environment', runtimeCapabilities: null }, CREDENTIALS),
 		null
 	);
 });
@@ -48,8 +48,8 @@ test('resolveExecution: browserstack envs with credentials execute remotely', ()
 	const environments = generateEnvironments();
 	const macChrome = environments.find(env => env.envId.startsWith('ENV-MAC-SONOMA-CHR'));
 	const resolved = resolveExecution(macChrome, CREDENTIALS);
-	assert.equal(resolved.mode, 'browserstack');
-	assert.match(resolved.label, /BrowserStack real device/);
+	assert.equal(resolved.mode, 'environment');
+	assert.match(resolved.label, /environment runtime/);
 	assert.equal(resolved.connectOptions.capabilities.os, 'OS X');
 	assert.equal(resolved.connectOptions.capabilities.osVersion, 'Sonoma');
 });
@@ -59,7 +59,7 @@ test('resolveExecution: without credentials a browserstack env downgrades to lab
 	const iPhoneSafari = environments.find(env => env.envId === 'ENV-IOS-IP16PRO-18.0-SAF-18.0');
 	const resolved = resolveExecution(iPhoneSafari, null);
 	assert.equal(resolved.mode, 'emulated');
-	assert.match(resolved.label, /local \(emulated; BrowserStack credentials not configured\)/);
+	assert.match(resolved.label, /local \(emulated; remote runtime not configured\)/);
 	assert.deepEqual(resolved.emulation.viewport, { width: 402, height: 874 });
 	assert.equal(resolved.emulation.isMobile, true);
 	assert.equal(resolved.emulation.hasTouch, true);

@@ -24,10 +24,10 @@ const SAMPLE = {
 	browserVersion: '140',
 	deviceType: 'mobile',
 	screenSize: '6.3 inch',
-	executionProvider: 'browserstack',
+	executionProvider: 'environment',
 	isRealDevice: true,
 	active: true,
-	browserstackCapabilities: { browserName: 'chrome', browserVersion: '140', os: 'ios', osVersion: '18.3', deviceName: 'iPhone 16 Pro', realMobile: true }
+	runtimeCapabilities: { browserName: 'chrome', browserVersion: '140', os: 'ios', osVersion: '18.3', deviceName: 'iPhone 16 Pro', realMobile: true }
 };
 
 async function startFixture(overrides = {}) {

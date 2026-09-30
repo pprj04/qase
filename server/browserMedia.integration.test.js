@@ -28,7 +28,7 @@ document.querySelector('#join').onclick = () => { status.textContent='Joined'; }
 async function setup(t, device = 'desktop') {
 	const server = createServer((request, response) => {
 		response.setHeader('content-type', 'text/html');
-		response.end(request.url === '/meeting' ? '<title>Meeting lobby</title><h1>Ready to join</h1><button>Join meeting</button>' :
+		response.end(request.url === '/meeting' ? '<title>Meeting lobby</title><h1>Lobby</h1><button>Join meeting</button>' :
 			request.url === '/invalid' ? '<title>Expired meeting</title><h1>This meeting link has expired</h1>' : fixture);
 	});
 	server.listen(0, '127.0.0.1');
@@ -39,7 +39,10 @@ async function setup(t, device = 'desktop') {
 	const session = { id: 'media-fixture', targetUrl, device, messages: [], status: 'running' };
 	const events = [];
 	const store = { publish(_session, type, payload) { events.push({ type, payload }); }, async commit(_session, type, payload) { events.push({ type, payload }); } };
-	const policy = createBrowserPolicy({ getTargetUrl: () => targetUrl, environment: { NODE_ENV: 'test' } });
+	// Loopback targets are private-network space, which the SSRF guard blocks
+	// by default (1be3796). The fixture deliberately opts its own loopback
+	// origin into the policy allowlist — production keeps the default block.
+	const policy = createBrowserPolicy({ getTargetUrl: () => targetUrl, environment: { NODE_ENV: 'test', QASE_BROWSER_ALLOWED_PRIVATE_HOSTS: '127.0.0.1' } });
 	const bridge = attachBrowserBridge(session, service, store, { policy });
 	t.after(async () => { bridge.dispose(); await service.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
 	await service.open(targetUrl);

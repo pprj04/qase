@@ -13,11 +13,53 @@ import { createEnvironmentService, createLocalEnvironmentBackend } from './envir
 import { createPostgresEnvironmentRepository } from './postgres/environmentRepository.js';
 import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
 import { createPostgresDeviceCatalogRepository } from './postgres/deviceCatalogRepository.js';
+import { createDeviceRuntimeManager } from './deviceRuntime/manager.js';
+import { createLocalSimulationProvider } from './deviceRuntime/localSimulationProvider.js';
+import { createBrowserstackRuntimeProvider } from './deviceRuntime/browserstackRuntimeProvider.js';
+import { createNullRealDeviceProvider } from './deviceRuntime/nullRealDeviceProvider.js';
 import { createTestCaseService, createLocalTestCaseBackend } from './testCaseService.js';
 import { createPostgresTestCaseRepository } from './postgres/testCaseRepository.js';
+import { createBugService, createLocalBugBackend } from './bugService.js';
+import { createPostgresBugRepository } from './postgres/bugRepository.js';
+import { createCoverageService } from './coverageService.js';
+import { createTestCaseAutogen, autogenSettingsFromEnv } from './testCaseAutogen.js';
+import { getConfig as readModelConfig } from './config.js';
 
 export const RUN_STORE_MODES = Object.freeze(['local', 'postgres']);
 export const EXECUTION_MODES = Object.freeze(['local', 'distributed']);
+
+/**
+ * Auto-generate test cases when a QA run publishes its report. Subscribes to
+ * the run bus; failures are logged and swallowed so generation can never
+ * affect the run itself. Called for both local and postgres service paths.
+ */
+function attachTestCaseAutogen({ services, environment, getConfig }) {
+	if (!services?.testCases || typeof services.runs?.subscribeGlobal !== 'function') return;
+	const configProvider = getConfig ?? readModelConfig;
+	// Reusable engine for the API surface ("Generate from run"); the same
+	// settings and config resolution the bus trigger uses.
+	services.testCaseAutogen = {
+		async generateForRun(session) {
+			const engine = createTestCaseAutogen({
+				testCases: services.testCases,
+				settings: autogenSettingsFromEnv(environment),
+				config: configProvider(),
+				logger: (line) => console.log(line)
+			});
+			return engine.generateForSession(session);
+		}
+	};
+	services.runs.subscribeGlobal(async (sessionId, event) => {
+		try {
+			if (event?.type !== 'report') return;
+			const session = services.runs.get ? await services.runs.get(sessionId) : null;
+			if (!session) return;
+			await services.testCaseAutogen.generateForRun(session);
+		} catch (error) {
+			console.log(`[autogen] generation failed for run ${sessionId}: ${error?.message ?? error}`);
+		}
+	});
+}
 
 export function configuredExecutionMode(environment = process.env) {
 	const mode = String(environment.QASE_EXECUTION_MODE ?? 'local').trim().toLowerCase();
@@ -73,7 +115,15 @@ export async function createConfiguredApplicationServices(options = {}) {
 
 	if (mode === 'local') {
 		if (executionMode === 'distributed') throw new Error('Distributed execution requires QASE_RUN_STORE=postgres.');
-		const services = (options.createLocalServices ?? createLocalApplicationServices)({ tenantContext });
+		// Phase 21: create the manager FIRST so every run turn can consult it.
+		const deviceRuntime = options.createDeviceRuntimeManager?.() ?? createDeviceRuntimeManager({
+			providers: [
+				createLocalSimulationProvider(),
+				createBrowserstackRuntimeProvider(),
+				createNullRealDeviceProvider()
+			]
+		});
+		const services = (options.createLocalServices ?? createLocalApplicationServices)({ tenantContext, deviceRuntime });
 		services.tenantContext = tenantContext;
 		await services.auth?.load?.();
 		await services.runs.load();
@@ -91,6 +141,22 @@ export async function createConfiguredApplicationServices(options = {}) {
 			options.createLocalTestCaseBackend?.() ?? createLocalTestCaseBackend(),
 			{ environments: services.environments, tenantContext }
 		);
+		// Phase 6: bug reports with BUG-XXXX ids + auto environment association.
+		services.bugs = createBugService(
+			options.createLocalBugBackend?.() ?? createLocalBugBackend(),
+			{ environments: services.environments, runs: services.runs, tenantContext }
+		);
+		// Phase 21: device runtime manager with the three honest providers.
+		services.deviceRuntime = deviceRuntime;
+		// Phase 7: coverage dashboard aggregation (test cases × environments × runs).
+		services.coverage = createCoverageService({
+			testCases: services.testCases,
+			environments: services.environments,
+			runs: services.runs,
+			listRuns: services.runs.listAll?.bind(services.runs),
+			tenantContext
+		});
+		attachTestCaseAutogen({ services, environment, getConfig: options.getConfig });
 		return { mode, executionMode, services, tenantContext, pool: undefined };
 	}
 
@@ -122,9 +188,18 @@ export async function createConfiguredApplicationServices(options = {}) {
 				environment, tenantContext
 			});
 		}
+		// Phase 21: create the manager before services so run turns can consult it.
+		const deviceRuntime = options.createDeviceRuntimeManager?.() ?? createDeviceRuntimeManager({
+			providers: [
+				createLocalSimulationProvider(),
+				createBrowserstackRuntimeProvider(),
+				createNullRealDeviceProvider()
+			]
+		});
 		services = (options.createPostgresServices ?? createPostgresApplicationServices)({
 			repository,
 			tenantContext,
+			deviceRuntime,
 			 eventTransport,
 			auth,
 			hydrateAll: executionMode !== 'distributed',
@@ -146,6 +221,21 @@ export async function createConfiguredApplicationServices(options = {}) {
 			(options.createTestCaseRepository ?? createPostgresTestCaseRepository)(pool, { tenantContext }),
 			{ environments: services.environments, tenantContext }
 		);
+		services.bugs = createBugService(
+			(options.createBugRepository ?? createPostgresBugRepository)(pool, { tenantContext }),
+			{ environments: services.environments, runs: services.runs, tenantContext }
+		);
+		// Phase 7: coverage dashboard aggregation (test cases × environments × runs).
+		services.coverage = createCoverageService({
+			testCases: services.testCases,
+			environments: services.environments,
+			runs: services.runs,
+			listRuns: services.runs.listAll?.bind(services.runs),
+			tenantContext
+		});
+		attachTestCaseAutogen({ services, environment, getConfig: options.getConfig });
+		// Phase 21: device runtime manager with the three honest providers.
+		services.deviceRuntime = deviceRuntime;
 		let executionQueue;
 		if (executionMode === 'distributed') {
 			executionQueue = (options.createExecutionQueue ?? createPostgresExecutionQueue)({

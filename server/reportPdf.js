@@ -53,12 +53,15 @@ function environmentLine(session) {
 		[snapshot.browser, snapshot.browserVersion].filter(Boolean).join(' ')
 	].filter(Boolean);
 	const label = parts.join(' \u00b7 ');
-	const provider = snapshot.executionProvider === 'browserstack'
-		? 'BrowserStack real device'
-		: snapshot.executionProvider === 'local'
-			? 'local (emulated)'
-			: snapshot.executionProvider;
-	return provider ? `${label} \u2014 ${provider}` : label;
+	// Phase 22: the execution label comes from RECORDED facts, never from the
+	// catalog capability hint — a simulated run must never read "real device".
+	const level = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	if (level === 'REAL_DEVICE') return `${label} \u2014 REAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'VIRTUAL_DEVICE') return `${label} \u2014 VIRTUAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'SIMULATED') return `${label} \u2014 SIMULATED${provider ? ` (${provider})` : ''}`;
+	const legacy = provider === 'browserstack' ? 'remote environment runtime' : provider;
+	return legacy ? `${label} \u2014 ${legacy}` : label;
 }
 
 function headerBlock(session, title, verdictText) {
@@ -74,6 +77,14 @@ function headerBlock(session, title, verdictText) {
 			['Started', created],
 			['Updated', finished]
 		];
+	// Phase 22: an explicit Execution row so every PDF states the level.
+	const pdfLevel = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	if (pdfLevel) {
+		const pdfProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		rows.push(['Execution', `${pdfLevel === 'REAL_DEVICE' ? 'REAL DEVICE' : pdfLevel}${pdfProvider ? ` (${pdfProvider})` : ''}`]);
+	} else if (session.environmentSnapshot) {
+		rows.push(['Execution', 'NOT AVAILABLE FOR REAL EXECUTION']);
+	}
 	if (verdictText) rows.push(['Verdict', verdictText]);
 	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
 		const usage = session.tokenUsage;

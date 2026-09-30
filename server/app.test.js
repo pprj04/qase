@@ -5,6 +5,7 @@ import { createApplication } from './app.js';
 import { PublicInputError } from './publicErrors.js';
 import { createInstanceAccess } from './instanceAccess.js';
 import { finishSqaAssessment } from './sqaService.js';
+import { createCoverageService } from './coverageService.js';
 
 const TEST_TENANT = Object.freeze({
 	organizationId: '55c15025-8ef4-4ce8-8ad5-4562f33f1852',
@@ -463,7 +464,7 @@ test('run creation with an environmentId snapshots the frozen environment onto t
 	const frozen = {
 		envId: 'ENV-IOS-IP15PRO-18.3-SAF-18.3', platform: 'ios', device: 'iPhone 15 Pro',
 		osVersion: '18.3', browser: 'Safari', browserVersion: '18.3',
-		deviceType: 'phone', executionProvider: 'browserstack', isRealDevice: true, active: true
+		deviceType: 'phone', executionProvider: 'environment', isRealDevice: true, active: true
 	};
 	fixture.services.environments.get = async envId => (envId === frozen.envId ? frozen : null);
 	fixture.services.environments.list = async () => [frozen];
@@ -475,7 +476,7 @@ test('run creation with an environmentId snapshots the frozen environment onto t
 	}));
 	assert.equal(created.environmentId, frozen.envId);
 	assert.equal(created.environmentSnapshot.device, 'iPhone 15 Pro');
-	assert.equal(created.environmentSnapshot.executionProvider, 'browserstack');
+	assert.equal(created.environmentSnapshot.executionProvider, 'environment');
 
 	const summaries = await body(await fixture.request('/api/sessions'));
 	assert.equal(summaries[0].environmentSnapshot.envId, frozen.envId);
@@ -1101,4 +1102,63 @@ test('only explicitly public input errors retain their message', async t => {
 	const spoofedPayload = await body(spoofedResponse);
 	assert.equal(spoofedPayload.error, 'The request could not be completed. Try again.');
 	assert.doesNotMatch(JSON.stringify(spoofedPayload), /workspace|auth\.json/);
+});
+
+test('GET /api/coverage aggregates cases × environments × runs with honest metrics', async t => {
+	const env = {
+		envId: 'ENV-IOS-IP16PRO-18.3-SAF-18.3', platform: 'ios', device: 'iPhone 16 Pro',
+		osVersion: '18.3', browser: 'Safari', browserVersion: '18.3', active: true
+	};
+	// The route mounts only when the coverage group exists at startup, so the
+	// fixture swaps the snapshot result per stage rather than the service.
+	let snapshotResult = { metrics: { environments: 0, testCases: 0, assignedPairs: 0, executedPairs: 0, passedPairs: 0, coveragePct: 0, passRatePct: 0, runsConsidered: 0 }, rows: [], environments: [] };
+	const memory = createMemoryServices();
+	memory.services.coverage = { snapshot: async () => snapshotResult };
+	const fixture = await startFixture({ memory });
+	t.after(() => fixture.close());
+
+	// Empty workspace → zeros/empty, not an error.
+	const empty = await body(await fixture.request('/api/coverage'));
+	assert.equal(empty.metrics.coveragePct, 0);
+	assert.equal(empty.metrics.assignedPairs, 0);
+	assert.deepEqual(empty.rows, []);
+	assert.deepEqual(empty.environments, []);
+
+	fixture.services.environments.list = async () => [env];
+	const expected = createCoverageService({
+		testCases: {
+			list: async () => ({ testCases: [
+				{ caseNumber: 'TC-1', title: 'Checkout flow', tags: [], environmentIds: [env.envId] },
+				{ caseNumber: 'TC-2', title: 'Login', tags: [], environmentIds: [env.envId], deleted: true }
+			] })
+		},
+		environments: fixture.services.environments,
+		runs: fixture.services.runs,
+		listRuns: async () => [
+			{ id: 'r1', testCaseId: 'TC-1', environmentId: env.envId, status: 'done', updatedAt: 10, report: { verdict: 'pass_with_issues' } }
+		],
+		tenantContext: {}
+	});
+	snapshotResult = await expected.snapshot();
+
+	const payload = await body(await fixture.request('/api/coverage'));
+	assert.equal(payload.metrics.environments, 1);
+	assert.equal(payload.metrics.testCases, 1); // deleted case excluded
+	assert.equal(payload.metrics.assignedPairs, 1);
+	assert.equal(payload.metrics.executedPairs, 1);
+	assert.equal(payload.metrics.passedPairs, 1); // pass_with_issues is a pass
+	assert.equal(payload.metrics.coveragePct, 100);
+	assert.equal(payload.metrics.passRatePct, 100);
+	assert.equal(payload.rows[0].caseNumber, 'TC-1');
+	assert.equal(payload.rows[0].cells[env.envId].latestRunId, 'r1');
+	assert.equal(payload.rows[0].cells[env.envId].verdict, 'pass_with_issues');
+	assert.equal(payload.environments[0].envId, env.envId);
+});
+
+test('GET /api/coverage is absent when no coverage service is configured', async t => {
+	const fixture = await startFixture({ memory: createMemoryServices() });
+	t.after(() => fixture.close());
+	assert.equal(fixture.services.coverage, undefined);
+	const response = await fixture.request('/api/coverage');
+	assert.equal(response.status, 404);
 });

@@ -47,8 +47,12 @@ check(4, 'Regeneration is idempotent (same set of IDs)', (() => {
 })(), 'second generation differs');
 
 // 5. BrowserStack capability mapping well-formed
+// (Phase 9 extended the catalog to Android + Windows. Those platforms run as
+// local emulation targets first; capability well-formedness only applies where
+// the catalog actually defines BrowserStack shapes.)
 const badCaps = environments.filter(e => {
 	const caps = e.browserstackCapabilities;
+	if (e.platform === 'android' || e.platform === 'windows') return !caps?.browserName; // emulation-first platforms still name a browser
 	if (!caps?.browserName || !caps?.os || !caps?.osVersion) return true;
 	if (e.platform === 'macos') return caps.os !== 'OS X' || caps.deviceName !== undefined;
 	if (!caps.deviceName || caps.realMobile !== true) return true;
@@ -58,10 +62,16 @@ check(5, 'BrowserStack capability mapping well-formed per platform', badCaps.len
 	badCaps.slice(0, 3).map(e => e.envId).join(', '));
 
 // 6. Non-executable browser/platform combos never generate environments
+// (Phase 9 deliberately added Firefox/Edge/Opera on Windows and Brave/
+// DuckDuckGo as Windows desktop entries — they are executable emulation
+// targets. The genuinely impossible combos stay forbidden: any non-Chromium
+// browser on iOS/iPadOS, Brave/DuckDuckGo outside Windows, Safari on
+// Android/Windows.)
 const forbidden = environments.filter(e =>
-	e.platform !== 'macos' && ['Firefox', 'Edge', 'Opera'].includes(e.browser))
-	.concat(environments.filter(e => ['Brave', 'DuckDuckGo'].includes(e.browser)));
-check(6, 'Non-executable combos (Firefox/Edge/Opera on iOS/iPadOS; Brave/DuckDuckGo anywhere) never generated',
+	(e.platform === 'ios' || e.platform === 'ipados') && ['Firefox', 'Edge', 'Opera'].includes(e.browser))
+	.concat(environments.filter(e => ['Brave', 'DuckDuckGo'].includes(e.browser) && e.platform !== 'windows'))
+	.concat(environments.filter(e => e.browser === 'Safari' && (e.platform === 'android' || e.platform === 'windows')));
+check(6, 'Non-executable combos (Firefox/Edge/Opera on iOS/iPadOS; Brave/DuckDuckGo outside Windows; Safari on Android/Windows) never generated',
 	forbidden.length === 0, forbidden.map(e => e.envId).join(', '));
 
 // 7. Deterministic regeneration ordering

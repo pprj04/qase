@@ -4,20 +4,20 @@
  * This module is the single source of truth for the Apple environment matrix:
  * which devices exist (iPhone / iPad / macOS), which OS versions each supports,
  * which browsers are actually executable per platform (validated against
- * BrowserStack's published availability), and how Safari versions derive from
+ * published vendor availability), and how Safari versions derive from
  * OS versions (Safari is never an independently installed browser).
  *
  * Everything here is frozen, deterministic data + pure functions — same pattern
- * as deviceProfiles.js. Browser/OS version lists are curated from BrowserStack's
+ * as deviceProfiles.js. Browser/OS version lists are curated from vendors'
  * published platform lists and refreshed manually (see scripts/generate-environments.mjs
  * usage). Nothing in this module talks to the network or the database.
  *
- * Hard availability rules (BrowserStack, verified 2026-09):
+ * Hard availability rules (verified 2026-09):
  *   - iOS / iPadOS real devices: Safari and Chrome ONLY.
  *     Firefox, Edge, Opera, Brave, DuckDuckGo are not offered on iOS/iPadOS
  *     automation and therefore never generate environments.
  *   - macOS: Safari, Chrome, Firefox, Edge, Opera.
- *     Brave and DuckDuckGo are not offered on BrowserStack desktop at all.
+ *     Brave and DuckDuckGo are Windows-desktop browsers only.
  */
 
 export const ENVIRONMENT_CATALOG_VERSION = '2026.09.1';
@@ -41,7 +41,7 @@ export const PLATFORMS = [
 /**
  * @typedef {{ code: string, name: string, envCode: string, independentlyVersioned: boolean,
  *             platforms: string[], note?: string }} BrowserDef
- * `platforms` lists the platforms where the browser is executable via BrowserStack.
+ * `platforms` lists the platforms where the browser is executable in QASE.
  * Browsers absent from a platform's list are kept here for UI explanation only.
  */
 export const BROWSERS = [
@@ -57,32 +57,32 @@ export const BROWSERS = [
 	{
 		code: 'firefox', name: 'Firefox', envCode: 'FF', independentlyVersioned: true,
 		platforms: ['macos', 'windows'],
-		note: 'BrowserStack does not offer Firefox on iOS/iPadOS real devices; Android Firefox is not scriptable via WebDriver.'
+		note: 'Firefox is not installable on iOS/iPadOS devices (WebKit-only engine); Android Firefox is not scriptable.'
 	},
 	{
 		code: 'edge', name: 'Edge', envCode: 'EDG', independentlyVersioned: true,
 		platforms: ['macos', 'windows'],
-		note: 'BrowserStack does not offer Edge on iOS/iPadOS real devices.'
+		note: 'Edge is not installable on iOS/iPadOS devices (WebKit-only engine).'
 	},
 	{
 		code: 'opera', name: 'Opera', envCode: 'OPR', independentlyVersioned: true,
 		platforms: ['macos', 'windows'],
-		note: 'BrowserStack does not offer Opera on iOS/iPadOS real devices.'
+		note: 'Opera is not installable on iOS/iPadOS devices (WebKit-only engine).'
 	},
 	{
 		code: 'brave', name: 'Brave', envCode: 'BRV', independentlyVersioned: true,
 		platforms: ['windows'],
-		note: 'Brave runs as a Chromium variant on Windows desktops; not offered on BrowserStack Apple platforms.'
+		note: 'Brave runs as a Chromium variant on Windows desktops; not installable on Apple platforms.'
 	},
 	{
 		code: 'duckduckgo', name: 'DuckDuckGo', envCode: 'DDG', independentlyVersioned: true,
 		platforms: ['windows'],
-		note: 'DuckDuckGo runs as a desktop app on Windows; not offered on BrowserStack Apple platforms.'
+		note: 'DuckDuckGo runs as a desktop app on Windows; not installable on Apple platforms.'
 	}
 ];
 
 /**
- * Curated major browser versions available on BrowserStack per browser family
+ * Curated major browser versions available per browser family
  * (latest ~4 majors). Refreshed manually with each catalog release.
  */
 export const BROWSER_VERSIONS = {
@@ -137,14 +137,14 @@ export function safariVersionFor(platformId, osVersion) {
  *                                  MONTEREY/VENTURA/… and there is one device
  *                                  record per macOS version.
  * @property {string} name          Display name ("iPhone 16 Pro").
- * @property {string} browserstackDeviceName  Value for BrowserStack `deviceName`.
+ * @property {string} runtimeDeviceName  Remote runtime device identifier.
  * @property {string} platformId    ios | ipados | macos
  * @property {string} deviceType    mobile | tablet | desktop
  * @property {string} screenSize    Human screen size, e.g. "6.3 inch".
- * @property {string[]} osVersions  Curated supported OS versions (BrowserStack-listed).
+ * @property {string[]} osVersions  Curated supported OS versions.
  * @property {boolean} isRealDevice Real hardware (true for iOS/iPadOS; false for macOS VMs).
  * @property {Object} [emulation]   Optional local-emulation hints (viewport etc.) for
- *                                  non-BrowserStack execution (Phase 5/6).
+ *                                  non-remote execution (Phase 5/6).
  */
 
 /** iPhone catalog — every requested model with curated supported OS versions. */
@@ -216,11 +216,11 @@ export const APPLE_DEVICES = [
 
 /** @typedef {Object} GenericDevice — same shape as AppleDevice, plus manufacturer. */
 
-function androidDevice(slug, name, manufacturer, browserstackDeviceName, osVersions, viewport = '390×844') {
+function androidDevice(slug, name, manufacturer, runtimeDeviceName, osVersions, viewport = '390×844') {
 	const [width, height] = viewport.split('×').map(Number);
 	return {
 		slug, name, manufacturer,
-		browserstackDeviceName,
+		runtimeDeviceName,
 		platformId: 'android',
 		deviceType: 'mobile',
 		screenSize: '—',
@@ -233,7 +233,7 @@ function androidDevice(slug, name, manufacturer, browserstackDeviceName, osVersi
 function windowsDevice(slug, name, deviceType) {
 	return {
 		slug, name, manufacturer: 'Microsoft',
-		browserstackDeviceName: null,
+		runtimeDeviceName: null,
 		platformId: 'windows',
 		deviceType,
 		screenSize: '—',
@@ -315,7 +315,7 @@ function iphone(slug, name, viewport, dpr, screenSize, osVersions) {
 	return {
 		slug,
 		name,
-		browserstackDeviceName: name,
+		runtimeDeviceName: name,
 		platformId: 'ios',
 		deviceType: 'mobile',
 		screenSize,
@@ -325,12 +325,12 @@ function iphone(slug, name, viewport, dpr, screenSize, osVersions) {
 	};
 }
 
-function ipad(slug, name, browserstackDeviceName, viewport, dpr, screenSize, osVersions) {
+function ipad(slug, name, runtimeDeviceName, viewport, dpr, screenSize, osVersions) {
 	const [width, height] = viewport.split('×').map(Number);
 	return {
 		slug,
 		name,
-		browserstackDeviceName,
+		runtimeDeviceName,
 		platformId: 'ipados',
 		deviceType: 'tablet',
 		screenSize,
@@ -344,7 +344,7 @@ function mac(slug, name, version) {
 	return {
 		slug,
 		name,
-		browserstackDeviceName: null,
+		runtimeDeviceName: null,
 		platformId: 'macos',
 		deviceType: 'desktop',
 		screenSize: '—',
@@ -378,7 +378,7 @@ export function getDevice(nameOrSlug) {
 
 /**
  * Whether a (platform, device, osVersion, browser[, browserVersion]) combination
- * is executable via BrowserStack. Returns { ok, reason } so callers can surface
+ * is executable in QASE. Returns { ok, reason } so callers can surface
  * a human-readable reason on rejection.
  */
 export function isCombinationSupported(platformId, device, osVersion, browser, browserVersion) {
@@ -404,7 +404,7 @@ export function isCombinationSupported(platformId, device, osVersion, browser, b
 		return { ok: false, reason: `Unknown browser "${browser}"` };
 	}
 	if (!browserRecord.platforms.includes(platformId)) {
-		return { ok: false, reason: `${browserRecord.name} is not available on ${platform.label} via BrowserStack${browserRecord.note ? ` — ${browserRecord.note}` : ''}` };
+		return { ok: false, reason: `${browserRecord.name} is not supported on ${platform.label}${browserRecord.note ? ` — ${browserRecord.note}` : ''}` };
 	}
 
 	if (browserRecord.code === 'safari') {
@@ -464,11 +464,11 @@ export function buildEnvId(platformId, deviceSlug, osVersion, browserEnvCode, br
 
 /**
  * The full deterministic environment matrix. Pure — callers persist the result.
- * Only BrowserStack-executable combinations are emitted.
+ * Only executable combinations are emitted.
  */
 export function generateEnvironments() {
 	const environments = [];
-	for (const device of APPLE_DEVICES) {
+	for (const device of ALL_DEVICES) {
 		const platform = PLATFORM_BY_ID.get(device.platformId);
 		for (const osVersion of device.osVersions) {
 			for (const browser of BROWSERS) {
@@ -497,19 +497,45 @@ function buildEnvironment(device, platform, osVersion, browser, browserVersion, 
 			os: 'OS X',
 			osVersion
 		}
-		: {
-			browserName: browser.code,
-			...(browser.code === 'safari' ? {} : { browserVersion: capabilityBrowserVersion }),
-			os: 'ios',
-			osVersion,
-			deviceName: device.browserstackDeviceName,
-			realMobile: true
-		};
+		: device.platformId === 'android'
+			? {
+				browserName: browser.code,
+				browserVersion: capabilityBrowserVersion,
+				os: 'android',
+				osVersion,
+				deviceName: device.runtimeDeviceName,
+				realMobile: true
+			}
+			: device.platformId === 'windows'
+				? {
+					browserName: browser.code,
+					browserVersion: capabilityBrowserVersion,
+					os: 'Windows',
+					osVersion
+				}
+				: device.platformId === 'ipados'
+					? {
+						browserName: browser.code,
+						...(browser.code === 'safari' ? {} : { browserVersion: capabilityBrowserVersion }),
+						os: 'ios',
+						osVersion,
+						deviceName: device.runtimeDeviceName,
+						realMobile: true
+					}
+					: {
+						browserName: browser.code,
+						...(browser.code === 'safari' ? {} : { browserVersion: capabilityBrowserVersion }),
+						os: 'ios',
+						osVersion,
+						deviceName: device.runtimeDeviceName,
+						realMobile: true
+					};
 	return {
 		envId,
 		platform: device.platformId,
 		platformLabel: platform.label,
 		device: device.name,
+		...(device.manufacturer ? { manufacturer: device.manufacturer } : {}),
 		os: platform.os,
 		osVersion,
 		browser: browser.name,
@@ -517,10 +543,14 @@ function buildEnvironment(device, platform, osVersion, browser, browserVersion, 
 		browserVersion: String(browserVersion),
 		deviceType: device.deviceType,
 		screenSize: device.screenSize,
-		executionProvider: 'browserstack',
+		screenResolution: device.emulation?.viewport
+			? `${device.emulation.viewport.width}x${device.emulation.viewport.height}`
+			: null,
+		orientation: device.deviceType === 'desktop' ? null : 'portrait',
+		executionProvider: 'environment',
 		isRealDevice: device.isRealDevice,
 		active: true,
-		browserstackCapabilities: capabilities
+		runtimeCapabilities: capabilities
 	};
 }
 
@@ -534,6 +564,6 @@ export function availabilityReport() {
 		available: BROWSERS.filter((browser) => browser.platforms.includes(platform.id)).map((browser) => browser.name),
 		unavailable: BROWSERS
 			.filter((browser) => !browser.platforms.includes(platform.id))
-			.map((browser) => ({ browser: browser.name, reason: browser.note ?? 'Not offered on this platform by BrowserStack.' }))
+			.map((browser) => ({ browser: browser.name, reason: browser.note ?? 'Not supported on this platform.' }))
 	}));
 }

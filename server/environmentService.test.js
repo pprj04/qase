@@ -87,7 +87,7 @@ test('environment service facade returns camelCase records and facets', async ()
 	assert.ok(list.length > 0);
 	for (const env of list) {
 		assert.ok(env.envId);
-		assert.ok(env.browserstackCapabilities);
+		assert.ok(env.runtimeCapabilities);
 		assert.equal(typeof env.browserVersion, 'string');
 		assert.equal(env.os, 'macOS');
 		assert.ok(!('os_version' in env), 'no snake_case leakage');
@@ -163,13 +163,13 @@ test('disable excludes an environment from picker queries; enable restores it', 
 	const envId = 'ENV-IOS-IP16PRO-18.3-CHR-140';
 
 	await backend.update(null, envId, { active: false });
-	const inactive = await backend.list(null, { active: 'true' });
+	const inactive = await backend.list(null, { active: 'true', limit: 1000 });
 	assert.ok(!inactive.some((env) => env.envId === envId), 'disabled env must not appear in active=true picker query');
-	const stillThere = await backend.list(null, {});
+	const stillThere = await backend.list(null, { limit: 1000 });
 	assert.ok(stillThere.some((env) => env.envId === envId), 'disabled env remains in unfiltered history');
 
 	await backend.update(null, envId, { active: true });
-	const restored = await backend.list(null, { active: 'true' });
+	const restored = await backend.list(null, { active: 'true', limit: 1000 });
 	assert.ok(restored.some((env) => env.envId === envId), 're-enabled env returns to the picker');
 	fs.rmSync(dir, { recursive: true, force: true });
 });
