@@ -1300,6 +1300,13 @@ const FEEDBACK_CATEGORIES = [
 /** A run accepts feedback only once it has reached a terminal state. */
 const FEEDBACK_TERMINAL_STATUSES = new Set(['done', 'error']);
 
+/**
+ * Runs the feedback modal has auto-opened for in THIS browser session.
+ * Survives modal close but resets on reload — refreshed pages with
+ * already-submitted feedback never re-prompt (the sync covers that).
+ */
+const feedbackAutoPrompted = new Set();
+
 /** Spec rating semantics for the star tooltips. */
 const FEEDBACK_STAR_LABELS = {
 	1: '1 — Very Poor',
@@ -1310,7 +1317,10 @@ const FEEDBACK_STAR_LABELS = {
 };
 
 function feedbackEligible(session) {
-	return Boolean(session?.id) && FEEDBACK_TERMINAL_STATUSES.has(session.status);
+	// The feedback feature is scoped to New QA Run executions — SQA and
+	// Founder reviews each have their own completion flows.
+	return Boolean(session?.id) && session.mode !== 'sqa' && session.mode !== 'founder'
+		&& FEEDBACK_TERMINAL_STATUSES.has(session.status);
 }
 
 /**
@@ -1331,6 +1341,16 @@ async function syncFeedbackForSession(session) {
 	if (state.feedback.runId === runId) applyFeedbackSubmittedState();
 	// Report section (and View/Provide button) follow the synced record.
 	if (state.sessionId === runId) renderReport();
+	// Auto-prompt once per run per browser session — only for QA runs whose
+	// user has NOT already given feedback and no modal is already open.
+	if (feedbackEligible(session)
+		&& state.feedback.existing === null
+		&& state.sessionId === runId
+		&& !feedbackAutoPrompted.has(runId)
+		&& !el.feedbackModal?.open) {
+		feedbackAutoPrompted.add(runId);
+		openFeedbackModal();
+	}
 }
 
 /**
@@ -3792,7 +3812,7 @@ function handleEvent(event) {
 		if (event.status !== 'running') {
 			void refreshRuns();
 			void refreshPerformance();
-			if (FEEDBACK_TERMINAL_STATUSES.has(event.status)) {
+			if (FEEDBACK_TERMINAL_STATUSES.has(event.status) && feedbackEligible(session)) {
 				renderReport();
 				void syncFeedbackForSession(session);
 			}

@@ -383,6 +383,29 @@ export function createApplication(options = {}) {
 		return session;
 	}
 
+	/**
+	 * Attaches the requesting user's feedback for this run (reports embed the
+	 * submitter's own record; nothing from other runs or users leaks in).
+	 */
+	async function attachUserFeedback(session, userId) {
+		if (!services.feedback || !session?.id) return session;
+		try {
+			const record = await services.feedback.forRun(session.id, userId ?? null);
+			if (record) {
+				if (userId && authService?.profile) {
+					try {
+						const submitter = await authService.profile(userId);
+						record.userName = submitter?.displayName || submitter?.email?.split('@')[0];
+					} catch { /* display name is best-effort */ }
+				}
+			}
+			session.userFeedback = record ?? undefined;
+		} catch {
+			session.userFeedback = undefined;
+		}
+		return session;
+	}
+
 	/** Runs a turn detached: HTTP returns immediately and progress arrives by SSE. */
 	function startTurn(session, turnOptions) {
 		let turn;
@@ -1089,7 +1112,7 @@ export function createApplication(options = {}) {
 			? buildSqaReportMarkdown(session.sqa.assessment)
 			: session.mode === 'founder'
 				? buildFounderReportMarkdown(session)
-				: services.reports.buildMarkdown(session);
+				: services.reports.buildMarkdown(await attachUserFeedback(session, request.auth?.userId));
 		response.type('text/markdown').send(markdown);
 	});
 
@@ -1117,7 +1140,7 @@ export function createApplication(options = {}) {
 			return;
 		}
 		try {
-			const pdf = await renderReportPdf(session);
+			const pdf = await renderReportPdf(await attachUserFeedback(session, request.auth?.userId));
 			response.setHeader('Content-Type', 'application/pdf');
 			response.setHeader('Content-Disposition', 'attachment; filename="qase-' + (session.mode || 'qa') + '-report.pdf"');
 			response.send(pdf);

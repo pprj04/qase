@@ -106,5 +106,33 @@ export function buildReportMarkdown(session) {
 		lines.push('## Recommendations', '', ...report.recommendations.map(item => `- ${item}`), '');
 	}
 
+	const feedback = buildFeedbackSectionMarkdown(session);
+	if (feedback) lines.push(feedback);
+
+	return lines.join('\n');
+}
+
+/**
+ * User Feedback section for downloaded reports. Rendered only when the run
+ * has feedback attached (server injects it as session.userFeedback before
+ * report generation); isolated per run by construction.
+ */
+export function buildFeedbackSectionMarkdown(session) {
+	const feedback = session.userFeedback;
+	if (!feedback || !Number.isFinite(feedback.rating)) return '';
+	const stars = '★★★★★'.slice(0, feedback.rating) + '☆☆☆☆☆'.slice(0, 5 - feedback.rating);
+	const lines = [];
+	lines.push('## User feedback', '');
+	lines.push(`- **Rating:** ${stars} ${feedback.rating}/5`);
+	if (feedback.comments) {
+		lines.push('', '>', ...String(feedback.comments).split('\n').map(line => `> ${line}`), '');
+	}
+	const submittedBy = feedback.userName || 'User';
+	const submittedOn = feedback.submittedAt
+		? new Date(feedback.submittedAt).toLocaleString()
+		: '—';
+	lines.push(`- **Submitted by:** ${submittedBy}`);
+	lines.push(`- **Submitted on:** ${submittedOn}`);
+	lines.push('');
 	return lines.join('\n');
 }
