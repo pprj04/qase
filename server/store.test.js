@@ -207,9 +207,62 @@ test('session persistence is not blocked by a stale PID temp directory', async t
 	assert.equal(persisted.some(candidate => candidate.id === session.id), true);
 });
 
-test('session history is persisted with owner-only permissions', async t => {
+test('setStatus records the first run start and keeps it across turns', async t => {
 	const originalDirectory = process.cwd();
-	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-session-mode-'));
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-run-started-store-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?run-started=${Date.now()}`);
+	const session = store.createSession('Timer anchor');
+
+	assert.equal(session.runStartedAt, undefined, 'no anchor before the first run');
+	store.setStatus(session, 'idle');
+	assert.equal(session.runStartedAt, undefined, 'idle does not anchor a run');
+
+	const before = Date.now();
+	store.setStatus(session, 'running');
+	const anchor = session.runStartedAt;
+	assert.equal(typeof anchor, 'number', 'first running status anchors the timer');
+	assert.ok(anchor >= before && anchor <= Date.now());
+
+	// Pause for input and resume: still the same anchor, not a second clock.
+	store.setStatus(session, 'awaiting_input');
+	store.setStatus(session, 'running');
+	assert.equal(session.runStartedAt, anchor, 'resumed turns reuse the original start');
+
+	store.flushSessions();
+	const restored = await import(`./store.js?run-started-read=${Date.now()}`);
+	restored.loadSessions();
+	assert.equal(restored.getSession(session.id).runStartedAt, anchor, 'anchor survives persistence');
+	restored.flushSessions();
+});
+
+test('pilot cohort is persisted on the session and survives a reload', async t => {
+	const originalDirectory = process.cwd();
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-cohort-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(directory, { recursive: true, force: true });
+	});
+	process.chdir(directory);
+	const first = await import(`./store.js?cohort-write=${Date.now()}`);
+	const pilot = first.createSession('Pilot cohort', { cohort: 'pilot' });
+	const developer = first.createSession('Developer cohort', {});
+	assert.equal(pilot.cohort, 'pilot', 'cohort=pilot stored from create options');
+	assert.equal(developer.cohort, undefined, 'non-pilot sessions carry no cohort');
+	first.flushSessions();
+	const restored = await import(`./store.js?cohort-read=${Date.now()}`);
+	restored.loadSessions();
+	assert.equal(restored.getSession(pilot.id).cohort, 'pilot', 'cohort survives persistence');
+	assert.equal(restored.getSession(developer.id).cohort, undefined);
+	restored.flushSessions();
+});
+
+test('session history is persisted with owner-only permissions', async t => {
+	const originalDirectory = process.cwd();	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-session-mode-'));
 	t.after(async () => {
 		process.chdir(originalDirectory);
 		await fs.rm(isolatedDirectory, { recursive: true, force: true });

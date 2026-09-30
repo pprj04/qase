@@ -139,8 +139,12 @@ test('isActive predicate keeps pinging when the bus has been quiet', async () =>
 	await new Promise(resolve => setTimeout(resolve, 90));
 	assert.ok(pings.length >= 2, `expected pings past the quiet window, got ${pings.length}`);
 	running = false;
+	// Wait past the quiet window (25ms) so a tick runs with the predicate off
+	// and stops the timer; then verify NO further pings arrive over a window
+	// that is long enough for several missed intervals.
+	await new Promise(resolve => setTimeout(resolve, 60));
 	const before = pings.length;
-	await new Promise(resolve => setTimeout(resolve, 70));
+	await new Promise(resolve => setTimeout(resolve, 80));
 	assert.equal(pings.length, before, 'pings stop once the predicate reports no live run');
 	keepalive.stop();
 });

@@ -42,6 +42,7 @@ export function createConfiguredDrytisIntegration(options = {}) {
 		: (options.createMemoryNonceStore ?? createMemoryDrytisNonceStore)());
 	const verifier = (options.createVerifier ?? createDrytisRequestVerifier)({ config, nonceStore });
 	const deliveryTarget = String(environment.QASE_DRYTIS_RESULTS_PATH ?? '').trim() || undefined;
+	const ticketsTarget = String(environment.QASE_DRYTIS_TICKETS_PATH ?? '').trim() || undefined;
 	const deliveryClient = deliveryTarget
 		? (options.createDeliveryClient ?? createDrytisDeliveryClient)({ config })
 		: undefined;
@@ -52,7 +53,8 @@ export function createConfiguredDrytisIntegration(options = {}) {
 		publicOrigin: String(environment.QASE_PUBLIC_URL ?? '').trim() || undefined,
 		logger: options.logger,
 		deliveryClient,
-		deliveryTarget
+		deliveryTarget,
+		ticketsTarget: deliveryClient ? (ticketsTarget ?? `${deliveryTarget.replace(/\/$/, '')}/tickets`) : undefined
 	});
-	return Object.freeze({ api, config, nonceStore, deliveryClient, deliveryTarget });
+	return Object.freeze({ api, config, nonceStore, deliveryClient, deliveryTarget, ticketsTarget });
 }

@@ -231,6 +231,32 @@ function runMode(session) {
 	return session.mode === 'sqa' || session.mode === 'founder' ? session.mode : 'qa';
 }
 
+/**
+ * Engine normalization for persistence. Defense in depth: unknown values
+ * (including rows written before migration 014 existed, or by other
+ * writers) fall back to the historical default rather than poisoning the
+ * session handed to the agent.
+ *
+ * NOTE: this allowlist intentionally duplicates ENGINE_IDS from
+ * browserEngines.js rather than importing it, keeping the persistence
+ * layer transport/launcher-free. When a new engine id is added to
+ * ENGINE_IDS, add it here too — otherwise Postgres persistence will
+ * silently coerce it to chromium while the local store keeps it (the
+ * exact parity class this migration fixed).
+ */
+function runEngine(session) {
+	return session?.engine === 'firefox' || session?.engine === 'webkit' ? session.engine : 'chromium';
+}
+
+function runDevice(session) {
+	return typeof session?.device === 'string' && session.device ? session.device : 'desktop';
+}
+
+/** Analytics cohort ('pilot' or NULL) — read by the run_started/run_finished hooks. */
+function runCohort(session) {
+	return session?.cohort === 'pilot' ? 'pilot' : null;
+}
+
 function sqaProfiles(session) {
 	if (runMode(session) !== 'sqa') return [];
 	return [...new Set(session.sqa.scope.profiles.map(profile => profile.trim()))];
@@ -380,6 +406,10 @@ function hydrateRun(row, children) {
 		status: row.status,
 		mode: row.run_mode === 'sqa' || row.run_mode === 'founder' ? row.run_mode : 'qa',
 		targetUrl: row.target_url ?? undefined,
+		engine: runEngine({ engine: row.engine }),
+		device: runDevice({ device: row.device }),
+		deviceLandscape: row.device_landscape === true,
+		cohort: row.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: (children.messages.get(row.id) ?? []).map(hydrateMessage),
 		activities: (children.activities.get(row.id) ?? []).map(hydrateActivity),
 		findings: (children.findings.get(row.id) ?? []).map(hydrateFinding),
@@ -387,6 +417,9 @@ function hydrateRun(row, children) {
 		report: hydrateReport(children.reports.get(row.id)?.[0]),
 		pendingQuestion: row.pending_question ?? undefined,
 		contextUsage: row.context_usage ?? undefined,
+		feedback: row.feedback ?? undefined,
+		runStartedAt: epoch(row.started_at) || undefined,
+		runCompletedAt: epoch(row.completed_at) || undefined,
 		secretNames: names(row.secret_names),
 		ownerUserId: row.created_by_user_id ?? undefined
 	};
@@ -567,8 +600,9 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
+			engine, device, device_landscape, cohort,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,$18,$19,$20)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,0,$18,$19,$20,$21,$22,$23,$24)
 		 RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -578,7 +612,10 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			runMode(session) === 'founder' ? json(session.founder) : null,
 			json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage), names(session.secretNames),
 			session.messages?.length ?? 0, session.findings?.length ?? 0,
-			nextEventSequence, createdAt, updatedAt
+			nextEventSequence,
+			runEngine(session), runDevice(session), session.deviceLandscape === true,
+			runCohort(session),
+			createdAt, updatedAt
 		]
 	);
 	await replaceChildren(client, tenant, session, updatedAt);
@@ -692,7 +729,7 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, secret_names, engine, device, device_landscape, cohort, created_at, updated_at, lock_version
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 				 ORDER BY updated_at DESC, id ASC`,
@@ -709,7 +746,7 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, secret_names, created_at, updated_at, lock_version
+					pending_question, context_usage, secret_names, engine, device, device_landscape, cohort, created_at, updated_at, lock_version
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND deleted_at IS NULL
@@ -725,7 +762,7 @@ export function createPostgresRunRepository({
 		const limit = boundedInteger(options.limit, 100, 1, 100, 'limit');
 		return transaction(async client => {
 			const result = await client.query(
-				`SELECT id, title, status, run_mode, target_url, created_at, updated_at,
+				`SELECT id, title, status, run_mode, target_url, engine, device, device_landscape, cohort, created_at, updated_at,
 					message_count, finding_count
 					FROM qa_runs
 					WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
@@ -740,6 +777,9 @@ export function createPostgresRunRepository({
 				status: row.status,
 				mode: row.run_mode === 'sqa' || row.run_mode === 'founder' ? row.run_mode : 'qa',
 				targetUrl: row.target_url ?? undefined,
+				engine: runEngine({ engine: row.engine }),
+				device: runDevice({ device: row.device }),
+				deviceLandscape: row.device_landscape === true,
 				createdAt: epoch(row.created_at),
 				updatedAt: epoch(row.updated_at),
 				findingCount: Number(row.finding_count ?? 0),
@@ -843,11 +883,14 @@ export function createPostgresRunRepository({
 					sqa_profiles = $8, sqa_assessment = $9, founder_assessment = $10,
 					drytis_integration = $11, pending_question = $12, context_usage = $13, secret_names = $14,
 					message_count = $15, finding_count = $16, updated_at = $17,
+					feedback = $18, started_at = $19, completed_at = $20,
+					engine = $24, device = $25, device_landscape = $26,
+					cohort = $27,
 					lock_version = lock_version + 1,
-					next_event_sequence = next_event_sequence + $18
+					next_event_sequence = next_event_sequence + $21
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
-					AND lock_version = $20 AND deleted_at IS NULL
-					AND ($19::uuid IS NULL OR created_by_user_id = $19)
+					AND lock_version = $23 AND deleted_at IS NULL
+					AND ($22::uuid IS NULL OR created_by_user_id = $22)
 					RETURNING lock_version, updated_at, next_event_sequence`,
 				[
 					tenant.organizationId, tenant.projectId, session.id,
@@ -857,9 +900,15 @@ export function createPostgresRunRepository({
 					runMode(session) === 'founder' ? json(session.founder) : null,
 					json(session.drytisIntegration), json(session.pendingQuestion), json(session.contextUsage), names(session.secretNames),
 					session.messages?.length ?? 0, session.findings?.length ?? 0,
-					updatedAt, eventIncrement,
+					updatedAt,
+					json(session.feedback),
+					typeof session.runStartedAt === 'number' ? new Date(session.runStartedAt) : null,
+					typeof session.runCompletedAt === 'number' ? new Date(session.runCompletedAt) : null,
+					eventIncrement,
 					currentRequestActor()?.actorUserId ?? null,
-					expectedVersion
+					expectedVersion,
+					runEngine(session), runDevice(session), session.deviceLandscape === true,
+					runCohort(session)
 				]
 			);
 			if (!result.rows?.length) {

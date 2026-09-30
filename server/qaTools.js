@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './secrets.js';
+import { isEngineId } from './browserEngines.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -43,6 +44,7 @@ export function createQaTools(session, runStore) {
 				severity: { type: 'string', enum: SEVERITIES, description: 'User impact: critical blocks the core flow, high breaks an important flow, medium is a real but survivable defect, low is polish, info is an observation.' },
 				category: { type: 'string', description: 'Area of the defect, e.g. authentication, forms, navigation, console, network, accessibility, layout, performance, content.' },
 				url: { type: 'string', description: 'The page URL where the defect appears.' },
+				engine: { type: 'string', enum: ['chromium', 'firefox', 'webkit'], description: 'The browser engine the defect was found on. Omit on single-engine runs; always set it when the finding only reproduces on one engine.' },
 				steps: { type: 'array', items: { type: 'string' }, description: 'The exact steps to reproduce, in order.' },
 				expected: { type: 'string', description: 'What should have happened.' },
 				actual: { type: 'string', description: 'What actually happened.' },
@@ -68,7 +70,8 @@ export function createQaTools(session, runStore) {
 				steps: boundedList(input.steps),
 				expected: boundedText(input.expected, 20_000),
 				actual: boundedText(input.actual, 20_000),
-				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined
+				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined,
+				engine: isEngineId(input.engine) ? input.engine : (isEngineId(session.engine) ? session.engine : undefined)
 			});
 
 			if (!finding.title) {

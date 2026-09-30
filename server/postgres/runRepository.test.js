@@ -327,7 +327,9 @@ test('save enforces optimistic lock version and rolls back without an event on c
 	);
 	const update = fake.calls.find(call => call.text.startsWith('UPDATE qa_runs'));
 	assert.deepEqual(update.params.slice(0, 3), [TENANT.organizationId, TENANT.projectId, RUN_ID]);
-	assert.equal(update.params.at(-1), 4);
+	// Since migration 014, engine/device/device_landscape bind after the
+	// optimistic-lock version parameter; the version stays at $23.
+	assert.equal(update.params[22], 4);
 	assert.equal(fake.calls.some(call => call.text.startsWith('INSERT INTO qa_run_events')), false);
 	assert.equal(fake.calls.at(-1).text, 'ROLLBACK');
 	assert.equal(fake.state.releases, 1);
@@ -738,6 +740,9 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		status: 'idle',
 		mode: 'qa',
 		targetUrl: 'https://other.example/',
+		engine: 'chromium',
+		device: 'desktop',
+		deviceLandscape: false,
 		createdAt: NOW - 1_000,
 		updatedAt: NOW,
 		findingCount: 1,

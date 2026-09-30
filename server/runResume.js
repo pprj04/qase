@@ -86,7 +86,7 @@ export function createRunResume(overrides = {}) {
 			.filter(m => m?.role === 'agent' && typeof m.text === 'string' && m.text.trim())
 			.slice(-25)
 			.map(m => `- ${m.text.trim().slice(0, 300)}`);
-		const activity = Array.isArray(session?.activity) ? session.activity : [];
+		const activity = Array.isArray(session?.activities) ? session.activities : [];
 		const actions = activity
 			.filter(a => a && typeof a.summary === 'string' && a.summary.trim())
 			.slice(-25)

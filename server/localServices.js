@@ -77,7 +77,22 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 				};
 			},
 			stop(sessionId) {
-				runStore.peekLive?.(sessionId)?.controller?.abort();
+				const record = runStore.peekLive?.(sessionId);
+				if (record?.running) {
+					record.controller?.abort();
+					return;
+				}
+				// No live turn to abort — but a browser runtime may still be
+				// resident (crashed/recovered run, idle keep-open). A stop must
+				// end ALL work for the session, so dispose the runtime and
+				// release the browser instead of silently no-op'ing.
+				record?.bridge?.stopFrames?.();
+				record?.dispose?.();
+				if (record) {
+					delete record.runtime;
+					delete record.bridge;
+					delete record.dispose;
+				}
 			},
 			async invalidateIdleRuntimes() {
 				let kept = 0;
@@ -153,11 +168,13 @@ export function createLocalApplicationServices(options = {}) {
 			return listSessions({ ...options, ownerUserId: ownerUserId() });
 		},
 		/**
-		 * Unscoped accessors for boot-time run recovery (runResume.js). The
+		 * Unscoped accessors for boot-time run recovery (runResume.js) and
+		 * cross-user operator review (feedback review in app.js). The
 		 * request-scoped list/get above filter by the current actor, which at
 		 * boot is the default tenant actor — sessions owned by real users would
 		 * be invisible and never resume. These deliberately bypass owner
-		 * filtering; runResume re-enters each owner's actor context itself.
+		 * filtering; runResume re-enters each owner's actor context itself, and
+		 * the operator endpoints re-apply their own role gate before calling.
 		 */
 		async listInterrupted() {
 			return listSessions({ limit: 100, ownerUserId: undefined })
@@ -167,6 +184,9 @@ export function createLocalApplicationServices(options = {}) {
 		},
 		async getAny(id) {
 			return getSession(id, undefined);
+		},
+		async listAll(options) {
+			return listSessions({ ...(options ?? {}), ownerUserId: undefined });
 		},
 		async delete(id) {
 			return deleteSession(id, ownerUserId());

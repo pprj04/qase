@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
+import { isEngineId } from './browserEngines.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -23,8 +24,10 @@ function createSession(title, now, options = {}) {
 		status: 'idle',
 		mode: 'qa',
 		targetUrl: options.targetUrl,
+		engine: isEngineId(options.engine) ? options.engine : 'chromium',
 		device: isDeviceId(options.device) ? options.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: options.deviceLandscape === true,
+		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: [],
 		activities: [],
 		findings: structuredClone(options.findings ?? []),
@@ -48,6 +51,7 @@ function summary(session) {
 		status: session.status,
 		mode: session.mode === 'sqa' || session.mode === 'founder' ? session.mode : 'qa',
 		targetUrl: session.targetUrl,
+		engine: isEngineId(session.engine) ? session.engine : 'chromium',
 		device: isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: session.deviceLandscape === true,
 		createdAt: session.createdAt,
@@ -289,6 +293,28 @@ export function createPostgresApplicationServices({
 				.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
 				.slice(0, Math.min(100, Math.max(1, Number(options?.limit) || 100)))
 				.map(summary);
+		},
+		/**
+		 * Unscoped cross-user accessors for the operator feedback-review
+		 * endpoint (app.js /api/analytics/feedback) — same rationale as
+		 * localServices: the request-scoped get/list above filter by the
+		 * current actor, which would hide pilot users' sessions from the
+		 * operator. The caller re-applies its own role gate before use.
+		 */
+		async listAll(options) {
+			if (typeof repository.listAll === 'function') return repository.listAll(options);
+			return [...sessions.values()]
+				.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
+				.slice(0, Math.min(100, Math.max(1, Number(options?.limit) || 100)))
+				.map(summary);
+		},
+		async getAny(id) {
+			// Same lookup as get(), minus the owner filter.
+			if (queues.has(id) && sessions.has(id)) return sessions.get(id);
+			const record = typeof repository.get === 'function'
+				? await repository.get(id)
+				: (await repository.loadAll()).find(candidate => candidate.session.id === id);
+			return record ? installRecord(record) : sessions.get(id);
 		},
 		async delete(id) {
 			const session = sessions.get(id);

@@ -92,16 +92,19 @@ test('the real SDK registry and advertised descriptions enforce each mode bounda
 
 test('new browser capabilities validate model arguments before invoking the bridge', async () => {
 	const calls = [];
-	const [media, meeting] = createBrowserTools(() => ({
+	const tools = createBrowserTools(() => ({
 		media: async input => { calls.push(input); return { success: true, synthetic: true }; },
-		testMeetingLink: async input => { calls.push(input); return { success: true }; }
+		testMeetingLink: async input => { calls.push(input); return { success: true }; },
+		runSecurityChecks: async input => ({ success: true, results: [] })
 	}));
+	const media = tools.find(tool => tool.name === 'browser_media');
+	const meeting = tools.find(tool => tool.name === 'browser_test_meeting_link');
 	for (const input of [null, {}, { action: 'record' }, { action: 'set_permission' }, { action: 'probe', durationMs: Infinity }]) {
 		assert.equal((await media.run(input)).success, false);
 	}
 	assert.equal((await meeting.run({})).success, false);
 	assert.equal((await meeting.run({ url: 10 })).success, false);
-	assert.equal(calls.length, 0);
+	assert.equal(calls.length, 0, 'invalid inputs must not reach the bridge');
 	assert.equal((await media.run({ action: 'set_permission', permission: 'denied' })).success, true);
 	assert.equal((await meeting.run({ selector: '#meeting' })).success, true);
 });

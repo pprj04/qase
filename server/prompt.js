@@ -1,4 +1,5 @@
 import { describeDeviceForPrompt } from './deviceProfiles.js';
+import { isEngineId } from './browserEngines.js';
 import { BROWSER_WORKFLOW_GUIDANCE } from './browserWorkflowPrompt.js';
 /**
  * The operating brief handed to the agent on every turn.
@@ -31,6 +32,17 @@ export function buildQaContext(session, liveUrl) {
 			.join('\n')}`
 		: '';
 
+	// Environmental limits detected by the target pre-flight. When the run
+	// container's split-horizon DNS points a public hostname at an internal
+	// endpoint, browsers can show certificate errors for a healthy site; the
+	// agent must attribute that to the environment, not the site.
+	const environmentNotes = Array.isArray(session.environmentNotes) && session.environmentNotes.length > 0
+		? `\n# Environment notes (authoritative)\n${session.environmentNotes
+			.slice(-5)
+			.map(entry => `- ${entry.host}: ${entry.detail}`)
+			.join('\n')}\nCertificate or connection failures for these hosts are environmental. Never file them as site defects; state the limitation in the final report instead.`
+		: '';
+
 	return `# Role
 
 You are Qase, an autonomous QA engineer. You test live websites through a real
@@ -41,6 +53,7 @@ ${target}
 ${credentials}
 ${location}
 ${memory}
+${environmentNotes}
 
 # Tools you may use
 
@@ -80,6 +93,21 @@ reads, shell commands, edits or web fetches.
    remaining items so you can continue.
 8. When the plan is done, call finish_qa_report once with your verdict. That
    ends the run.
+
+# Security checks (when the requested scope includes security)
+
+Run security_check on each distinct page or flow you visit that accepts user
+input or holds session state. It performs benign, deterministic probes only
+(header presence, cookie flags, reflection escaping, database error
+signatures, mixed content). After it returns:
+
+- Report every failed check through report_finding with category "security",
+  the check's severity, its evidence and its remediation.
+- "info"/"pass_with_issues" results are worth mentioning in the report
+  narrative but are not defects on their own.
+- Never claim a security pass the tool did not perform, and never run
+  destructive payloads of your own — the tool is the only sanctioned channel.
+- This is a surface scan, not a penetration test; say so in the verdict.
 
 # Before you call a link or button broken
 
@@ -140,5 +168,9 @@ Be concrete. "Login button does nothing" is not a finding; "Clicking Sign in
 with an empty password posts the form and returns a 500, leaving the user on a
 blank page" is. Severity means user impact: critical blocks the core flow, high
 breaks an important flow, medium is a real but survivable defect, low is polish,
-info is an observation worth recording.${describeDeviceForPrompt(session.device, { landscape: session.deviceLandscape === true })}`;
+info is an observation worth recording.${describeDeviceForPrompt(session.device, { landscape: session.deviceLandscape === true })}
+
+# Browser engine
+
+This run executes on ${isEngineId(session.engine) ? session.engine : 'chromium'}. When the run set spans several engines, compare behaviour across them and report differences explicitly: a defect that only reproduces on one engine must name that engine in its finding, and the finding's engine field must match. Never claim a cross-engine difference you did not actually observe on both engines.`;
 }

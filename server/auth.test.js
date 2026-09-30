@@ -75,6 +75,18 @@ test('local authentication hashes passwords and isolates profiles and memory', a
 		await auth.updateProfile(alice.user.userId, { displayName: 'Alice QA', profile: { timezone: 'Asia/Kolkata' } });
 		assert.equal((await auth.profile(alice.user.userId)).displayName, 'Alice QA');
 		assert.equal((await auth.profile(alice.user.userId)).profile.timezone, 'Asia/Kolkata');
+		// Onboarding flag: defaults false, set once by the welcome checklist,
+		// idempotent on repeat calls, and per-user.
+		assert.equal((await auth.profile(alice.user.userId)).profile.onboardingComplete, false);
+		await auth.updateProfile(alice.user.userId, { profile: { onboardingComplete: true } });
+		assert.equal((await auth.profile(alice.user.userId)).profile.onboardingComplete, true);
+		await auth.updateProfile(alice.user.userId, { profile: { onboardingComplete: true } });
+		assert.equal((await auth.profile(alice.user.userId)).profile.onboardingComplete, true, 'repeat call stays true');
+		assert.equal((await auth.profile(bob.user.userId)).profile.onboardingComplete, false, 'flag is per-user');
+		await assert.rejects(
+			() => auth.updateProfile(alice.user.userId, { profile: { onboardingComplete: 'yes' } }),
+			error => error instanceof AuthError && error.code === 'invalid_profile'
+		);
 		await assert.rejects(() => auth.login({ email: 'alice@example.com', password: 'wrong password' }), error => error instanceof AuthError && error.status === 401);
 	} finally {
 		await auth.close();

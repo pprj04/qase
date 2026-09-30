@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { normalizeFounderState } from './founderService.js';
 import { normalizePendingSqaState } from './sqaService.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
+import { isEngineId } from './browserEngines.js';
 import { DEFAULT_ACTOR_USER_ID } from './tenancy.js';
 
 /**
@@ -151,6 +152,9 @@ export function createSession(title = 'New test run', options = {}) {
 	if (options.deviceLandscape !== undefined && typeof options.deviceLandscape !== 'boolean') {
 		throw new TypeError('Run creation received an invalid landscape flag.');
 	}
+	if (options.engine !== undefined && !isEngineId(options.engine)) {
+		throw new TypeError('Run creation received an unknown browser engine.');
+	}
 	if (options.drytisIntegration !== undefined) {
 		if (!options.drytisIntegration || typeof options.drytisIntegration !== 'object'
 			|| Array.isArray(options.drytisIntegration)
@@ -172,6 +176,10 @@ export function createSession(title = 'New test run', options = {}) {
 		targetUrl: options.targetUrl,
 		device: isDeviceId(options.device) ? options.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: options.deviceLandscape === true,
+		engine: isEngineId(options.engine) ? options.engine : 'chromium',
+		/** Analytics cohort ('pilot' for invite-admitted users) — read by the
+		 *  run_started/run_finished status hook, which has no request context. */
+		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: [],
 		activities: [],
 		findings: structuredClone(options.findings ?? []),
@@ -210,6 +218,7 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			targetUrl: session.targetUrl,
 			device: isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID,
 			deviceLandscape: session.deviceLandscape === true,
+			engine: isEngineId(session.engine) ? session.engine : 'chromium',
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			// Needed by boot-time recovery (runResume), which runs without a
@@ -308,5 +317,13 @@ export function updateActivity(session, id, patch) {
 
 export function setStatus(session, status, detail) {
 	session.status = status;
+	if (status === 'running' && typeof session.runStartedAt !== 'number') {
+		// Server-truth start of the first run turn; used by the UI elapsed timer.
+		session.runStartedAt = Date.now();
+	}
+	if (['done', 'error', 'interrupted'].includes(status)) {
+		// Server-truth completion of the last run turn; persisted for analytics.
+		session.runCompletedAt = Date.now();
+	}
 	emit(session, 'status', { status, detail });
 }

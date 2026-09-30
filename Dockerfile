@@ -11,7 +11,10 @@ WORKDIR /app
 # installed once in the shared image because only worker replicas launch it.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts \
-    && npx playwright install --with-deps chromium \
+    && npx playwright install --with-deps chromium firefox webkit \
+    && apt-get update -qq \
+    && apt-get install -y --no-install-recommends xvfb libflite1 libjxl0.11 libharfbuzz-icu0 libmanette-0.2-0 libenchant-2-2 libhyphen0 libsecret-1-0 libwayland-egl1 libepoxy0 libx264-164 \
+    && rm -rf /var/lib/apt/lists/* \
     && npm cache clean --force
 
 COPY --chown=node:node public ./public
