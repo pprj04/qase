@@ -7,6 +7,7 @@ import { normalizePendingSqaState } from './sqaService.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { isEngineId } from './browserEngines.js';
 import { DEFAULT_ACTOR_USER_ID } from './tenancy.js';
+import { clearSecrets, secretNames } from './secrets.js';
 
 /**
  * In-memory session store with a JSON mirror on disk.
@@ -39,6 +40,35 @@ bus.emit = (sessionId, event) => {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_DRYTIS_INTEGRATION_BYTES = 1_000_000;
+
+/** Lifecycle of a tracked bug (finding). Every finding starts `open`. */
+export const FINDING_STATUSES = ['open', 'in_progress', 'fixed', 'wont_fix'];
+export const FINDING_STATUS_DEFAULT = 'open';
+export const FINDING_NOTE_MAX = 500;
+
+export function isFindingStatus(value) {
+	return FINDING_STATUSES.includes(value);
+}
+
+/** Severity display order used by the bug table (most severe first). */
+export const FINDING_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+
+/**
+ * Returns a copy of the finding with the tracking fields defaulted: every
+ * legacy finding (filed before statuses existed) reads back as `open` with a
+ * status timestamp equal to its filing time. Never mutates the input.
+ */
+export function normalizeFindingStatus(finding) {
+	if (!finding || typeof finding !== 'object') return finding;
+	const status = isFindingStatus(finding.status) ? finding.status : FINDING_STATUS_DEFAULT;
+	const note = typeof finding.statusNote === 'string' ? finding.statusNote.slice(0, FINDING_NOTE_MAX) : '';
+	return {
+		...finding,
+		status,
+		statusTs: Number.isFinite(finding.statusTs) ? finding.statusTs : (finding.ts ?? Date.now()),
+		statusNote: note
+	};
+}
 
 let saveTimer;
 
@@ -115,14 +145,23 @@ export function loadSessions() {
 					}
 				}
 			}
-			// Vault contents are process-local. Never advertise names whose values
-			// disappeared during the restart, including on a preserved approval wait.
-			session.secretNames = [];
+			// Rehydrate names only for resumable/waiting work. A crash between final
+			// status persistence and vault cleanup is reconciled here on next boot.
+			if (['done', 'error', 'idle'].includes(session.status)) {
+				clearSecrets(session.id);
+				session.secretNames = [];
+			} else {
+				session.secretNames = secretNames(session.id);
+			}
 			if (typeof session.autoResumeCount !== 'number' || session.autoResumeCount < 0) {
 				session.autoResumeCount = 0;
 			}
 			// Earlier versions stored reasoning as a message; it is live-only now.
 			session.messages = (session.messages ?? []).filter(message => message.role !== 'thinking');
+			// Findings filed before lifecycle tracking existed read back as open.
+			if (Array.isArray(session.findings)) {
+				session.findings = session.findings.map(normalizeFindingStatus);
+			}
 			sessions.set(session.id, session);
 		}
 	} catch {
@@ -182,11 +221,13 @@ export function createSession(title = 'New test run', options = {}) {
 		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: [],
 		activities: [],
-		findings: structuredClone(options.findings ?? []),
+		findings: (options.findings ?? []).map(normalizeFindingStatus),
 		todos: [],
 		report: undefined,
 		pendingQuestion: undefined,
 		contextUsage: undefined,
+		/** Token usage recorded after each run: provider-reported or estimated. */
+		tokenUsage: undefined,
 		/** Names of secrets held for this session — never the values. */
 		secretNames: []
 	};
@@ -224,8 +265,19 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			// Needed by boot-time recovery (runResume), which runs without a
 			// request actor and must see runs owned by any user.
 			ownerUserId: session.ownerUserId,
+			startedAt: session.startedAt,
+			completedAt: session.completedAt,
+			pausedAt: session.pausedAt,
+			pausedSeconds: session.pausedSeconds ?? 0,
+			durationSeconds: activeDurationSeconds(session),
 			findingCount: session.findings.length,
-			messageCount: session.messages.length
+			messageCount: session.messages.length,
+			// Plan progress for the sidebar card — derived, never stored.
+			todoTotal: Array.isArray(session.todos) ? session.todos.length : 0,
+			todoCompleted: Array.isArray(session.todos)
+				? session.todos.filter(todo => todo?.status === 'completed').length
+				: 0,
+			tokenUsage: session.tokenUsage
 		}));
 }
 
@@ -239,6 +291,115 @@ export function deleteSession(id, ownerUserId) {
 	const existed = sessions.delete(id);
 	persistSoon();
 	return existed;
+}
+
+/**
+ * Updates one finding's tracking lifecycle in place. Validates the status
+ * enum and note length, stamps statusTs at the transition, and persists via
+ * the caller's commit (so the change also broadcasts on the run bus).
+ * An empty note string clears an existing note.
+ */
+export function setFindingStatus(session, findingId, { status, note } = {}) {
+	const finding = (session.findings ?? []).find(candidate => candidate.id === findingId);
+	if (!finding) {
+		const error = new Error(`Finding ${findingId} does not exist on run ${session.id}.`);
+		error.code = 'QASE_FINDING_NOT_FOUND';
+		throw error;
+	}
+	if (!isFindingStatus(status)) {
+		const error = new TypeError(`Finding status must be one of: ${FINDING_STATUSES.join(', ')}.`);
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	let trimmedNote;
+	if (note !== undefined && note !== null) {
+		if (typeof note !== 'string') {
+			const error = new TypeError('Finding status note must be a string.');
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+		trimmedNote = note.trim();
+		if (trimmedNote.length > FINDING_NOTE_MAX) {
+			const error = new RangeError(`Finding status note must be at most ${FINDING_NOTE_MAX} characters.`);
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+	} else {
+		trimmedNote = finding.statusNote ?? '';
+	}
+	finding.status = status;
+	finding.statusTs = Date.now();
+	finding.statusNote = trimmedNote;
+	return finding;
+}
+
+/**
+ * Cross-run bug backlog for the standalone Bugs view. Aggregates every QA
+ * finding across the owner's runs (SQA/Founder findings are assessments, not
+ * tracked bugs), filtered by status/severity/run/free-text search, ordered
+ * severity-major then newest first.
+ */
+export function aggregateFindings({ ownerUserId, status, severity, runId, search, limit } = {}) {
+	return aggregateSessionFindings(sessions.values(), { ownerUserId, status, severity, runId, search, limit });
+}
+
+/**
+ * Store-agnostic bug backlog aggregation: takes any iterable of run sessions
+ * and returns the filtered, severity-ordered finding rows. Shared by the local
+ * JSON store and the PostgreSQL in-memory aggregate view.
+ */
+export function aggregateSessionFindings(sessionIterable, { ownerUserId, status, severity, runId, search, limit } = {}) {
+	if (status !== undefined && !isFindingStatus(status)) {
+		const error = new TypeError('Invalid finding status filter.');
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	if (severity !== undefined && !FINDING_SEVERITY_ORDER.includes(severity)) {
+		const error = new TypeError('Invalid finding severity filter.');
+		error.code = 'QASE_FINDING_SEVERITY_INVALID';
+		throw error;
+	}
+	const bounded = Number.isSafeInteger(limit) ? Math.min(500, Math.max(1, limit)) : 200;
+	const needle = typeof search === 'string' && search.trim() ? search.trim().toLowerCase() : undefined;
+	const rows = [];
+	for (const session of sessionIterable) {
+		if (ownerUserId && session.ownerUserId !== ownerUserId) continue;
+		if (session.mode !== 'qa') continue;
+		for (const finding of (session.findings ?? []).map(normalizeFindingStatus)) {
+			if (status !== undefined && finding.status !== status) continue;
+			if (severity !== undefined && finding.severity !== severity) continue;
+			if (runId !== undefined && session.id !== runId) continue;
+			if (needle) {
+				const haystack = `${finding.title ?? ''}\n${finding.category ?? ''}\n${finding.url ?? ''}`.toLowerCase();
+				if (!haystack.includes(needle)) continue;
+			}
+			rows.push({
+				id: finding.id,
+				runId: session.id,
+				runTitle: session.title,
+				runStatus: session.status,
+				targetUrl: session.targetUrl,
+				title: finding.title,
+				severity: finding.severity,
+				category: finding.category,
+				url: finding.url,
+				expected: finding.expected,
+				actual: finding.actual,
+				steps: Array.isArray(finding.steps) ? finding.steps : [],
+				evidence: finding.evidence,
+				ts: finding.ts,
+				status: finding.status,
+				statusTs: finding.statusTs,
+				statusNote: finding.statusNote
+			});
+		}
+	}
+	rows.sort((a, b) => {
+		const bySeverity = FINDING_SEVERITY_ORDER.indexOf(a.severity) - FINDING_SEVERITY_ORDER.indexOf(b.severity);
+		if (bySeverity !== 0) return bySeverity;
+		return (b.ts ?? 0) - (a.ts ?? 0);
+	});
+	return rows.slice(0, bounded);
 }
 
 /** Live handles (runtime, bridge, abort controller) for a session. */
@@ -316,14 +477,140 @@ export function updateActivity(session, id, patch) {
 }
 
 export function setStatus(session, status, detail) {
+	applyStatusTiming(session, status);
 	session.status = status;
-	if (status === 'running' && typeof session.runStartedAt !== 'number') {
-		// Server-truth start of the first run turn; used by the UI elapsed timer.
-		session.runStartedAt = Date.now();
+	// Compatibility aliases: keep the Phase-4 UI timer / analytics fields in
+	// lockstep with the server-authoritative timing fields above.
+	if (session.startedAt !== undefined && typeof session.runStartedAt !== 'number') {
+		session.runStartedAt = session.startedAt;
 	}
-	if (['done', 'error', 'interrupted'].includes(status)) {
-		// Server-truth completion of the last run turn; persisted for analytics.
-		session.runCompletedAt = Date.now();
+	if (session.completedAt !== undefined && typeof session.runCompletedAt !== 'number') {
+		session.runCompletedAt = session.completedAt;
 	}
-	emit(session, 'status', { status, detail });
+	emit(session, 'status', { status, detail, timing: timingForEvent(session) });
+}
+
+/**
+ * Server-authoritative run timing (Test Execution Timer).
+ *
+ * Timestamps are set here — once, at the moment of each transition — so every
+ * persistence backend (Postgres repository or this JSON mirror) stores the same
+ * authoritative values. `startedAt` and `completedAt` are write-once: repeat
+ * transitions never reset or extend them.
+ */
+export function applyStatusTiming(session, status) {
+	const now = Date.now();
+	switch (status) {
+		case 'queued':
+			if (session.queuedAt === undefined) session.queuedAt = now;
+			break;
+		case 'running':
+			// Environment setup starts the moment the run flips to running.
+			if (session.startedAt === undefined) {
+				session.startedAt = now;
+				session.setupStartedAt = now;
+			}
+			// Resume from a user stop: close the pause interval and accumulate
+			// it, so paused time is excluded from active execution time.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
+			break;
+		case 'done':
+			// Close any open pause interval before completing.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
+			if (session.completedAt === undefined) session.completedAt = now;
+			if (session.reportStartedAt !== undefined && session.reportEndedAt === undefined) {
+				session.reportEndedAt = now;
+			}
+			session.failureReason = undefined;
+			break;
+		case 'error':
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
+			if (session.completedAt === undefined) session.completedAt = now;
+			break;
+		case 'interrupted':
+			// Stuck / interrupted / server pause = PAUSED, not terminal: the
+			// elapsed clock freezes at the interruption point and the run can
+			// be recovered and resumed from exactly that value. Only an error
+			// or an explicit cancel closes the timer.
+			if (session.startedAt !== undefined && session.completedAt === undefined) {
+				if (session.pausedAt === undefined) session.pausedAt = now;
+			}
+			break;
+		case 'idle':
+			// User stop = PAUSED, not cancelled. The elapsed clock freezes at
+			// the pause point and resumes exactly when the run continues.
+			// Cancellation is reserved for a future explicit permanent-cancel
+			// action; the Stop button never cancels the timer.
+			if (session.startedAt !== undefined && session.completedAt === undefined) {
+				if (session.pausedAt === undefined) session.pausedAt = now;
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+/** Mark report-generation boundaries; called by the agent workflow. */
+export function markReportPhase(session, phase) {
+	const now = Date.now();
+	if (phase === 'start') {
+		if (session.reportStartedAt === undefined) session.reportStartedAt = now;
+	} else if (phase === 'end' && session.reportStartedAt !== undefined) {
+		if (session.reportEndedAt === undefined) session.reportEndedAt = now;
+	}
+}
+
+/** Mark the boundary between environment setup and actual test execution. */
+export function markExecutionStarted(session) {
+	if (session.setupEndedAt === undefined && session.setupStartedAt !== undefined) {
+		session.setupEndedAt = Date.now();
+	}
+}
+
+/**
+ * Timing payload attached to status events; `serverNow` lets clients correct
+ * local clock skew so elapsed time is computed from server timestamps only.
+ */
+export function timingForEvent(session) {
+	return {
+		serverNow: Date.now(),
+		startedAt: session.startedAt,
+		completedAt: session.completedAt,
+		queuedAt: session.queuedAt,
+		setupStartedAt: session.setupStartedAt,
+		setupEndedAt: session.setupEndedAt,
+		reportStartedAt: session.reportStartedAt,
+		reportEndedAt: session.reportEndedAt,
+		cancelledAt: session.cancelledAt,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
+		failureReason: session.failureReason
+	};
+}
+
+/**
+ * Active execution seconds, excluding paused intervals. For a running run
+ * this is live; for a paused run it is frozen at the pause point.
+ */
+export function activeDurationSeconds(session, now = Date.now()) {
+	if (session?.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		// Currently paused: elapsed is frozen at the pause point.
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }

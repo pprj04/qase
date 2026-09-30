@@ -33,6 +33,9 @@ function createMemoryServices({ authFile } = {}) {
 		agent: { ensureRuntime: () => undefined, runTurn: noop, closeBrowser: noop, getLiveState: () => ({ running: false }), stop: noop, invalidateIdleRuntimes: noop },
 		readiness: { check: async () => ({ ready: true, checks: {} }) },
 		lifecycle: { close() {} },
+		// DEV (User Feedback feature) added a feedback service group to the
+		// runtime contract; a stub is enough for the pilot-flow surface.
+		feedback: { create: noop, get: async () => undefined, list: async () => [], update: noop, remove: noop, stats: async () => ({}), forRun: async () => undefined },
 		auth
 	};
 	return { services, auth };

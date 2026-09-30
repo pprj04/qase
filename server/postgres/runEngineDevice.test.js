@@ -71,13 +71,14 @@ describe('runRepository persistence', () => {
 		assert.match(insert.text, /engine, device, device_landscape/);
 		const paramIndex = insert.text.split(')').findIndex(part => /engine, device, device_landscape/.test(part));
 		assert.ok(paramIndex >= 0, 'engine column group present in column list');
-		// Values appear in parameter order after next_event_sequence ($18/$19/$20).
+		// After the DEV merge the insert binds engine/device/device_landscape/
+		// cohort at $20-$23 (after next_event_sequence, before timestamps).
 		const values = insert.text.match(/VALUES \(([^)]+)\)/)[1].split(',');
-		const enginePosition = values.findIndex(v => v.trim() === '$19');
-		assert.ok(enginePosition >= 0, 'engine binds as $19');
-		assert.equal(insert.params[18], 'firefox');
-		assert.equal(insert.params[19], 'pixel-7');
-		assert.equal(insert.params[20], true);
+		const enginePosition = values.findIndex(v => v.trim() === '$20');
+		assert.ok(enginePosition >= 0, 'engine binds as $20');
+		assert.equal(insert.params[19], 'firefox');
+		assert.equal(insert.params[20], 'pixel-7');
+		assert.equal(insert.params[21], true);
 	});
 
 	it('save updates engine/device/device_landscape alongside the aggregate', async () => {
@@ -90,10 +91,11 @@ describe('runRepository persistence', () => {
 		);
 		const update = pool.queries.find(q => /UPDATE qa_runs SET/.test(q.text));
 		assert.ok(update, 'update executed');
-		assert.match(update.text, /engine = \$24, device = \$25, device_landscape = \$26/);
-		assert.equal(update.params[23], 'webkit');
-		assert.equal(update.params[24], 'iphone-14');
-		assert.equal(update.params[25], false);
+		// Merged save layout: engine/device/device_landscape at $33-$35.
+		assert.match(update.text, /engine = \$33, device = \$34, device_landscape = \$35/);
+		assert.equal(update.params[32], 'webkit');
+		assert.equal(update.params[33], 'iphone-14');
+		assert.equal(update.params[34], false);
 	});
 
 	it('load queries select the new columns so hydration sees them', async () => {
@@ -171,7 +173,7 @@ describe('runRepository cohort persistence (Phase 12)', () => {
 		const insert = pool.queries.find(q => /INSERT INTO qa_runs/.test(q.text));
 		assert.ok(insert, 'insert executed');
 		assert.match(insert.text, /device_landscape, cohort/);
-		assert.equal(insert.params[21], 'pilot', 'cohort binds as $24');
+		assert.equal(insert.params[22], 'pilot', 'cohort binds as $23');
 	});
 
 	it('save updates cohort ($27) and null-cohort sessions stay NULL', async () => {
@@ -184,8 +186,8 @@ describe('runRepository cohort persistence (Phase 12)', () => {
 		);
 		const update = pool.queries.find(q => /UPDATE qa_runs SET/.test(q.text));
 		assert.ok(update);
-		assert.match(update.text, /cohort = \$27/);
-		assert.equal(update.params[26], 'pilot');
+		assert.match(update.text, /cohort = \$36/);
+		assert.equal(update.params[35], 'pilot');
 		// Non-pilot session normalizes to NULL, not 'undefined'.
 		const pool2 = stubPool();
 		const repository2 = createPostgresRunRepository({ pool: pool2, tenantContext: TENANT });
@@ -194,7 +196,7 @@ describe('runRepository cohort persistence (Phase 12)', () => {
 			{ type: 'status', expectedVersion: 2 }
 		);
 		const update2 = pool2.queries.find(q => /UPDATE qa_runs SET/.test(q.text));
-		assert.equal(update2.params[26], null);
+		assert.equal(update2.params[35], null);
 	});
 
 	it('hydrateRun maps the cohort column back onto the session', async () => {

@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import test from 'node:test';
 import { createRuntimeApplicationServices } from './localServices.js';
 
@@ -53,6 +57,30 @@ test('stop on a non-running session is idempotent', () => {
 	assert.deepEqual(calls, ['stopFrames', 'dispose'], 'second stop finds no bridge/dispose and does nothing');
 });
 
+test('events surface the run store\'s global subscription when available', async () => {
+	const seen = [];
+	const runStore = {
+		publish() {},
+		subscribe() {},
+		subscribeGlobal(listener) {
+			seen.push('registered');
+			listener('session-a', { type: 'usage', usage: { totalTokens: 10 } });
+			return () => seen.push('unsubscribed');
+		}
+	};
+	const services = createRuntimeApplicationServices(runStore, {});
+	assert.equal(typeof services.events.subscribeGlobal, 'function');
+	const unsubscribe = services.events.subscribeGlobal((sessionId, event) => seen.push([sessionId, event.type]));
+	assert.deepEqual(seen, ['registered', ['session-a', 'usage']]);
+	unsubscribe();
+	assert.equal(seen.at(-1), 'unsubscribed');
+});
+
+test('events omit subscribeGlobal when the store has none', () => {
+	const services = createRuntimeApplicationServices({ publish() {}, subscribe() {} }, {});
+	assert.equal(services.events.subscribeGlobal, undefined);
+});
+
 test('artifact purge uses only non-creating live lookup and always drops the record', async () => {
 	const calls = [];
 	let record = {
@@ -95,4 +123,47 @@ test('artifact purge still removes workspace and live entry when runtime disposa
 
 	await assert.rejects(services.agent.purgeArtifacts(RUN_ID), failure);
 	assert.deepEqual(calls, ['drop', 'workspace']);
+});
+
+test('setFindingStatus mutates, persists, and broadcasts the finding_status event', async () => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-local-finding-status-'));
+	try {
+		process.chdir(isolatedDirectory);
+		const { createLocalApplicationServices } = await import(`./localServices.js?status=${Date.now()}`);
+		const services = createLocalApplicationServices({});
+		await services.runs.load();
+		const session = await services.runs.create('Bug tracking run', {});
+		const finding = {
+			id: randomUUID(), ts: 500, severity: 'high', title: 'Broken filter',
+			category: 'search', url: 'https://example.test/search', expected: 'filters', actual: 'ignores input'
+		};
+		session.findings = [finding];
+
+		const events = [];
+		const unsubscribe = services.runs.subscribe(session.id, event => events.push(event));
+
+		const updated = await services.runs.setFindingStatus(session, finding.id, { status: 'in_progress', note: 'assigned' });
+		assert.equal(updated.status, 'in_progress');
+		assert.equal(updated.statusNote, 'assigned');
+
+		const broadcast = events.filter(event => event.type === 'finding_status');
+		assert.equal(broadcast.length, 1);
+		assert.equal(broadcast[0].finding.id, finding.id);
+		assert.equal(broadcast[0].finding.status, 'in_progress');
+
+		const rows = await services.runs.aggregateFindings({ ownerUserId: session.ownerUserId });
+		assert.equal(rows.length, 1);
+		assert.equal(rows[0].status, 'in_progress');
+		assert.equal(rows[0].runTitle, 'Bug tracking run');
+
+		await assert.rejects(
+			() => services.runs.setFindingStatus(session, randomUUID(), { status: 'fixed' }),
+			error => error.code === 'QASE_FINDING_NOT_FOUND'
+		);
+		unsubscribe();
+	} finally {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	}
 });

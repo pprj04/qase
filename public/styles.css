@@ -457,6 +457,57 @@ a {
   font-weight: 500;
 }
 
+/* Anti-overlap: the meta row never overflows sideways; badges shrink last. */
+.run-meta > .dot {
+  flex: 0 0 auto;
+}
+
+.run-meta > .run-mode-badge,
+.run-meta > .run-badge,
+.run-meta > .run-device-pill {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Mini progress row under the meta line — own row, never overlaps badges. */
+.run-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: -2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-progress-steps {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-weight: 640;
+  letter-spacing: 0.02em;
+}
+
+.run-progress-bar {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.run-progress-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 240ms var(--ease);
+}
+
 .dot {
   display: inline-block;
   flex: 0 0 auto;
@@ -492,6 +543,38 @@ a {
   color: #f5a1a5;
   font-size: 10.5px;
   font-weight: 700;
+}
+
+.run-badge--tokens {
+  margin-left: 0;
+  border-color: rgba(104, 119, 255, 0.22);
+  background: var(--accent-soft);
+  color: #aeb7ff;
+  font-weight: 600;
+}
+
+.usage-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid rgba(104, 119, 255, 0.25);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #aeb7ff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  cursor: default;
+  white-space: nowrap;
+}
+
+/* Waiting for the first model call's usage: dimmed, clearly not a count. */
+.usage-chip.is-pending {
+  color: var(--text-faint);
+  border-style: dashed;
 }
 
 .run-del {
@@ -557,7 +640,7 @@ a {
 
 .chat {
   display: grid;
-  grid-template-rows: 68px minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: var(--panel-chat);
 }
 
@@ -565,6 +648,230 @@ a {
   justify-content: space-between;
   gap: 16px;
   background: rgba(255, 255, 255, 0.008);
+}
+
+/* Run summary: token row + progress card as separate, non-overlapping
+   regions between the header and the transcript. Collapsible — the toggle
+   hides the detail block and swaps in the compact mini row; all normal
+   flex flow, no absolute positioning. */
+.run-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-chat);
+  transition: padding 160ms ease, gap 160ms ease;
+}
+
+.run-summary.is-collapsed {
+  gap: 0;
+  padding-bottom: 6px;
+}
+
+.run-summary-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.run-summary.is-collapsed .run-summary-detail {
+  display: none;
+}
+
+.run-summary.is-collapsed .token-text,
+.run-summary.is-collapsed .live-pill {
+  display: none;
+}
+
+.run-summary-mini {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  min-width: 0;
+  min-height: 26px;
+  padding: 0 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-summary-mini[hidden] {
+  display: none;
+}
+
+.mini-tokens,
+.mini-status,
+.mini-progress,
+.mini-findings {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+.mini-tokens {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.mini-status[data-status="running"] { color: var(--accent); }
+.mini-status[data-status="done"] { color: var(--text-secondary); }
+
+.run-summary-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.run-summary-toggle:hover,
+.run-summary-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+
+.run-summary-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.token-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: clamp(42px, 3.2vh, 52px);
+  min-width: 0;
+  padding: 0 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.token-glyph {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.token-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+}
+
+.live-pill {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(103, 232, 166, 0.3);
+  border-radius: 3px;
+  background: rgba(103, 232, 166, 0.1);
+  color: #67e8a6;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.token-text.is-pending {
+  color: var(--text-faint);
+  opacity: 0.75;
+}
+
+.progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.progress-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-steps,
+.progress-pct {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.progress-findings {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(239, 121, 127, 0.25);
+  border-radius: 3px;
+  background: var(--danger-soft);
+  color: #f5a0a4;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.progress-bar {
+  display: block;
+  width: 100%;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border-strong);
+}
+
+.progress-bar > i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 240ms var(--ease);
+}
+
+.current-activity {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.current-activity .ca-label {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.current-activity .ca-state {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-id {
@@ -592,13 +899,6 @@ a {
   white-space: nowrap;
 }
 
-.head-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-}
-
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -614,6 +914,223 @@ a {
   font-weight: 650;
   letter-spacing: 0.02em;
   text-transform: lowercase;
+}
+
+/* ── Test Execution Timer ──────────────────────────────────────── */
+.run-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.025);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.run-timer[hidden] {
+  display: none;
+}
+
+.run-timer-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.run-timer-clock {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 58px;
+  text-align: right;
+}
+
+.run-timer[data-state="running"] {
+  border-color: rgba(104, 119, 255, 0.32);
+  background: var(--accent-soft);
+  color: #aeb7ff;
+}
+
+.run-timer[data-state="running"] .run-timer-clock {
+  color: #dfe3ff;
+}
+
+.run-timer[data-state="paused"] {
+  border-color: rgba(232, 181, 95, 0.3);
+  background: var(--warning-soft);
+  color: #efc77f;
+}
+
+.run-timer[data-state="completed"] {
+  border-color: rgba(91, 208, 150, 0.27);
+  background: var(--success-soft);
+  color: #86dcbb;
+}
+
+.run-timer[data-state="completed"] .run-timer-clock,
+.run-timer[data-state="failed"] .run-timer-clock,
+.run-timer[data-state="cancelled"] .run-timer-clock {
+  color: var(--text);
+}
+
+.run-timer[data-state="failed"] {
+  border-color: rgba(240, 110, 110, 0.32);
+  background: rgba(240, 110, 110, 0.09);
+  color: #f0a1a1;
+}
+
+.run-timer[data-state="cancelled"] {
+  color: var(--text-muted);
+}
+
+.run-duration {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-duration--live {
+  color: #aeb7ff;
+}
+
+.run-duration--paused {
+  color: #efc77f;
+}
+
+/* ── Performance panel ─────────────────────────────────────────── */
+.perf-panel {
+  margin: 10px 12px 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.perf-panel[hidden] {
+  display: none;
+}
+
+.perf-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header row: title left, controls right; wraps cleanly on narrow widths. */
+.perf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.perf-panel.is-minimized .perf-head {
+  margin-bottom: 0;
+}
+
+.perf-body[hidden] {
+  display: none;
+}
+
+.perf-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.perf-ctl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.perf-ctl:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.perf-restore {
+  margin: 10px 12px 4px;
+  align-self: flex-start;
+}
+
+.perf-restore[hidden] {
+  display: none;
+}
+
+.perf-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+
+.perf-grid dt {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.perf-grid dd {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-compare {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.perf-compare[hidden] {
+  display: none;
+}
+
+.perf-compare-title {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.perf-compare-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+}
+
+.perf-compare-list .is-current {
+  color: #aeb7ff;
+  font-weight: 700;
 }
 
 .status-chip::before {
@@ -4804,6 +5321,26 @@ body.cli-theme {
   font-weight: 600;
 }
 
+.cli-theme .run-progress {
+  gap: 7px;
+  margin-top: 0;
+  font-size: 9px;
+}
+
+.cli-theme .run-progress-steps {
+  color: #7f919e;
+}
+
+.cli-theme .run-progress-bar {
+  height: 3px;
+  border-radius: 1.5px;
+  background: #16202b;
+}
+
+.cli-theme .run-progress-bar > i {
+  background: #67e8a6;
+}
+
 .cli-theme .run.is-active .run-title { color: #eff8f4; }
 
 .cli-theme .run-meta,
@@ -4846,8 +5383,101 @@ body.cli-theme {
 /* Agent terminal */
 
 .cli-theme .chat {
-  grid-template-rows: 64px minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: #070c12;
+}
+
+/* Terminal treatment for the run-summary region: token row + progress card. */
+.cli-theme .run-summary {
+  padding: 8px 13px 9px;
+  border-bottom-color: #192530;
+  background: #0a1017;
+  gap: 8px;
+}
+
+.cli-theme .run-summary.is-collapsed {
+  padding-bottom: 5px;
+}
+
+.cli-theme .run-summary-mini {
+  min-height: 24px;
+  padding: 0 2px;
+}
+
+.cli-theme .mini-tokens,
+.cli-theme .mini-status,
+.cli-theme .mini-progress,
+.cli-theme .mini-findings {
+  color: #9fb2be;
+  font-size: 10px;
+  font-weight: 640;
+}
+
+.cli-theme .mini-tokens {
+  color: #67e8a6;
+  font-size: 10.5px;
+}
+
+.cli-theme .mini-status[data-status="running"] { color: #67e8a6; }
+
+.cli-theme .run-summary-toggle {
+  width: 24px;
+  height: 24px;
+  color: #9fb2be;
+  font-size: 12px;
+}
+
+.cli-theme .run-summary-toggle:hover,
+.cli-theme .run-summary-toggle:focus-visible {
+  background: #16202b;
+  border-color: #192530;
+  color: #d7e3ea;
+}
+
+.cli-theme .token-summary {
+  height: clamp(42px, 3.2vh, 52px);
+  padding: 0 2px;
+}
+
+.cli-theme .token-glyph {
+  color: #67e8a6;
+  font-size: 10.5px;
+}
+
+.cli-theme .token-text {
+  color: #9fb2be;
+  font-size: 10px;
+  font-weight: 640;
+}
+
+.cli-theme .progress-top {
+  gap: 7px 10px;
+}
+
+.cli-theme .progress-steps,
+.cli-theme .progress-pct {
+  color: #9fb2be;
+  font-size: 10px;
+}
+
+.cli-theme .progress-findings {
+  font-size: 9px;
+}
+
+.cli-theme .progress-bar {
+  background: #16202b;
+}
+
+.cli-theme .progress-bar > i {
+  background: #67e8a6;
+}
+
+.cli-theme .current-activity {
+  font-size: 10px;
+}
+
+.cli-theme .current-activity .ca-state {
+  color: #9fb2be;
 }
 
 .cli-theme .chat > .panel-head,
@@ -5781,7 +6411,7 @@ body.cli-theme {
   }
 
   .cli-theme .chat {
-    grid-template-rows: 60px minmax(0, 1fr) auto auto auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   }
 
   .cli-theme .viewer {
@@ -7196,17 +7826,12 @@ body.cli-theme {
 
 .cli-theme .chat-id,
 .cli-theme .urlbar,
-.cli-theme .head-actions,
 .cli-theme #browser-title {
   min-width: 0;
 }
 
 .cli-theme .chat-id {
   flex: 1 1 auto;
-}
-
-.cli-theme .head-actions {
-  max-width: 46%;
 }
 
 .cli-theme .status-chip {
@@ -7735,3 +8360,115 @@ body.cli-theme {
 	color: #f5d491;
 	font-size: 13px;
 }
+
+/* ── Post-run feedback modal (DEV: User Feedback feature) ────────── */
+
+/* ── Post-run feedback modal ─────────────────────────────────────── */
+
+.feedback-meta {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: #8fa3b8;
+  word-break: break-all;
+}
+
+.feedback-stars {
+  border: 0;
+  padding: 0;
+  margin: 0 0 14px;
+}
+
+.feedback-stars legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b8c7d6;
+  margin-bottom: 6px;
+}
+
+.feedback-star-row {
+  display: flex;
+  gap: 4px;
+}
+
+.feedback-star {
+  font-size: 26px;
+  line-height: 1;
+  color: #3a4a5c;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: color 120ms ease, transform 120ms ease;
+}
+
+.feedback-star input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.feedback-star:focus-within {
+  outline: 2px solid #4f8cff;
+  outline-offset: 1px;
+}
+
+.feedback-star.is-on {
+  color: #ffc14d;
+}
+
+.feedback-star:hover {
+  transform: scale(1.12);
+}
+
+.feedback-success {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #4dd599;
+  font-weight: 600;
+}
+
+.req { color: #e06c75; }
+
+@media(max-width:640px) {
+  .feedback-star { font-size: 30px; }
+}
+
+/* ── Admin feedback review panel ─────────────────────────────────── */
+
+.feedback-filters { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+.feedback-filters input[type="search"] {
+  width:100%; padding:6px 9px; font-size:12.5px; border-radius:7px;
+  border:1px solid #263342; background:#0d141d; color:#dbe6f2;
+}
+.feedback-filter-row { display:flex; gap:6px; }
+.feedback-filter-row select {
+  flex:1; min-width:0; padding:5px 6px; font-size:12px; border-radius:7px;
+  border:1px solid #263342; background:#0d141d; color:#dbe6f2;
+}
+.feedback-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; max-height:320px; overflow:auto; }
+.feedback-row { border:1px solid #263342; border-radius:9px; padding:9px 10px; background:#0d141d; }
+.feedback-row-head { display:flex; align-items:center; gap:8px; }
+.feedback-row-stars { color:#ffc14d; font-size:13px; letter-spacing:1px; }
+.feedback-row-cat { font-size:11.5px; color:#8fa3b8; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.feedback-row-status {
+  font-size:11.5px; padding:3px 5px; border-radius:6px;
+  border:1px solid #263342; background:#0d141d; color:#dbe6f2;
+}
+.feedback-row-comments { margin:7px 0 5px; font-size:12.5px; line-height:1.5; color:#c6d4e3; word-break:break-word; }
+.feedback-row-meta { font-size:11px; color:#68798c; word-break:break-all; }
+.feedback-empty { font-size:12.5px; color:#68798c; padding:8px 2px; }
+
+@media(max-width:640px) {
+  .feedback-filter-row { flex-wrap:wrap; }
+  .feedback-filter-row select { flex:1 1 45%; }
+}
+
+#feedback-category:disabled { opacity: 0.75; cursor: not-allowed; }
+
+/* DEV/Phase-4 timer reconciliation: both feature lines added an elapsed-time
+   display. The Phase-4 #timer-chip is the visible one; the DEV #run-timer is
+   kept in the DOM (its JS paths run) but never rendered, avoiding a doubled
+   timer in the header. */
+#run-timer { display: none !important; }

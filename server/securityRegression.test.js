@@ -79,6 +79,8 @@ function createMemoryServices() {
 			stop: async () => {}, invalidateIdleRuntimes: async () => {}
 		},
 		readiness: { check: () => ({ ready: true, checks: {} }) },
+		// DEV added a feedback service group to the runtime contract.
+		feedback: { create: async () => ({}), get: async () => undefined, list: async () => [], update: async () => ({}), remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		lifecycle: { close: () => Promise.resolve() }
 	};
 }

@@ -14,9 +14,10 @@ import { createFounderReviewTodos } from './founderService.js';
 import { buildSqaContext } from './sqaPrompt.js';
 import { createSqaTools } from './sqaTools.js';
 import { isCredentialQuestion } from '../public/questionPresentation.js';
-import { redact, secretNames } from './secrets.js';
+import { clearSecrets, redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
 import { guardSqaBrowserTool } from './sqaBrowserBudget.js';
+import { applyUsage, attachUsageCapture, createUsageLedger, createUsageLogger, subtractUsage } from './usageCapture.js';
 
 export { guardSqaBrowserTool } from './sqaBrowserBudget.js';
 
@@ -406,11 +407,36 @@ export function ensureRuntime(session, runStore) {
 		azureApiVersion: settings.apiVersion || undefined
 	});
 
+	// Token usage capture. The SDK never forwards provider usage to the agent
+	// stream, so two instance-level hooks harvest it: a wrapper on
+	// logProviderReportedUsage that sees the real normalized usage for every
+	// provider before the SDK drops it, and a logger that parses the SDK's
+	// stage=complete line for chars/4 estimates (the fallback when a provider
+	// reports no usage in-stream). Both fail safe — if SDK internals move, no
+	// usage is recorded and runs are unaffected. The ledger stamps every
+	// harvested call with a unique id and drops duplicates, so the same report
+	// can never be counted twice however many times it surfaces.
+	const turnUsage = { reports: [], estimates: [] };
+	const usageLedger = createUsageLedger();
+	const harvestUsage = (usage, estimated) => {
+		const tracked = usageLedger.track(usage);
+		if (!tracked) return;
+		(estimated ? turnUsage.estimates : turnUsage.reports).push(tracked);
+		// A real provider report for one model call can be pushed live the
+		// moment it lands; the per-call commit below fires from the stream loop.
+		record.onUsageHarvested?.(tracked, estimated);
+	};
+	const usageLogger = createUsageLogger({
+		onEstimate: usage => harvestUsage(usage, true)
+	});
+	record.turnUsage = turnUsage;
+
 	const runtime = new CleanSlateNodeAgentRuntime({
 		rootPath,
 		workspaceStorageHome: path.join(rootPath, '.state'),
 		configuration,
 		sessionId: session.id,
+		logger: usageLogger,
 		browserHeadless: settings.headless !== false,
 		// This agent never runs commands. The SDK refuses by default; being
 		// explicit means the policy survives an SDK default changing.
@@ -436,6 +462,15 @@ export function ensureRuntime(session, runStore) {
 	if (typeof sdkSession?.continueWithLatestUserMessage === 'function') {
 		sdkSession.continueWithTurn = sdkSession.continueWithLatestUserMessage.bind(sdkSession);
 	}
+
+	// Real provider usage for every provider arrives here, right before the
+	// SDK would drop it. This is the ONLY real-usage source: the SDK's Azure
+	// debug log line carries the same report, so the logger above deliberately
+	// ignores it (harvesting both would double-count Azure).
+	const releaseUsageCapture = attachUsageCapture(runtime.cleanSlateService, {
+		onUsage: usage => harvestUsage(usage, false)
+	});
+	record.releaseUsageCapture = releaseUsageCapture;
 
 	// The registry is fixed at construction, so mode-specific tools are
 	// registered afterwards through the headless runtime that resolves them.
@@ -494,6 +529,8 @@ export function ensureRuntime(session, runStore) {
 	record.bridge = bridge;
 	record.waitingSnapshotRestored = restoreWaitingSnapshot(runtime, session);
 	record.dispose = () => {
+		record.releaseUsageCapture?.();
+		record.releaseUsageCapture = undefined;
 		bridge.dispose();
 		try {
 			runtime.dispose();
@@ -510,6 +547,9 @@ export function ensureRuntime(session, runStore) {
  * asked a blocking question.
  */
 export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, incompleteAttempt = 0 }, runStore) {
+	// Rehydrate only placeholder names before rebuilding prompt context. Values
+	// remain inside the encrypted host vault and browser substitution boundary.
+	session.secretNames = secretNames(session.id);
 	const record = ensureRuntime(session, runStore);
 	const { runtime, bridge } = record;
 	const previousArtifact = finalArtifact(session);
@@ -583,7 +623,13 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 				});
 			}
 		}
+		await commitTurnUsage();
+		// Test Execution Timer: the chat report is the last report-generation
+		// step; close the report phase before the terminal transition.
+		runStore.markReportPhase?.(session, 'end');
 		await runStore.setStatus(session, 'done');
+		clearSecrets(session.id);
+		session.secretNames = [];
 	};
 
 	// Reasoning is streamed for the live strip but never stored: it belongs to
@@ -605,11 +651,159 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		thinking = undefined;
 	};
 
+	// Fold harvested usage into the run's token totals and persist. Real
+	// provider reports win over SDK estimates. Both kinds commit live, per
+	// model call, so the dashboard's token chip updates during a run even
+	// when the provider sends no in-stream usage (providers without usage
+	// support are the chars/4 estimate fallback — still real accounting,
+	// flagged with the run's `estimated` marker). Commits are coalesced with
+	// a short throttle, and a flush is always forced on turn end / terminal
+	// paths so a completed, stopped, or failed run carries its exact usage.
+	// If a real report supersedes an already-committed estimate, the estimate
+	// is rolled back before the report is applied: totals end up exactly as
+	// if the estimate had never been counted.
+	let pendingUsage = [];
+	let usageFlushPromise = Promise.resolve();
+	let lastUsageCommitAt = 0;
+	const USAGE_COMMIT_THROTTLE_MS = 1000;
+
+	const commitUsageNow = async () => {
+		if (pendingUsage.length === 0) return;
+		const batch = pendingUsage;
+		pendingUsage = [];
+		for (const usage of batch) {
+			if (usage.estimateDelta) {
+				// A real report superseded a live-committed estimate for the
+				// same call: roll the estimate out first, then apply the
+				// report, so totals are exact either way.
+				session.tokenUsage = subtractUsage(session.tokenUsage, usage.estimateDelta);
+			}
+			session.tokenUsage = applyUsage(session.tokenUsage, usage);
+			console.info(JSON.stringify({
+				event: 'token_usage_commit', runId: session.id, model: getConfig().model,
+				callId: usage.callId, inputTokens: usage.inputTokens ?? 0,
+				outputTokens: usage.outputTokens ?? 0,
+				totalTokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+				runInputTokens: session.tokenUsage.inputTokens,
+				runOutputTokens: session.tokenUsage.outputTokens,
+				estimated: usage.estimated === true, ts: new Date().toISOString()
+			}));
+		}
+		await runStore.commit(session, 'usage', { usage: session.tokenUsage, mode: session.mode });
+	};
+
+	const scheduleUsageCommit = () => {
+		if (pendingUsage.length === 0) return;
+		const now = Date.now();
+		const elapsed = now - lastUsageCommitAt;
+		if (elapsed >= USAGE_COMMIT_THROTTLE_MS) {
+			lastUsageCommitAt = now;
+			usageFlushPromise = usageFlushPromise.then(commitUsageNow).catch(error => {
+				console.warn(JSON.stringify({ event: 'token_usage_commit_failed', runId: session.id, error: sanitizeErrorDetail(error) }));
+			});
+		} else {
+			// Coalesce: one trailing timer keeps the batch alive until the
+			// throttle window passes, so no call is ever dropped or delayed
+			// beyond the window.
+			clearTimeout(record.usageFlushTimer);
+			record.usageFlushTimer = setTimeout(() => scheduleUsageCommit(), USAGE_COMMIT_THROTTLE_MS - elapsed);
+			record.usageFlushTimer.unref?.();
+		}
+	};
+
+	// Flush at turn end / terminal path. Every harvested call — real report
+	// or estimate fallback — was already committed live; this only picks up
+	// anything that reached the harvest without passing the live hook (still
+	// deduped by the run ledger), so a call is never counted twice.
+	const commitTurnUsage = async () => {
+		const harvest = record.turnUsage;
+		if (harvest && harvest.reports.length > 0) {
+			for (const report of harvest.reports.splice(0)) {
+				const tracked = turnUsageLedger.track(report);
+				if (tracked) pendingUsage.push(tracked);
+			}
+		}
+		if (harvest && harvest.estimates.length > 0) {
+			for (const estimate of harvest.estimates.splice(0)) {
+				const tracked = turnUsageLedger.track(estimate);
+				if (tracked) pendingUsage.push(tracked);
+			}
+		}
+		await flushUsage();
+	};
+
+	const flushUsage = async () => {
+		clearTimeout(record.usageFlushTimer);
+		record.usageFlushTimer = undefined;
+		lastUsageCommitAt = 0;
+		await usageFlushPromise;
+		await commitUsageNow();
+	};
+
+	// Map of callId → committed estimate usage. Keyed per RUN and cleared
+	// alongside the ledger when the run's runtime record is discarded.
+	record.committedEstimates ??= new Map();
+	const committedEstimates = record.committedEstimates;
+	// Estimate callIds committed during the CURRENT turn. A provider either
+	// reports usage in-stream or not, consistently within a turn — so when a
+	// real report lands, every estimate from this turn belongs to calls whose
+	// real reports either arrived (same call) or never will (provider does not
+	// report). Rolling all of them back keeps totals exact and preserves the
+	// original turn-level "estimates only when the turn had no real usage"
+	// accounting, while still updating the chip live in the meantime.
+	const turnEstimateCallIds = new Set();
+
+	// Every harvested call funnels through here, deduped by this RUN's
+	// ledger: the same report (SDK retry, event replay) can never be applied
+	// twice however many times it surfaces. The ledger lives on the record,
+	// not the turn — automatic continuations re-enter runTurn for the same
+	// run, and a fresh per-turn ledger would re-count already-committed calls.
+	record.usageLedger ??= createUsageLedger();
+	const turnUsageLedger = record.usageLedger;
+	record.onUsageHarvested = usage => {
+		const tracked = turnUsageLedger.track(usage);
+		if (!tracked) return;
+		if (tracked.estimated === true) {
+			// Estimates commit live too (throttled): on providers that never
+			// report usage in-stream this is the only accounting available, and
+			// deferring it made the chip sit at zero until the run finished.
+			committedEstimates.set(tracked.callId, tracked);
+			turnEstimateCallIds.add(tracked.callId);
+			pendingUsage.push(tracked);
+			scheduleUsageCommit();
+			return;
+		}
+		// A real report supersedes this turn's committed estimates: they are
+		// subtracted in commitUsageNow before the report is applied, so the
+		// totals are exact whether the provider reported usage or not.
+		if (turnEstimateCallIds.size > 0) {
+			let delta = { inputTokens: 0, outputTokens: 0 };
+			for (const id of turnEstimateCallIds) {
+				const estimate = committedEstimates.get(id);
+				if (!estimate) continue;
+				committedEstimates.delete(id);
+				delta = {
+					inputTokens: delta.inputTokens + (estimate.inputTokens ?? 0),
+					outputTokens: delta.outputTokens + (estimate.outputTokens ?? 0)
+				};
+			}
+			turnEstimateCallIds.clear();
+			if (delta.inputTokens > 0 || delta.outputTokens > 0) tracked.estimateDelta = delta;
+		}
+		pendingUsage.push(tracked);
+		scheduleUsageCommit();
+	};
+
 	const openActivities = new Map();
 
 	const beginActivity = async (toolName, input, toolCallId) => {
 		await finalizeAssistant();
 		closeThinking();
+		// Test Execution Timer: the finalizer tool opening is the start of
+		// report generation.
+		if (toolName === finalizerName(session)) {
+			runStore.markReportPhase?.(session, 'start');
+		}
 		const safeInput = redact(session.id, input);
 		if (toolName === 'browser_open' && typeof input?.url === 'string') {
 			session.targetUrl ??= input.url;
@@ -720,6 +914,9 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 					if (part.toolName === 'browser_open' && ok && result?.url) {
 						bridge.startFrames();
 					}
+					// Test Execution Timer: the first successful tool call ends the
+					// environment-setup phase; actual test execution has begun.
+					runStore.markExecutionStarted?.(session);
 					// A published artifact is the end of this run. Continuing the model
 					// after this point can overwrite success with a provider error or
 					// trigger redundant browser actions and a second finalization.
@@ -740,6 +937,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			}
 		}
 		await finalizeAssistant();
+		await commitTurnUsage();
 
 		// The loop ends either because the work is done or because ask_question
 		// suspended it. Only the runtime knows which.
@@ -786,9 +984,11 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = `The agent paused repeatedly before publishing the final ${artifact}. Send "continue" to resume this run.`;
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			clearSecrets(session.id);
 			deleteRunSnapshot(session.id);
 		}
 	} catch (error) {
+		await commitTurnUsage().catch(() => undefined);
 		if (successfulFinalizer) {
 			await completeRun();
 			deleteRunSnapshot(session.id);
@@ -809,6 +1009,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 			const message = sanitizeErrorDetail(error);
 			await runStore.addMessage(session, { role: 'system', text: message, kind: 'error' });
 			await runStore.setStatus(session, 'error', message);
+			clearSecrets(session.id);
 			deleteRunSnapshot(session.id);
 		}
 	} finally {
@@ -852,6 +1053,8 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		record.running = false;
 		record.controller = undefined;
 		if (session.status !== 'idle') await runStore.setStatus(session, 'idle', 'Stopped by user.');
+		clearSecrets(session.id);
+		session.secretNames = [];
 	};
 	if (controller.signal.aborted) {
 		await stoppedBeforeContinuation();

@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 013: run feedback.
+-- Qase PostgreSQL migration 020: run feedback (thumbs up/down) stored on the run aggregate.
 -- Thumbs up/down stored on the run row so the dashboard restores the vote on
 -- reload; NULL means the user has not voted yet.
 

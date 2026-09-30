@@ -4,6 +4,8 @@ import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { isEngineId } from './browserEngines.js';
+import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
+import { createPostgresFeedbackRepository } from './postgres/feedbackRepository.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -35,6 +37,7 @@ function createSession(title, now, options = {}) {
 		report: undefined,
 		pendingQuestion: undefined,
 		contextUsage: undefined,
+		tokenUsage: undefined,
 		secretNames: [],
 		ownerUserId: options.ownerUserId ?? currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId
 	};
@@ -56,9 +59,26 @@ function summary(session) {
 		deviceLandscape: session.deviceLandscape === true,
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
+		startedAt: session.startedAt,
+		completedAt: session.completedAt,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
+		durationSeconds: liveDurationSeconds(session),
 		findingCount: session.findings.length,
-		messageCount: session.messages.length
+		messageCount: session.messages.length,
+		tokenUsage: session.tokenUsage
 	};
+}
+
+/** Live active-execution seconds (paused time excluded), from server stamps. */
+export function liveDurationSeconds(session, now = Date.now()) {
+	if (session.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }
 
 function eventActor(type, payload, tenantContext) {
@@ -93,7 +113,8 @@ export function createPostgresApplicationServices({
 	auth,
 	hydrateAll = true,
 	now = () => Date.now(),
-	recoverActiveRuns = true
+	recoverActiveRuns = true,
+	feedbackRepository
 }) {
 	if (!repository || typeof repository !== 'object') {
 		throw new TypeError('A PostgreSQL run repository is required.');
@@ -345,6 +366,18 @@ export function createPostgresApplicationServices({
 			}
 			return repository.recordCleanup(id, options);
 		},
+		async durationAnalytics(options = {}) {
+			if (typeof repository.durationAnalytics !== 'function') {
+				return { runCount: 0, byTarget: [] };
+			}
+			return repository.durationAnalytics(options);
+		},
+		async targetDurationHistory(targetUrl, options = {}) {
+			if (typeof repository.targetDurationHistory !== 'function') {
+				return [];
+			}
+			return repository.targetDurationHistory(targetUrl, options);
+		},
 		commit,
 		async addMessage(session, message) {
 			const entry = { id: randomUUID(), ts: now(), ...message };
@@ -368,10 +401,45 @@ export function createPostgresApplicationServices({
 			await commit(session, 'activity', { activity: entry });
 			return entry;
 		},
-		async setStatus(session, status, detail) {
-			session.status = status;
-			await commit(session, 'status', { status, detail });
-		},
+	async setStatus(session, status, detail) {
+		const before = { pausedAt: session.pausedAt, pausedSeconds: session.pausedSeconds ?? 0 };
+		applyStatusTiming(session, status);
+		session.status = status;
+		// On resume (pausedAt cleared), tell the repository how much pause time
+		// to accumulate into the persisted paused_seconds column.
+		if (before.pausedAt !== undefined && session.pausedAt === undefined) {
+			session.resumedPauseSeconds = Math.max(0, (Date.now() - before.pausedAt) / 1000);
+		} else {
+			session.resumedPauseSeconds = 0;
+		}
+		if (status === 'error' && detail && session.failureReason === undefined) {
+			session.failureReason = String(detail);
+		}
+		await commit(session, 'status', { status, detail, timing: timingForEvent(session) });
+	},
+	async setFindingStatus(session, findingId, patch) {
+		// Mutate the in-memory aggregate first (validation happens there),
+		// then persist durably through the queued event log exactly like every
+		// other run mutation. On version conflict the failed save restores the
+		// last committed snapshot, so the optimistic lock stays sound.
+		const finding = setFindingStatus(session, findingId, patch ?? {});
+		await commit(session, 'finding_status', { finding });
+		return finding;
+	},
+	async aggregateFindings(options) {
+		// Aggregates over the loaded in-memory run aggregates, mirroring the
+		// local store's semantics including owner scoping.
+		return aggregateSessionFindings(sessions.values(), {
+			...options,
+			ownerUserId: options?.ownerUserId ?? currentRequestActor()?.actorUserId ?? tenantContext?.actorUserId
+		});
+	},
+	markReportPhase(session, phase) {
+		markReportPhase(session, phase);
+	},
+	markExecutionStarted(session) {
+		markExecutionStarted(session);
+	},
 		publish,
 		subscribe(sessionId, listener) {
 			if (eventTransport) return eventTransport.subscribe(sessionId, listener);
@@ -416,7 +484,14 @@ export function createPostgresApplicationServices({
 		}
 	};
 
-	const services = createRuntimeApplicationServices(runStore, { auth });
+	const services = createRuntimeApplicationServices(runStore, {
+		auth,
+		feedbackStore: feedbackRepository ?? createPostgresFeedbackRepository({ pool: repository.pool ?? repository, tenantContext })
+	});
+	// In PostgreSQL mode the Redis transport is the global event fan-out.
+	if (eventTransport && typeof eventTransport.subscribeGlobal === 'function') {
+		services.events.subscribeGlobal = eventTransport.subscribeGlobal.bind(eventTransport);
+	}
 	services.tenantContext = tenantContext;
 	services.realtime = eventTransport;
 	return services;

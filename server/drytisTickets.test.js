@@ -72,7 +72,9 @@ function memoryServices(delivery) {
 				stop() { return Promise.resolve(); },
 				invalidateIdleRuntimes() { return Promise.resolve(0); }
 			},
-			readiness: { check: async () => true }
+			readiness: { check: async () => true },
+			// DEV added a feedback service group to the runtime contract.
+			feedback: { create: async () => ({}), get: async () => undefined, list: async () => [], update: async () => ({}), remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		},
 		sessions,
 		events

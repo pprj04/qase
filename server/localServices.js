@@ -3,12 +3,17 @@ import { getPublicConfig, saveConfig, testConnection, withUserConfiguration } fr
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
-	addActivity, addMessage, bus, createSession, deleteSession, emit, getSession,
-	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, peekLive, setStatus, updateActivity, watchRunBus
+	addActivity, addMessage, aggregateFindings, bus, createSession, deleteSession, emit, getSession,
+	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
+	markReportPhase, peekLive, setFindingStatus, setStatus, updateActivity, watchRunBus
 } from './store.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
+import {
+	closeFeedbackStore, createFeedback, deleteFeedback, feedbackStats,
+	findFeedbackForRun, getFeedback, listFeedback, updateFeedback
+} from './feedbackStore.js';
 
 /**
  * Builds the non-persistence services around a run store. Both the rollback
@@ -25,11 +30,29 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		return withUserConfiguration(settings, next => options.auth.saveSettings(userId, next), work);
 	}
 	const purgeWorkspace = options.purgeRunWorkspace ?? purgeRunWorkspace;
+	// subscribeGlobal exists only in local mode; PostgreSQL deployments
+	// fan events out through their realtime transport instead.
+	const subscribeGlobal = typeof runStore.subscribeGlobal === 'function'
+		? runStore.subscribeGlobal.bind(runStore)
+		: undefined;
 	const services = {
 		runs: runStore,
+		// Feedback is store-backed in both adapters; the local implementation
+		// (feedbackStore.js) ships with this composition, and the PostgreSQL
+		// adapter overrides it below.
+		feedback: options.feedbackStore ?? {
+			create: input => createFeedback(input),
+			get: getFeedback,
+			list: options => listFeedback(options),
+			update: (id, patch) => updateFeedback(id, patch),
+			remove: deleteFeedback,
+			stats: feedbackStats,
+			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
+		},
 		events: {
 			publish: runStore.publish,
-			subscribe: runStore.subscribe
+			subscribe: runStore.subscribe,
+			...(subscribeGlobal ? { subscribeGlobal } : {})
 		},
 		configuration: {
 			getPublic: () => inWorkspace(getPublicConfig),
@@ -130,6 +153,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		lifecycle: {
 			close: async () => {
 				await runStore.close?.();
+				closeFeedbackStore();
 				await options.auth?.close?.();
 				await options.close?.();
 			}
@@ -167,6 +191,63 @@ export function createLocalApplicationServices(options = {}) {
 		async list(options) {
 			return listSessions({ ...options, ownerUserId: ownerUserId() });
 		},
+		// Duration analytics for the in-memory store: computed from loaded
+		// sessions so dev-without-Postgres still shows real numbers.
+		async durationAnalytics({ targetUrl } = {}) {
+			const completed = listSessions({ limit: 100, ownerUserId: ownerUserId() })
+				.filter(candidate => {
+					const session = getSession(candidate.id, undefined);
+					if (!session?.startedAt || !session.completedAt) return false;
+					if (targetUrl !== undefined && session.targetUrl !== targetUrl) return false;
+					return true;
+				})
+				.map(candidate => getSession(candidate.id, undefined));
+			// Active duration only: paused intervals are excluded.
+			const active = session =>
+				Math.max(0, (session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0));
+			const durations = completed.map(active).sort((a, b) => a - b);
+			const average = values => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined);
+			const byTargetMap = new Map();
+			for (const session of completed) {
+				const entry = byTargetMap.get(session.targetUrl) ?? { runCount: 0, total: 0 };
+				entry.runCount += 1;
+				entry.total += active(session);
+				byTargetMap.set(session.targetUrl, entry);
+			}
+			return {
+				runCount: durations.length,
+				minDurationSeconds: durations[0],
+				maxDurationSeconds: durations[durations.length - 1],
+				avgDurationSeconds: average(durations),
+				medianDurationSeconds: durations.length
+					? durations[Math.floor(durations.length / 2)]
+					: undefined,
+				avgSecondsPerItem: undefined,
+				byTarget: [...byTargetMap.entries()].map(([url, entry]) => ({
+					targetUrl: url,
+					runCount: entry.runCount,
+					avgDurationSeconds: entry.total / entry.runCount
+				})),
+				serverNow: Date.now()
+			};
+		},
+		async targetDurationHistory(targetUrl, { limit = 20 } = {}) {
+			return listSessions({ limit: 100, ownerUserId: ownerUserId() })
+				.map(candidate => getSession(candidate.id, undefined))
+				.filter(session => session?.startedAt && session.completedAt && session.targetUrl === targetUrl)
+				.sort((a, b) => a.startedAt - b.startedAt)
+				.slice(0, Math.min(100, Math.max(1, Number(limit) || 20)))
+				.map(session => ({
+					id: session.id,
+					status: session.status,
+					startedAt: session.startedAt,
+					completedAt: session.completedAt,
+					pausedAt: session.pausedAt,
+					pausedSeconds: session.pausedSeconds ?? 0,
+					durationSeconds: Math.max(0,
+						(session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0))
+				}));
+		},
 		/**
 		 * Unscoped accessors for boot-time run recovery (runResume.js) and
 		 * cross-user operator review (feedback review in app.js). The
@@ -195,6 +276,14 @@ export function createLocalApplicationServices(options = {}) {
 			emit(session, type, payload);
 			return session;
 		},
+		async setFindingStatus(session, findingId, patch) {
+			const finding = setFindingStatus(session, findingId, patch ?? {});
+			emit(session, 'finding_status', { finding });
+			return finding;
+		},
+		async aggregateFindings(options) {
+			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
+		},
 		async addMessage(session, message) {
 			return addMessage(session, message);
 		},
@@ -207,6 +296,8 @@ export function createLocalApplicationServices(options = {}) {
 		async setStatus(session, status, detail) {
 			setStatus(session, status, detail);
 		},
+		markReportPhase,
+		markExecutionStarted,
 		publish: emit,
 		subscribe(sessionId, listener) {
 			bus.on(sessionId, listener);
@@ -236,5 +327,5 @@ export function createLocalApplicationServices(options = {}) {
 		tenantContext: options.tenantContext,
 		file: options.authFile
 	});
-	return createRuntimeApplicationServices(runStore, { auth });
+	return createRuntimeApplicationServices(runStore, { ...options, auth: options.auth ?? auth });
 }

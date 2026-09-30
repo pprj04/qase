@@ -2,8 +2,10 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
-import { hostOf, list, markdown, paragraph, relativeTime, section, truncate } from './uiPrimitives.js';
 import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
+import { createBugsView } from './bugsView.js';
+import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
+import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
  * Qase dashboard.
@@ -23,6 +25,8 @@ const el = {
 	newRun: $('new-run'),
 	newSqa: $('new-sqa'),
 	newFounder: $('new-founder'),
+	openBugs: $('open-bugs'),
+	bugsView: $('bugs-view'),
 	connDot: $('conn-dot'),
 	connLabel: $('conn-label'),
 	modelBadge: $('model-badge'),
@@ -30,10 +34,63 @@ const el = {
 
 	chatTitle: $('chat-title'),
 	chatTarget: $('chat-target'),
+	runSummary: $('run-summary'),
+	tokenSummary: $('token-summary'),
+	tokenText: $('token-text'),
+	livePill: $('live-pill'),
+	runSummaryToggle: $('run-summary-toggle'),
+	runSummaryDetail: $('run-summary-detail'),
+	runSummaryMini: $('run-summary-mini'),
+	miniTokens: $('mini-tokens'),
+	miniStatus: $('mini-status'),
+	miniProgress: $('mini-progress'),
+	miniFindings: $('mini-findings'),
 	statusChip: $('status-chip'),
 	timerChip: $('timer-chip'),
 	tokenChip: $('token-chip'),
 	resumeRun: $('resume-run'),
+	progressSteps: $('progress-steps'),
+	progressPct: $('progress-pct'),
+	progressFindings: $('progress-findings'),
+	progressBar: $('progress-bar'),
+	currentActivity: $('current-activity'),
+	currentActivityState: $('current-activity-state'),
+	runTimer: $('run-timer'),
+	runTimerLabel: $('run-timer-label'),
+	runTimerClock: $('run-timer-clock'),
+	perfPanel: $('perf-panel'),
+	perfGrid: $('perf-grid'),
+	perfCompare: $('perf-compare'),
+	perfCompareTitle: $('perf-compare-title'),
+	perfCompareList: $('perf-compare-list'),
+	perfMinimize: $('perf-minimize'),
+	perfClose: $('perf-close'),
+	perfRestore: $('perf-restore'),
+	perfBody: $('perf-body'),
+	feedbackModal: $('feedback-modal'),
+	feedbackForm: $('feedback-form'),
+	feedbackClose: $('feedback-close'),
+	feedbackCancel: $('feedback-cancel'),
+	feedbackSubmit: $('feedback-submit'),
+	feedbackStars: $('feedback-star-row'),
+	feedbackCategory: $('feedback-category'),
+	feedbackComments: $('feedback-comments'),
+	feedbackImprovement: $('feedback-improvement'),
+	feedbackError: $('feedback-error'),
+	feedbackSuccess: $('feedback-success'),
+	feedbackRunMeta: $('feedback-run-meta'),
+	// Admin feedback review panel (owner/admin only).
+	feedbackPanel: $('feedback-panel'),
+	feedbackAdminBody: $('feedback-admin-body'),
+	feedbackStats: $('feedback-stats'),
+	feedbackSearch: $('feedback-search'),
+	feedbackFilterRating: $('feedback-filter-rating'),
+	feedbackFilterCategory: $('feedback-filter-category'),
+	feedbackFilterStatus: $('feedback-filter-status'),
+	feedbackList: $('feedback-list'),
+	feedbackMinimize: $('feedback-minimize'),
+	feedbackCloseCtl: $('feedback-close-ctl'),
+	feedbackRestore: $('feedback-restore'),
 	stopRun: $('stop-run'),
 	thinkingStrip: $('thinking-strip'),
 	thinkingHead: $('thinking-head'),
@@ -97,6 +154,7 @@ const state = {
 	session: undefined,
 	config: undefined,
 	stream: undefined,
+	bugsViewOpen: false,
 	/** Message id -> the nodes streamed text is appended to. */
 	bubbles: new Map(),
 	viewport: { width: 1440, height: 900 },
@@ -114,7 +172,43 @@ const state = {
 	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
 	pilotMode: false,
-	user: undefined
+	user: undefined,
+	/**
+	 * Test Execution Timer state. Server-authoritative: elapsed time is always
+	 * computed from server timestamps (startedAt/completedAt) corrected by the
+	 * latest serverNow sample, never from a frontend start event — so browser
+	 * refresh, tab switches and reconnects can never reset or skew it.
+	 */
+	timer: {
+		interval: undefined,
+		/** serverNow − clientNow (ms) from the latest snapshot/event. */
+		skew: 0,
+		/** run id -> live duration node in the runs list. */
+		runLiveTimers: new Map()
+	},
+	/** Performance panel UI state — visibility only, never data. */
+	perfUi: { minimized: false, closed: false },
+	/**
+	 * Post-run feedback UI state. `existing` is the submitter's record for the
+	 * current run (null = not submitted yet); `rating` mirrors the star row;
+	 * `submitting` guards duplicate submissions while a request is in flight.
+	 */
+	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false },
+	/**
+	 * Admin feedback review panel. Visibility-only UI state plus the loaded
+	 * list/stats; `feedbackAdmin.allowed` flips true only for owner/admin.
+	 */
+	feedbackAdmin: {
+		allowed: false,
+		minimized: false,
+		closed: false,
+		search: '',
+		rating: '',
+		category: '',
+		status: '',
+		records: [],
+		stats: undefined
+	}
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -212,15 +306,79 @@ const founderView = createFounderView({
 const renderFounder = founderView.render;
 const renderFounderReportTab = founderView.renderReportTab;
 
+/* ── Bug tracker (standalone view) ───────────────────────────────── */
+
+const bugsView = createBugsView({
+	elements: {
+		statusFilter: $('bugs-status-filter'),
+		severityFilter: $('bugs-severity-filter'),
+		runSelect: $('bugs-run-filter-select'),
+		searchInput: $('bugs-search-input'),
+		summary: $('bugs-summary'),
+		tableWrap: $('bugs-table-wrap'),
+		tbody: $('bugs-tbody'),
+		empty: $('bugs-empty'),
+		refresh: $('bugs-refresh')
+	},
+	api,
+	toast,
+	fail,
+	openRun: runId => {
+		setBugsViewOpen(false);
+		void selectSession(runId);
+	}
+});
+bugsView.bind();
+
+el.bugsClose = $('bugs-close');
+el.bugsClose.onclick = () => setBugsViewOpen(false);
+
+// The SSE stream is per-run, so findings filed by agents in OTHER runs never
+// reach the open backlog view. While it is open, poll on a slow cadence via
+// the view's own coalesced scheduleRefresh (max one refetch per 4s window).
+let bugsViewLiveTimer;
+function setBugsViewOpen(open) {
+	state.bugsViewOpen = open;
+	el.bugsView.hidden = !open;
+	el.openBugs.setAttribute('aria-pressed', String(open));
+	// The three-panel workspace and the bugs view are exclusive regions.
+	document.querySelector('.app')?.classList.toggle('is-hidden', open);
+	if (open) {
+		// Coming back to the view: filters may be stale after runs finished.
+		bugsView.load().catch(fail);
+		if (bugsViewLiveTimer === undefined) {
+			bugsViewLiveTimer = setInterval(() => bugsView.scheduleRefresh(), 10_000);
+		}
+	} else {
+		clearInterval(bugsViewLiveTimer);
+		bugsViewLiveTimer = undefined;
+	}
+}
+
+el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
+
 /* ── Runs (left panel) ───────────────────────────────────────────── */
 
 async function refreshRuns() {
 	const runs = await api('/sessions').catch(() => []);
 	if (runs.length === 0) {
 		el.runList.innerHTML = '<div class="feed-empty">No runs yet</div>';
+		state.timer.runLiveTimers.clear();
 		return;
 	}
 	el.runList.replaceChildren(...runs.map(renderRun));
+}
+
+// Live token commits arrive up to once a second; refreshing the whole run
+// list for each is wasteful. Coalesce to at most one refetch per 5s.
+let runBadgeRefreshTimer;
+function scheduleRunBadgeRefresh() {
+	if (runBadgeRefreshTimer) return;
+	runBadgeRefreshTimer = setTimeout(() => {
+		runBadgeRefreshTimer = undefined;
+		void refreshRuns();
+	}, 5000);
+	runBadgeRefreshTimer.unref?.();
 }
 
 function renderRun(run) {
@@ -253,6 +411,32 @@ function renderRun(run) {
 	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
 	dot.setAttribute('aria-hidden', 'true');
 	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
+	// Per-run timer: live elapsed for running runs (frozen while paused),
+	// stored active duration for finished ones. Each row computes
+	// independently — never a shared clock.
+	if (Number.isFinite(run.startedAt)) {
+		const pausedRow = Number.isFinite(run.pausedAt) && !Number.isFinite(run.completedAt);
+		const duration = Number.isFinite(run.completedAt) || pausedRow
+			? formatDurationShort(run.durationSeconds ?? elapsedSecondsOf(run))
+			: formatDurationShort(elapsedSecondsOf(run));
+		if (duration) {
+			const timer = document.createElement('span');
+			timer.className = `run-duration${run.status === 'running' && !pausedRow ? ' run-duration--live' : ''}${pausedRow ? ' run-duration--paused' : ''}`;
+			timer.dataset.runId = run.id;
+			timer.textContent = pausedRow ? `⏸ ${duration}` : `⏱ ${duration}`;
+			timer.title = pausedRow
+				? `Paused at ${formatTimeOfDay(run.pausedAt)} — resumes from ${duration} on continue`
+				: run.status === 'running'
+					? `Elapsed time — started ${formatTimeOfDay(run.startedAt)}`
+					: `Total duration — completed ${formatTimeOfDay(run.completedAt)}`;
+			meta.append(timer);
+			if (run.status === 'running' && !pausedRow) {
+				state.timer.runLiveTimers.set(run.id, timer);
+			} else {
+				state.timer.runLiveTimers.delete(run.id);
+			}
+		}
+	}
 	if (run.mode === 'sqa') {
 		const mode = document.createElement('span');
 		mode.className = 'run-mode-badge';
@@ -273,6 +457,14 @@ function renderRun(run) {
 		badge.textContent = `${run.findingCount}`;
 		meta.append(badge);
 	}
+	if (run.tokenUsage && Number.isFinite(run.tokenUsage.totalTokens) && run.tokenUsage.totalTokens > 0) {
+		const tokens = document.createElement('span');
+		tokens.className = 'run-badge run-badge--tokens';
+		tokens.textContent = `${formatTokens(run.tokenUsage.totalTokens) ?? run.tokenUsage.totalTokens} tok`;
+		tokens.title = `${(run.tokenUsage.inputTokens ?? 0).toLocaleString()} prompt / ${(run.tokenUsage.outputTokens ?? 0).toLocaleString()} completion tokens`
+			+ (run.tokenUsage.estimated === true ? ' (estimated)' : '');
+		meta.append(tokens);
+	}
 	if (run.device && run.device !== 'desktop') {
 		const profile = deviceState.list.find(p => p.id === run.device);
 		const pill = document.createElement('span');
@@ -289,6 +481,27 @@ function renderRun(run) {
 		pill.textContent = run.engine;
 		pill.title = `Run executed on ${run.engine}`;
 		meta.append(pill);
+	}
+
+	// Mini progress row: step count + slim bar, only when a plan exists.
+	let progress = null;
+	if (run.todoTotal > 0) {
+		progress = document.createElement('div');
+		progress.className = 'run-progress';
+		const steps = document.createElement('span');
+		steps.className = 'run-progress-steps';
+		steps.textContent = `${run.todoCompleted}/${run.todoTotal}`;
+		const bar = document.createElement('span');
+		bar.className = 'run-progress-bar';
+		const fill = document.createElement('i');
+		fill.style.width = `${Math.round((run.todoCompleted / run.todoTotal) * 100)}%`;
+		bar.setAttribute('role', 'progressbar');
+		bar.setAttribute('aria-valuemin', '0');
+		bar.setAttribute('aria-valuemax', '100');
+		bar.setAttribute('aria-valuenow', String(Math.round((run.todoCompleted / run.todoTotal) * 100)));
+		bar.setAttribute('aria-label', `Plan progress ${run.todoCompleted} of ${run.todoTotal} steps`);
+		bar.append(fill);
+		progress.append(steps, bar);
 	}
 
 	const remove = document.createElement('button');
@@ -318,6 +531,7 @@ function renderRun(run) {
 	};
 
 	node.append(title, meta);
+	if (progress) node.append(progress);
 	row.append(node, remove);
 	return row;
 }
@@ -404,6 +618,12 @@ async function selectSession(id) {
 	state.shownFounderReport = undefined;
 	state.sessionId = id;
 	state.bubbles.clear();
+	// Feedback submitted-state is per run: drop any cached record when the
+	// selected run changes so the next modal open re-fetches it.
+	if (state.feedback.existingLoadedFor !== id) {
+		state.feedback.existing = undefined;
+		state.feedback.existingLoadedFor = undefined;
+	}
 	localStorage.setItem('qase.session', id);
 
 	const session = await api(`/sessions/${id}`);
@@ -411,16 +631,22 @@ async function selectSession(id) {
 	applySessionSnapshot(session);
 	await connect(id);
 	await refreshRuns();
+	void refreshPerformance();
 }
 
 function applySessionSnapshot(session) {
 	const changedSession = state.session?.id !== session.id;
 	state.bubbles.clear();
 	state.session = session;
+	// Refresh the clock-skew sample on every snapshot (load, resync, refresh).
+	noteServerNow(session.serverNow);
 	applyStageDevice(session);
 	resetRunMeta(session);
 
 	renderHeader();
+	// The collapse preference is UI state — reapply it on every run switch so
+	// navigating between runs never unexpectedly expands/collapses the panel.
+	setRunSummaryCollapsed(state.runSummaryCollapsed);
 	renderTranscript();
 	resetThinking();
 	renderQuestion();
@@ -433,6 +659,7 @@ function applySessionSnapshot(session) {
 	renderFounder();
 	showCompletedFounderReport();
 	renderStageCollapse();
+	updateRunTimer();
 
 	if (session.frame) {
 		applyFrame(session.frame);
@@ -464,8 +691,91 @@ async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, en
 	return session;
 }
 
+/** Compact token count: 820, 15.3k, 2.01M, 3.4B. Re-exported for callers importing from app.js. */
+export { formatTokens };
+
+
+/** A run with no counted usage yet: show a pending state, never a fake 0. */
+function usageIsPending(session) {
+	const usage = session.tokenUsage;
+	const hasUsage = usage && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0;
+	return !hasUsage && session.status === 'running';
+}
+
+/**
+ * Collapsed/expanded state for the run-summary section. UI preference, not run
+ * state: survives run navigation and the RUNNING→DONE transition, stored in the
+ * same localStorage the other UI prefs (device, session) already use.
+ */
+const RUN_SUMMARY_COLLAPSED_KEY = 'qase.runSummaryCollapsed';
+state.runSummaryCollapsed = localStorage.getItem(RUN_SUMMARY_COLLAPSED_KEY) === '1';
+
+function setRunSummaryCollapsed(collapsed) {
+	state.runSummaryCollapsed = collapsed;
+	localStorage.setItem(RUN_SUMMARY_COLLAPSED_KEY, collapsed ? '1' : '0');
+	el.runSummary.classList.toggle('is-collapsed', collapsed);
+	el.runSummaryMini.hidden = !collapsed;
+	el.runSummaryToggle.setAttribute('aria-expanded', String(!collapsed));
+	el.runSummaryToggle.textContent = collapsed ? '⌄' : '⌃';
+	el.runSummaryToggle.title = collapsed ? 'Expand run summary' : 'Collapse run summary';
+}
+
+/**
+ * Compact mirror of the run summary for the collapsed state. Reads the exact
+ * same session state the expanded card reads (no extra fetching, no
+ * recalculation) so live updates keep flowing while minimized.
+ */
+function renderMiniSummary() {
+	const session = state.session;
+	const usage = session?.tokenUsage;
+	const mini = miniSummaryText({
+		usage,
+		status: session?.status,
+		progress: runProgress(),
+		findings: session?.findings?.length ?? 0,
+	});
+	el.miniTokens.textContent = mini.tokens;
+	el.miniStatus.textContent = mini.status;
+	el.miniStatus.dataset.status = session?.status ?? '';
+	el.miniProgress.textContent = mini.progress;
+	el.miniFindings.textContent = mini.findings;
+}
+
 function renderHeader() {
 	const session = state.session;
+	const usage = session.tokenUsage;
+	const context = session.contextUsage;
+	// Token row: dedicated region below the header.
+	const hasRun = Boolean(session.targetUrl || session.title);
+	el.runSummary.hidden = !hasRun;
+	if (usageIsPending(session)) {
+		// Live run, first model call still in flight. "Pending" is honest;
+		// "0 in · 0 out" would suggest calls were counted and came back empty.
+		el.tokenText.classList.add('is-pending');
+		el.tokenText.textContent = '-- in · -- out';
+		el.tokenText.title = 'Token usage pending — waiting for the first model call to complete.';
+	} else {
+		const text = tokenSummaryText(usage)
+			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
+				? `${Math.round(context.percentage)}% ctx` : undefined);
+		el.tokenText.classList.remove('is-pending');
+		el.tokenText.textContent = text ?? '';
+		if (usage && text) {
+			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
+				? Math.round(context.percentage) : undefined;
+			el.tokenText.title = `${(usage.inputTokens ?? 0).toLocaleString()} prompt / ${(usage.outputTokens ?? 0).toLocaleString()} completion tokens`
+				+ (usage.estimated === true ? ' (estimated)' : '')
+				+ (percentage !== undefined ? ` · context ${percentage}% of window` : '');
+		} else if (text) {
+			el.tokenText.title = `model context window ${text.replace(' ctx', '')} used`;
+		} else {
+			el.tokenText.title = '';
+		}
+	}
+	// LIVE pill: only while the run is actively working.
+	el.livePill.hidden = session.status !== 'running';
+	renderMiniSummary();
+	renderProgressCard();
 	if (session.mode === 'founder') {
 		const target = session.founder?.scope?.target ?? session.founder?.report?.target ?? {};
 		const context = session.founder?.scope?.productContext ?? {};
@@ -497,14 +807,69 @@ function renderHeader() {
 	setStatus(session.status);
 }
 
+/**
+ * Step counts for the progress card. Same computation renderTodos() feeds the
+ * right-hand Plan tab, kept here once so the two can never disagree.
+ */
+function runProgress() {
+	const todos = state.session?.todos ?? [];
+	const total = todos.length;
+	const done = todos.filter(todo => todo.status === 'completed').length;
+	const percent = total > 0 ? Math.round((done / total) * 100) : undefined;
+	return { total, done, percent };
+}
+
+/**
+ * The RUNNING/DONE card: status + step count + percent + findings on the top
+ * row, the progress bar on its own row, and the current activity below it —
+ * all normal flow, no absolute positioning.
+ */
+function renderProgressCard() {
+	const session = state.session;
+	const { total, done, percent } = runProgress();
+	el.progressSteps.textContent = total > 0 ? `${done}/${total}` : '';
+	el.progressPct.textContent = percent !== undefined ? `${percent}%` : '';
+	if (percent !== undefined) {
+		el.progressBar.setAttribute('aria-valuenow', String(percent));
+		el.progressBar.firstElementChild.style.width = `${percent}%`;
+	} else {
+		el.progressBar.setAttribute('aria-valuenow', '0');
+		el.progressBar.firstElementChild.style.width = '0%';
+	}
+	const findings = session?.findings ?? [];
+	el.progressFindings.textContent = findings.length > 0 ? `Findings ${findings.length}` : '';
+	renderMiniSummary();
+	renderCurrentActivity();
+}
+
+function renderCurrentActivity() {
+	const session = state.session;
+	if (session?.status === 'running') {
+		const { text, action } = state.thinking;
+		const label = action || (text ? tailOf(text) : '');
+		el.currentActivityState.textContent = label ? `◌ ${label}` : '◌ Working…';
+		el.currentActivity.hidden = false;
+	} else if (session?.status === 'done') {
+		el.currentActivityState.textContent = '✓ Run completed';
+		el.currentActivity.hidden = false;
+	} else {
+		el.currentActivityState.textContent = '';
+		el.currentActivity.hidden = true;
+	}
+}
+
 function setStatus(status) {
 	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = status === 'awaiting_input' ? 'waiting for you' : status;
+	el.statusChip.textContent = status === 'awaiting_input'
+		? 'waiting for you'
+		: status === 'done' ? 'done ✓' : status;
+	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
 	el.resumeRun.hidden = !((status === 'interrupted' || status === 'error') && state.sessionId);
 	el.sendBtn.disabled = running;
 	el.composerHint.hidden = !running;
+	el.livePill.hidden = !running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
 	if (state.session) {
 		state.session.status = status;
@@ -515,6 +880,7 @@ function setStatus(status) {
 	document.title = status === 'awaiting_input'
 		? 'Qase — waiting for you'
 		: 'Qase — autonomous QA agent';
+	updateRunTimer();
 	updateThinkingStrip();
 }
 
@@ -642,6 +1008,620 @@ function toggleStageCollapse() {
 	renderStageCollapse();
 }
 
+/* ── Test Execution Timer ────────────────────────────────────────── */
+
+function formatClock(totalSeconds) {
+	if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return '00:00:00';
+	const seconds = Math.floor(totalSeconds);
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = seconds % 60;
+	return [h, m, s].map(part => String(part).padStart(2, '0')).join(':');
+}
+
+/** Human short form, e.g. "12m 18s" — used in run lists. */
+function formatDurationShort(totalSeconds) {
+	if (!Number.isFinite(totalSeconds)) return '';
+	const seconds = Math.max(0, Math.floor(totalSeconds));
+	const h = Math.floor(seconds / 3600);
+	const m = Math.floor((seconds % 3600) / 60);
+	const s = seconds % 60;
+	if (h > 0) return `${h}h ${m}m`;
+	if (m > 0) return `${m}m ${s}s`;
+	return `${s}s`;
+}
+
+function formatTimeOfDay(epochMs) {
+	if (!Number.isFinite(epochMs)) return '';
+	return new Date(epochMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+/** Record a server clock sample so elapsed math corrects local clock skew. */
+function noteServerNow(serverNow) {
+	if (Number.isFinite(serverNow) && serverNow > 0) {
+		state.timer.skew = serverNow - Date.now();
+	}
+}
+
+function serverNowNow() {
+	return Date.now() + state.timer.skew;
+}
+
+/** Live elapsed ACTIVE seconds (server-authoritative, pause time excluded). */
+function elapsedSecondsOf(session, now = serverNowNow()) {
+	if (!Number.isFinite(session?.startedAt)) return undefined;
+	const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+	// Currently paused: the clock is frozen at the pause point.
+	if (Number.isFinite(session.pausedAt)) {
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
+	const end = Number.isFinite(session.completedAt) ? session.completedAt : now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
+}
+
+	const TIMER_LABELS = {
+		running: 'Elapsed',
+		awaiting_input: 'Elapsed (paused for input)',
+		done: 'Total Duration',
+		error: 'Duration Until Failure',
+		idle: 'Duration'
+	};
+
+/**
+ * Render the header timer for the current session and keep it ticking.
+ * Stamps come only from the server (snapshot fields or SSE status timing);
+ * the interval merely re-renders elapsed time between updates.
+ */
+function updateRunTimer() {
+	const session = state.session;
+	if (!session || !Number.isFinite(session.startedAt)) {
+		el.runTimer.hidden = true;
+		return;
+	}
+	el.runTimer.hidden = false;
+	const terminal = ['done', 'error'].includes(session.status)
+		|| Number.isFinite(session.completedAt);
+	const paused = Number.isFinite(session.pausedAt) && !terminal;
+	const label = paused ? 'Paused' : (TIMER_LABELS[session.status] ?? 'Elapsed');
+	el.runTimerLabel.textContent = session.cancelledAt ? 'Duration (cancelled)' : label;
+	el.runTimerLabel.dataset.state = session.status;
+	if (session.status === 'done') {
+		el.runTimer.dataset.state = 'completed';
+		el.runTimerLabel.textContent = '✓ Test Completed';
+	} else if (session.status === 'error') {
+		el.runTimer.dataset.state = 'failed';
+		el.runTimerLabel.textContent = '⚠ Test Execution Failed';
+	} else if (session.cancelledAt) {
+		el.runTimer.dataset.state = 'cancelled';
+		el.runTimerLabel.textContent = 'Test Cancelled';
+	} else if (paused) {
+		// User stop or system interruption = paused, not cancelled: elapsed
+		// frozen at the pause point, resuming from exactly this value.
+		el.runTimer.dataset.state = 'paused';
+		el.runTimerLabel.textContent = '⏸ Paused';
+	} else if (session.status === 'running') {
+		el.runTimer.dataset.state = 'running';
+		el.runTimerLabel.textContent = '● Testing';
+	} else if (session.status === 'awaiting_input') {
+		el.runTimer.dataset.state = 'paused';
+		el.runTimerLabel.textContent = '⏸ Paused (awaiting input)';
+	}
+	const seconds = elapsedSecondsOf(session);
+	el.runTimerClock.textContent = formatClock(seconds);
+	// Tick the live clock only while the run can actually advance it.
+	const live = session.status === 'running' && !terminal && !paused;
+	el.runTimer.dataset.live = live ? 'true' : 'false';
+	if (terminal || paused) {
+		// Terminal or paused states don't need a second hand; show the stamps.
+		el.runTimer.title = paused
+			? `Paused: ${formatTimeOfDay(session.pausedAt)} — resumes from ${formatClock(seconds)} on continue`
+			: Number.isFinite(session.completedAt)
+				? `Test Completed: ${formatTimeOfDay(session.completedAt)}`
+				: Number.isFinite(session.startedAt)
+					? `Test Started: ${formatTimeOfDay(session.startedAt)}`
+					: '';
+	} else {
+		el.runTimer.title = `Test Started: ${formatTimeOfDay(session.startedAt)}`;
+	}
+}
+
+function startTimerInterval() {
+	if (state.timer.interval !== undefined) return;
+	state.timer.interval = setInterval(() => {
+		const session = state.session;
+		if (!session || el.runTimer.hidden) return;
+		// Re-render only while a live run can advance the clock — paused and
+		// terminal states stay frozen at their server-recorded values.
+		const live = session.status === 'running'
+			&& !Number.isFinite(session.completedAt)
+			&& !Number.isFinite(session.pausedAt);
+		if (live) {
+			el.runTimerClock.textContent = formatClock(elapsedSecondsOf(session));
+		}
+		// Keep the runs list's live per-row elapsed times ticking too.
+		if (state.timer.runLiveTimers?.size) {
+			for (const [runId, node] of state.timer.runLiveTimers) {
+				const run = runId === session?.id ? session : undefined;
+				if (run && run.status === 'running' && !Number.isFinite(run.pausedAt)) {
+					node.textContent = `⏱ ${formatDurationShort(elapsedSecondsOf(run))}`;
+				}
+			}
+		}
+	}, 1000);
+}
+
+/* ── Performance analytics & run-time comparison ─────────────────── */
+
+function perfRow(label, value) {
+	const dt = document.createElement('dt');
+	dt.textContent = label;
+	const dd = document.createElement('dd');
+	dd.textContent = value ?? '—';
+	return [dt, dd];
+}
+
+/**
+ * Render the Performance panel from the analytics API. Shows real aggregates
+ * only; when there are no completed runs the panel stays hidden.
+ *
+ * Panel visibility is pure UI state: `state.perfUi.closed` (set by the Close
+ * button) only hides the panel — run results and stored metrics are never
+ * touched. Minimize (`state.perfUi.minimized`) collapses the body while the
+ * header stays available for restoring.
+ */
+async function refreshPerformance() {
+	const aggregate = await api('/analytics/durations').catch(() => undefined);
+	if (!aggregate || !aggregate.runCount) {
+		el.perfPanel.hidden = true;
+		el.perfRestore.hidden = true;
+		return;
+	}
+	// Update the data regardless of panel visibility so a later restore shows
+	// current numbers; visibility controls below only toggle display.
+	el.perfGrid.replaceChildren(
+		...perfRow('Completed runs', String(aggregate.runCount)),
+		...perfRow('Average execution', formatDurationShort(aggregate.avgDurationSeconds)),
+		...perfRow('Median execution', formatDurationShort(aggregate.medianDurationSeconds)),
+		...perfRow('Fastest run', formatDurationShort(aggregate.minDurationSeconds)),
+		...perfRow('Slowest run', formatDurationShort(aggregate.maxDurationSeconds)),
+		...perfRow('Avg / test item', aggregate.avgSecondsPerItem !== undefined
+			? `${aggregate.avgSecondsPerItem.toFixed(1)}s`
+			: undefined)
+	);
+	// Same-target comparison for the currently selected run's target.
+	const session = state.session;
+	let showCompare = false;
+	if (session?.targetUrl && typeof session.targetUrl === 'string') {
+		const history = await api(`/analytics/targets/durations?targetUrl=${encodeURIComponent(session.targetUrl)}`)
+			.catch(() => []);
+		if (Array.isArray(history) && history.length >= 2) {
+			showCompare = true;
+			el.perfCompareTitle.textContent = `${hostOf(session.targetUrl)} — run comparison`;
+			const items = history.map((entry, index) => {
+				const li = document.createElement('li');
+				const trend = index === 0 ? '' : (
+					entry.durationSeconds < history[index - 1].durationSeconds ? ' ▼ faster'
+						: entry.durationSeconds > history[index - 1].durationSeconds ? ' ▲ slower'
+							: ' → stable');
+				li.textContent = `Run #${index + 1} · ${formatDurationShort(entry.durationSeconds)}${trend}`;
+				if (entry.id === session.id) li.classList.add('is-current');
+				return li;
+			});
+			el.perfCompareList.replaceChildren(...items);
+		}
+	}
+	el.perfCompare.hidden = !showCompare;
+	// Close wins over show: the panel stays hidden until the user restores it.
+	el.perfPanel.hidden = state.perfUi.closed;
+	el.perfRestore.hidden = !state.perfUi.closed;
+	applyPerfMinimize();
+}
+
+/* ── Performance panel visibility controls ───────────────────────── */
+
+function applyPerfMinimize() {
+	const minimized = state.perfUi.minimized;
+	el.perfBody.hidden = minimized;
+	el.perfMinimize.textContent = minimized ? '▸' : '▾';
+	el.perfMinimize.title = minimized ? 'Restore' : 'Minimize';
+	el.perfMinimize.setAttribute('aria-expanded', minimized ? 'false' : 'true');
+	el.perfPanel.classList.toggle('is-minimized', minimized);
+}
+
+function togglePerfMinimize() {
+	state.perfUi.minimized = !state.perfUi.minimized;
+	applyPerfMinimize();
+}
+
+function closePerfPanel() {
+	// Visibility only: metrics, run results and analytics stay intact.
+	state.perfUi.closed = true;
+	el.perfPanel.hidden = true;
+	el.perfRestore.hidden = false;
+}
+
+function restorePerfPanel() {
+	state.perfUi.closed = false;
+	el.perfPanel.hidden = false;
+	el.perfRestore.hidden = true;
+	applyPerfMinimize();
+}
+
+/* ── Post-run feedback ──────────────────────────────────────────── */
+
+/**
+ * Category values match the server contract (server/feedbackStore.js
+ * FEEDBACK_CATEGORIES). Labels are display-only.
+ */
+const FEEDBACK_CATEGORIES = [
+	{ value: 'test_accuracy', label: 'Test Accuracy' },
+	{ value: 'test_coverage', label: 'Test Coverage' },
+	{ value: 'execution_speed', label: 'Test Execution Speed' },
+	{ value: 'results', label: 'Test Results' },
+	{ value: 'ui_ux', label: 'UI/UX Experience' },
+	{ value: 'automation_quality', label: 'Automation Quality' },
+	{ value: 'error_handling', label: 'Error Handling' },
+	{ value: 'ease_of_use', label: 'Ease of Use' },
+	{ value: 'overall', label: 'Overall Experience' },
+	{ value: 'other', label: 'Other' }
+];
+
+/** A run accepts feedback only once it has reached a terminal state. */
+const FEEDBACK_TERMINAL_STATUSES = new Set(['done', 'error']);
+
+function feedbackEligible(session) {
+	return Boolean(session?.id) && FEEDBACK_TERMINAL_STATUSES.has(session.status);
+}
+
+/**
+ * Loads the submitter's existing feedback for a run so the modal can open in
+ * "already submitted" mode instead of inviting a duplicate. Called when a run
+ * completes and when the modal opens; failures keep the modal usable.
+ */
+async function syncFeedbackForSession(session) {
+	if (!session?.id) return;
+	const runId = session.id;
+	state.feedback.existing = undefined;
+	state.feedback.existingLoadedFor = runId;
+	try {
+		state.feedback.existing = await api(`/sessions/${runId}/feedback`);
+	} catch {
+		state.feedback.existing = null;
+	}
+	if (state.feedback.runId === runId) applyFeedbackSubmittedState();
+}
+
+/**
+ * Opens the feedback modal for the run in `state.session`. Run metadata
+ * (Test Run ID, target URL, execution status, duration) is display-only —
+ * the server attaches it from the run record, never from this form.
+ */
+async function openFeedbackModal() {
+	const session = state.session;
+	if (!feedbackEligible(session)) return;
+	state.feedback.runId = session.id;
+	state.feedback.rating = 0;
+	// Existing submission for THIS run (and user) is server-owned truth: it
+	// decides submitted-vs-blank mode. Cached while the modal stays on the
+	// same run, re-fetched whenever a new run opens the modal.
+	if (!state.feedback.existing && state.feedback.existingLoadedFor !== session.id) {
+		try {
+			state.feedback.existing = await api(`/sessions/${session.id}/feedback`);
+		} catch {
+			state.feedback.existing = null;
+		}
+		state.feedback.existingLoadedFor = session.id;
+	}
+	el.feedbackError.textContent = '';
+	el.feedbackSuccess.textContent = '';
+	const failed = session.status === 'error';
+	el.feedbackSubmit.disabled = true;
+	el.feedbackSubmit.textContent = 'Submit feedback';
+	el.feedbackCategory.innerHTML = '<option value="" selected disabled>Choose a category…</option>';
+	for (const { value, label } of FEEDBACK_CATEGORIES) {
+		const option = document.createElement('option');
+		option.value = value;
+		option.textContent = label;
+		el.feedbackCategory.append(option);
+	}
+	el.feedbackCategory.value = '';
+	el.feedbackComments.value = '';
+	el.feedbackImprovement.value = '';
+	renderFeedbackStars();
+	const duration = Number.isFinite(session.completedAt) && Number.isFinite(session.startedAt)
+		? formatClock((session.completedAt - session.startedAt - (Number.isFinite(session.pausedSeconds) ? session.pausedSeconds * 1000 : 0)) / 1000)
+		: null;
+	const bits = [`Test Run: ${session.id.slice(0, 8)}`];
+	if (session.targetUrl) bits.push(String(session.targetUrl));
+	bits.push(failed ? 'Status: Failed' : 'Status: Completed');
+	if (duration) bits.push(`Duration: ${duration}`);
+	el.feedbackRunMeta.textContent = bits.join(' · ');
+	el.feedbackModal.showModal();
+	applyFeedbackSubmittedState();
+	renderFeedbackStars();
+	el.feedbackStars.querySelector('input[type="radio"]')?.focus();
+}
+
+/** Star row: five radios whose labels light up up-to the checked value. */
+function renderFeedbackStars() {
+	if (el.feedbackStars.childElementCount === 0) {
+		for (let value = 1; value <= 5; value += 1) {
+			const radio = document.createElement('input');
+			radio.type = 'radio';
+			radio.name = 'feedback-rating';
+			radio.id = `feedback-star-${value}`;
+			radio.value = String(value);
+			radio.addEventListener('change', () => {
+				state.feedback.rating = value;
+				el.feedbackError.textContent = '';
+				paintFeedbackStars(value);
+				updateFeedbackSubmitEnabled();
+			});
+			const label = document.createElement('label');
+			label.htmlFor = radio.id;
+			label.className = 'feedback-star';
+			label.title = `${value} star${value === 1 ? '' : 's'}`;
+			label.textContent = '★';
+			label.append(radio);
+			el.feedbackStars.append(label);
+		}
+	}
+	paintFeedbackStars(state.feedback.rating);
+	updateFeedbackSubmitEnabled();
+}
+
+function paintFeedbackStars(value) {
+	[...el.feedbackStars.querySelectorAll('.feedback-star')].forEach((label, index) => {
+		label.classList.toggle('is-on', index < value);
+	});
+}
+
+function updateFeedbackSubmitEnabled() {
+	const ready = state.feedback.rating > 0
+		&& el.feedbackCategory.value !== ''
+		&& el.feedbackComments.value.trim().length > 0;
+	el.feedbackSubmit.disabled = !ready || state.feedback.submitting || Boolean(state.feedback.existing);
+}
+
+/**
+ * Submitted mode: form fields go read-only, the submit button is replaced by a
+ * confirmation, and editing stays possible in a follow-up ticket (the API
+ * supports it). Cancel becomes "Done".
+ */
+function applyFeedbackSubmittedState() {
+	const existing = state.feedback.existing;
+	const submitted = Boolean(existing);
+	for (const input of [el.feedbackCategory, el.feedbackComments, el.feedbackImprovement]) {
+		input.readOnly = submitted;
+		input.disabled = submitted;
+	}
+	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = submitted; });
+	if (submitted) {
+		state.feedback.rating = existing.rating;
+		el.feedbackCategory.value = FEEDBACK_CATEGORIES.some(c => c.value === existing.category)
+			? existing.category : '';
+		el.feedbackComments.value = existing.comments ?? '';
+		el.feedbackImprovement.value = existing.improvement ?? '';
+		paintFeedbackStars(existing.rating);
+		el.feedbackSubmit.textContent = 'Feedback submitted ✓';
+		el.feedbackCancel.textContent = 'Done';
+		el.feedbackSuccess.textContent = 'Feedback submitted successfully. Thank you for helping us improve QASE!';
+	} else {
+		el.feedbackSubmit.textContent = 'Submit feedback';
+		el.feedbackCancel.textContent = 'Cancel';
+		el.feedbackSuccess.textContent = '';
+	}
+	updateFeedbackSubmitEnabled();
+}
+
+function closeFeedbackModal() {
+	el.feedbackModal.close();
+}
+
+async function submitFeedback(event) {
+	event.preventDefault();
+	if (state.feedback.submitting || state.feedback.existing) return;
+	const rating = state.feedback.rating;
+	const category = el.feedbackCategory.value;
+	const comments = el.feedbackComments.value.trim();
+	if (!rating || !category || !comments) {
+		el.feedbackError.textContent = 'Please choose a rating, a category and add a comment.';
+		return;
+	}
+	state.feedback.submitting = true;
+	el.feedbackSubmit.disabled = true;
+	el.feedbackSubmit.textContent = 'Submitting…';
+	el.feedbackError.textContent = '';
+	try {
+		const record = await api('/feedback', {
+			method: 'POST',
+			body: JSON.stringify({
+				runId: state.session.id,
+				rating,
+				category,
+				comments,
+				improvement: el.feedbackImprovement.value.trim() || undefined
+			})
+		});
+		state.feedback.existing = record;
+		applyFeedbackSubmittedState();
+		toast('Feedback submitted successfully. Thank you for helping us improve QASE!', 'good');
+	} catch (error) {
+		// Retry keeps every entered field — only the button returns to idle.
+		el.feedbackError.textContent = `${error.message} Your feedback was kept — please try again.`;
+		el.feedbackSubmit.textContent = 'Retry submit';
+	} finally {
+		state.feedback.submitting = false;
+		updateFeedbackSubmitEnabled();
+		if (state.feedback.existing) el.feedbackSubmit.textContent = 'Feedback submitted ✓';
+	}
+}
+
+/* ── Admin feedback review panel ────────────────────────────────── */
+
+const FEEDBACK_REVIEW_STATUSES = [
+	{ value: 'new', label: 'New' },
+	{ value: 'reviewed', label: 'Reviewed' },
+	{ value: 'in_progress', label: 'In Progress' },
+	{ value: 'resolved', label: 'Resolved' },
+	{ value: 'closed', label: 'Closed' }
+];
+
+/**
+ * Loads stats + filtered records for the review panel. A 403 means the user is
+ * not an owner/admin — the panel stays hidden instead of erroring.
+ */
+async function refreshFeedbackAdmin() {
+	if (!state.feedbackAdmin.allowed) return;
+	const admin = state.feedbackAdmin;
+	const params = new URLSearchParams();
+	if (admin.rating) params.set('rating', admin.rating);
+	if (admin.category) params.set('category', admin.category);
+	if (admin.status) params.set('status', admin.status);
+	if (admin.search.trim()) params.set('search', admin.search.trim());
+	try {
+		const [stats, page] = await Promise.all([
+			api('/feedback/stats'),
+			api(`/feedback?${params.toString()}`)
+		]);
+		admin.stats = stats;
+		admin.records = page.records ?? [];
+	} catch (error) {
+		if (error?.status === 403) { state.feedbackAdmin.allowed = false; }
+		return;
+	}
+	renderFeedbackAdmin();
+}
+
+function renderFeedbackAdmin() {
+	const admin = state.feedbackAdmin;
+	el.feedbackPanel.hidden = admin.closed || !admin.allowed;
+	el.feedbackRestore.hidden = !admin.closed || !admin.allowed;
+	el.feedbackAdminBody.hidden = admin.minimized;
+	el.feedbackMinimize.textContent = admin.minimized ? '▸' : '▾';
+	el.feedbackMinimize.setAttribute('aria-expanded', String(!admin.minimized));
+
+	// Stats row: total + average + status counts.
+	el.feedbackStats.replaceChildren();
+	if (admin.stats) {
+		const avg = Number.isFinite(admin.stats.averageRating)
+			? admin.stats.averageRating.toFixed(1)
+			: '—';
+		for (const [value, name] of [
+			[admin.stats.total ?? 0, 'submissions'],
+			[`${avg}★`, 'average']
+		]) {
+			const div = document.createElement('div');
+			const b = document.createElement('b');
+			b.textContent = value;
+			const span = document.createElement('span');
+			span.textContent = name;
+			div.append(b, span);
+			el.feedbackStats.append(div);
+		}
+	}
+
+	// Category filter options follow the server stats keys.
+	const categorySelect = el.feedbackFilterCategory;
+	if (categorySelect.options.length <= 1) {
+		for (const { value, label } of FEEDBACK_CATEGORIES) {
+			const option = document.createElement('option');
+			option.value = value;
+			option.textContent = label;
+			categorySelect.append(option);
+		}
+	}
+
+	el.feedbackList.replaceChildren();
+	if (!admin.records.length) {
+		const empty = document.createElement('li');
+		empty.className = 'feedback-empty';
+		empty.textContent = 'No feedback matches the current filters.';
+		el.feedbackList.append(empty);
+		return;
+	}
+	for (const record of admin.records) {
+		el.feedbackList.append(renderFeedbackRow(record));
+	}
+}
+
+/** One reviewable feedback card, linked back to its test run. */
+function renderFeedbackRow(record) {
+	const row = document.createElement('li');
+	row.className = 'feedback-row';
+	const head = document.createElement('div');
+	head.className = 'feedback-row-head';
+	const stars = document.createElement('span');
+	stars.className = 'feedback-row-stars';
+	stars.textContent = '★'.repeat(record.rating) + '☆'.repeat(5 - record.rating);
+	stars.title = `${record.rating} of 5`;
+	const category = document.createElement('span');
+	category.className = 'feedback-row-cat';
+	category.textContent = FEEDBACK_CATEGORIES.find(c => c.value === record.category)?.label ?? record.category;
+	const status = document.createElement('select');
+	status.className = 'feedback-row-status';
+	status.setAttribute('aria-label', `Review status for run ${record.runId?.slice(0, 8)}`);
+	for (const { value, label } of FEEDBACK_REVIEW_STATUSES) {
+		const option = document.createElement('option');
+		option.value = value;
+		option.textContent = label;
+		status.append(option);
+	}
+	status.value = record.status;
+	status.addEventListener('change', async () => {
+		try {
+			await api(`/feedback/${record.id}`, { method: 'PUT', body: JSON.stringify({ status: status.value }) });
+			record.status = status.value;
+			toast('Feedback status updated.', 'good');
+			void refreshFeedbackAdmin();
+		} catch (error) {
+			status.value = record.status;
+			fail(error);
+		}
+	});
+	head.append(stars, category, status);
+	const comments = document.createElement('p');
+	comments.className = 'feedback-row-comments';
+	comments.textContent = record.comments ?? '';
+	const meta = document.createElement('div');
+	meta.className = 'feedback-row-meta';
+	const bits = [];
+	if (record.runId) bits.push(`Run ${record.runId.slice(0, 8)}`);
+	if (record.targetUrl) bits.push(String(record.targetUrl));
+	if (record.runStatus) bits.push(record.runStatus === 'done' ? 'completed' : 'failed');
+	if (Number.isFinite(record.durationSeconds)) bits.push(formatClock(record.durationSeconds));
+	if (record.improvement) bits.push(`improve: ${record.improvement}`);
+	meta.textContent = bits.join(' · ');
+	row.append(head, comments, meta);
+	return row;
+}
+
+function toggleFeedbackAdminMinimize() {
+	state.feedbackAdmin.minimized = !state.feedbackAdmin.minimized;
+	renderFeedbackAdmin();
+}
+
+function closeFeedbackAdminPanel() {
+	state.feedbackAdmin.closed = true;
+	renderFeedbackAdmin();
+}
+
+function restoreFeedbackAdminPanel() {
+	state.feedbackAdmin.closed = false;
+	renderFeedbackAdmin();
+}
+
+/**
+ * Called once after login: an owner/admin sees the review panel; everyone else
+ * never does (the API also enforces this server-side).
+ */
+async function initFeedbackAdmin() {
+	const role = state.user?.role;
+	if (role && !['owner', 'admin'].includes(role)) return;
+	state.feedbackAdmin.allowed = true;
+	await refreshFeedbackAdmin();
+}
+
 /* ── Transcript ──────────────────────────────────────────────────── */
 
 function renderTranscript() {
@@ -744,6 +1724,7 @@ function appendDelta(id, content, role) {
 	if (role === 'thinking') {
 		state.thinking.text += content;
 		updateThinkingStrip();
+		renderCurrentActivity();
 		return;
 	}
 
@@ -875,7 +1856,7 @@ function credentialForm() {
 
 	const note = document.createElement('div');
 	note.className = 'cred-note';
-	note.innerHTML = 'Held in this server\'s memory only — never written to disk, never sent to the model. ' +
+	note.innerHTML = 'Encrypted locally for this run and deleted when the run ends — never sent to the model. ' +
 		'The agent fills the form with <code>{{QA_USERNAME}}</code> and <code>{{QA_PASSWORD}}</code>; the real values are swapped in at the keyboard.';
 
 	const actions = document.createElement('div');
@@ -1612,7 +2593,14 @@ function renderReport() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
-	actions.append(download, copy, copyFixes, downloadFixes, pdf);
+	const provideFeedback = document.createElement('button');
+	provideFeedback.className = 'btn btn-ghost btn-sm';
+	provideFeedback.type = 'button';
+	provideFeedback.textContent = 'Provide Feedback';
+	provideFeedback.title = 'Rate this QASE testing run and tell us how it went.';
+	provideFeedback.onclick = () => openFeedbackModal();
+
+	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
 	el.reportView.append(actions);
 	el.reportView.append(renderFeedback());
 }
@@ -2392,6 +3380,7 @@ function handleEvent(event) {
 				state.thinking.action = [event.activity.label, event.activity.detail]
 					.filter(Boolean).join(' — ');
 				updateThinkingStrip();
+				renderCurrentActivity();
 			}
 			if (session.mode === 'founder') renderFounder();
 			break;
@@ -2400,11 +3389,29 @@ function handleEvent(event) {
 		case 'todos':
 			session.todos = event.todos;
 			renderTodos();
+			renderProgressCard();
+			break;
+
+		case 'context':
+			session.contextUsage = event.context;
+			renderHeader();
+			break;
+
+		case 'usage':
+			session.tokenUsage = event.usage;
+			renderHeader();
+			// Keep the sidebar's token badge in step without a full refetch;
+			// throttled so a fast series of commits stays cheap.
+			scheduleRunBadgeRefresh();
 			break;
 
 		case 'finding':
 			session.findings.push(event.finding);
 			renderFindings();
+			renderProgressCard();
+			// The backlog view is server-sourced; a new finding anywhere in
+			// this account's stream coalesces to one throttled refetch.
+			if (state.bugsViewOpen) bugsView.scheduleRefresh();
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
 				toast(`${event.finding.severity.toUpperCase()}: ${event.finding.title}`, 'bad');
 			}
@@ -2497,6 +3504,20 @@ function handleEvent(event) {
 			if (event.status === 'running' && typeof session.runStartedAt !== 'number') {
 				session.runStartedAt = event.ts ?? Date.now();
 			}
+			renderCurrentActivity();
+			// Server-authoritative timing arrives with every status event.
+			if (event.timing) {
+				noteServerNow(event.timing.serverNow);
+				Object.assign(session, {
+					startedAt: event.timing.startedAt,
+					completedAt: event.timing.completedAt,
+					cancelledAt: event.timing.cancelledAt,
+					pausedAt: event.timing.pausedAt,
+					pausedSeconds: event.timing.pausedSeconds ?? session.pausedSeconds ?? 0,
+					failureReason: event.timing.failureReason
+				});
+			}
+			updateRunTimer();
 			if (session.mode === 'sqa') {
 				renderSqa();
 				renderReport();
@@ -2506,9 +3527,14 @@ function handleEvent(event) {
 				renderReport();
 				showCompletedFounderReport();
 			}
-			if (event.status !== 'running') {
-				void refreshRuns();
+		if (event.status !== 'running') {
+			void refreshRuns();
+			void refreshPerformance();
+			if (FEEDBACK_TERMINAL_STATUSES.has(event.status)) {
+				renderReport();
+				void syncFeedbackForSession(session);
 			}
+		}
 			if (event.detail && event.status === 'error') {
 				toast(event.detail, 'bad');
 			}
@@ -2554,10 +3580,6 @@ const qaUi = {
 	engineOptions: $('qa-engine-options'),
 	error: $('qa-form-error')
 };
-
-/** Scope option catalogue: value -> instruction the agent receives. */
-import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
-export { buildQaKickoffMessage };
 
 function selectedQaScopeValues() {
 	if (!qaUi.scopeOptions) return undefined;
@@ -3392,6 +4414,7 @@ el.authForm?.addEventListener('submit', async event => {
 		});
 		el.authPassword.value = '';
 		hideAuthGate();
+		void initFeedbackAdmin();
 		await bootWorkspace();
 	} catch (error) {
 		if (el.authError) {
@@ -3458,6 +4481,13 @@ el.composerInput.addEventListener('input', () => {
 	el.composerInput.style.height = 'auto';
 	el.composerInput.style.height = `${Math.min(el.composerInput.scrollHeight, 170)}px`;
 	el.composerInput.style.overflowY = el.composerInput.scrollHeight > 170 ? 'auto' : 'hidden';
+});
+
+// Collapse/expand the run summary. Pure UI: values already in state keep
+// flowing to the mini row — nothing is refetched or recalculated.
+el.runSummaryToggle?.addEventListener('click', () => {
+	setRunSummaryCollapsed(!state.runSummaryCollapsed);
+	renderMiniSummary();
 });
 
 el.composerInput.addEventListener('keydown', event => {
@@ -3608,6 +4638,36 @@ async function bootWorkspace() {
 
 (async function boot() {
 	await window.qaseEntryReady;
+	// Test Execution Timer: one shared second-hand for every live timer view.
+	startTimerInterval();
+	// Performance panel controls: minimize/restore/close are visibility-only.
+	el.perfMinimize?.addEventListener('click', togglePerfMinimize);
+	el.perfClose?.addEventListener('click', closePerfPanel);
+	el.perfRestore?.addEventListener('click', restorePerfPanel);
+	el.feedbackForm?.addEventListener('submit', submitFeedback);
+	el.feedbackClose?.addEventListener('click', closeFeedbackModal);
+	el.feedbackCancel?.addEventListener('click', closeFeedbackModal);
+	el.feedbackComments?.addEventListener('input', updateFeedbackSubmitEnabled);
+	el.feedbackCategory?.addEventListener('change', updateFeedbackSubmitEnabled);
+	el.feedbackMinimize?.addEventListener('click', toggleFeedbackAdminMinimize);
+	el.feedbackCloseCtl?.addEventListener('click', closeFeedbackAdminPanel);
+	el.feedbackRestore?.addEventListener('click', restoreFeedbackAdminPanel);
+	el.feedbackSearch?.addEventListener('input', () => {
+		state.feedbackAdmin.search = el.feedbackSearch.value;
+		void refreshFeedbackAdmin();
+	});
+	el.feedbackFilterRating?.addEventListener('change', () => {
+		state.feedbackAdmin.rating = el.feedbackFilterRating.value;
+		void refreshFeedbackAdmin();
+	});
+	el.feedbackFilterCategory?.addEventListener('change', () => {
+		state.feedbackAdmin.category = el.feedbackFilterCategory.value;
+		void refreshFeedbackAdmin();
+	});
+	el.feedbackFilterStatus?.addEventListener('change', () => {
+		state.feedbackAdmin.status = el.feedbackFilterStatus.value;
+		void refreshFeedbackAdmin();
+	});
 	try {
 		const pilot = await api('/pilot-status').catch(() => undefined);
 		if (pilot?.pilot) {
@@ -3629,6 +4689,7 @@ async function bootWorkspace() {
 			return;
 		}
 	}
+	void initFeedbackAdmin();
 	await bootWorkspace();
 })();
 

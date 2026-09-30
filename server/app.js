@@ -462,6 +462,209 @@ export function createApplication(options = {}) {
 		response.json(await services.runs.list({ limit }));
 	});
 
+	// Test Execution Timer analytics. Computed server-side from stored run
+	// timestamps; falls back to an empty aggregate when the repository does
+	// not support analytics (in-memory store).
+	app.get('/api/analytics/durations', async (request, response) => {
+		const targetUrl = typeof request.query.targetUrl === 'string' && request.query.targetUrl.trim() !== ''
+			? request.query.targetUrl.trim()
+			: undefined;
+		if (typeof services.runs.durationAnalytics !== 'function') {
+			response.json({ runCount: 0, byTarget: [] });
+			return;
+		}
+		response.json(await services.runs.durationAnalytics({ targetUrl }));
+	});
+
+	app.get('/api/analytics/targets/durations', async (request, response) => {
+		const targetUrl = typeof request.query.targetUrl === 'string' ? request.query.targetUrl.trim() : '';
+		if (targetUrl === '') {
+			response.status(400).json({ error: 'targetUrl query parameter is required.' });
+			return;
+		}
+		if (typeof services.runs.targetDurationHistory !== 'function') {
+			response.json([]);
+			return;
+		}
+		response.json(await services.runs.targetDurationHistory(targetUrl));
+	});
+
+	/* ── User feedback on test runs ───────────────────────────── */
+
+	const feedbackService = () => {
+		if (!services.feedback) {
+			response.status(501).json({ error: 'Feedback is not available on this instance.' });
+			return undefined;
+		}
+		return services.feedback;
+	};
+
+	function requireFeedbackAdmin(request, response) {
+		if (request.auth?.role && !['owner', 'admin'].includes(request.auth.role)) {
+			response.status(403).json({ error: 'Feedback review requires an owner or administrator.' });
+			return false;
+		}
+		return true;
+	}
+
+	app.post('/api/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		const runId = typeof request.body?.runId === 'string' ? request.body.runId.trim() : '';
+		if (runId === '') {
+			response.status(400).json({ error: 'runId is required.' });
+			return;
+		}
+		const session = await services.runs.get(runId);
+		if (!session) {
+			response.status(404).json({ error: 'No such test run.' });
+			return;
+		}
+		// Feedback exists for finished runs — both successes and failures —
+		// never mid-execution.
+		if (!['done', 'error'].includes(session.status)) {
+			response.status(409).json({ error: 'Feedback is available once the test run has finished.' });
+			return;
+		}
+		const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+		const durationSeconds = session.startedAt === undefined ? undefined : Math.max(
+			0,
+			Math.floor(
+				((session.pausedAt ?? session.completedAt ?? Date.now()) - session.startedAt) / 1000
+				- pausedSeconds
+			)
+		);
+		try {
+			const record = await feedback.create({
+				runId,
+				submittedBy: request.auth?.userId ?? null,
+				context: {
+					targetUrl: session.targetUrl,
+					runStatus: session.status,
+					durationSeconds
+				},
+				rating: request.body?.rating,
+				category: request.body?.category,
+				comments: request.body?.comments,
+				improvement: request.body?.improvement
+			});
+			response.status(201).json(record);
+		} catch (error) {
+			if (error?.code === 'duplicate_feedback') {
+				response.status(409).json({ error: 'Feedback already exists for this test run.', existingId: error.existingId });
+				return;
+			}
+			if (error?.code === 'invalid_input') {
+				response.status(400).json({ error: 'Feedback validation failed.', fields: error.fields });
+				return;
+			}
+			throw error;
+		}
+	});
+
+	// The submitter's own feedback for a run — powers the completion UI's
+	// "edit your feedback" mode and the already-submitted state.
+	app.get('/api/sessions/:id/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const record = await feedback.forRun(session.id, request.auth?.userId ?? null);
+		response.json(record ?? null);
+	});
+
+	app.get('/api/feedback/stats', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		response.json(await feedback.stats());
+	});
+
+	app.get('/api/feedback', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const q = request.query;
+		const rating = /^\d+$/.test(String(q.rating ?? '')) ? Number(q.rating) : undefined;
+		const since = /^\d+$/.test(String(q.since ?? '')) ? Number(q.since) : undefined;
+		const until = /^\d+$/.test(String(q.until ?? '')) ? Number(q.until) : undefined;
+		const rows = await feedback.list({
+			runId: typeof q.runId === 'string' && q.runId.trim() !== '' ? q.runId.trim() : undefined,
+			targetUrl: typeof q.targetUrl === 'string' && q.targetUrl.trim() !== '' ? q.targetUrl.trim() : undefined,
+			rating,
+			category: typeof q.category === 'string' && q.category.trim() !== '' ? q.category.trim() : undefined,
+			status: typeof q.status === 'string' && q.status.trim() !== '' ? q.status.trim() : undefined,
+			since,
+			until,
+			q: typeof q.q === 'string' && q.q.trim() !== '' ? q.q.trim() : undefined,
+			limit: /^\d+$/.test(String(q.limit ?? '')) ? Number(q.limit) : undefined
+		});
+		response.json(rows);
+	});
+
+	app.get('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const record = await feedback.get(request.params.id);
+		if (!record) {
+			response.status(404).json({ error: 'No such feedback.' });
+			return;
+		}
+		// Trace back to the execution: include the run summary, never secrets.
+		const session = await services.runs.get(record.runId);
+		response.json({
+			...record,
+			run: session ? {
+				id: session.id,
+				title: session.title,
+				status: session.status,
+				targetUrl: session.targetUrl,
+				startedAt: session.startedAt,
+				completedAt: session.completedAt,
+				findingCount: Array.isArray(session.findings) ? session.findings.length : 0
+			} : undefined
+		});
+	});
+
+	app.put('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		try {
+			const record = await feedback.update(request.params.id, {
+				status: request.body?.status,
+				rating: request.body?.rating,
+				category: request.body?.category,
+				comments: request.body?.comments,
+				improvement: request.body?.improvement
+			});
+			response.json(record);
+		} catch (error) {
+			if (error?.code === 'not_found') {
+				response.status(404).json({ error: 'No such feedback.' });
+				return;
+			}
+			if (error?.code === 'invalid_input') {
+				response.status(400).json({ error: 'Feedback validation failed.', fields: error.fields });
+				return;
+			}
+			throw error;
+		}
+	});
+
+	app.delete('/api/feedback/:id', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		if (!requireFeedbackAdmin(request, response)) return;
+		const removed = await feedback.remove(request.params.id);
+		if (!removed) {
+			response.status(404).json({ error: 'No such feedback.' });
+			return;
+		}
+		response.status(204).end();
+	});
+
 	app.post('/api/sessions', async (request, response) => {
 		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 		const deviceLandscape = request.body?.deviceLandscape === true;
@@ -539,11 +742,25 @@ export function createApplication(options = {}) {
 		const session = await requireSession(request, response);
 		if (!session) return;
 		const liveState = services.agent.getLiveState(session.id);
+		// Active (pause-excluded) seconds, server-authoritative: a paused run
+		// freezes at the pause point instead of reporting undefined.
+		const pausedSeconds = Number.isFinite(session.pausedSeconds) ? session.pausedSeconds : 0;
+		const durationSeconds = session.startedAt === undefined ? undefined : Math.max(
+			0,
+			Math.floor(
+				((session.pausedAt ?? session.completedAt ?? Date.now()) - session.startedAt) / 1000
+				- pausedSeconds
+			)
+		);
 		response.json({
 			...session,
+			durationSeconds,
 			secretNames: await services.secrets.names(session.id),
 			running: liveState.running,
-			frame: liveState.frame
+			frame: liveState.frame,
+			// Server-authoritative clock sample: the client computes elapsed
+			// timer time from this skew, never from its own render time.
+			serverNow: Date.now()
 		});
 	});
 
@@ -567,6 +784,47 @@ export function createApplication(options = {}) {
 			);
 			response.json({ result, assessment: session.sqa.assessment });
 		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.get('/api/findings', async (request, response) => {
+		try {
+			const rawLimit = Number(request.query.limit);
+			const findings = await services.runs.aggregateFindings({
+				status: request.query.status,
+				severity: request.query.severity,
+				runId: request.query.run,
+				search: request.query.q,
+				limit: Number.isSafeInteger(rawLimit) ? rawLimit : undefined
+			});
+			response.json({ findings, serverNow: Date.now() });
+		} catch (error) {
+			if (error?.code === 'QASE_FINDING_STATUS_INVALID' || error?.code === 'QASE_FINDING_SEVERITY_INVALID') {
+				return response.status(400).json({ error: error.message });
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.patch('/api/sessions/:id/findings/:findingId', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		// Any authenticated user may track bugs on runs they own;
+		// requireSession already scopes access to the requesting owner.
+		try {
+			const finding = await services.runs.setFindingStatus(session, request.params.findingId, {
+				status: request.body?.status,
+				note: request.body?.note
+			});
+			response.json({ ok: true, finding });
+		} catch (error) {
+			if (error?.code === 'QASE_FINDING_NOT_FOUND') {
+				return response.status(404).json({ error: 'That bug does not exist on this run.' });
+			}
+			if (error?.code === 'QASE_FINDING_STATUS_INVALID') {
+				return response.status(400).json({ error: error.message });
+			}
 			safeErrorResponse(request, response, error);
 		}
 	});

@@ -80,6 +80,13 @@ if (typeof services.events.subscribeGlobal === 'function') {
 	// is in flight, so they are a precise liveness signal.
 	services.events.subscribeGlobal((_sessionId, event) => {
 		if (event?.type === 'status' ? isRunStatusActive(event.status) : true) keepalive.noteActive();
+		// Token usage committed after each turn feeds the model-token metrics.
+		if (event?.type === 'usage' && event.usage && typeof event.usage.totalTokens === 'number') {
+			const mode = event.mode === 'sqa' || event.mode === 'founder' ? event.mode : 'qa';
+			operations.observeTokens({ kind: 'input', mode, value: event.usage.inputTokens });
+			operations.observeTokens({ kind: 'output', mode, value: event.usage.outputTokens });
+			operations.observeTokens({ kind: 'total', mode, value: event.usage.totalTokens });
+		}
 	});
 }
 const drytisIntegration = createConfiguredDrytisIntegration({
@@ -140,7 +147,7 @@ server = app.listen(port, host, () => {
 	}
 	console.log('');
 	if (config.problem) {
-		console.log(`  ! ${config.problem} Set it in the dashboard under Settings, or in .env.\n`);
+		console.log(`  ! ${config.problem}\n`);
 	}
 	}
 

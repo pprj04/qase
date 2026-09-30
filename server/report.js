@@ -48,6 +48,11 @@ export function buildReportMarkdown(session) {
 	lines.push(`- **Run:** ${new Date(session.createdAt).toLocaleString()}`);
 	lines.push(`- **Verdict:** ${report ? VERDICT_LABELS[report.verdict] ?? report.verdict : 'Run not finished'}`);
 	lines.push(`- **Findings:** ${session.findings.length}`);
+	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
+		const usage = session.tokenUsage;
+		const fmt = value => (Number.isFinite(value) ? value.toLocaleString('en-US') : '—');
+		lines.push(`- **Tokens:** ${fmt(usage.inputTokens)} prompt / ${fmt(usage.outputTokens)} completion / ${fmt(usage.totalTokens)} total${usage.estimated === true ? ' (estimated)' : ''}`);
+	}
 	lines.push('');
 
 	if (report?.summary) {
