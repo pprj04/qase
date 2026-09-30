@@ -25,7 +25,7 @@ export function createPostgresFeedbackRepository({ pool, tenantContext }) {
 			durationSeconds: record.duration_seconds === null ? undefined : Number(record.duration_seconds),
 			rating: Number(record.rating),
 			category: record.category,
-			comments: record.comments,
+			comments: record.comments ?? '',
 			improvement: record.improvement ?? undefined,
 			status: record.status,
 			submittedAt: record.submitted_at.getTime(),

@@ -85,13 +85,15 @@ export function normalizeFeedbackInput(input = {}) {
 	if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
 		fields.rating = 'Rating must be an integer from 1 to 5.';
 	}
-	if (!FEEDBACK_CATEGORIES.includes(input.category)) {
+	// Category is optional; unrated feedback defaults to "overall".
+	const category = input.category === undefined || input.category === '' || input.category === null
+		? 'overall'
+		: input.category;
+	if (!FEEDBACK_CATEGORIES.includes(category)) {
 		fields.category = 'Unknown feedback category.';
 	}
-	const comments = safeText(input.comments, 4000);
-	if (comments === undefined) {
-		fields.comments = 'Comments are required (1-4000 characters).';
-	}
+	// Description is optional per spec: a rating alone is valid feedback.
+	const comments = safeText(input.comments, 4000) ?? '';
 	const improvement = safeText(input.improvement, 4000);
 	if (Object.keys(fields).length > 0) {
 		const error = new Error('Feedback validation failed.');
@@ -99,7 +101,7 @@ export function normalizeFeedbackInput(input = {}) {
 		error.fields = fields;
 		throw error;
 	}
-	const normalized = { rating, category: input.category, comments };
+	const normalized = { rating, category, comments };
 	if (improvement !== undefined) normalized.improvement = improvement;
 	return normalized;
 }
@@ -176,7 +178,7 @@ export function listFeedback({ runId, submittedBy, targetUrl, rating, category, 
 	if (q !== undefined && String(q).trim() !== '') {
 		const needle = String(q).toLowerCase();
 		filtered = filtered.filter(record =>
-			record.comments.toLowerCase().includes(needle)
+			String(record.comments ?? '').toLowerCase().includes(needle)
 			|| String(record.improvement ?? '').toLowerCase().includes(needle));
 	}
 	filtered.sort((a, b) => b.submittedAt - a.submittedAt);

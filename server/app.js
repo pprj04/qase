@@ -602,6 +602,22 @@ export function createApplication(options = {}) {
 		response.json(rows);
 	});
 
+	app.get('/api/feedback/mine', async (request, response) => {
+		const feedback = feedbackService();
+		if (!feedback) return;
+		// The submitter's own feedback across runs — powers run-list badges.
+		const runs = String(request.query.runs ?? '')
+			.split(',')
+			.map(id => id.trim())
+			.filter(Boolean)
+			.slice(0, 100);
+		const all = await feedback.list({
+			submittedBy: request.auth?.userId ?? null,
+			limit: 500
+		});
+		response.json(runs.length === 0 ? all : all.filter(record => runs.includes(record.runId)));
+	});
+
 	app.get('/api/feedback/:id', async (request, response) => {
 		const feedback = feedbackService();
 		if (!feedback) return;
@@ -630,10 +646,29 @@ export function createApplication(options = {}) {
 	app.put('/api/feedback/:id', async (request, response) => {
 		const feedback = feedbackService();
 		if (!feedback) return;
-		if (!requireFeedbackAdmin(request, response)) return;
+		// Two authorizations share this route: an owner/admin may change the
+		// review status AND content; the submitter may edit their OWN content
+		// (rating/category/comments/improvement) but never a review status.
+		const identity = request.auth;
+		const isAdmin = !identity?.role || ['owner', 'admin'].includes(identity.role);
+		if (!isAdmin) {
+			const existing = await feedback.get(request.params.id);
+			if (!existing) {
+				response.status(404).json({ error: 'No such feedback.' });
+				return;
+			}
+			if (existing.submittedBy !== identity?.userId) {
+				response.status(403).json({ error: 'You can only edit your own feedback.' });
+				return;
+			}
+			if (request.body?.status !== undefined) {
+				response.status(403).json({ error: 'Review status can only be changed by an owner or administrator.' });
+				return;
+			}
+		}
 		try {
 			const record = await feedback.update(request.params.id, {
-				status: request.body?.status,
+				status: isAdmin ? request.body?.status : undefined,
 				rating: request.body?.rating,
 				category: request.body?.category,
 				comments: request.body?.comments,

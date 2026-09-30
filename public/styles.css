@@ -8472,3 +8472,83 @@ body.cli-theme {
    kept in the DOM (its JS paths run) but never rendered, avoiding a doubled
    timer in the header. */
 #run-timer { display: none !important; }
+
+/* Feedback v2: run-list rating badge + admin star distribution */
+
+.run-rating-badge {
+  font-size: 10.5px;
+  color: #ffc14d;
+  background: rgba(255,193,77,0.08);
+  border-radius: 6px;
+  padding: 1px 5px;
+  margin-left: 4px;
+}
+
+.feedback-rating-dist {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 6px 0 2px;
+  grid-column: 1 / -1;
+}
+
+.feedback-rating-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #8fa3b8;
+}
+
+.feedback-rating-row-stars { width: 22px; color: #ffc14d; }
+.feedback-rating-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: #1a2432;
+  overflow: hidden;
+  display: inline-block;
+}
+.feedback-rating-bar i { display: block; height: 100%; background: #ffc14d; border-radius: 3px; }
+
+/* ── User Feedback section in the QA Run Report ──────────────────── */
+
+.report-feedback {
+  margin-top: 16px;
+  border: 1px solid #263342;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #0d141d;
+}
+
+.report-feedback-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #b8c7d6;
+}
+
+.report-feedback-stars {
+  color: #ffc14d;
+  font-size: 17px;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+}
+
+.report-feedback-score { color: #8fa3b8; font-size: 12.5px; letter-spacing: 0; }
+
+.report-feedback-description {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #c6d4e3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-feedback-meta {
+  margin: 0;
+  font-size: 11.5px;
+  color: #68798c;
+}
