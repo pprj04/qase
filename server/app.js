@@ -182,6 +182,10 @@ export function createApplication(options = {}) {
 	app.get('/login', (_request, response) => {
 		response.sendFile(path.join(publicDirectory, 'index.html'));
 	});
+	// React UI preview (phased rollout — legacy UI stays primary until cutover).
+	app.get('/app-react/', (_request, response) => {
+		response.sendFile(path.join(publicDirectory, 'app-react', 'index.html'));
+	});
 	app.use(express.static(publicDirectory));
 	if (demoEnabled) {
 		mountDemoSite(app);
