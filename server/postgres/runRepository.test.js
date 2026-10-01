@@ -669,17 +669,39 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
 
 	// create: token_usage rides in the run INSERT alongside context_usage;
-	// queuedAt and pausedAt (DEV timing) are the trailing write-once columns.
+	// pausedAt, selected_tests (standard-QA test selection) and
+	// security_authorization are the trailing write-once columns.
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
 	// Merged insert tail: ... createdAt, updatedAt, queuedAt, environmentId,
 	// environmentSnapshot, testCaseId — timestamps then three env/case params.
+	// Plus DEV's structural-integrity check: distinct placeholders must equal
+	// params length and the highest placeholder must bind the last param.
 	assert.equal(runInsert.params[runInsert.params.length - 1], null, 'testCaseId tail');
 	assert.equal(runInsert.params[runInsert.params.length - 2], null, 'environmentSnapshot tail');
 	assert.equal(runInsert.params[runInsert.params.length - 3], null, 'environmentId tail');
 	assert.equal(runInsert.params[runInsert.params.length - 4], null, 'queuedAt tail (unset)');
 	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime(), 'updatedAt');
+	const columnList = runInsert.text.match(/INSERT INTO qa_runs \(([\s\S]*?)\)\s*VALUES/)?.[1] ?? '';
+	const columnCount = columnList.split(',').length;
+	const placeholders = [...runInsert.text.matchAll(/\$(\d+)/g)].map(match => Number(match[1]));
+	const maxPlaceholder = Math.max(...placeholders);
+	const literalCount = columnCount - placeholders.length;
+	assert.equal(
+		new Set(placeholders).size,
+		runInsert.params.length,
+		`distinct placeholders (${new Set(placeholders).size}) must equal params length (${runInsert.params.length})`
+	);
+	assert.equal(
+		maxPlaceholder,
+		runInsert.params.length,
+		`highest placeholder $${maxPlaceholder} must equal params length (${runInsert.params.length})`
+	);
+	assert.ok(
+		literalCount === 2,
+		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
+	);
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;

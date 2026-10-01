@@ -17,6 +17,7 @@ import { isCredentialQuestion } from '../public/questionPresentation.js';
 import { clearSecrets, redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
 import { guardSqaBrowserTool } from './sqaBrowserBudget.js';
+import { guardSecurityPayloadTool } from './securityPayloadBudget.js';
 import { applyUsage, attachUsageCapture, createUsageLedger, createUsageLogger, subtractUsage } from './usageCapture.js';
 
 export { guardSqaBrowserTool } from './sqaBrowserBudget.js';
@@ -486,7 +487,7 @@ export function ensureRuntime(session, runStore) {
 		.filter(tool => allowedTools.has(tool.name));
 	const headless = runtime.headlessRuntime;
 	const registeredTools = [...ALL_TOOLS, ...sessionTools].filter(tool => allowedTools.has(tool.name)).map(tool => {
-		const guardedTool = guardSqaBrowserTool(tool, session);
+		const guardedTool = guardSecurityPayloadTool(guardSqaBrowserTool(tool, session), session, settings.securityPayloadLimit);
 		if (session.mode !== 'founder' || guardedTool.name !== 'update_todo') return guardedTool;
 		const canonicalPlan = createFounderReviewTodos();
 		return {

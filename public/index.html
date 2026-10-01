@@ -12,7 +12,7 @@
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
-<body class="cli-theme">
+<body>
 
 <section class="auth-gate" id="auth-gate" hidden aria-labelledby="auth-title">
   <div class="terminal-atmosphere" aria-hidden="true"><canvas id="entry-motion"></canvas><div class="terminal-grid"></div><div class="terminal-scanlines"></div></div>
@@ -704,11 +704,50 @@
         </div>
         <small>Everything is pre-checked so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
       </fieldset>
+      <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
+        <legend>Tests</legend>
+        <div class="qa-tests-toolbar">
+          <span class="qa-tests-count" id="qa-tests-count" aria-live="polite"></span>
+          <span class="qa-tests-bulk">
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-select-all">Select all</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-deselect-all">Deselect all</button>
+          </span>
+        </div>
+        <div class="sqa-catalog-state" id="qa-tests-state" role="status" aria-live="polite">Loading standard tests…</div>
+        <section class="qa-category" id="qa-category-standard">
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-standard-toggle" checked>
+              <span>Standard tests</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-test-options"></div>
+        </section>
+        <section class="qa-category" id="qa-category-security" hidden>
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-security-toggle" checked>
+              <span>Security testing</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-security-options"></div>
+          <div class="qa-security-auth" id="qa-security-auth" hidden>
+            <label class="check qa-security-auth-confirm">
+              <input type="checkbox" id="qa-security-authorized">
+              <span>I confirm the target is an explicitly authorized, isolated test environment for security testing.</span>
+            </label>
+            <label class="field qa-security-auth-scope">
+              <span>Scope notes (optional)</span>
+              <textarea id="qa-security-notes" rows="2" placeholder="e.g. isolated staging copy, no production data"></textarea>
+            </label>
+          </div>
+        </section>
+      </fieldset>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
     </div>
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="qa-cancel">Cancel</button>
-      <button class="btn btn-primary" type="submit" id="qa-submit">Start QA run</button>
+      <button class="btn btn-primary" type="submit" id="qa-submit">Start test</button>
     </footer>
   </form>
 </dialog>

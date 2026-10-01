@@ -30,6 +30,8 @@ import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { createCatalogRoutes } from './catalogApi.js';
 import { createTestCaseRoutes } from './testCaseApi.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
+import { publicQaTestCatalog } from './qaTestCatalog.js';
+import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { PublicInputError, publicInput } from './publicErrors.js';
@@ -455,6 +457,11 @@ export function createApplication(options = {}) {
 	app.get('/api/sqa/catalog', (_request, response) => {
 		response.set('Cache-Control', 'private, max-age=300');
 		response.json(publicSqaCatalog());
+	});
+
+	app.get('/api/qa/catalog', (_request, response) => {
+		response.set('Cache-Control', 'private, max-age=300');
+		response.json(publicQaTestCatalog());
 	});
 
 	app.get('/api/founder/catalog', (_request, response) => {
@@ -922,6 +929,15 @@ export function createApplication(options = {}) {
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
+			let selectedTests;
+			let securityAuthorization;
+			try {
+				selectedTests = validateQaSelectedTests(request.body?.selectedTests);
+				securityAuthorization = validateSecurityAuthorization(request.body?.securityAuthorization, selectedTests);
+			} catch (error) {
+				response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
+				return;
+			}
 			const cohort = cohortFor(request.auth?.role).cohort;
 			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
 			const testCase = await resolveTestCaseForRun(services, request.body?.testCaseId, environment?.envId);
@@ -930,7 +946,9 @@ export function createApplication(options = {}) {
 				environmentId: environment?.envId,
 				environmentSnapshot: environment,
 				testCaseId: testCase?.caseNumber,
-				testCaseSnapshot: testCase
+				testCaseSnapshot: testCase,
+				selectedTests,
+				securityAuthorization
 			});
 			track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
 			response.status(201).json(session);

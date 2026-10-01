@@ -178,6 +178,8 @@ const state = {
 	sqaCatalogPromise: undefined,
 	founderCatalog: undefined,
 	founderCatalogPromise: undefined,
+	qaTestCatalog: undefined,
+	qaTestCatalogPromise: undefined,
 	/** Live reasoning for the current turn. Never kept once the agent replies. */
 	thinking: { text: '', action: '' },
 	runTimer: { interval: undefined, startedAt: undefined, endedAt: undefined },
@@ -830,12 +832,20 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId }) {
+async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId }) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
-	const session = await api('/sessions', { method: 'POST', body: JSON.stringify({
-		device, deviceLandscape, engine, ...(environmentId ? { environmentId } : {})
-	}) });
+	const session = await api('/sessions', {
+		method: 'POST',
+		body: JSON.stringify({
+			device,
+			deviceLandscape,
+			engine,
+			selectedTests,
+			...(securityAuthorization ? { securityAuthorization } : {}),
+			...(environmentId ? { environmentId } : {})
+		})
+	});
 	await selectSession(session.id);
 	if (targetUrl) {
 		const text = coreFlowsOnly && engine !== 'chromium'
@@ -1565,7 +1575,10 @@ function applyFeedbackSubmittedState() {
 		input.readOnly = locked;
 		input.disabled = locked;
 	}
-	el.feedbackStars.querySelectorAll('input').forEach(radio => { radio.disabled = locked; });
+	el.feedbackStars.querySelectorAll('input').forEach(radio => {
+		radio.disabled = locked;
+		if (locked) radio.checked = false; // submitted view never shows an unsaved selection
+	});
 	if (submitted) {
 		if (locked) {
 			state.feedback.rating = existing.rating;
@@ -1614,6 +1627,11 @@ async function cancelEditFeedback() {
 		return;
 	}
 	closeFeedbackModal();
+}
+
+function clearFeedbackRating() {
+	state.feedback.rating = 0;
+	paintFeedbackStars(0);
 }
 
 function closeFeedbackModal() {
@@ -2867,6 +2885,102 @@ function renderReport() {
 	el.reportView.append(actions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
+	el.reportView.append(renderFilesSection(findings));
+}
+
+/**
+ * Files section — the run's downloadable artifacts, grouped in one place at
+ * the end of the report. Only real exports the run actually supports are
+ * listed; runs without artifacts get an empty state, never fabricated rows.
+ */
+function renderFilesSection(findings = []) {
+	const wrap = document.createElement('section');
+	wrap.className = 'files-section';
+	wrap.setAttribute('aria-label', 'Files');
+
+	const title = document.createElement('h3');
+	title.className = 'files-title';
+	title.textContent = 'FILES';
+	wrap.append(title);
+
+	const runId = state.sessionId;
+	const rows = [];
+	const addRow = (icon, name, description, enabled, handler, disabledTitle) => {
+		const row = document.createElement('div');
+		row.className = 'file-row';
+		const glyph = document.createElement('span');
+		glyph.className = 'file-icon';
+		glyph.textContent = icon;
+		glyph.setAttribute('aria-hidden', 'true');
+		const info = document.createElement('div');
+		info.className = 'file-info';
+		const label = document.createElement('span');
+		label.className = 'file-name';
+		label.textContent = name;
+		const desc = document.createElement('span');
+		desc.className = 'file-desc';
+		desc.textContent = description;
+		info.append(label, desc);
+		const get = document.createElement('button');
+		get.type = 'button';
+		get.className = 'btn btn-ghost btn-sm';
+		get.textContent = 'Download';
+		get.disabled = !enabled;
+		if (!enabled) get.title = disabledTitle ?? 'Not available for this run.';
+		else get.onclick = handler;
+		row.append(glyph, info, get);
+		rows.push(row);
+	};
+
+	addRow(
+		'🗎', 'QA report (PDF)', 'Full test report as a printable PDF.',
+		true,
+		async () => { try { await downloadReportPdf('qase-qa-report.pdf'); } catch (error) { exportError(error, 'The PDF export failed.'); } }
+	);
+	addRow(
+		'▤', 'QA report (Markdown)', 'Plain-text report for notes and diffs.',
+		true,
+		async () => {
+			try {
+				const markdownText = await apiText(`/sessions/${runId}/report.md`);
+				const url = URL.createObjectURL(new Blob([markdownText], { type: 'text/markdown;charset=utf-8' }));
+				const save = document.createElement('a');
+				save.href = url;
+				save.download = 'qase-report.md';
+				document.body.append(save);
+				save.click();
+				save.remove();
+				window.setTimeout(() => URL.revokeObjectURL(url), 0);
+			} catch (error) { exportError(error, 'The report download failed.'); }
+		}
+	);
+	addRow(
+		'🛠', 'Fix prompts (Markdown)', 'One fix prompt per finding for your engineers.',
+		findings.length > 0,
+		() => {
+			const markdown = buildAllFixPromptsMarkdown(state.session);
+			if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+			const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+			const save = document.createElement('a');
+			save.href = url;
+			save.download = 'qase-fix-prompts.md';
+			document.body.append(save);
+			save.click();
+			save.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
+		},
+		'No findings to generate fix prompts for.'
+	);
+
+	if (rows.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'files-empty';
+		empty.textContent = 'No files available for this run yet.';
+		wrap.append(empty);
+	} else {
+		wrap.append(...rows);
+	}
+	return wrap;
 }
 
 /** Thumbs up/down feedback on the finished run; last vote wins. */
@@ -3880,6 +3994,19 @@ const qaUi = {
 	targetUrl: $('qa-target-url'),
 	deviceSelect: $('qa-device-select'),
 	deviceLandscape: $('qa-device-landscape'),
+	testsFieldset: $('qa-tests-fieldset'),
+	testsState: $('qa-tests-state'),
+	testsCount: $('qa-tests-count'),
+	testOptions: $('qa-test-options'),
+	securityOptions: $('qa-security-options'),
+	securityCategory: $('qa-category-security'),
+	standardCategoryToggle: $('qa-category-standard-toggle'),
+	securityCategoryToggle: $('qa-category-security-toggle'),
+	securityAuth: $('qa-security-auth'),
+	securityAuthorized: $('qa-security-authorized'),
+	securityNotes: $('qa-security-notes'),
+	selectAll: $('qa-select-all'),
+	deselectAll: $('qa-deselect-all'),
 	scopeAll: $('qa-scope-all'),
 	scopeOptions: $('qa-scope-options'),
 	engineOptions: $('qa-engine-options'),
@@ -3925,6 +4052,209 @@ function setQaFormError(message = '') {
 	if (!qaUi.error) return;
 	qaUi.error.className = `test-result${message ? ' bad' : ''}`;
 	qaUi.error.textContent = message;
+}
+
+/** Test selection lives on the qaUi object itself so it survives any
+ *  re-render of the dialog chrome while the user configures the run. */
+qaUi.selectedTests = new Set();
+
+/** All selectable test inputs, both categories. Unavailable checks are never
+ *  rendered as inputs, so they can never enter a selection. */
+function qaSelectableInputs(scope = document) {
+	return [...scope.querySelectorAll('input[name="qa-test"]:not([disabled])')];
+}
+
+function qaCheckedTests() {
+	return qaSelectableInputs(qaUi.testOptions.ownerDocument).filter(input => input.checked).map(input => input.value);
+}
+
+/** Selected count and total exclude unavailable checks entirely. */
+function qaCatalogSize() {
+	return qaSelectableInputs().length;
+}
+
+function syncQaCategoryToggles() {
+	for (const [section, toggle] of [
+		[qaUi.testOptions?.closest('.qa-category'), qaUi.standardCategoryToggle],
+		[qaUi.securityOptions?.closest('.qa-category'), qaUi.securityCategoryToggle]
+	]) {
+		if (!section || !toggle) continue;
+		const inputs = qaSelectableInputs(section);
+		const checked = inputs.filter(input => input.checked).length;
+		toggle.checked = inputs.length > 0 && checked === inputs.length;
+		toggle.indeterminate = checked > 0 && checked < inputs.length;
+		toggle.disabled = inputs.length === 0;
+	}
+}
+
+function syncQaSubmitState() {
+	if (!qaUi.submit) return;
+	const selected = qaUi.selectedTests.size;
+	qaUi.submit.disabled = selected === 0 || qaUi.submit.dataset.busy === 'true';
+	if (qaUi.testsCount) {
+		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
+	}
+	syncQaCategoryToggles();
+}
+
+function qaTestOption(test) {
+	const label = document.createElement('label');
+	const isAvailable = test.availability?.available !== false;
+	label.className = `sqa-option${isAvailable ? '' : ' is-unavailable'}`;
+	const input = document.createElement('input');
+	input.type = 'checkbox';
+	input.name = 'qa-test';
+	input.value = test.id;
+	if (isAvailable) {
+		// Available checks default to selected — standard and security alike.
+		input.checked = true;
+		input.defaultChecked = true;
+	} else {
+		// Unavailable checks are never selectable and never counted.
+		input.disabled = true;
+		input.setAttribute('aria-disabled', 'true');
+	}
+	const copy = document.createElement('span');
+	const heading = document.createElement('strong');
+	heading.textContent = test.title;
+	const description = document.createElement('small');
+	description.textContent = test.description;
+	copy.append(heading, description);
+	if (!isAvailable && test.availability?.reason) {
+		const reason = document.createElement('em');
+		reason.className = 'qa-unavailable-reason';
+		reason.textContent = test.availability.reason;
+		copy.append(reason);
+	}
+	label.append(input, copy);
+	return label;
+}
+
+/** Groups the catalog by category into its section grid. */
+function paintQaTestCatalog(catalog) {
+	const tests = catalog?.tests ?? [];
+	const byCategory = new Map([
+		['standard', []],
+		['security', []]
+	]);
+	for (const test of tests) {
+		const bucket = byCategory.get(test.category ?? 'standard');
+		if (bucket) bucket.push(test);
+	}
+	qaUi.testOptions.replaceChildren(...byCategory.get('standard').map(qaTestOption));
+	if (qaUi.securityOptions) {
+		qaUi.securityOptions.replaceChildren(...byCategory.get('security').map(qaTestOption));
+		qaUi.securityCategory.hidden = byCategory.get('security').length === 0;
+	}
+	qaUi.selectedTests = new Set(qaSelectableInputs().filter(input => input.checked).map(input => input.value));
+	qaUi.selectedTests.catalogSize = qaCatalogSize();
+	qaUi.testsState.hidden = true;
+	qaUi.testsFieldset.disabled = false;
+	syncQaSubmitState();
+	syncQaSecurityGate();
+}
+
+function refreshQaSelection() {
+	qaUi.selectedTests = new Set(qaCheckedTests());
+	qaUi.selectedTests.catalogSize = qaCatalogSize();
+	syncQaSubmitState();
+	syncQaSecurityGate();
+}
+
+/** True when the current selection includes at least one security check. */
+function qaSecuritySelected() {
+	return qaCheckedTests().some(id => id.startsWith('security_'));
+}
+
+/**
+ * The authorization gate: security checks only run against targets the user
+ * has explicitly confirmed are authorized, isolated test environments. The
+ * confirmation travels with the run request; the server enforces it
+ * independently (a forged client gets a 400), this gate just makes the honest
+ * path the easy path.
+ */
+function syncQaSecurityGate() {
+	if (!qaUi.securityAuth || !qaUi.securityAuthorized) return;
+	const needed = qaSecuritySelected();
+	qaUi.securityAuth.hidden = !needed;
+	if (!needed) {
+		// Confirmation becomes inert when no security check is selected.
+		qaUi.securityAuthorized.required = false;
+		qaUi.securityAuthorized.setCustomValidity('');
+		return;
+	}
+	// Native validation would show a generic bubble; use the specific message —
+	// but only while the box is actually unchecked. A stale custom validity on
+	// a checked box would block the submit forever.
+	qaUi.securityAuthorized.required = true;
+	qaUi.securityAuthorized.setCustomValidity(qaUi.securityAuthorized.checked ? '' : 'Confirm the target is an explicitly authorized, isolated test environment before running security tests.');
+}
+
+if (qaUi.securityAuthorized) {
+	// Mirror the gate's validity message into the dialog error element so the
+	// wording is visible regardless of how the browser renders the bubble.
+	qaUi.securityAuthorized.addEventListener('invalid', () => {
+		setQaFormError('Confirm the target is an explicitly authorized, isolated test environment before running security tests.');
+	});
+	// Checking the box resolves the validity error immediately.
+	qaUi.securityAuthorized.addEventListener('change', () => {
+		syncQaSecurityGate();
+		setQaFormError('');
+	});
+}
+
+function qaSecurityAuthorization() {
+	if (!qaSecuritySelected()) return undefined;
+	if (!qaUi.securityAuthorized?.checked) return undefined;
+	const notes = qaUi.securityNotes?.value?.trim();
+	return notes ? { confirmed: true, notes } : { confirmed: true };
+}
+
+function qaCategoryFor(input) {
+	return input.closest('.qa-category');
+}
+
+if (qaUi.testOptions) {
+	for (const grid of [qaUi.testOptions, qaUi.securityOptions]) {
+		if (!grid) continue;
+		grid.addEventListener('change', event => {
+			const input = event.target;
+			if (input?.name !== 'qa-test') return;
+			refreshQaSelection();
+		});
+	}
+	// Category header toggles select/deselect every available check in their
+	// own category (indeterminate state resolves toward "select all").
+	for (const toggle of [qaUi.standardCategoryToggle, qaUi.securityCategoryToggle]) {
+		if (!toggle) continue;
+		toggle.addEventListener('click', () => {
+			// click fires before checked settles for indeterminate boxes; the
+			// handler runs on the final state, so decide from checked.
+			const section = toggle.closest('.qa-category');
+			const inputs = qaSelectableInputs(section);
+			const willCheck = toggle.checked;
+			for (const input of inputs) input.checked = willCheck;
+			refreshQaSelection();
+		});
+	}
+}
+
+async function loadQaTestCatalog() {
+	if (state.qaTestCatalog) return state.qaTestCatalog;
+	if (!state.qaTestCatalogPromise) {
+		state.qaTestCatalogPromise = api('/qa/catalog')
+			.then(catalog => {
+				if (!catalog || typeof catalog !== 'object' || !Array.isArray(catalog.tests) || catalog.tests.length === 0) {
+					throw new Error('The standard test catalog response is invalid.');
+				}
+				state.qaTestCatalog = catalog;
+				return catalog;
+			})
+			.finally(() => {
+				state.qaTestCatalogPromise = undefined;
+			});
+	}
+	return state.qaTestCatalogPromise;
 }
 
 /** The built-in deliberately-broken demo site, when this instance serves one. */
@@ -4012,10 +4342,17 @@ function openQaStart() {
 	populateDeviceSelect(qaUi.deviceSelect, pendingDeviceId());
 	qaUi.environmentSelect && populateEnvironmentSelect(qaUi.environmentSelect);
 	if (qaUi.deviceLandscape) qaUi.deviceLandscape.checked = pendingLandscape();
+	qaUi.testsFieldset.disabled = true;
+	qaUi.testsState.hidden = false;
+	qaUi.testsState.textContent = 'Loading standard tests…';
 	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
 	qaUi.submit.disabled = false;
 	qaUi.submit.textContent = 'Start QA run';
+	// form.reset() restores the confirmation checkbox, but a stale custom
+	// validity from a previous open must be cleared explicitly.
+	qaUi.securityAuthorized?.setCustomValidity('');
+	syncQaSecurityGate();
 	if (qaUi.environmentSelect) {
 		delete qaUi.environmentSelect._testCaseId;
 		delete qaUi.environmentSelect._testCaseSnapshot;
@@ -4026,6 +4363,13 @@ function openQaStart() {
 	}
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	setTimeout(() => qaUi.targetUrl?.focus(), 0);
+	void loadQaTestCatalog()
+		.then(paintQaTestCatalog)
+		.catch(error => {
+			qaUi.testsState.hidden = false;
+			qaUi.testsState.textContent = 'The standard test catalog could not be loaded.';
+			setQaFormError(error instanceof Error ? error.message : String(error));
+		});
 }
 
 function closeQaStart() {
@@ -4062,6 +4406,20 @@ if (qaUi.dialog) {
 		}
 	}
 
+	qaUi.selectAll.onclick = () => {
+		for (const input of qaSelectableInputs()) {
+			input.checked = true;
+		}
+		refreshQaSelection();
+	};
+
+	qaUi.deselectAll.onclick = () => {
+		for (const input of qaSelectableInputs()) {
+			input.checked = false;
+		}
+		refreshQaSelection();
+	};
+
 	qaUi.form.onsubmit = async event => {
 		event.preventDefault();
 		setQaFormError();
@@ -4075,6 +4433,17 @@ if (qaUi.dialog) {
 		} catch {
 			setQaFormError('Enter a valid http(s) URL.');
 			qaUi.targetUrl.focus();
+			return;
+		}
+		const selectedTests = qaCheckedTests();
+		if (selectedTests.length === 0) {
+			setQaFormError('Select at least one test.');
+			return;
+		}
+		const securityAuthorization = qaSecurityAuthorization();
+		if (qaSecuritySelected() && !securityAuthorization) {
+			setQaFormError('Confirm the target is an explicitly authorized, isolated test environment before running security tests.');
+			qaUi.securityAuthorized?.focus();
 			return;
 		}
 		const device = (qaUi.deviceSelect?.value) || pendingDeviceId();
@@ -4098,7 +4467,18 @@ if (qaUi.dialog) {
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
 			for (const engine of engines) {
-				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1, environmentId: environmentId || undefined, testCaseId });
+				await createQaRun({
+					targetUrl,
+					device,
+					deviceLandscape,
+					selectedTests,
+					securityAuthorization,
+					kickoffText,
+					engine,
+					coreFlowsOnly: engines.length > 1,
+					environmentId: environmentId || undefined,
+					testCaseId
+				});
 			}
 			closeQaStart();
 		} catch (error) {
@@ -4106,7 +4486,8 @@ if (qaUi.dialog) {
 		} finally {
 			qaUi.submit.dataset.busy = 'false';
 			qaUi.submit.disabled = false;
-			qaUi.submit.textContent = 'Start QA run';
+			qaUi.submit.textContent = 'Start test';
+			syncQaSubmitState();
 		}
 	};
 }
