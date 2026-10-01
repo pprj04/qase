@@ -13,6 +13,7 @@ import { ProfileDialog } from './components/ProfileDialog';
 import { Transcript } from './components/Transcript';
 import { QaLauncher } from './components/QaLauncher';
 import { SqaLauncher } from './components/SqaLauncher';
+import { FounderLauncher } from './components/FounderLauncher';
 import { ViewerPanel } from './components/ViewerPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -38,6 +39,7 @@ function AppShell() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [sqaOpen, setSqaOpen] = useState(false);
+  const [founderOpen, setFounderOpen] = useState(false);
   const { connection, runs } = useSessionStore();
   const { session: liveSession, openSession } = useLiveSession();
   const { status, user, signOut } = useAuth();
@@ -89,13 +91,14 @@ function AppShell() {
       if (event.key === 'Escape') {
         if (launcherOpen) setLauncherOpen(false);
         else if (sqaOpen) setSqaOpen(false);
+        else if (founderOpen) setFounderOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
         else if (profileOpen) setProfileOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [authed, launcherOpen, sqaOpen, settingsOpen, profileOpen]);
+  }, [authed, launcherOpen, sqaOpen, founderOpen, settingsOpen, profileOpen]);
 
   return (
     <div className="app-shell" data-app="qase-react">
@@ -210,7 +213,14 @@ function AppShell() {
             <ClipboardIcon />
             <span>SQA</span>
           </button>
-          <button type="button" className="rail-btn" title="Founder mode" disabled>
+          <button
+            type="button"
+            className="rail-btn"
+            title="Founder mode"
+            aria-label="Start a Founder review"
+            onClick={() => setFounderOpen(true)}
+            data-testid="open-founder"
+          >
             <RocketIcon />
             <span>Founder</span>
           </button>
@@ -252,6 +262,9 @@ function AppShell() {
       </ErrorBoundary>
       <ErrorBoundary label="SQA launcher">
         <SqaLauncher open={sqaOpen} onClose={() => setSqaOpen(false)} />
+      </ErrorBoundary>
+      <ErrorBoundary label="Founder launcher">
+        <FounderLauncher open={founderOpen} onClose={() => setFounderOpen(false)} />
       </ErrorBoundary>
     </div>
   );
