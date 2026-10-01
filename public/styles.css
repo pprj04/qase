@@ -9518,3 +9518,57 @@ select:focus {
   background: var(--surface-1);
   border-top: 1px solid var(--border);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   UX U4 · Designed empty states
+   ════════════════════════════════════════════════════════════════ */
+.feed-empty {
+  display: grid;
+  gap: 4px;
+  place-items: center;
+  padding: 26px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.run-list > .feed-empty { min-height: 140px; }
+/* a CTA link inside an empty state */
+.feed-empty .empty-cta {
+  margin-top: 6px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #171717;
+  color: #fafafa;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.feed-empty .empty-cta:hover { box-shadow: 0 6px 18px rgba(47, 91, 234, 0.35); }
+@media (prefers-color-scheme: dark) {
+  .feed-empty .empty-cta { background: #fafafa; color: #171717; }
+}
+/* dialog table empty rows */
+.empty-row td {
+  padding: 22px 14px !important;
+  text-align: center;
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  border: 0;
+}
+
+/* UX U4 · drawer/matrix empty states as dashed cards */
+.dd-empty,
+.dm-empty {
+  padding: 20px 16px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-align: center;
+}

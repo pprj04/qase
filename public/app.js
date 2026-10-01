@@ -375,10 +375,25 @@ el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
 
 /* ── Runs (left panel) ───────────────────────────────────────────── */
 
+function renderRunsEmptyState() {
+	el.runList.replaceChildren();
+	const empty = document.createElement('div');
+	empty.className = 'feed-empty';
+	const line = document.createElement('p');
+	line.textContent = 'No runs yet';
+	const cta = document.createElement('button');
+	cta.type = 'button';
+	cta.className = 'empty-cta';
+	cta.textContent = 'Start your first run';
+	cta.addEventListener('click', () => { void startRun(); });
+	empty.append(line, cta);
+	el.runList.append(empty);
+}
+
 async function refreshRuns() {
 	const runs = await api('/sessions').catch(() => []);
 	if (runs.length === 0) {
-		el.runList.innerHTML = '<div class="feed-empty">No runs yet</div>';
+		renderRunsEmptyState();
 		state.timer.runLiveTimers.clear();
 		return;
 	}
@@ -5511,6 +5526,7 @@ async function bootWorkspace() {
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
 		renderWelcomeChecklist();
+		renderRunsEmptyState();
 		await startRun();
 	}
 	el.composerInput.focus();
