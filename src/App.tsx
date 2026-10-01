@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ThemeToggle } from './theme/ThemeToggle';
 import { RunList } from './components/RunList';
 import { SessionStoreProvider, useSessionStore } from './state/sessionStore';
@@ -6,6 +6,7 @@ import { LiveSessionProvider, useLiveSession } from './state/liveSession';
 import { ConfigProvider } from './state/configStore';
 import { AuthProvider, useAuth } from './state/authStore';
 import { ToastProvider, useToast } from './state/toastStore';
+import { readRunFromUrl, consumeRunParam } from './lib/runDeepLink';
 import { AuthGate } from './components/AuthGate';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ProfileDialog } from './components/ProfileDialog';
@@ -54,6 +55,43 @@ function AppShell() {
       openSession(id);
     }
   };
+
+  // Deep link: open ?run=<uuid> once after auth resolves, then strip the param
+  // whether or not the id was valid (legacy parity — stale handles are cleaned).
+  const [deepLinkDone, setDeepLinkDone] = useState(false);
+  useEffect(() => {
+    if (deepLinkDone || !authed) return;
+    const requested = readRunFromUrl();
+    if (requested) {
+      openRun(requested);
+    }
+    consumeRunParam();
+    setDeepLinkDone(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkDone, authed]);
+
+  // Keyboard shortcuts (legacy parity): ⌘N/Ctrl+N new run, ⌘,/Ctrl+, settings.
+  // Escape closes the topmost open dialog.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!authed) return;
+      if ((event.metaKey || event.ctrlKey) && event.key === 'n') {
+        event.preventDefault();
+        setLauncherOpen(true);
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+        event.preventDefault();
+        setSettingsOpen(true);
+      }
+      if (event.key === 'Escape') {
+        if (launcherOpen) setLauncherOpen(false);
+        else if (settingsOpen) setSettingsOpen(false);
+        else if (profileOpen) setProfileOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authed, launcherOpen, settingsOpen, profileOpen]);
 
   return (
     <div className="app-shell" data-app="qase-react">
