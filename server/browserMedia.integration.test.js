@@ -5,8 +5,7 @@ import { once } from 'node:events';
 import { attachBrowserBridge } from './browserBridge.js';
 import { createBrowserPolicy } from './browserPolicy.js';
 
-const browserTests = process.env.QASE_RUN_BROWSER_TESTS === '1';
-const fixture = `<!doctype html><html><head><title>Meeting and microphone fixture</title></head><body>
+const browserTests = process.env.QASE_RUN_BROWSER_TESTS === '1';const fixture = `<!doctype html><html><head><title>Meeting and microphone fixture</title></head><body>
 <a id="meeting" href="/meeting">Test meeting</a>
 <a id="invalid" href="/invalid">Expired meeting</a>
 <a id="popup" href="/meeting" target="_blank">Open popup</a>
@@ -39,10 +38,16 @@ async function setup(t, device = 'desktop') {
 	const session = { id: 'media-fixture', targetUrl, device, messages: [], status: 'running' };
 	const events = [];
 	const store = { publish(_session, type, payload) { events.push({ type, payload }); }, async commit(_session, type, payload) { events.push({ type, payload }); } };
-	// Loopback targets are private-network space, which the SSRF guard blocks
-	// by default (1be3796). The fixture deliberately opts its own loopback
-	// origin into the policy allowlist — production keeps the default block.
-	const policy = createBrowserPolicy({ getTargetUrl: () => targetUrl, environment: { NODE_ENV: 'test', QASE_BROWSER_ALLOWED_PRIVATE_HOSTS: '127.0.0.1' } });
+	// The fixture binds 127.0.0.1 — explicitly allow that reserved host so the
+	// private-network policy permits the test's own localhost server (in
+	// production this same policy correctly blocks reserved space).
+	const policy = createBrowserPolicy({
+		getTargetUrl: () => targetUrl,
+		environment: {
+			NODE_ENV: 'test',
+			QASE_BROWSER_ALLOWED_PRIVATE_HOSTS: process.env.QASE_BROWSER_ALLOWED_PRIVATE_HOSTS ?? '127.0.0.1'
+		}
+	});
 	const bridge = attachBrowserBridge(session, service, store, { policy });
 	t.after(async () => { bridge.dispose(); await service.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
 	await service.open(targetUrl);
@@ -97,7 +102,14 @@ test('meeting link tools require a visible link, inspect prejoin and expired pag
 	const blockedJoin = await service.click('ide', { text: 'Join meeting' });
 	assert.equal(blockedJoin.code, 'DESTRUCTIVE_ACTION_CONFIRMATION_REQUIRED');
 	for (const label of ['Join', 'Ask to join']) {
+		// Rename the lobby's single button in place — `text: label` matching is
+		// substring-based, so a stale "Join meeting" alongside a new "Join"
+		// would be ambiguous (BROWSER_TARGET_AMBIGUOUS).
 		await service.activePage.locator('button').evaluate((element, text) => { element.textContent = text; }, label);
+		await service.activePage.waitForFunction(
+			text => [...document.querySelectorAll('button')].every(b => b.textContent === text),
+			label
+		);
 		assert.equal((await service.click('ide', { text: label })).code, 'DESTRUCTIVE_ACTION_CONFIRMATION_REQUIRED');
 	}
 	await service.selectTab('ide', opened.sourceTabId);

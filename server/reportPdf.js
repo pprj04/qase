@@ -210,7 +210,29 @@ function buildQaBody(session) {
 	parts.push(plainList(report.notCovered, 'Not covered'));
 	parts.push(findingsSection(session.findings ?? [], session));
 	parts.push(plainList(report.recommendations, 'Recommendations'));
+	parts.push(feedbackSectionHtml(session));
 	return parts.join('');
+}
+
+/**
+ * User Feedback section for the PDF report. Rendered only when the run has
+ * feedback attached (server injects it as session.userFeedback); content is
+ * escaped, isolated per run by construction.
+ */
+function feedbackSectionHtml(session) {
+	const feedback = session.userFeedback;
+	if (!feedback || !Number.isFinite(feedback.rating)) return '';
+	const stars = '\u2605'.repeat(feedback.rating) + '\u2606'.repeat(5 - feedback.rating);
+	const submittedBy = escapeHtml(feedback.userName || 'User');
+	const submittedOn = feedback.submittedAt ? new Date(feedback.submittedAt).toLocaleString() : '\u2014';
+	const description = feedback.comments
+		? '<p>' + paragraphs(String(feedback.comments)) + '</p>'
+		: '';
+	return '<section><h2>User feedback</h2>'
+		+ '<table class="meta"><tr><th>Rating</th><td>' + escapeHtml(stars) + ' ' + escapeHtml(feedback.rating) + '/5</td></tr>'
+		+ (description ? '<tr><th>Description</th><td>' + description + '</td></tr>' : '')
+		+ '<tr><th>Submitted by</th><td>' + submittedBy + '</td></tr>'
+		+ '<tr><th>Submitted on</th><td>' + escapeHtml(submittedOn) + '</td></tr></table></section>';
 }
 
 function buildSqaBody(session) {

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { normalizeFounderState } from './founderService.js';
 import { normalizePendingSqaState } from './sqaService.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
+import { isEngineId } from './browserEngines.js';
 import { DEFAULT_ACTOR_USER_ID } from './tenancy.js';
 import { clearSecrets, secretNames } from './secrets.js';
 
@@ -17,8 +18,14 @@ import { clearSecrets, secretNames } from './secrets.js';
  * kept on a parallel `runtime` record that never reaches disk.
  */
 
-const STATE_DIR = path.join(process.cwd(), '.qase');
-const STATE_FILE = path.join(STATE_DIR, 'sessions.json');
+// Resolved lazily from the working directory at call time: tests (and embedded
+// deployments) chdir into an isolated scratch directory AFTER this module was
+// first imported, and the frozen-at-import constant made them read/write the
+// ambient workspace's .qase state instead of their own.
+function statePaths() {
+	const stateDir = path.join(process.cwd(), '.qase');
+	return { stateDir, stateFile: path.join(stateDir, 'sessions.json') };
+}
 
 /** Live, non-serialisable per-session handles, keyed by session id. */
 const live = new Map();
@@ -40,19 +47,49 @@ bus.emit = (sessionId, event) => {
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_DRYTIS_INTEGRATION_BYTES = 1_000_000;
 
+/** Lifecycle of a tracked bug (finding). Every finding starts `open`. */
+export const FINDING_STATUSES = ['open', 'in_progress', 'fixed', 'wont_fix'];
+export const FINDING_STATUS_DEFAULT = 'open';
+export const FINDING_NOTE_MAX = 500;
+
+export function isFindingStatus(value) {
+	return FINDING_STATUSES.includes(value);
+}
+
+/** Severity display order used by the bug table (most severe first). */
+export const FINDING_SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+
+/**
+ * Returns a copy of the finding with the tracking fields defaulted: every
+ * legacy finding (filed before statuses existed) reads back as `open` with a
+ * status timestamp equal to its filing time. Never mutates the input.
+ */
+export function normalizeFindingStatus(finding) {
+	if (!finding || typeof finding !== 'object') return finding;
+	const status = isFindingStatus(finding.status) ? finding.status : FINDING_STATUS_DEFAULT;
+	const note = typeof finding.statusNote === 'string' ? finding.statusNote.slice(0, FINDING_NOTE_MAX) : '';
+	return {
+		...finding,
+		status,
+		statusTs: Number.isFinite(finding.statusTs) ? finding.statusTs : (finding.ts ?? Date.now()),
+		statusNote: note
+	};
+}
+
 let saveTimer;
 
 function persistNow() {
 	let tmp;
+	const { stateDir, stateFile } = statePaths();
 	try {
-		fs.mkdirSync(STATE_DIR, { recursive: true });
+		fs.mkdirSync(stateDir, { recursive: true });
 		// Atomic-write pattern: write to a temp file then rename, so a crash
 		// mid-write can never leave a truncated sessions.json behind. Include a
 		// nonce because a killed/corrupted process can leave its old PID path as
 		// a directory; PID reuse must never disable all future persistence.
-		tmp = `${STATE_FILE}.tmp-${process.pid}-${randomUUID()}`;
+		tmp = `${stateFile}.tmp-${process.pid}-${randomUUID()}`;
 		fs.writeFileSync(tmp, JSON.stringify([...sessions.values()], undefined, '\t'), { mode: 0o600 });
-		fs.renameSync(tmp, STATE_FILE);
+		fs.renameSync(tmp, stateFile);
 	} catch (error) {
 		if (tmp) {
 			try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup */ }
@@ -79,8 +116,9 @@ export function flushSessions() {
 }
 
 export function loadSessions() {
+	const { stateFile } = statePaths();
 	try {
-		const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+		const raw = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 		for (const session of Array.isArray(raw) ? raw : []) {
 			session.mode = session.mode === 'sqa' || session.mode === 'founder' ? session.mode : 'qa';
 			if (session.mode === 'qa') {
@@ -130,6 +168,10 @@ export function loadSessions() {
 			}
 			// Earlier versions stored reasoning as a message; it is live-only now.
 			session.messages = (session.messages ?? []).filter(message => message.role !== 'thinking');
+			// Findings filed before lifecycle tracking existed read back as open.
+			if (Array.isArray(session.findings)) {
+				session.findings = session.findings.map(normalizeFindingStatus);
+			}
 			sessions.set(session.id, session);
 		}
 	} catch {
@@ -173,6 +215,9 @@ export function createSession(title = 'New test run', options = {}) {
 		&& (!options.testCaseSnapshot || typeof options.testCaseSnapshot !== 'object' || Array.isArray(options.testCaseSnapshot))) {
 		throw new TypeError('Run creation received an invalid test case snapshot.');
 	}
+	if (options.engine !== undefined && !isEngineId(options.engine)) {
+		throw new TypeError('Run creation received an unknown browser engine.');
+	}
 	if (options.drytisIntegration !== undefined) {
 		if (!options.drytisIntegration || typeof options.drytisIntegration !== 'object'
 			|| Array.isArray(options.drytisIntegration)
@@ -182,6 +227,25 @@ export function createSession(title = 'New test run', options = {}) {
 	}
 	if (options.findings !== undefined && !Array.isArray(options.findings)) {
 		throw new TypeError('Initial run findings must be an array.');
+	}
+	// Standard-QA test selection: validated at the API boundary
+	// (appQaSelection.js). undefined = full coverage (legacy behavior).
+	if (options.selectedTests !== undefined) {
+		if (!Array.isArray(options.selectedTests)
+			|| options.selectedTests.length === 0
+			|| options.selectedTests.some(id => typeof id !== 'string')) {
+			throw new TypeError('Run test selection must be a non-empty array of test ids.');
+		}
+	}
+	// Security testing authorization: required whenever the selection includes
+	// a security-category check (enforced at the API boundary).
+	if (options.securityAuthorization !== undefined) {
+		const auth = options.securityAuthorization;
+		if (typeof auth !== 'object' || Array.isArray(auth)
+			|| typeof auth.confirmed !== 'boolean'
+			|| (auth.notes !== undefined && typeof auth.notes !== 'string')) {
+			throw new TypeError('Security authorization must be { confirmed: boolean, notes?: string }.');
+		}
 	}
 	const timestamp = Date.now();
 	const session = {
@@ -200,12 +264,22 @@ export function createSession(title = 'New test run', options = {}) {
 		/** Test case this run executes (Phase 4; frozen snapshot). */
 		testCaseId: options.testCaseId,
 		testCaseSnapshot: options.testCaseSnapshot ? structuredClone(options.testCaseSnapshot) : undefined,
+		engine: isEngineId(options.engine) ? options.engine : 'chromium',
+		/** Analytics cohort ('pilot' for invite-admitted users) — read by the
+		 *  run_started/run_finished status hook, which has no request context. */
+		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: [],
 		activities: [],
-		findings: structuredClone(options.findings ?? []),
+		findings: (options.findings ?? []).map(normalizeFindingStatus),
 		todos: [],
 		report: undefined,
 		pendingQuestion: undefined,
+		/** Selected standard QA test ids; undefined = full coverage. */
+		selectedTests: options.selectedTests ? [...options.selectedTests] : undefined,
+		/** Security testing authorization for runs with security checks. */
+		securityAuthorization: options.securityAuthorization
+			? structuredClone(options.securityAuthorization)
+			: undefined,
 		contextUsage: undefined,
 		/** Token usage recorded after each run: provider-reported or estimated. */
 		tokenUsage: undefined,
@@ -247,6 +321,7 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			// Test-case join key (Phase 11 bulk flows): last-run aggregation
 			// and per-environment records map runs to cases without full loads.
 			testCaseId: session.testCaseId ?? undefined,
+			engine: isEngineId(session.engine) ? session.engine : 'chromium',
 			createdAt: session.createdAt,
 			updatedAt: session.updatedAt,
 			// Needed by boot-time recovery (runResume), which runs without a
@@ -254,9 +329,9 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			ownerUserId: session.ownerUserId,
 			startedAt: session.startedAt,
 			completedAt: session.completedAt,
-			durationSeconds: Number.isFinite(session.startedAt)
-				? ((session.completedAt ?? Date.now()) - session.startedAt) / 1000
-				: undefined,
+			pausedAt: session.pausedAt,
+			pausedSeconds: session.pausedSeconds ?? 0,
+			durationSeconds: activeDurationSeconds(session),
 			findingCount: session.findings.length,
 			messageCount: session.messages.length,
 			// Plan progress for the sidebar card — derived, never stored.
@@ -295,6 +370,115 @@ export function deleteSession(id, ownerUserId) {
 	const existed = sessions.delete(id);
 	persistSoon();
 	return existed;
+}
+
+/**
+ * Updates one finding's tracking lifecycle in place. Validates the status
+ * enum and note length, stamps statusTs at the transition, and persists via
+ * the caller's commit (so the change also broadcasts on the run bus).
+ * An empty note string clears an existing note.
+ */
+export function setFindingStatus(session, findingId, { status, note } = {}) {
+	const finding = (session.findings ?? []).find(candidate => candidate.id === findingId);
+	if (!finding) {
+		const error = new Error(`Finding ${findingId} does not exist on run ${session.id}.`);
+		error.code = 'QASE_FINDING_NOT_FOUND';
+		throw error;
+	}
+	if (!isFindingStatus(status)) {
+		const error = new TypeError(`Finding status must be one of: ${FINDING_STATUSES.join(', ')}.`);
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	let trimmedNote;
+	if (note !== undefined && note !== null) {
+		if (typeof note !== 'string') {
+			const error = new TypeError('Finding status note must be a string.');
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+		trimmedNote = note.trim();
+		if (trimmedNote.length > FINDING_NOTE_MAX) {
+			const error = new RangeError(`Finding status note must be at most ${FINDING_NOTE_MAX} characters.`);
+			error.code = 'QASE_FINDING_STATUS_INVALID';
+			throw error;
+		}
+	} else {
+		trimmedNote = finding.statusNote ?? '';
+	}
+	finding.status = status;
+	finding.statusTs = Date.now();
+	finding.statusNote = trimmedNote;
+	return finding;
+}
+
+/**
+ * Cross-run bug backlog for the standalone Bugs view. Aggregates every QA
+ * finding across the owner's runs (SQA/Founder findings are assessments, not
+ * tracked bugs), filtered by status/severity/run/free-text search, ordered
+ * severity-major then newest first.
+ */
+export function aggregateFindings({ ownerUserId, status, severity, runId, search, limit } = {}) {
+	return aggregateSessionFindings(sessions.values(), { ownerUserId, status, severity, runId, search, limit });
+}
+
+/**
+ * Store-agnostic bug backlog aggregation: takes any iterable of run sessions
+ * and returns the filtered, severity-ordered finding rows. Shared by the local
+ * JSON store and the PostgreSQL in-memory aggregate view.
+ */
+export function aggregateSessionFindings(sessionIterable, { ownerUserId, status, severity, runId, search, limit } = {}) {
+	if (status !== undefined && !isFindingStatus(status)) {
+		const error = new TypeError('Invalid finding status filter.');
+		error.code = 'QASE_FINDING_STATUS_INVALID';
+		throw error;
+	}
+	if (severity !== undefined && !FINDING_SEVERITY_ORDER.includes(severity)) {
+		const error = new TypeError('Invalid finding severity filter.');
+		error.code = 'QASE_FINDING_SEVERITY_INVALID';
+		throw error;
+	}
+	const bounded = Number.isSafeInteger(limit) ? Math.min(500, Math.max(1, limit)) : 200;
+	const needle = typeof search === 'string' && search.trim() ? search.trim().toLowerCase() : undefined;
+	const rows = [];
+	for (const session of sessionIterable) {
+		if (ownerUserId && session.ownerUserId !== ownerUserId) continue;
+		if (session.mode !== 'qa') continue;
+		for (const finding of (session.findings ?? []).map(normalizeFindingStatus)) {
+			if (status !== undefined && finding.status !== status) continue;
+			if (severity !== undefined && finding.severity !== severity) continue;
+			if (runId !== undefined && session.id !== runId) continue;
+			if (needle) {
+				const haystack = `${finding.title ?? ''}\n${finding.category ?? ''}\n${finding.url ?? ''}`.toLowerCase();
+				if (!haystack.includes(needle)) continue;
+			}
+			rows.push({
+				id: finding.id,
+				runId: session.id,
+				runTitle: session.title,
+				runStatus: session.status,
+				targetUrl: session.targetUrl,
+				title: finding.title,
+				severity: finding.severity,
+				category: finding.category,
+				url: finding.url,
+				expected: finding.expected,
+				actual: finding.actual,
+				steps: Array.isArray(finding.steps) ? finding.steps : [],
+				evidence: finding.evidence,
+				ts: finding.ts,
+				status: finding.status,
+				statusTs: finding.statusTs,
+				statusNote: finding.statusNote
+			});
+		}
+	}
+	rows.sort((a, b) => {
+		const bySeverity = FINDING_SEVERITY_ORDER.indexOf(a.severity) - FINDING_SEVERITY_ORDER.indexOf(b.severity);
+		if (bySeverity !== 0) return bySeverity;
+		return (b.ts ?? 0) - (a.ts ?? 0);
+	});
+	return rows.slice(0, bounded);
 }
 
 /** Live handles (runtime, bridge, abort controller) for a session. */
@@ -374,6 +558,14 @@ export function updateActivity(session, id, patch) {
 export function setStatus(session, status, detail) {
 	applyStatusTiming(session, status);
 	session.status = status;
+	// Compatibility aliases: keep the Phase-4 UI timer / analytics fields in
+	// lockstep with the server-authoritative timing fields above.
+	if (session.startedAt !== undefined && typeof session.runStartedAt !== 'number') {
+		session.runStartedAt = session.startedAt;
+	}
+	if (session.completedAt !== undefined && typeof session.runCompletedAt !== 'number') {
+		session.runCompletedAt = session.completedAt;
+	}
 	emit(session, 'status', { status, detail, timing: timingForEvent(session) });
 }
 
@@ -397,8 +589,21 @@ export function applyStatusTiming(session, status) {
 				session.startedAt = now;
 				session.setupStartedAt = now;
 			}
+			// Resume from a user stop: close the pause interval and accumulate
+			// it, so paused time is excluded from active execution time.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			break;
 		case 'done':
+			// Close any open pause interval before completing.
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			if (session.completedAt === undefined) session.completedAt = now;
 			if (session.reportStartedAt !== undefined && session.reportEndedAt === undefined) {
 				session.reportEndedAt = now;
@@ -406,15 +611,29 @@ export function applyStatusTiming(session, status) {
 			session.failureReason = undefined;
 			break;
 		case 'error':
-		case 'interrupted':
+			if (session.pausedAt !== undefined) {
+				session.pausedSeconds = (session.pausedSeconds ?? 0)
+					+ Math.max(0, (now - session.pausedAt) / 1000);
+				session.pausedAt = undefined;
+			}
 			if (session.completedAt === undefined) session.completedAt = now;
 			break;
-		case 'idle':
-			// User stop: an idle run that was executing counts as cancelled,
-			// not completed.
+		case 'interrupted':
+			// Stuck / interrupted / server pause = PAUSED, not terminal: the
+			// elapsed clock freezes at the interruption point and the run can
+			// be recovered and resumed from exactly that value. Only an error
+			// or an explicit cancel closes the timer.
 			if (session.startedAt !== undefined && session.completedAt === undefined) {
-				session.cancelledAt = now;
-				session.completedAt = now;
+				if (session.pausedAt === undefined) session.pausedAt = now;
+			}
+			break;
+		case 'idle':
+			// User stop = PAUSED, not cancelled. The elapsed clock freezes at
+			// the pause point and resumes exactly when the run continues.
+			// Cancellation is reserved for a future explicit permanent-cancel
+			// action; the Stop button never cancels the timer.
+			if (session.startedAt !== undefined && session.completedAt === undefined) {
+				if (session.pausedAt === undefined) session.pausedAt = now;
 			}
 			break;
 		default:
@@ -454,6 +673,23 @@ export function timingForEvent(session) {
 		reportStartedAt: session.reportStartedAt,
 		reportEndedAt: session.reportEndedAt,
 		cancelledAt: session.cancelledAt,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
 		failureReason: session.failureReason
 	};
+}
+
+/**
+ * Active execution seconds, excluding paused intervals. For a running run
+ * this is live; for a paused run it is frozen at the pause point.
+ */
+export function activeDurationSeconds(session, now = Date.now()) {
+	if (session?.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		// Currently paused: elapsed is frozen at the pause point.
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
+	}
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }

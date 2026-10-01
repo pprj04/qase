@@ -12,6 +12,7 @@ const REQUIRED_METHODS = {
 		'load', 'create', 'get', 'list', 'delete',
 		'commit', 'addMessage', 'addActivity', 'updateActivity', 'setStatus'
 	],
+	feedback: ['create', 'get', 'list', 'update', 'remove', 'stats', 'forRun'],
 	events: ['publish', 'subscribe'],
 	configuration: ['getPublic', 'save', 'testConnection'],
 	secrets: ['clear', 'names', 'store'],
@@ -19,9 +20,6 @@ const REQUIRED_METHODS = {
 	agent: [
 		'ensureRuntime', 'runTurn', 'closeBrowser', 'getLiveState',
 		'stop', 'invalidateIdleRuntimes'
-	],
-	environments: [
-		'seed', 'list', 'get', 'create', 'update', 'facets', 'availability', 'catalogVersion'
 	],
 	readiness: ['check'],
 	lifecycle: ['close']

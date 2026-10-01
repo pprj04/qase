@@ -43,3 +43,8 @@ userDocs.corrupt-*/
 userDocs/image_21567749.png
 .drytis/cred.json
 .drytis/specs/prepopulate-llm-key-new-users.md
+
+# Root-level screenshots and OS binaries — local artifacts, not repo content
+/*.png
+/*.deb
+userDocs/image_73eed07c.png

@@ -159,6 +159,30 @@ test('a lost snapshot directory still resumes an interrupted run from the store'
 	assert.equal(session.interruptedFromRun, false);
 });
 
+test('no-snapshot recovery digest includes tool-activity summaries, not just assistant prose', async () => {
+	// Regression for the field-name bug: transcriptDigestFor read the
+	// nonexistent session.activity (singular) and silently dropped every tool
+	// summary, so a recovered run saw only assistant text — weakening the
+	// "do not redo irreversible steps" protection.
+	const session = interruptedSession({
+		id: 'run-digest',
+		messages: [{ role: 'agent', text: 'Started exploring the site.' }],
+		activities: [
+			{ id: 'a1', toolName: 'browser_click', summary: 'Clicked "Send message" on the contact form (destructive: message).', ts: 5 },
+			{ id: 'a2', toolName: 'browser_snapshot', summary: 'Captured homepage snapshot (24 elements).', ts: 6 }
+		]
+	});
+	const { resumeAll, turns } = makeHarness({
+		sessions: [session],
+		snapshots: [],
+		listInterrupted: async () => [session]
+	});
+	const count = await resumeAll();
+	assert.equal(count, 1);
+	assert.match(turns[0].task, /\[browser_click\] Clicked "Send message"/, 'tool summary present in digest');
+	assert.match(turns[0].task, /\[browser_snapshot\] Captured homepage snapshot/, 'second tool summary present');
+});
+
 test('store scan respects the same resumability rules', async () => {
 	const finished = interruptedSession({ id: 'run-k', status: 'done' });
 	const waiting = interruptedSession({ id: 'run-l', interruptedFromRun: false });

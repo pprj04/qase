@@ -54,7 +54,7 @@ function statements(client) {
 
 test('loads the checked migration set in numeric order', async () => {
 	const migrations = await loadMigrations();
-	assert.deepEqual(migrations.map(migration => migration.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+	assert.deepEqual(migrations.map(migration => migration.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]);
 	assert.deepEqual(migrations.map(migration => migration.name), [
 		'identity_tenancy',
 		'run_domain',
@@ -76,7 +76,15 @@ test('loads the checked migration set in numeric order', async () => {
 		'cross_platform_catalog',
 		'device_runtime',
 		'bugs',
-		'test_case_provenance'
+		'test_case_provenance',
+		'finding_status',
+		'run_pause',
+		'run_feedback',
+		'run_engine_device',
+		'run_cohort',
+		'run_feedback_column',
+		'qa_test_selection',
+		'security_authorization'
 	]);
 	for (const migration of migrations) {
 		assert.match(migration.checksum, /^[0-9a-f]{64}$/);
@@ -127,6 +135,14 @@ test('loads the checked migration set in numeric order', async () => {
 	assert.match(migrations[16].sql, /test_cases_number_unique UNIQUE \(organization_id, project_id, case_number\)/);
 	assert.match(migrations[16].sql, /ALTER TABLE qa_runs\s+ADD COLUMN IF NOT EXISTS test_case_id text/);
 	assert.match(migrations[16].sql, /CREATE POLICY test_cases_tenant_isolation ON test_cases/);
+	assert.match(migrations[21].sql, /ALTER TABLE qa_findings ADD COLUMN IF NOT EXISTS status text/);
+	assert.match(migrations[21].sql, /qa_findings_status_enum/);
+	assert.match(migrations[21].sql, /CHECK \(status IN \('open', 'in_progress', 'fixed', 'wont_fix'\)\)/);
+	assert.match(migrations[21].sql, /qa_findings_status_note_size/);
+	assert.match(migrations[21].sql, /qa_findings_status_at_positive/);
+	assert.match(migrations[21].sql, /UPDATE qa_findings SET status = 'open' WHERE status IS NULL/);
+	assert.match(migrations[27].sql, /ADD COLUMN selected_tests text\[\]/);
+	assert.match(migrations[27].sql, /qa_runs_selected_tests_valid/);
 });
 
 test('applies pending migrations in order and records them with parameters', async () => {
@@ -138,15 +154,16 @@ test('applies pending migrations in order and records them with parameters', asy
 		.filter(Boolean);
 
 	assert.equal(pool.connectCalls, 1);
-	assert.deepEqual(migrationOrder, ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016', '017', '018', '019', '020', '021']);
-	assert.deepEqual(result.applied.map(migration => migration.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
-	assert.equal(result.currentVersion, 21);
-	assert.equal(sql.filter(statement => statement === 'BEGIN').length, 21);
-	assert.equal(sql.filter(statement => statement === 'COMMIT').length, 21);
+	assert.deepEqual(migrationOrder, ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010', '011', '012', '013', '014', '015', '016', '017', '018', '019', '020', '021', '023', '024', '025', '026', '027', '028', '029', '030']);
+	assert.deepEqual(result.applied.map(migration => migration.version), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30]);
+	assert.equal(result.currentVersion, 30);
+	assert.equal(result.applied.length, 29);
+	assert.equal(sql.filter(statement => statement === 'BEGIN').length, 29);
+	assert.equal(sql.filter(statement => statement === 'COMMIT').length, 29);
 	assert.equal(sql.filter(statement => statement === 'ROLLBACK').length, 0);
 
 	const records = pool.client.calls.filter(call => call.text.startsWith('INSERT INTO qase_schema_migrations'));
-	assert.equal(records.length, 21);
+	assert.equal(records.length, 29);
 	assert.match(records[0].text, /VALUES \(\$1, \$2, \$3\)/);
 	assert.deepEqual(records.map(record => record.values.slice(0, 2)), [
 		[1, 'identity_tenancy'],
@@ -169,7 +186,15 @@ test('applies pending migrations in order and records them with parameters', asy
 		[18, "cross_platform_catalog"],
 		[19, "device_runtime"],
 		[20, "bugs"],
-		[21, "test_case_provenance"]
+		[21, "test_case_provenance"],
+		[23, "finding_status"],
+		[24, "run_pause"],
+		[25, "run_feedback"],
+		[26, "run_engine_device"],
+		[27, "run_cohort"],
+		[28, "run_feedback_column"],
+		[29, "qa_test_selection"],
+		[30, "security_authorization"]
 	]);
 	assert.deepEqual(pool.client.calls[0].values, [MIGRATION_ADVISORY_LOCK_KEY]);
 	assert.match(sql[0], /pg_advisory_lock/);
@@ -185,7 +210,7 @@ test('does no transactional work when every migration is already applied', async
 	const result = await runPostgresMigrations(pool);
 	const sql = statements(pool.client);
 
-	assert.deepEqual(result, { applied: [], currentVersion: 21 });
+	assert.deepEqual(result, { applied: [], currentVersion: 30 });
 	assert.equal(sql.includes('BEGIN'), false);
 	assert.equal(sql.some(statement => statement.startsWith('INSERT INTO qase_schema_migrations')), false);
 	assert.match(sql.at(-1), /pg_advisory_unlock/);

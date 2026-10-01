@@ -3,14 +3,32 @@ import { getPublicConfig, saveConfig, testConnection, withUserConfiguration } fr
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
-	addActivity, addMessage, allSessions, bus, createSession, deleteSession, emit, getSession,
+	addActivity,
+	addMessage,
+	aggregateFindings,
+	allSessions,
+	bus,
+	createSession,
+	deleteSession,
+	emit,
+	getSession,
 	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
-	markReportPhase, persistSoon, peekLive, setStatus, updateActivity, watchRunBus
+	markReportPhase,
+	peekLive,
+	persistSoon,
+	setFindingStatus,
+	setStatus,
+	updateActivity,
+	watchRunBus,
 } from './store.js';
 import { createArtifactStore } from './artifactStore.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
+import {
+	closeFeedbackStore, createFeedback, deleteFeedback, feedbackStats,
+	findFeedbackForRun, getFeedback, listFeedback, updateFeedback
+} from './feedbackStore.js';
 
 /**
  * Builds the non-persistence services around a run store. Both the rollback
@@ -38,6 +56,18 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		: undefined;
 	const services = {
 		runs: runStore,
+		// Feedback is store-backed in both adapters; the local implementation
+		// (feedbackStore.js) ships with this composition, and the PostgreSQL
+		// adapter overrides it below.
+		feedback: options.feedbackStore ?? {
+			create: input => createFeedback(input),
+			get: getFeedback,
+			list: options => listFeedback(options),
+			update: (id, patch) => updateFeedback(id, patch),
+			remove: deleteFeedback,
+			stats: feedbackStats,
+			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
+		},
 		artifacts,
 		events: {
 			publish: runStore.publish,
@@ -90,7 +120,22 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 				};
 			},
 			stop(sessionId) {
-				runStore.peekLive?.(sessionId)?.controller?.abort();
+				const record = runStore.peekLive?.(sessionId);
+				if (record?.running) {
+					record.controller?.abort();
+					return;
+				}
+				// No live turn to abort — but a browser runtime may still be
+				// resident (crashed/recovered run, idle keep-open). A stop must
+				// end ALL work for the session, so dispose the runtime and
+				// release the browser instead of silently no-op'ing.
+				record?.bridge?.stopFrames?.();
+				record?.dispose?.();
+				if (record) {
+					delete record.runtime;
+					delete record.bridge;
+					delete record.dispose;
+				}
 			},
 			async invalidateIdleRuntimes() {
 				let kept = 0;
@@ -128,6 +173,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		lifecycle: {
 			close: async () => {
 				await runStore.close?.();
+				closeFeedbackStore();
 				await options.auth?.close?.();
 				await options.close?.();
 			}
@@ -170,7 +216,6 @@ export function createLocalApplicationServices(options = {}) {
 		// Duration analytics for the in-memory store: computed from loaded
 		// sessions so dev-without-Postgres still shows real numbers.
 		async durationAnalytics({ targetUrl } = {}) {
-			const now = Date.now();
 			const completed = listSessions({ limit: 100, ownerUserId: ownerUserId() })
 				.filter(candidate => {
 					const session = getSession(candidate.id, undefined);
@@ -179,13 +224,16 @@ export function createLocalApplicationServices(options = {}) {
 					return true;
 				})
 				.map(candidate => getSession(candidate.id, undefined));
-			const durations = completed.map(session => (session.completedAt - session.startedAt) / 1000).sort((a, b) => a - b);
+			// Active duration only: paused intervals are excluded.
+			const active = session =>
+				Math.max(0, (session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0));
+			const durations = completed.map(active).sort((a, b) => a - b);
 			const average = values => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined);
 			const byTargetMap = new Map();
 			for (const session of completed) {
 				const entry = byTargetMap.get(session.targetUrl) ?? { runCount: 0, total: 0 };
 				entry.runCount += 1;
-				entry.total += (session.completedAt - session.startedAt) / 1000;
+				entry.total += active(session);
 				byTargetMap.set(session.targetUrl, entry);
 			}
 			return {
@@ -202,7 +250,7 @@ export function createLocalApplicationServices(options = {}) {
 					runCount: entry.runCount,
 					avgDurationSeconds: entry.total / entry.runCount
 				})),
-				serverNow: now
+				serverNow: Date.now()
 			};
 		},
 		async targetDurationHistory(targetUrl, { limit = 20 } = {}) {
@@ -216,15 +264,20 @@ export function createLocalApplicationServices(options = {}) {
 					status: session.status,
 					startedAt: session.startedAt,
 					completedAt: session.completedAt,
-					durationSeconds: (session.completedAt - session.startedAt) / 1000
+					pausedAt: session.pausedAt,
+					pausedSeconds: session.pausedSeconds ?? 0,
+					durationSeconds: Math.max(0,
+						(session.completedAt - session.startedAt) / 1000 - (session.pausedSeconds ?? 0))
 				}));
 		},
 		/**
-		 * Unscoped accessors for boot-time run recovery (runResume.js). The
+		 * Unscoped accessors for boot-time run recovery (runResume.js) and
+		 * cross-user operator review (feedback review in app.js). The
 		 * request-scoped list/get above filter by the current actor, which at
 		 * boot is the default tenant actor — sessions owned by real users would
 		 * be invisible and never resume. These deliberately bypass owner
-		 * filtering; runResume re-enters each owner's actor context itself.
+		 * filtering; runResume re-enters each owner's actor context itself, and
+		 * the operator endpoints re-apply their own role gate before calling.
 		 */
 		async listInterrupted() {
 			return listSessions({ limit: 100, ownerUserId: undefined })
@@ -238,9 +291,10 @@ export function createLocalApplicationServices(options = {}) {
 		/**
 		 * Unscoped full-record list for coverage aggregation (Phase 7). list()
 		 * caps at 100 and filters by owner; the coverage matrix needs every
-		 * case×environment pair's latest run.
+		 * case×environment pair's latest run. Options (e.g. ownerUserId
+		 * overrides) are ignored here: the local store returns full records.
 		 */
-		async listAll() {
+		async listAll(_options) {
 			return allSessions();
 		},
 		async delete(id) {
@@ -278,6 +332,14 @@ export function createLocalApplicationServices(options = {}) {
 				label: 'Final browser frame at end of run',
 				bridgeExecution: bridge?.execution ?? null
 			});
+		},
+		async setFindingStatus(session, findingId, patch) {
+			const finding = setFindingStatus(session, findingId, patch ?? {});
+			emit(session, 'finding_status', { finding });
+			return finding;
+		},
+		async aggregateFindings(options) {
+			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
 		},
 		async addMessage(session, message) {
 			return addMessage(session, message);
@@ -322,5 +384,5 @@ export function createLocalApplicationServices(options = {}) {
 		tenantContext: options.tenantContext,
 		file: options.authFile
 	});
-	return createRuntimeApplicationServices(runStore, { auth, deviceRuntime: options.deviceRuntime });
+	return createRuntimeApplicationServices(runStore, { ...options, auth: options.auth ?? auth, deviceRuntime: options.deviceRuntime });
 }

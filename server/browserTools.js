@@ -1,6 +1,30 @@
 /** Bounded browser-only capabilities absent from the upstream SDK registry. */
+import { SECURITY_CHECK_IDS } from './securityChecks.js';
+
 export function createBrowserTools(getBridge) {
 	return [
+		{
+			name: 'security_check',
+			category: 'browser',
+			description: `Runs deterministic, benign security checks against the CURRENT page: security headers (CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy), session cookie flags, reflected-XSS escaping (submits a harmless canary through the page's own search form), SQL-injection error signatures (benign quote payload only), and mixed content. Every failed check is reported through report_finding with category "security", the check's evidence and remediation. This is a surface scan, not a penetration test: report findings honestly, including "info" results. Optionally pass a subset of check ids: ${SECURITY_CHECK_IDS.join(', ')}.`,
+			parametersSchema: {
+				type: 'object', additionalProperties: false,
+				properties: {
+					checks: {
+						type: 'array',
+						items: { type: 'string', enum: SECURITY_CHECK_IDS },
+						description: 'Optional subset of checks; omit to run all.'
+					}
+				}
+			},
+			async run(input) {
+				if (input?.checks !== undefined
+					&& (!Array.isArray(input.checks) || input.checks.some(id => !SECURITY_CHECK_IDS.includes(id)))) {
+					return { success: false, error: `checks must be a subset of: ${SECURITY_CHECK_IDS.join(', ')}.` };
+				}
+				return getBridge().runSecurityChecks({ checks: input?.checks });
+			}
+		},
 		{
 			name: 'browser_media',
 			category: 'browser',

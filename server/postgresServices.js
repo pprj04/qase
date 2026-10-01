@@ -3,7 +3,9 @@ import { EventEmitter } from 'node:events';
 import { createRuntimeApplicationServices } from './localServices.js';
 import { currentRequestActor } from './requestActor.js';
 import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
-import { applyStatusTiming, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
+import { isEngineId } from './browserEngines.js';
+import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
+import { createPostgresFeedbackRepository } from './postgres/feedbackRepository.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -24,8 +26,10 @@ function createSession(title, now, options = {}) {
 		status: 'idle',
 		mode: 'qa',
 		targetUrl: options.targetUrl,
+		engine: isEngineId(options.engine) ? options.engine : 'chromium',
 		device: isDeviceId(options.device) ? options.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: options.deviceLandscape === true,
+		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		messages: [],
 		activities: [],
 		findings: structuredClone(options.findings ?? []),
@@ -35,6 +39,12 @@ function createSession(title, now, options = {}) {
 		contextUsage: undefined,
 		tokenUsage: undefined,
 		secretNames: [],
+		/** Selected standard QA test ids; undefined = full coverage. */
+		selectedTests: options.selectedTests ? [...options.selectedTests] : undefined,
+		/** Security testing authorization for runs with security checks. */
+		securityAuthorization: options.securityAuthorization
+			? structuredClone(options.securityAuthorization)
+			: undefined,
 		ownerUserId: options.ownerUserId ?? currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId
 	};
 	if (options.drytisIntegration !== undefined) {
@@ -50,28 +60,31 @@ function summary(session) {
 		status: session.status,
 		mode: session.mode === 'sqa' || session.mode === 'founder' ? session.mode : 'qa',
 		targetUrl: session.targetUrl,
+		engine: isEngineId(session.engine) ? session.engine : 'chromium',
 		device: isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: session.deviceLandscape === true,
 		createdAt: session.createdAt,
 		updatedAt: session.updatedAt,
 		startedAt: session.startedAt,
 		completedAt: session.completedAt,
-		durationSeconds: session.durationSeconds,
+		pausedAt: session.pausedAt,
+		pausedSeconds: session.pausedSeconds ?? 0,
+		durationSeconds: liveDurationSeconds(session),
 		findingCount: session.findings.length,
 		messageCount: session.messages.length,
 		tokenUsage: session.tokenUsage
 	};
 }
 
-/** Live elapsed seconds for a still-running run, computed from server stamps. */
+/** Live active-execution seconds (paused time excluded), from server stamps. */
 export function liveDurationSeconds(session, now = Date.now()) {
-	if (session.completedAt !== undefined && session.startedAt !== undefined) {
-		return Math.max(0, Math.floor((session.completedAt - session.startedAt) / 1000));
+	if (session.startedAt === undefined) return undefined;
+	const pausedSeconds = session.pausedSeconds ?? 0;
+	if (session.pausedAt !== undefined) {
+		return Math.max(0, Math.floor((session.pausedAt - session.startedAt) / 1000 - pausedSeconds));
 	}
-	if (session.startedAt !== undefined) {
-		return Math.max(0, Math.floor((now - session.startedAt) / 1000));
-	}
-	return undefined;
+	const end = session.completedAt ?? now;
+	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
 }
 
 function eventActor(type, payload, tenantContext) {
@@ -107,7 +120,8 @@ export function createPostgresApplicationServices({
 	auth,
 	hydrateAll = true,
 	now = () => Date.now(),
-	recoverActiveRuns = true
+	recoverActiveRuns = true,
+	feedbackRepository
 }) {
 	if (!repository || typeof repository !== 'object') {
 		throw new TypeError('A PostgreSQL run repository is required.');
@@ -314,12 +328,27 @@ export function createPostgresApplicationServices({
 		 * case×environment pair's latest run. PostgreSQL is authoritative:
 		 * repository.loadAll() hydrates full records for the tenant.
 		 */
-		async listAll() {
+		async listAll(_options) {
 			if (typeof repository.loadAll === 'function') {
 				const records = await repository.loadAll();
 				return records.map(record => record.session).filter(Boolean);
 			}
 			return [...sessions.values()];
+		},
+		/**
+		 * Unscoped cross-user accessors for the operator feedback-review
+		 * endpoint (app.js /api/analytics/feedback) — same rationale as
+		 * localServices: the request-scoped get/list above filter by the
+		 * current actor, which would hide pilot users' sessions from the
+		 * operator. The caller re-applies its own role gate before use.
+		 */
+		async getAny(id) {
+			// Same lookup as get(), minus the owner filter.
+			if (queues.has(id) && sessions.has(id)) return sessions.get(id);
+			const record = typeof repository.get === 'function'
+				? await repository.get(id)
+				: (await repository.loadAll()).find(candidate => candidate.session.id === id);
+			return record ? installRecord(record) : sessions.get(id);
 		},
 		async delete(id) {
 			const session = sessions.get(id);
@@ -386,12 +415,37 @@ export function createPostgresApplicationServices({
 			return entry;
 		},
 	async setStatus(session, status, detail) {
+		const before = { pausedAt: session.pausedAt, pausedSeconds: session.pausedSeconds ?? 0 };
 		applyStatusTiming(session, status);
 		session.status = status;
+		// On resume (pausedAt cleared), tell the repository how much pause time
+		// to accumulate into the persisted paused_seconds column.
+		if (before.pausedAt !== undefined && session.pausedAt === undefined) {
+			session.resumedPauseSeconds = Math.max(0, (Date.now() - before.pausedAt) / 1000);
+		} else {
+			session.resumedPauseSeconds = 0;
+		}
 		if (status === 'error' && detail && session.failureReason === undefined) {
 			session.failureReason = String(detail);
 		}
 		await commit(session, 'status', { status, detail, timing: timingForEvent(session) });
+	},
+	async setFindingStatus(session, findingId, patch) {
+		// Mutate the in-memory aggregate first (validation happens there),
+		// then persist durably through the queued event log exactly like every
+		// other run mutation. On version conflict the failed save restores the
+		// last committed snapshot, so the optimistic lock stays sound.
+		const finding = setFindingStatus(session, findingId, patch ?? {});
+		await commit(session, 'finding_status', { finding });
+		return finding;
+	},
+	async aggregateFindings(options) {
+		// Aggregates over the loaded in-memory run aggregates, mirroring the
+		// local store's semantics including owner scoping.
+		return aggregateSessionFindings(sessions.values(), {
+			...options,
+			ownerUserId: options?.ownerUserId ?? currentRequestActor()?.actorUserId ?? tenantContext?.actorUserId
+		});
 	},
 	markReportPhase(session, phase) {
 		markReportPhase(session, phase);
@@ -461,7 +515,11 @@ export function createPostgresApplicationServices({
 		}
 	};
 
-	const services = createRuntimeApplicationServices(runStore, { auth, deviceRuntime });
+	const services = createRuntimeApplicationServices(runStore, {
+		auth,
+		deviceRuntime,
+		feedbackStore: feedbackRepository ?? createPostgresFeedbackRepository({ pool: repository.pool ?? repository, tenantContext })
+	});
 	// In PostgreSQL mode the Redis transport is the global event fan-out.
 	if (eventTransport && typeof eventTransport.subscribeGlobal === 'function') {
 		services.events.subscribeGlobal = eventTransport.subscribeGlobal.bind(eventTransport);

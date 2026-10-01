@@ -335,7 +335,11 @@ test('save enforces optimistic lock version and rolls back without an event on c
 	);
 	const update = fake.calls.find(call => call.text.startsWith('UPDATE qa_runs'));
 	assert.deepEqual(update.params.slice(0, 3), [TENANT.organizationId, TENANT.projectId, RUN_ID]);
-	assert.equal(update.params.at(-1), 4);
+	// After the DEV merge the save UPDATE binds $1-$36 (feedback $19, timing
+	// $22-$32, engine/device/landscape/cohort $33-$36) and the optimistic-lock
+	// version at $37 (params[36]).
+	assert.equal(update.params[18], null, 'feedback $19 is null on plain save');
+	assert.equal(update.params[36], 4, 'expectedVersion at $37');
 	assert.equal(fake.calls.some(call => call.text.startsWith('INSERT INTO qa_run_events')), false);
 	assert.equal(fake.calls.at(-1).text, 'ROLLBACK');
 	assert.equal(fake.state.releases, 1);
@@ -665,16 +669,42 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	const repository = createPostgresRunRepository({ pool: fake.pool, tenantContext: TENANT, now: () => NOW });
 
 	// create: token_usage rides in the run INSERT alongside context_usage;
-	// queuedAt (DEV timing) is the trailing write-once column.
+	// pausedAt, selected_tests (standard-QA test selection) and
+	// security_authorization are the trailing write-once columns.
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
-	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // runtime_facts
-	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // execution_provider_actual
-	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_level_actual
-	// queued_at trails test_case_id/level/provider/facts; a session without
-	// queuedAt writes null there (asNullableDate).
-	assert.equal(runInsert.params[runInsert.params.length - 7], null);
+	// Structural integrity of the INSERT: the number of target columns must
+	// equal the number of VALUES expressions, and the highest placeholder must
+	// bind every param. (A fake pool never parses SQL, so an off-by-one here
+	// would otherwise pass silently and break real Postgres at parse time.)
+	const columnList = runInsert.text.match(/INSERT INTO qa_runs \(([\s\S]*?)\)\s*VALUES/)?.[1] ?? '';
+	const columnCount = columnList.split(',').length;
+	// Expressions include literals (NULL, 0), so the real invariant is:
+	// (placeholders bound = params.length) and (columns = placeholders + literals).
+	const placeholders = [...runInsert.text.matchAll(/\$(\d+)/g)].map(match => Number(match[1]));
+	const maxPlaceholder = Math.max(...placeholders);
+	const literalCount = columnCount - placeholders.length;
+	assert.equal(
+		new Set(placeholders).size,
+		runInsert.params.length,
+		`distinct placeholders (${new Set(placeholders).size}) must equal params length (${runInsert.params.length})`
+	);
+	assert.equal(
+		maxPlaceholder,
+		runInsert.params.length,
+		`highest placeholder $${maxPlaceholder} must equal params length (${runInsert.params.length})`
+	);
+	assert.ok(
+		literalCount === 2,
+		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
+	);
+	assert.equal(runInsert.params[runInsert.params.length - 1], null);        // runtime_facts
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);        // execution_provider_actual
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);        // execution_level_actual
+	assert.equal(runInsert.params[runInsert.params.length - 4], null);        // test_case_id
+	assert.equal(runInsert.params[runInsert.params.length - 5], null);        // environment_snapshot (json of undefined)
+	assert.equal(runInsert.params[runInsert.params.length - 6], null);        // environment_id
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
@@ -845,15 +875,20 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		status: 'idle',
 		mode: 'qa',
 		targetUrl: 'https://other.example/',
+		engine: 'chromium',
+		device: 'desktop',
+		deviceLandscape: false,
 		createdAt: NOW - 1_000,
 		updatedAt: NOW,
 		startedAt: undefined,
 		completedAt: undefined,
+		pausedAt: undefined,
+		pausedSeconds: 0,
+		durationSeconds: undefined,
+		queueDurationSeconds: undefined,
 		setupDurationSeconds: undefined,
 		executionDurationSeconds: undefined,
 		reportDurationSeconds: undefined,
-		queueDurationSeconds: undefined,
-		durationSeconds: undefined,
 		findingCount: 1,
 		messageCount: 3,
 		todoTotal: 0,
@@ -914,4 +949,93 @@ test('close is idempotent', async () => {
 	assert.strictEqual(first, second);
 	await first;
 	assert.equal(fake.state.endCalls, 1);
+});
+
+test('finding_status events rewrite findings and the lifecycle columns round-trip', async () => {
+	// Event-group ownership: a status transition must rewrite qa_findings (the
+	// child table carrying status), not any other group.
+	const fake = scriptedPool(call => call.text.startsWith('UPDATE qa_runs')
+		? {
+			rows: [{ lock_version: '4', updated_at: new Date(NOW), next_event_sequence: '9' }],
+			rowCount: 1
+		}
+		: { rows: [], rowCount: 1 });
+	const repository = createPostgresRunRepository({
+		pool: fake.pool, tenantContext: TENANT, now: () => NOW
+	});
+	const tracked = session({
+		findings: [{
+			id: FINDING_ID,
+			ts: NOW - 700,
+			title: 'Broken action',
+			severity: 'high',
+			category: 'forms',
+			url: 'https://studio.drytis.ai/form',
+			steps: ['Open form', 'Submit'],
+			expected: 'Saved',
+			actual: 'Failed',
+			status: 'in_progress',
+			statusTs: NOW - 100,
+			statusNote: 'assigned to platform team'
+		}]
+	});
+	await repository.save(tracked, { expectedVersion: 3, eventType: 'finding_status' });
+
+	assert.equal(
+		fake.calls.some(call => call.text.startsWith('DELETE FROM qa_findings')),
+		true,
+		'finding_status must own the findings rewrite'
+	);
+	for (const table of CHILD_TABLE_NAMES.filter(table => table !== 'qa_findings')) {
+		assert.equal(
+			fake.calls.some(call => call.text.startsWith(`DELETE FROM ${table}`)),
+			false,
+			`finding_status must not rewrite ${table}`
+		);
+	}
+	const insert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_findings'));
+	assert.ok(insert, 'finding insert recorded');
+	const paramIndex = sqlText(insert.text).split(',').map(part => part.trim()).indexOf('status');
+	assert.equal(insert.params[paramIndex], 'in_progress');
+	assert.equal(insert.params[paramIndex + 1], 'assigned to platform team');
+	assert.equal(insert.params[paramIndex + 2], NOW - 100);
+
+	// Hydration: a legacy row (no status columns yet) reads back as open; a
+	// tracked row round-trips its lifecycle exactly.
+	const hydrate = scriptedPool(call => {
+		if (call.text.includes('FROM qa_runs')) return {
+			rows: [{
+				id: RUN_ID, title: 'Run', target_url: 'https://example.com/', status: 'idle',
+				run_mode: 'qa', sqa_profiles: [], sqa_assessment: null, founder_assessment: null,
+				pending_question: null, context_usage: null, token_usage: null, secret_names: [],
+				next_event_sequence: '5', created_at: new Date(NOW - 1_000), updated_at: new Date(NOW),
+				lock_version: '6'
+			}], rowCount: 1
+		};
+		if (call.text.includes('FROM qa_findings')) return { rows: [
+			{
+				run_id: RUN_ID, id: FINDING_ID, title: 'Legacy', severity: 'medium', category: 'general',
+				page_url: null, steps: [], expected: 'x', actual: 'y', created_at: new Date(NOW - 600),
+				status: null, status_note: null, status_at: null
+			},
+			{
+				run_id: RUN_ID, id: '11111111-2222-4333-8444-555555555555', title: 'Tracked', severity: 'low',
+				category: 'ui', page_url: null, steps: [], expected: 'x', actual: 'y',
+				created_at: new Date(NOW - 500), status: 'wont_fix', status_note: 'by design',
+				status_at: String(NOW - 200)
+			}
+		] };
+		return { rows: [], rowCount: 0 };
+	});
+	const hydrated = await createPostgresRunRepository({
+		pool: hydrate.pool, tenantContext: TENANT
+	}).loadAll();
+
+	const [legacy, trackedRow] = hydrated[0].session.findings;
+	assert.equal(legacy.status, 'open');
+	assert.equal(legacy.statusNote, '');
+	assert.equal(legacy.statusTs, NOW - 600, 'legacy statusTs defaults to the filing time');
+	assert.equal(trackedRow.status, 'wont_fix');
+	assert.equal(trackedRow.statusNote, 'by design');
+	assert.equal(trackedRow.statusTs, NOW - 200);
 });

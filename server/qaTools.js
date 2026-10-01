@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './secrets.js';
+import { isEngineId } from './browserEngines.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -112,6 +113,7 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 				severity: { type: 'string', enum: SEVERITIES, description: 'User impact: critical blocks the core flow, high breaks an important flow, medium is a real but survivable defect, low is polish, info is an observation.' },
 				category: { type: 'string', description: 'Area of the defect, e.g. authentication, forms, navigation, console, network, accessibility, layout, performance, content.' },
 				url: { type: 'string', description: 'The page URL where the defect appears.' },
+				engine: { type: 'string', enum: ['chromium', 'firefox', 'webkit'], description: 'The browser engine the defect was found on. Omit on single-engine runs; always set it when the finding only reproduces on one engine.' },
 				steps: { type: 'array', items: { type: 'string' }, description: 'The exact steps to reproduce, in order.' },
 				expected: { type: 'string', description: 'What should have happened.' },
 				actual: { type: 'string', description: 'What actually happened.' },
@@ -127,9 +129,10 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 				return { success: false, error: 'report_finding requires a valid severity: critical, high, medium, low, or info.' };
 			}
 			const severity = input.severity;
+			const findingTs = Date.now();
 			const finding = redact(session.id, {
 				id: randomUUID(),
-				ts: Date.now(),
+				ts: findingTs,
 				title: boundedText(input.title, 1_000),
 				severity,
 				category: boundedText(input.category, 200, 'general'),
@@ -137,7 +140,13 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 				steps: boundedList(input.steps),
 				expected: boundedText(input.expected, 20_000),
 				actual: boundedText(input.actual, 20_000),
-				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined
+				evidence: input.evidence ? boundedText(input.evidence, 20_000) : undefined,
+				engine: isEngineId(input.engine) ? input.engine : (isEngineId(session.engine) ? session.engine : undefined),
+				// Every tracked bug starts open; the user moves it through the
+				// lifecycle from the Bugs view.
+				status: 'open',
+				statusTs: findingTs,
+				statusNote: ''
 			});
 
 			if (!finding.title) {
@@ -161,21 +170,34 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 		}
 	};
 
-	const finishReport = {
-		name: 'finish_qa_report',
-		description: 'Ends the test run and publishes the report. Call exactly once, after every planned check is done and every defect has been filed with report_finding.',
-		category: 'qa',
-		parametersSchema: {
-			type: 'object',
-			properties: {
-				verdict: { type: 'string', enum: VERDICTS, description: 'pass when nothing of substance broke, pass_with_issues when defects exist but the core flows work, fail when a core flow is broken, blocked when testing could not proceed.' },
-				summary: { type: 'string', description: 'A short paragraph a product owner could read: what was tested, what state the site is in.' },
-				covered: { type: 'array', items: { type: 'string' }, description: 'The areas and flows actually exercised.' },
-				not_covered: { type: 'array', items: { type: 'string' }, description: 'Anything planned but skipped, and why.' },
-				recommendations: { type: 'array', items: { type: 'string' }, description: 'What to fix or investigate first.' }
-			},
-			required: ['verdict', 'summary']
+const finishReport = {
+	name: 'finish_qa_report',
+	description: 'Ends the test run and publishes the report. Call exactly once, after every planned check is done and every defect has been filed with report_finding.',
+	category: 'qa',
+	parametersSchema: {
+		type: 'object',
+		properties: {
+			verdict: { type: 'string', enum: VERDICTS, description: 'pass when nothing of substance broke, pass_with_issues when defects exist but the core flows work, fail when a core flow is broken, blocked when testing could not proceed.' },
+			summary: { type: 'string', description: 'A short paragraph a product owner could read: what was tested, what state the site is in.' },
+			covered: { type: 'array', items: { type: 'string' }, description: 'The areas and flows actually exercised.' },
+			not_covered: { type: 'array', items: { type: 'string' }, description: 'Anything planned but skipped, and why.' },
+			recommendations: { type: 'array', items: { type: 'string' }, description: 'What to fix or investigate first.' },
+			security_outcomes: {
+				type: 'array',
+				description: 'Required when the run selected security checks. One entry per security check: pass only with concrete positive browser evidence, fail only with a filed finding, not_tested with a mandatory reason. Unavailable checks (MITM, DoS) are always not_tested with their unavailability reason.',
+				items: {
+					type: 'object',
+					properties: {
+						check: { type: 'string', enum: ['security_authentication', 'security_authorization', 'security_input_validation', 'security_sql_injection', 'security_mitm', 'security_dos'] },
+						outcome: { type: 'string', enum: ['pass', 'fail', 'not_tested'] },
+						reason: { type: 'string', description: 'Mandatory for not_tested; for pass/fail a one-line evidence pointer.' }
+					},
+					required: ['check', 'outcome']
+				}
+			}
 		},
+		required: ['verdict', 'summary']
+	},
 		async run(input) {
 			if (session.mode === 'sqa' || session.mode === 'founder') {
 				return { success: false, error: 'finish_qa_report is available only in QA mode. Use this mode\'s dedicated finalization tool.' };
@@ -186,6 +208,39 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 			for (const field of ['covered', 'not_covered', 'recommendations']) {
 				if (input[field] !== undefined && (!Array.isArray(input[field]) || !input[field].every(hasText))) {
 					return { success: false, error: `${field} must be an array of nonempty strings.` };
+				}
+			}
+			// Security honesty contract: when the run selected security checks,
+			// every one of them gets an explicit outcome; not_tested requires a
+			// reason; unavailable checks (MITM/DoS) can never be pass/fail; a
+			// pass must not contradict the findings ledger.
+			const selectedSecurity = (session.selectedTests ?? []).filter(id => typeof id === 'string' && id.startsWith('security_'));
+			if (selectedSecurity.length > 0) {
+				const outcomes = Array.isArray(input.security_outcomes) ? input.security_outcomes : [];
+				const UNAVAILABLE_REASONS = {
+					security_mitm: 'Not implemented — requires an agreed, configured MITM scenario.',
+					security_dos: 'Not implemented — requires an agreed, configured DoS scenario.'
+				};
+				const entries = new Map();
+				for (const entry of outcomes) {
+					if (!validInput(entry) || !selectedSecurity.includes(entry.check)
+						|| !['pass', 'fail', 'not_tested'].includes(entry.outcome)) {
+						return { success: false, error: 'security_outcomes entries must reference this run\'s selected security checks with an outcome of pass, fail, or not_tested.' };
+					}
+					if (entries.has(entry.check)) {
+						return { success: false, error: `security_outcomes lists ${entry.check} more than once.` };
+					}
+					if (UNAVAILABLE_REASONS[entry.check] && entry.outcome !== 'not_tested') {
+						return { success: false, error: `${entry.check} is not implemented and can only be not_tested with its reason.` };
+					}
+					if (entry.outcome === 'not_tested' && !hasText(entry.reason)) {
+						return { success: false, error: `security_outcomes: ${entry.check} is not_tested and requires a reason.` };
+					}
+					entries.set(entry.check, entry);
+				}
+				const missing = selectedSecurity.filter(id => !entries.has(id));
+				if (missing.length > 0) {
+					return { success: false, error: `security_outcomes must include every selected security check. Missing: ${missing.join(', ')}.` };
 				}
 			}
 			const remainingTodos = Array.isArray(session.todos)
@@ -262,6 +317,13 @@ export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 				targetUrl: session.targetUrl,
 				findings: session.findings.length,
 				attestation: attestationFor(session),
+				securityOutcomes: Array.isArray(input.security_outcomes) && input.security_outcomes.every(validInput)
+					? input.security_outcomes.map(entry => ({
+						check: entry.check,
+						outcome: entry.outcome,
+						...(hasText(entry.reason) ? { reason: boundedText(entry.reason, 2_000) } : {})
+					}))
+					: undefined,
 				bySeverity: SEVERITIES.reduce((counts, severity) => {
 					counts[severity] = session.findings.filter(finding => finding.severity === severity).length;
 					return counts;

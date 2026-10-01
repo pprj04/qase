@@ -4,7 +4,7 @@ import { ALL_TOOLS, CleanSlateNodeAgentRuntime, createNodeProviderConfiguration 
 import { chromium } from 'playwright';
 import { attachBrowserBridge } from './browserBridge.js';
 import { createBrowserTools } from './browserTools.js';
-import { getConfig, getPublicConfig } from './config.js';
+import { getConfig, getPublicConfig, envKeyDestinationProblem } from './config.js';
 import { buildQaContext } from './prompt.js';
 import { createQaTools } from './qaTools.js';
 import { buildQaChatReport } from './report.js';
@@ -17,6 +17,7 @@ import { isCredentialQuestion } from '../public/questionPresentation.js';
 import { clearSecrets, redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
 import { guardSqaBrowserTool } from './sqaBrowserBudget.js';
+import { guardSecurityPayloadTool } from './securityPayloadBudget.js';
 import { applyUsage, attachUsageCapture, createUsageLedger, createUsageLogger, subtractUsage } from './usageCapture.js';
 
 export { guardSqaBrowserTool } from './sqaBrowserBudget.js';
@@ -104,11 +105,15 @@ const BROWSER_TOOL_NAMES = [
 
 /** The advertised registry and execution gate share the same mode boundary. */
 export function allowedToolNames(mode = 'qa') {
-	return new Set([...BROWSER_TOOL_NAMES, ...(mode === 'founder'
-		? ['record_founder_observation', 'finish_founder_review']
-		: mode === 'sqa'
-			? ['report_finding', 'record_sqa_control', 'record_sqa_blockers', 'finish_sqa_assessment']
-			: ['report_finding', 'finish_qa_report'])]);
+	return new Set([...BROWSER_TOOL_NAMES,
+		// Active security probes are QA-only: SQA gathers evidence and must not
+		// fire payloads at a regulated target; founder reviews never probe.
+		...(mode === 'qa' ? ['security_check'] : []),
+		...(mode === 'founder'
+			? ['record_founder_observation', 'finish_founder_review']
+			: mode === 'sqa'
+				? ['report_finding', 'record_sqa_control', 'record_sqa_blockers', 'finish_sqa_assessment']
+				: ['report_finding', 'finish_qa_report'])]);
 }
 
 /**
@@ -375,6 +380,13 @@ export function ensureRuntime(session, runStore) {
 	if (problem) {
 		throw new Error(`${problem} Open Settings and add the endpoint details.`);
 	}
+	// Same exfiltration guard as the settings probe: the instance's env key may
+	// only be used against operator-allowlisted model hosts. A user who stored
+	// a different base URL must also store their own key.
+	const envKeyDestination = envKeyDestinationProblem(settings);
+	if (envKeyDestination) {
+		throw new Error(envKeyDestination);
+	}
 
 	// The agent has no filesystem tools, but the runtime still wants a root. A
 	// per-session scratch directory means even a slipped write stays contained.
@@ -475,7 +487,7 @@ export function ensureRuntime(session, runStore) {
 		.filter(tool => allowedTools.has(tool.name));
 	const headless = runtime.headlessRuntime;
 	const registeredTools = [...ALL_TOOLS, ...sessionTools].filter(tool => allowedTools.has(tool.name)).map(tool => {
-		const guardedTool = guardSqaBrowserTool(tool, session);
+		const guardedTool = guardSecurityPayloadTool(guardSqaBrowserTool(tool, session), session, settings.securityPayloadLimit);
 		if (session.mode !== 'founder' || guardedTool.name !== 'update_todo') return guardedTool;
 		const canonicalPlan = createFounderReviewTodos();
 		return {
@@ -596,6 +608,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	const controller = new AbortController();
 	record.running = true;
 	record.controller = controller;
+	bridge.setAbortSignal?.(controller.signal);
 	clearTimeout(record.idleTimer);
 	record.idleTimer = undefined;
 	session.pendingQuestion = undefined;

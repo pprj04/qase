@@ -79,6 +79,7 @@ async function startFixture(overrides = {}) {
 		reports: { buildMarkdown: async () => '' },
 		agent: { ensureRuntime: async () => ({}), runTurn: async () => ({}), closeBrowser: async () => undefined, getLiveState: () => ({}), stop: async () => undefined, invalidateIdleRuntimes: () => undefined },
 		readiness: { check: async () => ({ ready: true }) },
+		feedback: { create: async () => ({}), get: async () => undefined, list: async () => [], update: async () => ({}), remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		lifecycle: { close: async () => undefined },
 		deviceCatalog,
 		environments: envService,

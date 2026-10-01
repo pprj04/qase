@@ -1,9 +1,9 @@
 import { hasUnresolvedPlaceholder, resolveSecrets } from './secrets.js';
-import { createBrowserPolicy } from './browserPolicy.js';
+import { createBrowserPolicy, classifyDestructiveAction } from './browserPolicy.js';
 import { contextOptionsFor, getDeviceProfile, DEFAULT_DEVICE_ID } from './deviceProfiles.js';
 import { runMobileAudit } from './mobileAudit.js';
 import { inspectFormValidation } from './browserFormAudit.js';
-import { chromium } from 'playwright';
+import { resolveEngine, ENGINE_IDS } from './browserEngines.js';
 import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
 import { browserstackCredentials, connectBrowserstack, environmentEmulationOptions, resolveExecution } from './browserstackProvider.js';
 import {
@@ -12,6 +12,10 @@ import {
 	platformRuntimeProfile,
 	EXECUTION_LEVELS
 } from './deviceRuntimeProfiles.js';
+import {
+	SECURITY_CHECK_IDS, XSS_CANARY,
+	checkResponseHeaders, checkCookies, checkXssReflection, checkSqlErrorSignature, checkMixedContent
+} from './securityChecks.js';
 
 /**
  * Makes the agent's browser watchable.
@@ -34,9 +38,91 @@ const CURSOR_DWELL_MS = Number(process.env.QASE_CURSOR_DWELL_MS ?? 420);
 /** How long to let a click's navigation land before reporting where we are. */
 const NAV_SETTLE_MS = Number(process.env.QASE_NAV_SETTLE_MS ?? 1600);
 
+/**
+ * Submits a benign probe value through the page's own GET search-like form.
+ * Returns the resulting URL, or undefined when no usable form exists. The
+ * form's own action decides the destination — the browser policy stays in
+ * charge of every request.
+ */
+async function submitCanaryThroughForms(page, value) {
+	try {
+		const form = await page.evaluate(probe => {
+			const candidates = [...document.querySelectorAll('form')]
+				.filter(node => node.checkVisibility?.() !== false)
+				.filter(node => {
+					const method = (node.getAttribute('method') || 'get').toLowerCase();
+					if (method !== 'get') return false;
+					const input = node.querySelector('input[type="text"], input[type="search"], input:not([type])');
+					return Boolean(input);
+				});
+			const chosen = candidates[0];
+			if (!chosen) return undefined;
+			const input = chosen.querySelector('input[type="text"], input[type="search"], input:not([type])');
+			return { action: chosen.action || location.href, name: input.name };
+		}, value);
+		if (!form?.name) return undefined;
+		const target = new URL(form.action, page.url());
+		target.searchParams.set(form.name, value);
+		await page.goto(target.toString(), { waitUntil: 'domcontentloaded' });
+		await page.waitForLoadState('networkidle').catch(() => undefined);
+		return page.url();
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Inspects the current DOM for the canary: `reflected` = present anywhere;
+ * `escaped` = present as text (textContent) but never as raw markup, and no
+ * probe element (img/onerror) actually exists in the document.
+ */
+async function inspectReflection(page, canary) {
+	return page.evaluate(marker => {
+		// Strip quotes from the marker: HTML serialization escapes attribute
+		// quotes, so even an unescaped reflection shows "qz7&quot;'..." — the
+		// bare marker must never contain a character the serializer would mangle.
+		const markerText = marker.slice(0, marker.indexOf('<')).replace(/["']/g, '');
+		const reflected = document.documentElement.outerHTML.includes(markerText) || document.body.innerText.includes(markerText);
+		if (!reflected) return { reflected: false, escaped: false };
+		const executable = [...document.querySelectorAll('img')].some(img => img.getAttribute('src') === 'x' && img.hasAttribute('onerror'));
+		const textOnly = document.body.innerText.includes(markerText) && !executable;
+		return { reflected: true, escaped: textOnly };
+	}, canary).catch(() => ({ reflected: false, escaped: false }));
+}
+
 export function selectSnapshotElements(elements, requestedLimit) {
 	const limit = Number.isFinite(requestedLimit) ? Math.min(500, Math.max(1, Math.floor(requestedLimit))) : 150;
 	return [...elements.filter(element => element.interactive), ...elements.filter(element => !element.interactive)].slice(0, limit);
+}
+
+/**
+ * Bounds one browser operation. A wedged browser-service call (dead renderer,
+ * hung MCP round-trip) must never strand a run in 'running' with no way back —
+ * Stop only breaks the model stream, not an awaited tool promise. On timeout
+ * the agent receives a retryable error result it can act on instead of
+ * silence. Accepts a thunk or an already-started promise so both call shapes
+ * are safe.
+ */
+export function withBrowserOperationTimeout(work, timeoutMs, operation = 'browser operation') {
+	const run = typeof work === 'function' ? () => Promise.resolve().then(work) : () => Promise.resolve(work);
+	if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return run();
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			const error = new Error(`${operation} timed out after ${timeoutMs} ms. The browser may be unresponsive — retry once, then report the affected check as not tested with a reason.`);
+			error.name = 'BrowserOperationTimeout';
+			error.timedOut = true;
+			reject(error);
+		}, timeoutMs);
+		run().then(
+			result => { clearTimeout(timer); resolve(result); },
+			error => { clearTimeout(timer); reject(error); }
+		);
+	});
+}
+
+/** Back-compat alias for the snapshot-bound tests and callers. */
+export function withSnapshotTimeout(work, timeoutMs) {
+	return withBrowserOperationTimeout(work, timeoutMs, 'browser_snapshot');
 }
 
 /**
@@ -99,9 +185,38 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		subscribers: 0,
 		lastFrame: undefined,
 		securityBlocks: [],
+		destructiveLedger: new Set(Array.isArray(session.executedDestructiveActions) ? session.executedDestructiveActions : []),
 		disposed: false
 	};
 	let syntheticMedia = false;
+	// Abort race for in-flight interactions: stop() must unwind a browser
+	// action within the abort window instead of waiting out Playwright's
+	// default 30s action timeout.
+	let activeAbortSignal = null;
+
+	const raceAbort = promise => {
+		if (!activeAbortSignal) return promise;
+		const signal = activeAbortSignal;
+		if (signal.aborted) {
+			return Promise.reject(abortError());
+		}
+		const aborted = new Promise((_, reject) => {
+			const onAbort = () => {
+				clearTimeout(timer);
+				reject(abortError());
+			};
+			const timer = setTimeout(() => signal.removeEventListener('abort', onAbort), 5000);
+			signal.addEventListener('abort', onAbort, { once: true });
+		});
+		return Promise.race([promise, aborted]);
+	};
+
+	const abortError = () =>
+		Object.assign(new Error('The browser action was interrupted by a stop request.'), { name: 'AbortError' });
+
+	bridge.setAbortSignal = signal => {
+		activeAbortSignal = signal ?? null;
+	};
 
 	/*
 	 * Snapshots hand back selectors that actually identify one element.
@@ -117,66 +232,75 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	 * the page: the path is computed from the tree as it already stands.
 	 */
 	const originalSnapshot = service.snapshot.bind(service);
+	// A hung MCP snapshot (or the DOM pass below) must never wedge a run in
+	// 'running' forever — bound the whole operation like every other browser
+	// call (see withBrowserOperationTimeout). On timeout the agent gets a
+	// retryable error instead of silence, which it already knows how to
+	// handle ("inspect the resulting state and retry once with a different
+	// verified locator; then continue the plan").
+	const SNAPSHOT_TIMEOUT_MS = Math.max(5000, Number(process.env.QASE_SNAPSHOT_TIMEOUT_MS ?? 30_000));
 	service.snapshot = async (surface, options) => {
-		const snapshot = await originalSnapshot(surface, options);
-		const page = currentPage();
-		if (!page || !Array.isArray(snapshot.elements)) {
+		const work = (async () => {
+			const snapshot = await originalSnapshot(surface, options);
+			const page = currentPage();
+			if (!page || !Array.isArray(snapshot.elements)) {
+				return snapshot;
+			}
+
+			try {
+				// The same node list the snapshot enumerated, in the same order, so
+				// an element's `eN` id indexes straight into these paths.
+				const elements = await page.locator('body *:visible').evaluateAll(nodes => nodes.flatMap((node, index) => {
+					const rect = node.getBoundingClientRect();
+					if (rect.width < 1 || rect.height < 1) return [];
+					let selector;
+					if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) selector = `#${CSS.escape(node.id)}`;
+					for (const attribute of ['data-testid', 'data-test', 'data-cy']) {
+						const value = node.getAttribute(attribute);
+						if (!selector && value) {
+							const candidate = `[${attribute}="${CSS.escape(value)}"]`;
+							if (document.querySelectorAll(candidate).length === 1) selector = candidate;
+						}
+					}
+					const steps = [];
+					for (let element = selector ? undefined : node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
+						const tag = element.tagName.toLowerCase();
+						if (element.id && document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1) {
+							steps.unshift(`#${CSS.escape(element.id)}`);
+							break;
+						}
+						const siblings = [...(element.parentElement?.children ?? [])]
+							.filter(sibling => sibling.tagName === element.tagName);
+						steps.unshift(siblings.length > 1
+							? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})`
+							: tag);
+					}
+					return [{
+						id: `e${index + 1}`, tagName: node.tagName.toLowerCase(), selector: selector || steps.join(' > '),
+						interactive: node.matches('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[role="tab"],[role="slider"],[role="combobox"],[contenteditable="true"],[tabindex]:not([tabindex="-1"]),[onclick]'),
+						testId: node.getAttribute('data-testid') || undefined,
+						role: node.getAttribute('role') || undefined,
+						name: node.getAttribute('aria-label') || node.getAttribute('title') || undefined,
+						text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) || undefined,
+						ariaLabel: node.getAttribute('aria-label') || undefined,
+						placeholder: node.getAttribute('placeholder') || undefined,
+						href: node.href || undefined, type: node.getAttribute('type') || undefined,
+						checked: 'checked' in node ? Boolean(node.checked) : undefined,
+						disabled: 'disabled' in node ? Boolean(node.disabled) : undefined,
+						boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+					}];
+				}));
+				snapshot.elements = selectSnapshotElements(elements, options?.limit);
+				snapshot.elementCoverage = { total: elements.length, returned: snapshot.elements.length, omitted: elements.length - snapshot.elements.length };
+				snapshot.guidance = 'Controls are listed before layout elements. Use the supplied unique selector or a semantic locator; coordinates are viewport-relative and become stale after scrolling. If an action has no effect, inspect the resulting state and retry once with a different verified locator. Then record the observed defect or unresolved coverage and continue the plan; do not repeat the same attempt or claim untested checks passed.';
+			} catch {
+				// A snapshot with the SDK's selectors beats no snapshot at all.
+			}
+
 			return snapshot;
-		}
-
-		try {
-			// The same node list the snapshot enumerated, in the same order, so
-			// an element's `eN` id indexes straight into these paths.
-			const elements = await page.locator('body *:visible').evaluateAll(nodes => nodes.flatMap((node, index) => {
-				const rect = node.getBoundingClientRect();
-				if (rect.width < 1 || rect.height < 1) return [];
-				let selector;
-				if (node.id && document.querySelectorAll(`#${CSS.escape(node.id)}`).length === 1) selector = `#${CSS.escape(node.id)}`;
-				for (const attribute of ['data-testid', 'data-test', 'data-cy']) {
-					const value = node.getAttribute(attribute);
-					if (!selector && value) {
-						const candidate = `[${attribute}="${CSS.escape(value)}"]`;
-						if (document.querySelectorAll(candidate).length === 1) selector = candidate;
-					}
-				}
-				const steps = [];
-				for (let element = selector ? undefined : node; element && element.nodeType === 1 && element.tagName !== 'HTML'; element = element.parentElement) {
-					const tag = element.tagName.toLowerCase();
-					if (element.id && document.querySelectorAll(`#${CSS.escape(element.id)}`).length === 1) {
-						steps.unshift(`#${CSS.escape(element.id)}`);
-						break;
-					}
-					const siblings = [...(element.parentElement?.children ?? [])]
-						.filter(sibling => sibling.tagName === element.tagName);
-					steps.unshift(siblings.length > 1
-						? `${tag}:nth-of-type(${siblings.indexOf(element) + 1})`
-						: tag);
-				}
-				return [{
-					id: `e${index + 1}`, tagName: node.tagName.toLowerCase(), selector: selector || steps.join(' > '),
-					interactive: node.matches('a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[role="switch"],[role="checkbox"],[role="radio"],[role="tab"],[role="slider"],[role="combobox"],[contenteditable="true"],[tabindex]:not([tabindex="-1"]),[onclick]'),
-					testId: node.getAttribute('data-testid') || undefined,
-					role: node.getAttribute('role') || undefined,
-					name: node.getAttribute('aria-label') || node.getAttribute('title') || undefined,
-					text: (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300) || undefined,
-					ariaLabel: node.getAttribute('aria-label') || undefined,
-					placeholder: node.getAttribute('placeholder') || undefined,
-					href: node.href || undefined, type: node.getAttribute('type') || undefined,
-					checked: 'checked' in node ? Boolean(node.checked) : undefined,
-					disabled: 'disabled' in node ? Boolean(node.disabled) : undefined,
-					boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
-				}];
-			}));
-			snapshot.elements = selectSnapshotElements(elements, options?.limit);
-			snapshot.elementCoverage = { total: elements.length, returned: snapshot.elements.length, omitted: elements.length - snapshot.elements.length };
-			snapshot.guidance = 'Controls are listed before layout elements. Use the supplied unique selector or a semantic locator; coordinates are viewport-relative and become stale after scrolling. If an action has no effect, inspect the resulting state and retry once with a different verified locator. Then record the observed defect or unresolved coverage and continue the plan; do not repeat the same attempt or claim untested checks passed.';
-		} catch {
-			// A snapshot with the SDK's selectors beats no snapshot at all.
-		}
-
-		return snapshot;
+		})();
+		return await withSnapshotTimeout(work, SNAPSHOT_TIMEOUT_MS);
 	};
-
 	/*
 	 * Locators resolve to visible elements only.
 	 *
@@ -414,14 +538,13 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 					// Remote real device / desktop via BrowserStack CDP. The
 					// capability map comes from the environment snapshot; no
 					// local launch, no synthetic media (that is local-only).
+					// Multi-engine note: remote environments always run the
+					// provider's Chromium; secondary engines are local-only.
 					service.browser = await connectBrowserstack(chromium, execution.connectOptions);
 					try {
 						service.context = service.browser.contexts()[0] ?? await service.browser.newContext();
 						syntheticMedia = false;
 						await installNetworkPolicy(service.context);
-						// Remote runtime facts: read the genuine UA/viewport from the
-						// provider's page — REAL_DEVICE/VIRTUAL_DEVICE facts are never
-						// synthesized locally.
 						try {
 							const probe = await service.context.newPage();
 							bridge.runtimeFacts = await probe.evaluate(() => ({
@@ -443,18 +566,29 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						throw error;
 					}
 				}
-				// Full Chromium supports native media on Windows; the separate
-				// headless-shell build can expose getUserMedia but reject every call.
-				const bundledExecutable = chromium.executablePath();
-				const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
-				// Launch ourselves because the SDK exposes no Chromium argument hook.
-				// Native getUserMedia can only receive synthetic devices in this process.
-				const launch = { headless, args: [...SYNTHETIC_MEDIA_ARGS] };
-				try {
-					service.browser = await chromium.launch({ ...launch, executablePath });
-				} catch (error) {
-					if (executablePath === bundledExecutable) throw error;
-					service.browser = await chromium.launch({ ...launch, executablePath: bundledExecutable });
+				// Multi-engine: the session's engine decides the browser type.
+				// Chromium keeps synthetic-media args; secondary engines launch
+				// plainly (synthetic media is a Chromium-only capability).
+				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
+				const engine = await resolveEngine(engineId);
+				if (!engine.available) {
+					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
+					error.code = 'ENGINE_UNAVAILABLE';
+					throw error;
+				}
+				const launch = { headless };
+				if (engine.id === 'chromium') {
+					launch.args = [...SYNTHETIC_MEDIA_ARGS];
+					const bundledExecutable = engine.type.executablePath();
+					const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
+					try {
+						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath });
+					} catch (error) {
+						if (executablePath === bundledExecutable) throw error;
+						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath: bundledExecutable });
+					}
+				} else {
+					service.browser = await engine.type.launch({ ...launch, ...engine.launch });
 				}
 				try {
 					// Phase 20: the emulated context applies the environment's
@@ -485,7 +619,7 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 							await service.context.grantPermissions(grantable).catch(() => {});
 						}
 					}
-					syntheticMedia = true;
+					syntheticMedia = engine.id === 'chromium';
 					await installNetworkPolicy(service.context);
 					// Runtime facts: read back what the browser ACTUALLY got —
 					// the UA the page sees and the viewport in use — so the run
@@ -607,6 +741,99 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	};
 
 	const viewportOf = page => page?.viewportSize() ?? { width: 1440, height: 900 };
+
+	/**
+	 * Host-driven security suite (ticket #12959). Runs deterministic checks
+	 * against the current page: response headers + cookies from live state, XSS
+	 * reflection through the page's own forms (benign canary), SQL error
+	 * signatures after a benign quote payload, mixed content from diagnostics.
+	 * The network policy stays in charge of destinations — probes use the
+	 * page's own form and URL, never a new origin.
+	 */
+	bridge.runSecurityChecks = async ({ checks } = {}) => {
+		await service.ensurePage();
+		const page = currentPage();
+		const pageUrl = page.url();
+		const decision = await policy.evaluateNavigation(pageUrl);
+		if (!decision.allowed) return policy.asBlockedResult(decision);
+
+		const wanted = new Set(Array.isArray(checks) && checks.length ? checks : SECURITY_CHECK_IDS);
+		const results = [];
+
+		// Main-document response + cookies from live browser state.
+		let mainResponse;
+		try {
+			const response = await page.goto(pageUrl, { waitUntil: 'domcontentloaded' });
+			mainResponse = response ?? undefined;
+		} catch { /* keep whatever state we had */ }
+		const headerObject = {};
+		for (const [key, value] of (mainResponse?.headers?.() ? Object.entries(mainResponse.headers()) : [])) {
+			headerObject[key] = value;
+		}
+		if (wanted.has('csp') || wanted.has('hsts') || wanted.has('x_frame_options')
+			|| wanted.has('x_content_type_options') || wanted.has('referrer_policy')) {
+			results.push(...checkResponseHeaders({
+				url: pageUrl,
+				status: mainResponse?.status?.(),
+				headers: headerObject
+			}).filter(result => wanted.has(result.id)));
+		}
+		if (wanted.has('cookie_flags')) {
+			let cookies = [];
+			try { cookies = await service.context.cookies(pageUrl); } catch { /* page may have navigated */ }
+			const documentCookie = await page.evaluate(() => document.cookie).catch(() => '');
+			results.push(...checkCookies({ url: pageUrl, cookies, documentCookie }));
+		}
+
+		// XSS reflection: submit the canary through the page's own search-like form.
+		if (wanted.has('xss_reflection')) {
+			const probeUrl = await submitCanaryThroughForms(page, XSS_CANARY);
+			if (probeUrl) {
+				const reflection = await inspectReflection(page, XSS_CANARY);
+				results.push(checkXssReflection({ url: probeUrl, ...reflection }));
+			} else {
+				results.push({
+					id: 'xss_reflection', title: 'xss_reflection', category: 'security', severity: 'info',
+					status: 'info', url: pageUrl,
+					evidence: 'No text input form found to submit the reflection canary.',
+					remediation: undefined
+				});
+			}
+		}
+
+		// SQL error signatures: benign quote payload through the same forms.
+		if (wanted.has('sqli_error_signature')) {
+			const quoteUrl = await submitCanaryThroughForms(page, "'\" --qase");
+			if (quoteUrl) {
+				const bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 200_000) ?? '').catch(() => '');
+				results.push(checkSqlErrorSignature({ url: quoteUrl, responseText: bodyText }));
+			} else {
+				results.push({
+					id: 'sqli_error_signature', title: 'sqli_error_signature', category: 'security', severity: 'info',
+					status: 'info', url: pageUrl,
+					evidence: 'No text input form found to submit the benign quote payload.',
+					remediation: undefined
+				});
+			}
+		}
+
+		// Mixed content from the diagnostics the page already produced.
+		if (wanted.has('mixed_content')) {
+			const diagnostics = await service.getDiagnostics('ide', {}).catch(() => undefined);
+			const requests = (diagnostics?.network ?? []).map(entry => ({ url: entry.url }));
+			results.push(...checkMixedContent({ url: pageUrl, requests }));
+		}
+
+		const report = {
+			success: true,
+			url: pageUrl,
+			checkedAt: Date.now(),
+			results,
+			limitations: 'Benign, deterministic checks only: header presence, cookie flags, reflection escaping, database error signatures, mixed content. No destructive or time-based payloads; absence of findings is not a full penetration test.'
+		};
+		await runStore.commit(session, 'security', { securityReport: report });
+		return report;
+	};
 
 	/**
 	 * Where the action is about to land, in viewport coordinates. Falls back to
@@ -803,11 +1030,48 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 					return policy.asBlockedResult(navigation);
 				}
 			}
+			// Mechanical no-repeat guard. Prompt-level "do not redo"
+			// instructions are advisory; a recovery turn that re-plans from
+			// scratch could re-send a message or re-purchase. Every executed
+			// destructive action is ledgered by category + target, and an
+			// identical re-execution in the same session is refused with a
+			// verify-instead instruction. Checked against the PERSISTED ledger
+			// (session record) BEFORE the policy grant: a fresh bridge after a
+			// crash-restart has no grant left, so the policy would otherwise
+			// demand a new confirmation — and a "yes" there would re-execute.
+			const ledgerRisk = classifyDestructiveAction(method, descriptor);
+			if (ledgerRisk) {
+				const ledgerKey = `${ledgerRisk.category}::${String(descriptor.text ?? descriptor.ariaLabel ?? descriptor.label ?? descriptor.name ?? descriptor.destination ?? input?.text ?? input?.selector ?? '')}`.slice(0, 300).toLowerCase();
+				if (bridge.destructiveLedger.has(ledgerKey)) {
+					return {
+						success: false,
+						code: 'ACTION_ALREADY_EXECUTED',
+						error: `This destructive ${ledgerRisk.category} action was already executed in this session. Do NOT repeat it. Verify the result instead (snapshot, URL, or confirmation state), then continue the assessment.`
+					};
+				}
+				bridge.pendingLedgerKey = ledgerKey;
+			}
 			const authorization = policy.authorizeAction(method, descriptor, session.messages);
 			if (!authorization.allowed) {
 				recordSecurityBlock(authorization, { method });
 				return policy.asBlockedResult(authorization);
 			}
+			if (authorization.confirmationUsed && bridge.pendingLedgerKey) {
+				// Mirror the ledger into the session record so it survives a
+				// crash-restart: the bridge is rebuilt by ensureRuntime on
+				// resume, but the recovered turn must still see what was
+				// already executed. Bounded: the Set guard above prevents
+				// duplicates, and the 300-char key cap bounds each entry.
+				bridge.destructiveLedger.add(bridge.pendingLedgerKey);
+				if (!Array.isArray(session.executedDestructiveActions)) session.executedDestructiveActions = [];
+				if (!session.executedDestructiveActions.includes(bridge.pendingLedgerKey)) {
+					session.executedDestructiveActions.push(bridge.pendingLedgerKey);
+					void runStore.commit(session, 'browser', {
+						browser: { action: 'destructive_executed', category: ledgerRisk.category }
+					}).catch(() => undefined);
+				}
+			}
+			bridge.pendingLedgerKey = undefined;
 			const securityMarker = bridge.securityBlocks.length;
 
 			// Fail deterministic locator problems before Playwright spends its full
@@ -836,7 +1100,7 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 
 			let result;
 			try {
-				result = await original(surface, input);
+				result = await raceAbort(original(surface, input));
 			} catch (error) {
 				const navigationBlock = bridge.securityBlocks.slice(securityMarker).find(entry => entry.topLevel);
 				if (navigationBlock) {
@@ -887,6 +1151,24 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		wrap(method, options);
 	}
 
+	/*
+	 * browser_wait clamp. The SDK schema promises "capped at 30000" for both
+	 * ms and timeoutMs but the driver passes them straight to Playwright, so a
+	 * model-supplied oversized value stalls the run indefinitely. Enforce the
+	 * documented bound here, where every implementation detail is visible.
+	 */
+	const originalWait = service.wait?.bind(service);
+	if (originalWait) {
+		const clampWaitInput = input => {
+			if (!input || typeof input !== 'object') return input;
+			const clamped = { ...input };
+			if (clamped.ms !== undefined) clamped.ms = Math.max(0, Math.min(30_000, Number(clamped.ms) || 0));
+			if (clamped.timeoutMs !== undefined) clamped.timeoutMs = Math.max(0, Math.min(30_000, Number(clamped.timeoutMs) || 0));
+			return clamped;
+		};
+		service.wait = (surface, input) => originalWait(surface, clampWaitInput(input));
+	}
+
 	// Credential placeholders become real values here, at the last moment before
 	// the keystrokes reach the page, and never anywhere the model can observe.
 	const originalFill = service.fill.bind(service);
@@ -909,10 +1191,34 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			};
 		}
 		const descriptor = await resolveActionDescriptor();
-		const authorization = policy.authorizeAction('typeText', descriptor, session.messages);
-		if (!authorization.allowed) {
-			recordSecurityBlock(authorization, { method: 'typeText' });
-			return policy.asBlockedResult(authorization);
+		// Same mechanical no-repeat guard as wrap(): the ledger check precedes
+		// the policy gate so a post-restart approval cannot re-execute a
+		// destructive action taken via typed text.
+		const ledgerRisk = classifyDestructiveAction('typeText', descriptor);
+		if (ledgerRisk) {
+			const ledgerKey = `typeText::${String(descriptor.text ?? descriptor.ariaLabel ?? descriptor.label ?? descriptor.name ?? '')}`.slice(0, 300).toLowerCase();
+			if (bridge.destructiveLedger.has(ledgerKey)) {
+				return {
+					success: false,
+					code: 'ACTION_ALREADY_EXECUTED',
+					error: `This destructive ${ledgerRisk.category} action was already executed in this session. Do NOT repeat it. Verify the result instead (snapshot, URL, or confirmation state), then continue the assessment.`
+				};
+			}
+			const authorization = policy.authorizeAction('typeText', descriptor, session.messages);
+			if (!authorization.allowed) {
+				recordSecurityBlock(authorization, { method: 'typeText' });
+				return policy.asBlockedResult(authorization);
+			}
+			if (authorization.confirmationUsed) {
+				bridge.destructiveLedger.add(ledgerKey);
+				if (!Array.isArray(session.executedDestructiveActions)) session.executedDestructiveActions = [];
+				if (!session.executedDestructiveActions.includes(ledgerKey)) {
+					session.executedDestructiveActions.push(ledgerKey);
+					void runStore.commit(session, 'browser', {
+						browser: { action: 'destructive_executed', category: ledgerRisk.category }
+					}).catch(() => undefined);
+				}
+			}
 		}
 		return originalType(surface, resolveSecrets(session.id, text));
 	};
@@ -971,20 +1277,24 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	// Qase deliberately blocked that asset from reaching a private address.
 	const originalDiagnostics = service.getDiagnostics?.bind(service);
 	if (originalDiagnostics) {
-		service.getDiagnostics = async (surface, diagnosticOptions = {}) => {
-			const result = await originalDiagnostics(surface, diagnosticOptions);
-			const securityBlocks = bridge.securityBlocks.map(entry => ({ ...entry }));
-			if (diagnosticOptions.clear) bridge.securityBlocks.length = 0;
-			// A live mobile/tablet run gets a bounded DOM-only audit attached so the
-			// agent sees viewport-meta, overflow, and tap-target evidence alongside
-			// console/network. Desktop runs skip the audit entirely.
-			let mobileAudit;
-			if (deviceProfile?.kind && deviceProfile.kind !== 'desktop') {
-				mobileAudit = await runMobileAudit(currentPage());
-			}
-			const formValidation = await inspectFormValidation(currentPage());
-			return { ...result, securityBlocks, ...(mobileAudit ? { mobileAudit } : {}), ...(formValidation ? { formValidation } : {}) };
-		};
+		// getDiagnostics reaches into the live page (state(), plus the form and
+		// mobile audits below). A dead renderer wedges page.title() forever, so
+		// bound the whole operation like every other browser call.
+		service.getDiagnostics = (surface, diagnosticOptions = {}) =>
+			withBrowserOperationTimeout(async () => {
+				const result = await originalDiagnostics(surface, diagnosticOptions);
+				const securityBlocks = bridge.securityBlocks.map(entry => ({ ...entry }));
+				if (diagnosticOptions.clear) bridge.securityBlocks.length = 0;
+				// A live mobile/tablet run gets a bounded DOM-only audit attached so the
+				// agent sees viewport-meta, overflow, and tap-target evidence alongside
+				// console/network. Desktop runs skip the audit entirely.
+				let mobileAudit;
+				if (deviceProfile?.kind && deviceProfile.kind !== 'desktop') {
+					mobileAudit = await runMobileAudit(currentPage());
+				}
+				const formValidation = await inspectFormValidation(currentPage());
+				return { ...result, securityBlocks, ...(mobileAudit ? { mobileAudit } : {}), ...(formValidation ? { formValidation } : {}) };
+			}, SNAPSHOT_TIMEOUT_MS, 'browser_diagnostics');
 	}
 
 	const sameFrame = (left, right) => Boolean(left && right &&

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -265,9 +266,62 @@ test('session persistence is not blocked by a stale PID temp directory', async t
 	assert.equal(persisted.some(candidate => candidate.id === session.id), true);
 });
 
-test('session history is persisted with owner-only permissions', async t => {
+test('setStatus records the first run start and keeps it across turns', async t => {
 	const originalDirectory = process.cwd();
-	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-session-mode-'));
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-run-started-store-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?run-started=${Date.now()}`);
+	const session = store.createSession('Timer anchor');
+
+	assert.equal(session.runStartedAt, undefined, 'no anchor before the first run');
+	store.setStatus(session, 'idle');
+	assert.equal(session.runStartedAt, undefined, 'idle does not anchor a run');
+
+	const before = Date.now();
+	store.setStatus(session, 'running');
+	const anchor = session.runStartedAt;
+	assert.equal(typeof anchor, 'number', 'first running status anchors the timer');
+	assert.ok(anchor >= before && anchor <= Date.now());
+
+	// Pause for input and resume: still the same anchor, not a second clock.
+	store.setStatus(session, 'awaiting_input');
+	store.setStatus(session, 'running');
+	assert.equal(session.runStartedAt, anchor, 'resumed turns reuse the original start');
+
+	store.flushSessions();
+	const restored = await import(`./store.js?run-started-read=${Date.now()}`);
+	restored.loadSessions();
+	assert.equal(restored.getSession(session.id).runStartedAt, anchor, 'anchor survives persistence');
+	restored.flushSessions();
+});
+
+test('pilot cohort is persisted on the session and survives a reload', async t => {
+	const originalDirectory = process.cwd();
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-cohort-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(directory, { recursive: true, force: true });
+	});
+	process.chdir(directory);
+	const first = await import(`./store.js?cohort-write=${Date.now()}`);
+	const pilot = first.createSession('Pilot cohort', { cohort: 'pilot' });
+	const developer = first.createSession('Developer cohort', {});
+	assert.equal(pilot.cohort, 'pilot', 'cohort=pilot stored from create options');
+	assert.equal(developer.cohort, undefined, 'non-pilot sessions carry no cohort');
+	first.flushSessions();
+	const restored = await import(`./store.js?cohort-read=${Date.now()}`);
+	restored.loadSessions();
+	assert.equal(restored.getSession(pilot.id).cohort, 'pilot', 'cohort survives persistence');
+	assert.equal(restored.getSession(developer.id).cohort, undefined);
+	restored.flushSessions();
+});
+
+test('session history is persisted with owner-only permissions', async t => {
+	const originalDirectory = process.cwd();	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-session-mode-'));
 	t.after(async () => {
 		process.chdir(originalDirectory);
 		await fs.rm(isolatedDirectory, { recursive: true, force: true });
@@ -278,4 +332,118 @@ test('session history is persisted with owner-only permissions', async t => {
 	store.flushSessions();
 	const metadata = await fs.stat(path.join(isolatedDirectory, '.qase', 'sessions.json'));
 	assert.equal(metadata.mode & 0o777, 0o600);
+});
+
+test('finding statuses validate, default to open, and persist through reload', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-finding-status-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?status-write=${Date.now()}`);
+	assert.deepEqual(store.FINDING_STATUSES, ['open', 'in_progress', 'fixed', 'wont_fix']);
+	assert.equal(store.isFindingStatus('fixed'), true);
+	assert.equal(store.isFindingStatus('closed'), false);
+
+	const legacy = { id: randomUUID(), ts: 1234, severity: 'high', title: 'Legacy bug', actual: 'boom' };
+	const normalized = store.normalizeFindingStatus(legacy);
+	assert.equal(normalized.status, 'open');
+	assert.equal(normalized.statusTs, 1234);
+	assert.equal(normalized.statusNote, '');
+	assert.equal(legacy.status, undefined, 'normalize must not mutate the input');
+
+	const session = store.createSession('Status persistence', { findings: [legacy] });
+	assert.equal(session.findings[0].status, 'open');
+
+	const updated = store.setFindingStatus(session, legacy.id, { status: 'in_progress', note: '  triaged by owner  ' });
+	assert.equal(updated.status, 'in_progress');
+	assert.equal(updated.statusNote, 'triaged by owner');
+	assert.ok(updated.statusTs >= 1235);
+
+	assert.throws(() => store.setFindingStatus(session, legacy.id, { status: 'closed' }),
+		error => error.code === 'QASE_FINDING_STATUS_INVALID');
+	assert.throws(() => store.setFindingStatus(session, randomUUID(), { status: 'fixed' }),
+		error => error.code === 'QASE_FINDING_NOT_FOUND');
+	assert.throws(() => store.setFindingStatus(session, legacy.id, { status: 'fixed', note: 'x'.repeat(501) }),
+		error => error.code === 'QASE_FINDING_STATUS_INVALID');
+
+	store.flushSessions();
+	const reloaded = await import(`./store.js?status-read=${Date.now()}`);
+	reloaded.loadSessions();
+	const restored = reloaded.getSession(session.id);
+	assert.equal(restored.findings[0].status, 'in_progress');
+	assert.equal(restored.findings[0].statusNote, 'triaged by owner');
+
+	// An empty note string clears the stored note.
+	reloaded.setFindingStatus(restored, restored.findings[0].id, { status: 'fixed', note: '' });
+	assert.equal(restored.findings[0].statusNote, '');
+});
+
+test('aggregateFindings filters by owner, composes filters, and sorts severity-first', async t => {
+	const originalDirectory = process.cwd();
+	const isolatedDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'qase-aggregate-findings-'));
+	t.after(async () => {
+		process.chdir(originalDirectory);
+		await fs.rm(isolatedDirectory, { recursive: true, force: true });
+	});
+	process.chdir(isolatedDirectory);
+	const store = await import(`./store.js?aggregate=${Date.now()}`);
+	const ownerA = randomUUID();
+	const ownerB = randomUUID();
+
+	const runA = store.createSession('Run A', { ownerUserId: ownerA });
+	runA.targetUrl = 'https://shop.test';
+	runA.findings = [
+		{ id: randomUUID(), ts: 100, severity: 'medium', title: 'Cart icon misaligned', category: 'ui', url: 'https://shop.test/cart', actual: 'off by 2px' },
+		{ id: randomUUID(), ts: 200, severity: 'critical', title: 'Checkout 500', category: 'checkout', url: 'https://shop.test/checkout', actual: 'server error' },
+		{ id: randomUUID(), ts: 300, severity: 'critical', title: 'Payment double charge', category: 'checkout', url: 'https://shop.test/pay', actual: 'charged twice' },
+		{ id: randomUUID(), ts: 400, severity: 'low', title: 'Old copyright', category: 'footer', url: 'https://shop.test/', actual: 'stale year' }
+	].map(store.normalizeFindingStatus);
+	store.setFindingStatus(runA, runA.findings[2].id, { status: 'fixed' });
+	store.setFindingStatus(runA, runA.findings[3].id, { status: 'wont_fix' });
+
+	const runB = store.createSession('Run B', { ownerUserId: ownerA });
+	runB.targetUrl = 'https://blog.test';
+	runB.findings = [
+		{ id: randomUUID(), ts: 500, severity: 'high', title: 'Broken pagination', category: 'nav', url: 'https://blog.test/2', actual: 'empty list' }
+	].map(store.normalizeFindingStatus);
+
+	const runOther = store.createSession('Run B-owner', { ownerUserId: ownerB });
+	runOther.findings = [
+		{ id: randomUUID(), ts: 600, severity: 'critical', title: 'Not mine', category: 'x', url: 'https://other.test', actual: 'nope' }
+	].map(store.normalizeFindingStatus);
+
+	const sqa = store.createSession('SQA run', { ownerUserId: ownerA });
+	sqa.mode = 'sqa';
+
+	const all = store.aggregateFindings({ ownerUserId: ownerA });
+	assert.equal(all.length, 5, 'ownerA sees only own QA findings (SQA skipped)');
+	assert.equal(all.some(row => row.title === 'Not mine'), false);
+	assert.equal(all.find(row => row.title === 'Checkout 500').actual, 'server error', 'detail fields travel with rows');
+
+	const sevOrder = all.map(row => row.severity);
+	assert.deepEqual(sevOrder, ['critical', 'critical', 'high', 'medium', 'low'], 'severity-major, newest first within severity');
+	assert.deepEqual(all.filter(row => row.severity === 'critical').map(row => row.ts), [300, 200]);
+
+	const fixed = store.aggregateFindings({ ownerUserId: ownerA, status: 'fixed' });
+	assert.deepEqual(fixed.map(row => row.title), ['Payment double charge']);
+
+	const composed = store.aggregateFindings({ ownerUserId: ownerA, status: 'open', severity: 'critical', runId: runA.id });
+	assert.deepEqual(composed.map(row => row.title), ['Checkout 500']);
+
+	const search = store.aggregateFindings({ ownerUserId: ownerA, search: 'CHECKOUT' });
+	assert.equal(search.length, 2, 'case-insensitive match across title/category/url');
+	const unicode = store.aggregateFindings({ ownerUserId: ownerA, search: 'PAYMENT' });
+	assert.equal(unicode.length, 1);
+
+	const limited = store.aggregateFindings({ ownerUserId: ownerA, limit: 2 });
+	assert.equal(limited.length, 2);
+
+	assert.deepEqual(store.aggregateFindings({ ownerUserId: randomUUID() }), []);
+	assert.throws(() => store.aggregateFindings({ status: 'closed' }),
+		error => error.code === 'QASE_FINDING_STATUS_INVALID');
+	assert.throws(() => store.aggregateFindings({ severity: 'blocker' }),
+		error => error.code === 'QASE_FINDING_SEVERITY_INVALID');
 });
