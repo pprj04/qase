@@ -3860,6 +3860,8 @@ const qaUi = {
 	scopeSelectAll: $('qa-scope-select-all'),
 	scopeDeselectAll: $('qa-scope-deselect-all'),
 	scopeOptions: $('qa-scope-options'),
+	founderMode: $('qa-founder-mode'),
+	compliance: $('qa-compliance'),
 	engineOptions: $('qa-engine-options'),
 	error: $('qa-form-error')
 };
@@ -4060,6 +4062,16 @@ if (qaUi.dialog) {
 				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1 });
 			}
 			closeQaStart();
+			// Optional follow-on flows: the QA run is already underway; each
+			// checked option opens the existing dialog prefilled with the same
+			// target for the user to confirm — nothing starts automatically.
+			if (qaUi.founderMode?.checked) {
+				await openFounderStart();
+				founderUi.targetUrl.value = targetUrl;
+			} else if (qaUi.compliance?.checked) {
+				await openSqaStart();
+				sqaUi.targetUrl.value = targetUrl;
+			}
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 		} finally {

@@ -525,6 +525,14 @@
         </div>
         <small>Everything is preselected so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
       </fieldset>
+      <fieldset class="qa-optional-fieldset">
+        <legend>Optional choices</legend>
+        <div class="scope-options" id="qa-optional-options">
+          <label class="check"><input id="qa-founder-mode" type="checkbox"><span>Founder Mode</span></label>
+          <label class="check"><input id="qa-compliance" type="checkbox"><span>Compliance (SQA assessment)</span></label>
+        </div>
+        <small>Both are optional. When checked, the corresponding review flow opens after this QA run starts — prefilled with the same target, and you confirm before anything runs.</small>
+      </fieldset>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
     </div>
     <footer class="modal-foot">
