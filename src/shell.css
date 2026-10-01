@@ -352,6 +352,151 @@ button {
 
 /* ── Viewer panel ───────────────────────────────────────── */
 
+.viewer-pane {
+  width: var(--viewer-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--sp-border);
+  background: var(--sp-bg-card);
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+.viewer-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--sp-border);
+  min-height: 44px;
+  align-items: center;
+}
+
+.viewer-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--sp-radius-sm);
+  padding: var(--sp-1) var(--sp-3);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--theme-text-muted);
+  cursor: pointer;
+}
+.viewer-tab:hover { color: var(--theme-text); background: var(--sp-bg-subtle); }
+.viewer-tab.is-active {
+  color: var(--theme-text);
+  background: var(--sp-bg-active);
+  border-color: var(--sp-border);
+  font-weight: 600;
+}
+
+.viewer-stage-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--sp-3);
+  gap: var(--sp-2);
+  overflow: auto;
+}
+
+.viewer-stage {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius);
+  background: var(--theme-bg-subtle, #fff);
+  overflow: hidden;
+  transition: max-height var(--dur-base) var(--ease-out), opacity var(--dur-base) var(--ease-out);
+  max-height: 70%;
+}
+.viewer-stage.is-collapsed {
+  max-height: 40px;
+  opacity: 0.75;
+}
+
+.stage-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--sp-border);
+  background: var(--sp-bg-subtle);
+  min-height: 38px;
+}
+.stage-url-text {
+  font-family: var(--sp-font-mono, ui-monospace, 'SF Mono', Menlo, monospace);
+  font-size: 0.75rem;
+  color: var(--theme-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2);
+  min-height: 0;
+  overflow: auto;
+}
+.stage-frame img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--sp-radius-sm);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+}
+
+.viewer-stage.is-collapsed .stage-frame { display: none; }
+
+.stage-collapse-btn { align-self: flex-end; }
+
+.viewer-tabpanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+.findings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.finding-card {
+  border: 1px solid var(--sp-border);
+  border-left: 3px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--theme-bg, var(--sp-bg-card));
+}
+.finding--critical,
+.finding--high { border-left-color: var(--sp-danger, #d73a49); }
+.finding--medium { border-left-color: var(--sp-warn, #d29922); }
+.finding--low { border-left-color: var(--sp-info, #2f5bea); }
+.finding-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--theme-text-muted);
+}
+.finding-evidence-tag {
+  border: 1px solid var(--sp-border);
+  border-radius: 999px;
+  padding: 0 var(--sp-2);
+  font-size: 0.625rem;
+}
+.finding-title { margin: var(--sp-1) 0 0; font-weight: 600; font-size: 0.875rem; }
+.finding-detail { margin: var(--sp-1) 0 0; font-size: 0.8125rem; color: var(--theme-text-muted); }
+
+.report-view { font-size: 0.875rem; }
+.report-view > :first-child { margin-top: 0; }
+
 .viewer {
   width: var(--viewer-w);
   display: flex;
@@ -1384,6 +1529,7 @@ button {
 /* ── Responsive ─────────────────────────────────────────── */
 
 @media (max-width: 1100px) {
+  .viewer-pane,
   .viewer:not(.collapsed) {
     width: 380px;
   }
@@ -1393,6 +1539,7 @@ button {
   .shell-body {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
+  .viewer-pane,
   .viewer:not(.collapsed) {
     position: absolute;
     right: 52px;

@@ -17,14 +17,21 @@ test('phase 1: vite config builds react app under /app-react/ base', () => {
 
 test('phase 1: react app shell renders structural landmarks', () => {
   const app = read('src/App.tsx');
-  // collapsible sidebar, conversation column, collapsible viewer, mode rail, status bar
+  // collapsible sidebar, conversation column, mode rail, status bar
   assert.match(app, /className="sidebar/);
   assert.match(app, /className="conversation"/);
-  assert.match(app, /className="viewer/);
   assert.match(app, /className="mode-rail"/);
   assert.match(app, /className="status-bar"/);
   assert.match(app, /data-testid="sidebar-toggle"/);
-  assert.match(app, /data-testid="viewer-toggle"/);
+  // viewer is its own component since Phase 4/5 (tabs + stage + auto-collapse)
+  const viewer = read('src/components/ViewerPanel.tsx');
+  assert.match(viewer, /className="viewer-pane"/);
+  assert.match(viewer, /viewer-tab-\$\{id\}/);
+  assert.match(viewer, /id="panel-browser"/);
+  assert.match(viewer, /id="panel-findings"/);
+  assert.match(viewer, /id="panel-report"/);
+  // QA launcher dialog is driven from the sidebar "New run" button
+  assert.match(app, /QaLauncher open=\{launcherOpen\}/);
 });
 
 test('phase 1: theme system — tokens for light and dark, toggle, no-flash script', () => {

@@ -1,24 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ThemeToggle } from './theme/ThemeToggle';
 import { RunList } from './components/RunList';
 import { SessionStoreProvider, useSessionStore } from './state/sessionStore';
 import { LiveSessionProvider, useLiveSession } from './state/liveSession';
+import { ConfigProvider } from './state/configStore';
 import { AuthProvider, useAuth } from './state/authStore';
 import { ToastProvider, useToast } from './state/toastStore';
 import { AuthGate } from './components/AuthGate';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ProfileDialog } from './components/ProfileDialog';
 import { Transcript } from './components/Transcript';
+import { QaLauncher } from './components/QaLauncher';
+import { ViewerPanel } from './components/ViewerPanel';
 
 export function App() {
   return (
     <ToastProvider>
       <AuthProvider>
-        <SessionStoreProvider>
-          <LiveSessionProvider>
-            <AppShell />
-          </LiveSessionProvider>
-        </SessionStoreProvider>
+        <ConfigProvider>
+          <SessionStoreProvider>
+            <LiveSessionProvider>
+              <AppShell />
+            </LiveSessionProvider>
+          </SessionStoreProvider>
+        </ConfigProvider>
       </AuthProvider>
     </ToastProvider>
   );
@@ -26,9 +31,9 @@ export function App() {
 
 function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [viewerOpen, setViewerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [launcherOpen, setLauncherOpen] = useState(false);
   const { connection, runs } = useSessionStore();
   const { session: liveSession, openSession } = useLiveSession();
   const { status, user, signOut } = useAuth();
@@ -38,15 +43,6 @@ function AppShell() {
     : connection === 'reconnecting' ? 'reconnecting…'
     : 'connecting…';
   const runningCount = runs.filter((run) => run.status === 'running').length;
-  // Auto-collapse the viewer below 1000px so its narrow-width overlay never
-  // hides transcript content (Phase 4 responsive).
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 1000px)');
-    const apply = () => setViewerOpen(!mq.matches);
-    apply();
-    mq.addEventListener('change', apply);
-    return () => mq.removeEventListener('change', apply);
-  }, []);
 
   const initials = (user?.displayName || user?.email || '?').trim().slice(0, 1).toUpperCase();
   // Selecting a run in the list opens its live session stream.
@@ -103,7 +99,7 @@ function AppShell() {
         <aside className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`} aria-label="Runs">
           <div className="sidebar-head">
             <span className="sidebar-title">Runs</span>
-            <button type="button" className="btn btn-secondary btn-sm" data-testid="new-run" disabled>
+            <button type="button" className="btn btn-secondary btn-sm" data-testid="new-run" onClick={() => setLauncherOpen(true)}>
               New run
             </button>
           </div>
@@ -150,24 +146,7 @@ function AppShell() {
           <Transcript />
         </main>
 
-        <aside className={`viewer ${viewerOpen ? '' : 'collapsed'}`} aria-label="Browser preview">
-          <div className="viewer-head">
-            <span className="viewer-title">Browser</span>
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label={viewerOpen ? 'Collapse browser panel' : 'Expand browser panel'}
-              aria-expanded={viewerOpen}
-              onClick={() => setViewerOpen((v) => !v)}
-              data-testid="viewer-toggle"
-            >
-              {viewerOpen ? <PanelRightCloseIcon /> : <PanelRightOpenIcon />}
-            </button>
-          </div>
-          <div className="viewer-body" data-testid="viewer-body">
-            <div className="empty-hint">The live browser appears here while a run is in progress.</div>
-          </div>
-        </aside>
+        <ViewerPanel />
 
         <nav className="mode-rail" aria-label="Modes and tools">
           <button type="button" className="rail-btn is-active" aria-pressed="true" title="QA mode">
@@ -211,6 +190,7 @@ function AppShell() {
       <AuthGate />
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
+      <QaLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} onRunCreated={openRun} />
     </div>
   );
 }
@@ -223,24 +203,7 @@ function PanelLeftIcon() {
     </svg>
   );
 }
-function PanelRightCloseIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
-      <path d="M12.5 3.5v13" />
-      <path d="M15 7l-1.5 3L15 13" />
-    </svg>
-  );
-}
-function PanelRightOpenIcon() {
-  return (
-    <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-      <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
-      <path d="M12.5 3.5v13" />
-      <path d="M14 7l1.5 3L14 13" />
-    </svg>
-  );
-}
+
 function BeakerIcon() {
   return (
     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
