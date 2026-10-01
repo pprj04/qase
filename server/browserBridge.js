@@ -534,11 +534,21 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
+				// Multi-engine: the session's engine decides the browser type.
+				// Chromium keeps synthetic-media args; secondary engines launch
+				// plainly (synthetic media is a Chromium-only capability).
+				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
+				const engine = await resolveEngine(engineId);
+				if (!engine.available) {
+					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
+					error.code = 'ENGINE_UNAVAILABLE';
+					throw error;
+				}
 				if (execution.mode === 'environment') {
 					// Remote real device / desktop via BrowserStack CDP. The
 					// capability map comes from the environment snapshot; no
 					// local launch, no synthetic media (that is local-only).
-					service.browser = await connectBrowserstack(chromium, execution.connectOptions);
+					service.browser = await connectBrowserstack(engine.type, execution.connectOptions);
 					try {
 						service.context = service.browser.contexts()[0] ?? await service.browser.newContext();
 						syntheticMedia = false;
@@ -566,16 +576,6 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						service.context = undefined;
 						throw error;
 					}
-				}
-				// Multi-engine: the session's engine decides the local browser type.
-				// Chromium keeps synthetic-media args; secondary engines launch
-				// plainly (synthetic media is a Chromium-only capability).
-				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
-				const engine = await resolveEngine(engineId);
-				if (!engine.available) {
-					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
-					error.code = 'ENGINE_UNAVAILABLE';
-					throw error;
 				}
 				const launch = { headless };
 				if (engine.id === 'chromium') {

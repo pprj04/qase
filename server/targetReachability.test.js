@@ -48,22 +48,22 @@ describe('probeTargetReachability', () => {
 	});
 
 	it('reports the split-horizon condition instead of a site defect', async () => {
-		// The dev container's split-horizon DNS may resolve this CNAME chain to
-		// an internal pod IP; public DNS returns public addresses. The probe
-		// must describe whichever environment it is actually running in.
-		const dns = spawnSync('getent', ['hosts', 'www.drytis.com'], { encoding: 'utf8' });
-		const firstIp = (dns.stdout ?? '').trim().split(/\s+/)[0];
-		const splitHorizonPresent = Boolean(firstIp) && isPrivateOrReserved(firstIp);
-		const result = await probeTargetReachability('https://www.drytis.com/');
-		if (splitHorizonPresent) {
+		// Hermetic: stub the CNAME chase so the first hop resolves to a private
+		// pod IP regardless of where the suite runs. The original live-network
+		// version depended on the dev container's split-horizon DNS for
+		// www.drytis.com, which drifted overnight (now resolves publicly).
+		const original = __internals.chaseOverride;
+		__internals.chaseOverride = async () => ([
+			{ name: 'www.drytis.com', cname: 'drytis-website-bpdgc6.prod.drytis.dev', ips: ['10.3.87.24'] }
+		]);
+		try {
+			const result = await probeTargetReachability('https://www.drytis.com/');
 			assert.equal(result.ok, true);
 			assert.equal(result.note, 'split-horizon-dns');
 			assert.match(result.detail, /run environment/);
 			assert.match(result.detail, /10\.3\.87\.24/);
-		} else {
-			assert.notEqual(result.note, 'split-horizon-dns');
-			assert.ok(Array.isArray(result.resolvedIps) && result.resolvedIps.length > 0);
-			assert.ok(result.resolvedIps.every(ip => !isPrivateOrReserved(ip)));
+		} finally {
+			__internals.chaseOverride = original;
 		}
 	}, 30_000);
 

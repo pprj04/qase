@@ -618,7 +618,7 @@ function renderRun(run) {
 		pill.className = 'run-device-pill';
 		pill.dataset.deviceKind = snap.platform === 'macos' ? 'desktop' : 'mobile';
 		pill.textContent = `${snap.device} · ${snap.browser} ${snap.browserVersion}`;
-		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime' : 'local (simulated)'}`;
+		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime (BrowserStack)' : 'local (simulated)'}`;
 		meta.append(pill);
 		// Phase 22: honest execution-level badge — recorded facts only.
 		const level = run.runtimeFacts?.executionLevel ?? run.executionLevel;
@@ -3757,7 +3757,8 @@ function renderReport() {
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
 	// The re-run control only applies to runs launched from a saved environment
-	// snapshot; runs without one keep the standard download/copy actions only.
+	// snapshot (environmentSnapshot carries envId for createQaRun); runs without
+	// one keep the standard download/copy actions only.
 	const snapshot = state.session?.environmentSnapshot;
 	if (snapshot) {
 		const rerun = document.createElement('button');
@@ -3777,8 +3778,6 @@ function renderReport() {
 		};
 		actions.append(rerun);
 	}
-
-	actions.append(download, copy, copyFixes, downloadFixes, pdf);
 
 	// Agent generation on demand: derive test cases from this completed run.
 	// Idempotent — a second click never duplicates the same cases.
@@ -4953,7 +4952,7 @@ const qaUi = {
 	deselectAll: $('qa-deselect-all'),
 	scopeAll: $('qa-scope-all'),
 	scopeOptions: $('qa-scope-options'),
-	engineOptions: $('qa-engine-options'),
+	engineOptions: $('qa-engine-options'),	environmentSelect: $('qa-environment-select'),
 	error: $('qa-form-error')
 };
 
@@ -5400,9 +5399,10 @@ if (qaUi.dialog) {
 			return;
 		}
 		// AC14: the run uses exactly the environment shown in the TEST ON block,
-		// read from the store at submit time (falls back to the QA form picker).
-		const environmentId = selectedEnvironmentForRun();
-		const testCaseId = qaUi._testCaseId || undefined;
+		// read from the store at submit time (falls back to the QA form's
+		// advanced BrowserStack environment picker when no TEST ON device is set).
+		const environmentId = selectedEnvironmentForRun() || (qaUi.environmentSelect?.value) || '';
+		const testCaseId = qaUi._testCaseId || qaUi.environmentSelect?._testCaseId || undefined;
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
@@ -6075,6 +6075,147 @@ el.authForm?.addEventListener('submit', async event => {
 $('open-settings').onclick = openSettings;
 
 const openDeviceMatrixButton = $('open-device-matrix');
+
+const envUi = {
+	dialog: $('environments'),
+	close: $('env-close'),
+	filters: {
+		platform: $('env-filter-platform'),
+		osVersion: $('env-filter-osversion'),
+		browser: $('env-filter-browser'),
+		browserVersion: $('env-filter-browserversion'),
+		active: $('env-filter-active'),
+		search: $('env-filter-search')
+	},
+	summary: $('env-summary'),
+	tbody: $('env-tbody'),
+	detail: $('env-detail'),
+	availabilityBody: $('env-availability-body')
+};
+
+function fillEnvFilterOptions(select, values) {
+	if (!select) return;
+	const current = select.value;
+	select.innerHTML = '';
+	const all = document.createElement('option');
+	all.value = '';
+	all.textContent = 'All';
+	select.append(all);
+	for (const value of values) {
+		const option = document.createElement('option');
+		option.value = String(value);
+		option.textContent = String(value);
+		select.append(option);
+	}
+	if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function envActiveQuery() {
+	const filters = {};
+	for (const [key, select] of Object.entries(envUi.filters)) {
+		if (!select || !select.value) continue;
+		filters[key === 'osVersion' ? 'osVersion' : key === 'browserVersion' ? 'browserVersion' : key] = select.value;
+	}
+	return filters;
+}
+
+async function refreshEnvTable() {
+	if (!envUi.tbody) return;
+	const filters = envActiveQuery();
+	const params = new URLSearchParams(filters);
+	params.set('limit', '300');
+	const payload = await api(`/environments?${params.toString()}`).catch(() => ({ total: 0, environments: [] }));
+	const rows = payload.environments ?? [];
+	envUi.tbody.innerHTML = '';
+	for (const env of rows) {
+		const tr = document.createElement('tr');
+		tr.dataset.envId = env.envId;
+		tr.className = env.active ? '' : 'env-inactive';
+		const cells = [
+			env.envId,
+			env.device,
+			`${env.os} ${env.osVersion}`,
+			env.browser,
+			env.browserVersion,
+			env.deviceType,
+			env.executionProvider === 'browserstack' ? 'BrowserStack' : env.executionProvider,
+			env.active ? 'active' : 'inactive'
+		];
+		for (const [index, text] of cells.entries()) {
+			const td = document.createElement('td');
+			td.textContent = String(text);
+			if (index === 7) td.dataset.state = env.active ? 'active' : 'inactive';
+			tr.append(td);
+		}
+		tr.title = `${env.screenSize}${env.isRealDevice ? ' · real device' : ' · desktop VM'} — click to inspect capabilities`;
+		tr.onclick = () => {
+			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.browserstackCapabilities)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`;
+		};
+		envUi.tbody.append(tr);
+	}
+	envUi.summary.textContent = `${payload.total} environment${payload.total === 1 ? '' : 's'} match the current filters (showing first ${rows.length}).`;
+}
+
+async function refreshEnvFacets() {
+	const payload = await api(`/environments/facets?${new URLSearchParams(envActiveQuery()).toString()}`).catch(() => null);
+	if (!payload) return;
+	fillEnvFilterOptions(envUi.filters.platform, payload.platform.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.osVersion, payload.osVersion.map(entry => entry.value).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
+	fillEnvFilterOptions(envUi.filters.browser, payload.browser.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.browserVersion, payload.browserVersion.map(entry => entry.value).sort((a, b) => Number(b) - Number(a)));
+}
+
+async function openEnvironments() {
+	if (!envUi.dialog) return;
+	if (!envUi.dialog.open) envUi.dialog.showModal();
+	await Promise.all([refreshEnvFacets(), refreshEnvTable()]);
+	if (envUi.availabilityBody && !envUi.availabilityBody.dataset.filled) {
+		const report = await api('/environments/availability').catch(() => []);
+		envUi.availabilityBody.innerHTML = '';
+		for (const entry of report) {
+			const p = document.createElement('p');
+			const strong = document.createElement('strong');
+			strong.textContent = entry.platformLabel;
+			p.append(strong, ` — available: ${entry.available.join(', ') || 'none'}.`);
+			if (entry.unavailable.length) {
+				const ul = document.createElement('ul');
+				for (const { browser, reason } of entry.unavailable) {
+					const li = document.createElement('li');
+					li.textContent = `${browser}: ${reason}`;
+					ul.append(li);
+				}
+				p.append(ul);
+			}
+			envUi.availabilityBody.append(p);
+		}
+		envUi.availabilityBody.dataset.filled = '1';
+	}
+}
+
+if (envUi.dialog) {
+	envUi.close.onclick = () => envUi.dialog.close();
+	for (const select of Object.values(envUi.filters)) {
+		select?.addEventListener('change', () => {
+			void refreshEnvFacets();
+			void refreshEnvTable();
+		});
+	}
+	envUi.filters.search?.addEventListener('input', () => {
+		clearTimeout(envUi.filters.search._timer);
+		envUi.filters.search._timer = setTimeout(() => void refreshEnvTable(), 250);
+	});
+}
+/* ── Sidebar workspace nav (UX U2) ─────────────────────────────── */
+const sidebarNav = [
+	['nav-environments', openEnvironments],
+	['nav-device-matrix', () => deviceMatrix?.open()],
+	['nav-test-cases', () => testCaseView?.open?.()],
+	['nav-bulk-runs', () => bulkRunView?.open?.()]
+];
+for (const [id, opener] of sidebarNav) {
+	const btn = $(id);
+	if (btn) btn.onclick = () => opener();
+}
 
 /* ── Device & Environment Matrix (Phase 3) ────────────────────── */
 const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({

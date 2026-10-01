@@ -76,6 +76,21 @@
       </div>
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
+    <nav class="sidebar-nav" aria-label="Workspace">
+      <span class="sidebar-nav-label">Workspace</span>
+      <button class="sidebar-nav-btn" id="nav-test-cases" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">▤</span> Test cases
+      </button>
+      <button class="sidebar-nav-btn" id="nav-device-matrix" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">◧</span> Device matrix
+      </button>
+      <button class="sidebar-nav-btn" id="nav-bulk-runs" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span> Bulk runs
+      </button>
+      <button class="sidebar-nav-btn" id="nav-environments" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
+      </button>
+    </nav>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs" tabindex="-1"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
       <header class="perf-head">
@@ -623,6 +638,50 @@
     </div>
   </form>
 </dialog>
+<!-- ── Environments (Apple compatibility matrix) ────────────────── -->
+<dialog class="modal" id="environments" aria-labelledby="environments-title">
+  <form class="modal-inner" id="env-form" method="dialog">
+    <header class="modal-head">
+      <div>
+        <h2 id="environments-title">Apple environments</h2>
+        <p>iPhone · iPad · macOS × Safari, Chrome, Firefox, Edge, Opera — only BrowserStack-executable combinations.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="env-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <div class="field-row" id="env-filters">
+        <label class="field"><span>Platform</span><select id="env-filter-platform"><option value="">All</option></select></label>
+        <label class="field"><span>OS version</span><select id="env-filter-osversion"><option value="">All</option></select></label>
+        <label class="field"><span>Browser</span><select id="env-filter-browser"><option value="">All</option></select></label>
+        <label class="field"><span>Browser version</span><select id="env-filter-browserversion"><option value="">All</option></select></label>
+        <label class="field"><span>State</span>
+          <select id="env-filter-active">
+            <option value="">All</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </label>
+        <label class="field env-search"><span>Search</span><input id="env-filter-search" type="search" placeholder="ENV-IOS-IP16PRO…" autocomplete="off"></label>
+      </div>
+      <p class="env-summary" id="env-summary" aria-live="polite"></p>
+      <div class="env-table-wrap">
+        <table class="env-table" id="env-table">
+          <thead>
+            <tr>
+              <th>Environment ID</th><th>Device</th><th>OS</th><th>Browser</th><th>Version</th><th>Type</th><th>Provider</th><th>State</th>
+            </tr>
+          </thead>
+          <tbody id="env-tbody"></tbody>
+        </table>
+      </div>
+      <p class="env-detail" id="env-detail" aria-live="polite"></p>
+      <details class="env-availability">
+        <summary>Why some browsers are missing (Brave, DuckDuckGo, Firefox-on-iOS…)</summary>
+        <div id="env-availability-body">Loading availability…</div>
+      </details>
+    </div>
+  </form>
+</dialog>
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">
   <form method="dialog" class="modal-inner">
@@ -728,7 +787,16 @@
             <span>Landscape orientation</span>
           </label>
         </div>
-        <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere.</small>
+        <details class="qa-advanced">
+          <summary>Advanced device options</summary>
+          <div class="qa-advanced-body">
+            <label class="field">
+              <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+              <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+            </label>
+            <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere. Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+          </div>
+        </details>
       </fieldset>
       <fieldset class="qa-engine-fieldset">
         <legend>Browser engines</legend>
