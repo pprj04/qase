@@ -1,6 +1,6 @@
 /**
  * Pure presentation helpers for SQA results — TypeScript port of
- * public/sqaPresentation.js. No DOM; components render from these values.
+ * SQA presentation. No DOM; components render from these values.
  * Labels only; never changes evaluator results.
  */
 

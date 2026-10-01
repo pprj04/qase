@@ -1,4 +1,4 @@
-/** QA launcher scope builder — pure, mirrors public/qaKickoff.js exactly. */
+/** QA launcher scope builder — pure. */
 
 export interface ScopeOption {
   value: string;

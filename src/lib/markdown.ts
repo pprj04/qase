@@ -1,5 +1,5 @@
 /**
- * Markdown renderer — port of public/uiPrimitives.js markdown(): escape-first,
+ * Markdown renderer (escape-first,
  * fenced code blocks via placeholder tokens, inline code/bold/italic, safe-link
  * anchors (https only, noreferrer), headings → h3, ul/ol lists, paragraph wrap.
  */

@@ -1,5 +1,5 @@
 /**
- * Shared fix-prompt builder — TypeScript port of public/fixPromptBuilder.js.
+ * Shared fix-prompt builder.
  * Used by the Report tab (bulk copy) and mirrors the /fix-prompts.md endpoint.
  *
  * The prompts are addressed to an *external* coding agent (Cursor, Copilot,

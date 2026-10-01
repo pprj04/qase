@@ -1,6 +1,6 @@
 /**
  * "Test these next" follow-up builder for completed QA runs — TypeScript
- * port of public/followUp.js. Pure, no DOM.
+ * follow-up suggestion helpers. Pure, no DOM.
  *
  * Not-covered items and recommendations from the report become suggested next
  * tests; every suggestion is pre-checked because users hit select-all.

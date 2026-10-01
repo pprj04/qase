@@ -1,6 +1,6 @@
 /**
  * Pure Founder Mode presentation helpers — TypeScript port of
- * public/founderPresentation.js. Durable state in, lifecycle labels out;
+ * Founder presentation. Durable state in, lifecycle labels out;
  * never mutates run state or observations.
  */
 
