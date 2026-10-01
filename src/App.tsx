@@ -1,19 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ThemeToggle } from './theme/ThemeToggle';
 import { RunList } from './components/RunList';
 import { SessionStoreProvider, useSessionStore } from './state/sessionStore';
+import { LiveSessionProvider, useLiveSession } from './state/liveSession';
 import { AuthProvider, useAuth } from './state/authStore';
 import { ToastProvider, useToast } from './state/toastStore';
 import { AuthGate } from './components/AuthGate';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ProfileDialog } from './components/ProfileDialog';
+import { Transcript } from './components/Transcript';
 
 export function App() {
   return (
     <ToastProvider>
       <AuthProvider>
         <SessionStoreProvider>
-          <AppShell />
+          <LiveSessionProvider>
+            <AppShell />
+          </LiveSessionProvider>
         </SessionStoreProvider>
       </AuthProvider>
     </ToastProvider>
@@ -26,6 +30,7 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const { connection, runs } = useSessionStore();
+  const { session: liveSession, openSession } = useLiveSession();
   const { status, user, signOut } = useAuth();
   const { toast } = useToast();
   const authed = status === 'signed-in';
@@ -33,7 +38,26 @@ function AppShell() {
     : connection === 'reconnecting' ? 'reconnecting…'
     : 'connecting…';
   const runningCount = runs.filter((run) => run.status === 'running').length;
+  // Auto-collapse the viewer below 1000px so its narrow-width overlay never
+  // hides transcript content (Phase 4 responsive).
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1000px)');
+    const apply = () => setViewerOpen(!mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
   const initials = (user?.displayName || user?.email || '?').trim().slice(0, 1).toUpperCase();
+  // Selecting a run in the list opens its live session stream.
+  const activeSessionId = liveSession?.id;
+  const [lastOpened, setLastOpened] = useState<string | undefined>(undefined);
+  const openRun = (id: string) => {
+    if (id !== lastOpened) {
+      setLastOpened(id);
+      openSession(id);
+    }
+  };
 
   return (
     <div className="app-shell" data-app="qase-react">
@@ -84,7 +108,7 @@ function AppShell() {
             </button>
           </div>
           <div className="sidebar-list" data-testid="run-list-container">
-            <RunList />
+            <RunList onSelect={openRun} activeId={activeSessionId} />
           </div>
           <div className="sidebar-foot">
             {authed ? (
@@ -123,12 +147,7 @@ function AppShell() {
         </aside>
 
         <main className="conversation" id="main">
-          <div className="conversation-empty" data-testid="conversation-empty">
-            <div className="conversation-empty-logo" aria-hidden="true">Q</div>
-            <h1>What should I test today?</h1>
-            <p>Describe a site or a flow and QASE will drive a real browser, watch for
-              bugs, and report back with evidence.</p>
-          </div>
+          <Transcript />
         </main>
 
         <aside className={`viewer ${viewerOpen ? '' : 'collapsed'}`} aria-label="Browser preview">

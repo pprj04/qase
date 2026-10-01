@@ -80,7 +80,7 @@ test('phase 2: run list renders live badges (engine, mode, device, tokens, progr
 test('phase 2: App wires store into shell (run list + connection status)', () => {
   const app = read('src/App.tsx');
   assert.match(app, /SessionStoreProvider/);
-  assert.match(app, /<RunList \/>/);
+  assert.match(app, /<RunList onSelect=\{openRun\} activeId=\{activeSessionId\} \/>/);
   assert.match(app, /connLabel/);
   assert.match(app, /run.*in progress/);
 });

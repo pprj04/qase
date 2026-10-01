@@ -32,6 +32,8 @@ export type SessionEvent =
 export interface SessionMessage {
   id: string;
   role: string;
+  /** Legacy snapshot stores message bodies as `text`; SSE deltas use `content`. */
+  text?: string;
   content?: string;
   [key: string]: unknown;
 }

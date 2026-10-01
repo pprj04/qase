@@ -14,7 +14,7 @@ import {
  * (server-authoritative, frozen while paused), engine/mode/device pills,
  * finding count, token badge, mini plan-progress bar, and delete with confirm.
  */
-export function RunList() {
+export function RunList({ onSelect, activeId }: { onSelect?: (id: string) => void; activeId?: string }) {
   const { runs, runsLoading, selectedId, selectSession, deleteRun, serverNow } = useSessionStore();
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
@@ -32,10 +32,13 @@ export function RunList() {
         <RunRow
           key={run.id}
           run={run}
-          active={run.id === selectedId}
+          active={run.id === (activeId ?? selectedId)}
           now={now}
           confirming={confirmingId === run.id}
-          onSelect={() => selectSession(run.id)}
+          onSelect={() => {
+            selectSession(run.id);
+            onSelect?.(run.id);
+          }}
           onDelete={() => setConfirmingId(run.id)}
           onCancelDelete={() => setConfirmingId(null)}
           onConfirmDelete={() => {
