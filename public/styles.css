@@ -9074,3 +9074,263 @@ body.cli-theme {
   .account-dialog hr { border-top-color: var(--border-dark, #2e2e32); }
   .cli-theme .toast { background: #1c1c1f; color: var(--text-dark, #e4e4e7); border-color: var(--border-dark, #2e2e32); }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Studio R4 · Run workspace — composer, chips, tabs, feed, report
+   Layered AFTER the cli-theme terminal rules; Studio light wins.
+   ════════════════════════════════════════════════════════════════ */
+
+/* Composer: white surface, zinc border, blue focus ring */
+.cli-theme .composer,
+.composer {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.cli-theme .composer:focus-within,
+.composer:focus-within {
+  border-color: #2F5BEA;
+  background: var(--surface-1);
+  box-shadow: 0 0 0 3px rgba(47, 91, 234, 0.12), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.composer textarea {
+  color: var(--text);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 14px;
+}
+.composer textarea::placeholder { color: var(--text-faint); }
+
+/* Chips: Studio alpha pills, tabular-nums kept for the timer */
+.cli-theme .meta-chip,
+.cli-theme .usage-chip,
+.cli-theme .run-timer,
+.meta-chip,
+.usage-chip,
+.run-timer {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-ui, sans-serif);
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.cli-theme .usage-chip,
+.usage-chip {
+  background: rgba(47, 91, 234, 0.07);
+  border-color: rgba(47, 91, 234, 0.25);
+  color: #2F5BEA;
+}
+.usage-chip.is-pending {
+  color: var(--text-faint);
+  border-style: dashed;
+}
+
+/* Status chip: Studio alpha tints per state */
+.cli-theme .status-chip,
+.status-chip {
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-ui, sans-serif);
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.cli-theme .status-chip[data-status="running"],
+.status-chip[data-status="running"] {
+  border-color: rgba(47, 91, 234, 0.28);
+  background: rgba(47, 91, 234, 0.08);
+  color: #2F5BEA;
+}
+.cli-theme .status-chip[data-status="awaiting_input"],
+.status-chip[data-status="awaiting_input"] {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: rgba(217, 119, 6, 0.08);
+  color: #b45309;
+}
+.cli-theme .status-chip[data-status="done"],
+.status-chip[data-status="done"] {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.08);
+  color: #15803d;
+}
+.cli-theme .status-chip[data-status="error"],
+.status-chip[data-status="error"] {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+}
+.cli-theme .status-chip[data-status="interrupted"],
+.status-chip[data-status="interrupted"] {
+  border-color: rgba(113, 113, 122, 0.28);
+  background: rgba(113, 113, 122, 0.10);
+  color: var(--text-muted);
+}
+
+/* Tab bar: Studio underline accent, no terminal dot motif */
+.cli-theme .tabs,
+.tabs {
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.cli-theme .tab,
+.tab {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 550;
+}
+.cli-theme .tab::before,
+.tab::before { content: none; }
+.cli-theme .tab:hover,
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.cli-theme .tab.is-active,
+.tab.is-active {
+  background: transparent;
+  color: var(--text);
+  border-bottom-color: #2F5BEA;
+  box-shadow: none;
+}
+.cli-theme .count,
+.count {
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.cli-theme .tab.is-active .count,
+.tab.is-active .count {
+  background: rgba(47, 91, 234, 0.10);
+  color: #2F5BEA;
+}
+
+/* Feed/activity: light surface, sans body, soft connector line */
+.cli-theme .feed,
+.feed {
+  background: var(--surface-1);
+}
+.cli-theme .feed-empty,
+.feed-empty {
+  color: var(--text-faint);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 13px;
+}
+.cli-theme .feed-empty::before,
+.feed-empty::before { content: none; }
+.cli-theme .act,
+.act {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.cli-theme .act:hover { background: var(--surface-2); }
+.cli-theme .act::before,
+.act::before { background: var(--border); }
+.cli-theme .act.running {
+  border-color: rgba(47, 91, 234, 0.22);
+  background: rgba(47, 91, 234, 0.05);
+}
+.cli-theme .act.running .act-icon { background: #2F5BEA; box-shadow: 0 0 0 3px rgba(47,91,234,0.12); }
+.cli-theme .act-icon { border-color: var(--surface-1); }
+.cli-theme .act-label,
+.cli-theme .act-detail,
+.cli-theme .act-time {
+  font-family: var(--font-ui, sans-serif);
+}
+.cli-theme .act-label { font-size: 13px; font-weight: 550; color: var(--text); }
+.cli-theme .act-detail { font-size: 12px; color: var(--text-muted); }
+.cli-theme .act-time { font-size: 11px; color: var(--text-faint); }
+
+/* Transcript: white reading surface, drop the scanline grid */
+.cli-theme .transcript,
+.transcript {
+  background: var(--surface-1);
+}
+.cli-theme .empty-state,
+.empty-state {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-1);
+}
+.cli-theme .empty-state::before,
+.empty-state::before { content: none; }
+
+/* Todo plan items */
+.cli-theme .todo,
+.todo {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+}
+.cli-theme .todo.in_progress {
+  border-color: rgba(47, 91, 234, 0.30);
+  background: rgba(47, 91, 234, 0.05);
+}
+.cli-theme .todo-text { font-family: var(--font-ui, sans-serif); font-size: 13px; color: var(--text); }
+
+/* Findings & report cards: white cards, zinc borders */
+.cli-theme .finding,
+.finding {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.cli-theme .finding.is-open {
+  border-color: rgba(47, 91, 234, 0.35);
+  background: var(--surface-1);
+  box-shadow: 0 4px 16px rgba(47,91,234,0.08);
+}
+.cli-theme .finding-title { font-family: var(--font-ui, sans-serif); font-size: 13px; font-weight: 600; color: var(--text); }
+.cli-theme .finding-body { font-family: var(--font-ui, sans-serif); font-size: 13px; color: var(--text-muted, #52525b); }
+.cli-theme .finding dl,
+.cli-theme .report-section,
+.cli-theme .verdict,
+.cli-theme .sev-stat,
+.cli-theme .check,
+.cli-theme .test-result {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+.cli-theme .report-section h3::before { content: none; }
+.cli-theme .report-section h3,
+.cli-theme .verdict-label {
+  font-family: var(--font-ui, sans-serif);
+  color: var(--text);
+}
+.cli-theme .report-section,
+.cli-theme .verdict,
+.cli-theme .check { padding: 4px; }
+
+/* Studio R4 · chat header title — light text, no "$" prompt prefix */
+.cli-theme .chat-id h1 {
+  color: var(--text);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.cli-theme .chat-id h1::before { content: none; }
+.cli-theme .chat-target {
+  color: var(--text-muted);
+  font-family: var(--font-ui, sans-serif);
+  font-size: 12.5px;
+}
+.cli-theme .chat > .panel-head,
+.cli-theme .viewer > .panel-head {
+  background: var(--surface-2);
+}
