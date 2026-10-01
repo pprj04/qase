@@ -637,21 +637,24 @@
       </label>
       <fieldset class="qa-device-fieldset">
         <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="qa-device-select"></select>
-          </label>
-          <label class="check qa-landscape">
-            <input id="qa-device-landscape" type="checkbox">
-            <span>Landscape orientation</span>
-          </label>
-        </div>
         <label class="field">
-          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
-          <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+          <span>Device</span>
+          <select id="qa-device-select"></select>
         </label>
-        <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+        <details class="qa-advanced" open>
+          <summary>Advanced device options</summary>
+          <div class="qa-advanced-body">
+            <label class="check qa-landscape">
+              <input id="qa-device-landscape" type="checkbox">
+              <span>Landscape orientation</span>
+            </label>
+            <label class="field">
+              <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+              <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+            </label>
+            <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+          </div>
+        </details>
       </fieldset>
       <fieldset class="qa-engine-fieldset">
         <legend>Browser engines</legend>
