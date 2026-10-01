@@ -1940,6 +1940,9 @@ button {
   padding: var(--sp-4);
 }
 
+/* The × overlay-close button only exists in the ≤900px overlay layout. */
+.viewer-overlay-close { display: none; }
+
 /* ── Responsive ─────────────────────────────────────────── */
 
 @media (max-width: 1100px) {
@@ -1968,7 +1971,10 @@ button {
   .viewer-pane.is-overlay-hidden {
     display: none;
   }
-  .viewer-overlay-close { display: inline-flex; }
+  .viewer-overlay-close {
+    display: inline-flex;
+    margin-left: auto;
+  }
   .composer textarea {
     font-size: 16px; /* prevents iOS zoom-on-focus */
   }
@@ -1977,9 +1983,22 @@ button {
   }
 }
 
-.viewer-overlay-close { display: none; }
-
 @media (max-width: 700px) {
+  .shell-body {
+    /* At phone widths only the conversation column fits: rail and sidebar
+       become overlays so nothing renders off-viewport. */
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mode-rail {
+    position: absolute;
+    right: 0;
+    top: 52px;
+    bottom: 28px;
+    width: 44px;
+    z-index: 25;
+    box-shadow: var(--shadow-xl);
+    background: var(--sp-bg-card);
+  }
   .sidebar:not(.collapsed) {
     position: absolute;
     left: 0;
@@ -1988,11 +2007,15 @@ button {
     z-index: 20;
     box-shadow: var(--shadow-xl);
   }
+  .sidebar.collapsed { display: none; }
+  .viewer-pane,
+  .viewer:not(.collapsed) {
+    right: 48px;
+    width: min(420px, calc(100vw - 56px));
+  }
+  .viewer-pane.is-overlay-hidden { display: none; }
   .mode-rail span {
     display: none;
-  }
-  .mode-rail {
-    width: 44px;
   }
   .rail-btn {
     width: 36px;
