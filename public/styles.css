@@ -8442,7 +8442,7 @@ html.entry-active body {
     min-height: 48px;
   }
 
-  .toasts {
+  .cli-theme .toasts {
     bottom: calc(82px + env(safe-area-inset-bottom));
   }
 }

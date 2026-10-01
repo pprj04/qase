@@ -70,6 +70,7 @@ async function startFixture(overrides = {}) {
 			availability: () => [{ platform: 'ios', available: ['Safari', 'Chrome'], unavailable: [{ browser: 'Firefox', reason: 'not on iOS' }] }],
 			catalogVersion: () => 'test'
 		},
+		feedback: { create: async () => undefined, get: async () => undefined, list: async () => [], update: async () => undefined, remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		...(overrides.services ?? {})
 	};
 	const application = createApplication({

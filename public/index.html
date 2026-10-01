@@ -390,61 +390,10 @@
         </select>
       </label>
     </div>
-
-    <form class="composer" id="composer">
-      <label class="sr-only" for="composer-input">URL or instruction for the QA agent</label>
-      <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
-      <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
-      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
-    </form>
   </main>
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
-  <aside class="panel viewer" aria-label="Live browser and test results">
-    <header class="panel-head" data-path="~/qase/browser.preview">
-      <div class="live-device-view-head" id="live-device-view-head">
-        <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
-        <span class="ldv-device" id="ldv-device">—</span>
-        <span class="ldv-badges">
-          <span class="ldv-badge" id="ldv-exec">○ NO DEVICE</span>
-          <span class="ldv-badge ldv-live" id="ldv-live">○ IDLE</span>
-        </span>
-      </div>
-      <div class="urlbar">
-        <span class="dot" id="browser-dot" aria-hidden="true"></span>
-        <span class="url" id="browser-url">about:blank</span>
-      </div>
-      <span class="subtle" id="browser-title"></span>
-      <div class="ldv-env-card" id="ldv-env-card" hidden>
-        <div class="ldv-env-card-head">
-          <span class="ldv-env-kicker" id="ldv-kicker">CURRENT TEST DEVICE</span>
-        </div>
-        <div class="ldv-env-name" id="ldv-env-device">—</div>
-        <div class="ldv-env-line" id="ldv-env-os">—</div>
-        <div class="ldv-env-line" id="ldv-env-browser">—</div>
-        <div class="ldv-env-badges">
-          <span class="ldv-badge" id="ldv-card-exec">○ NO DEVICE</span>
-          <span class="ldv-badge ldv-live" id="ldv-card-status">○ IDLE</span>
-        </div>
-        <div class="ldv-env-runtime" id="ldv-env-runtime" hidden>Runtime: <code id="ldv-runtime-id"></code></div>
-        <div class="ldv-env-card-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-device">Change Device</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-device-details">Device details</button>
-        </div>
-      </div>
-      <!-- Empty state (AC11): no device selected yet — the only action opens THE picker. -->
-      <div class="ldv-env-card ldv-env-card-empty" id="ldv-env-card-empty" hidden>
-        <div class="ldv-env-card-head">
-          <span class="ldv-env-kicker">CURRENT TEST DEVICE</span>
-        </div>
-        <p class="ldv-env-prompt">SELECT A DEVICE</p>
-        <button type="button" class="btn btn-primary btn-sm" id="ldv-choose-device">Choose device</button>
-      </div>
-    </header>
-
-
-
-  </aside>
+  
 
   <!-- Feature dock stays outside the three working panels so launch actions
        remain available without displacing the browser/results workspace. -->

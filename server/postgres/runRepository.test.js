@@ -705,10 +705,12 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // runtime_facts
 	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // execution_provider_actual
 	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_level_actual
-	// queued_at trails security_authorization + the environment block; a session
-	// without queuedAt writes null there (asNullableDate).
-	assert.equal(runInsert.params[runInsert.params.length - 11], null);         // queued_at
-	assert.equal(runInsert.params[runInsert.params.length - 12].getTime(), new Date(NOW).getTime()); // updated_at
+	// Param tail after cohort: createdAt(-11), updatedAt(-12), queued_at(-10,
+	// null without queuedAt), paused_at(-9), selected_tests, security_authorization,
+	// then the environment block.
+	assert.equal(runInsert.params[runInsert.params.length - 10], null);         // queued_at
+	assert.equal(runInsert.params[runInsert.params.length - 9], null);          // paused_at
+	assert.equal(runInsert.params[runInsert.params.length - 11].getTime(), new Date(NOW).getTime()); // updated_at
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;

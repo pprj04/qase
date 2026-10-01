@@ -80,6 +80,7 @@ async function startFixture(overrides = {}) {
 		agent: { ensureRuntime: async () => ({}), runTurn: async () => ({}), closeBrowser: async () => undefined, getLiveState: () => ({}), stop: async () => undefined, invalidateIdleRuntimes: () => undefined },
 		readiness: { check: async () => ({ ready: true }) },
 		lifecycle: { close: async () => undefined },
+		feedback: { create: async () => undefined, get: async () => undefined, list: async () => [], update: async () => undefined, remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		deviceCatalog,
 		environments: envService,
 		testCases,

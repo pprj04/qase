@@ -9,6 +9,8 @@ import {
 	updateActivity, watchRunBus
 } from './store.js';
 import { createArtifactStore } from './artifactStore.js';
+import { createEnvironmentService, createLocalEnvironmentBackend } from './environmentService.js';
+import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
@@ -36,6 +38,18 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 	const deviceRuntime = options.deviceRuntime ?? null;
 	// Phase 22: persisted evidence artifacts with execution-level metadata.
 	const artifacts = options.artifactStore ?? createArtifactStore();
+	// Device-matrix environment service (NIHARIKA). The runtime contract
+	// (contracts.js) requires `environments`; compose a local backend-backed
+	// instance so every local composition is contract-complete. Real startup
+	// (serviceFactory) may override with its own configured instance.
+	let environments = options.environments;
+	if (!environments) {
+		const catalogBackend = options.deviceCatalogBackend ?? createLocalDeviceCatalogBackend();
+		environments = createEnvironmentService(
+			createLocalEnvironmentBackend({ catalogBackend }),
+			{ tenantContext: options.tenantContext ?? null }
+		);
+	}
 	// subscribeGlobal exists only in local mode; PostgreSQL deployments
 	// fan events out through their realtime transport instead.
 	const subscribeGlobal = typeof runStore.subscribeGlobal === 'function'
@@ -56,6 +70,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
 		},
 		artifacts,
+		environments,
 		events: {
 			publish: runStore.publish,
 			subscribe: runStore.subscribe,

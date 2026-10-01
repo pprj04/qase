@@ -24,6 +24,7 @@ function memoryServices(delivery) {
 	return {
 		services: {
 			lifecycle: { close: async () => {} },
+		environments: { seed: async () => ({ inserted: 0 }), list: async () => [], get: async () => undefined, create: async () => ({}), update: async () => ({}), facets: async () => ({}), availability: () => [], catalogVersion: () => 'test' },
 			reports: { buildMarkdown: () => '# report' },
 			events: {
 				publish,
