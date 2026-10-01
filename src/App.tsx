@@ -14,6 +14,7 @@ import { Transcript } from './components/Transcript';
 import { QaLauncher } from './components/QaLauncher';
 import { SqaLauncher } from './components/SqaLauncher';
 import { FounderLauncher } from './components/FounderLauncher';
+import { BugsView } from './components/BugsView';
 import { ViewerPanel } from './components/ViewerPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -40,6 +41,7 @@ function AppShell() {
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [sqaOpen, setSqaOpen] = useState(false);
   const [founderOpen, setFounderOpen] = useState(false);
+  const [bugsOpen, setBugsOpen] = useState(false);
   const { connection, runs } = useSessionStore();
   const { session: liveSession, openSession } = useLiveSession();
   const { status, user, signOut } = useAuth();
@@ -140,7 +142,7 @@ function AppShell() {
         </div>
       </header>
 
-      <div className="shell-body">
+      <div className={`shell-body${bugsOpen ? ' is-hidden' : ''}`}>
         <aside className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`} aria-label="Runs">
           <div className="sidebar-head">
             <span className="sidebar-title">Runs</span>
@@ -224,7 +226,15 @@ function AppShell() {
             <RocketIcon />
             <span>Founder</span>
           </button>
-          <button type="button" className="rail-btn" title="Bugs view" disabled>
+          <button
+            type="button"
+            className={`rail-btn${bugsOpen ? ' is-active' : ''}`}
+            title="Bugs view"
+            aria-pressed={bugsOpen}
+            aria-label="Open bug tracker"
+            onClick={() => setBugsOpen((v) => !v)}
+            data-testid="open-bugs"
+          >
             <BugIcon />
             <span>Bugs</span>
           </button>
@@ -249,6 +259,10 @@ function AppShell() {
           {runningCount > 0 ? `${runningCount} run${runningCount > 1 ? 's' : ''} in progress · ` : ''}{connLabel}
         </span>
       </footer>
+
+      <ErrorBoundary label="The bug tracker">
+        <BugsView open={bugsOpen} onClose={() => setBugsOpen(false)} onOpenRun={openRun} />
+      </ErrorBoundary>
 
       <AuthGate />
       <ErrorBoundary label="Settings">
