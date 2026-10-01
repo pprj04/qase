@@ -546,6 +546,112 @@ button {
   overflow: auto;
 }
 
+/* ── Launcher dialogs (QA / SQA / Founder) ───────────────── */
+
+.catalog-meta {
+  font-size: 0.75rem;
+  color: var(--theme-text-muted);
+  margin: 0 0 var(--sp-1);
+}
+.catalog-disclaimer {
+  font-size: 0.75rem;
+  color: var(--theme-text-muted);
+  border-left: 2px solid var(--sp-border);
+  padding-left: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+}
+
+.launcher-fieldset {
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0 0 var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.launcher-fieldset legend {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--theme-text-muted);
+  padding: 0 var(--sp-1);
+}
+
+.option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-2);
+}
+
+.sqa-option {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  padding: var(--sp-2);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.sqa-option:hover { border-color: var(--sp-border-strong, var(--sp-border)); }
+.sqa-option input { margin-top: 2px; }
+.sqa-option.is-required {
+  background: var(--sp-bg-subtle);
+  cursor: default;
+}
+.sqa-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sqa-option small { color: var(--theme-text-muted); font-size: 0.75rem; }
+.sqa-option em { color: var(--theme-text-muted); font-size: 0.6875rem; font-style: normal; }
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  min-width: 0;
+}
+.form-grid .span-2 { grid-column: span 2; }
+
+.check-block {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  font-size: 0.8125rem;
+  padding: var(--sp-2);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+  margin-bottom: var(--sp-3);
+}
+.check-block input { margin-top: 2px; }
+.check-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.form-error {
+  color: var(--sp-danger, #d73a49);
+  font-size: 0.8125rem;
+  margin: 0 0 var(--sp-2);
+}
+
 /* ── Mode rail ──────────────────────────────────────────── */
 
 .mode-rail {

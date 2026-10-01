@@ -12,7 +12,9 @@ import { SettingsDialog } from './components/SettingsDialog';
 import { ProfileDialog } from './components/ProfileDialog';
 import { Transcript } from './components/Transcript';
 import { QaLauncher } from './components/QaLauncher';
+import { SqaLauncher } from './components/SqaLauncher';
 import { ViewerPanel } from './components/ViewerPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export function App() {
   return (
@@ -35,6 +37,7 @@ function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
+  const [sqaOpen, setSqaOpen] = useState(false);
   const { connection, runs } = useSessionStore();
   const { session: liveSession, openSession } = useLiveSession();
   const { status, user, signOut } = useAuth();
@@ -85,13 +88,14 @@ function AppShell() {
       }
       if (event.key === 'Escape') {
         if (launcherOpen) setLauncherOpen(false);
+        else if (sqaOpen) setSqaOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
         else if (profileOpen) setProfileOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [authed, launcherOpen, settingsOpen, profileOpen]);
+  }, [authed, launcherOpen, sqaOpen, settingsOpen, profileOpen]);
 
   return (
     <div className="app-shell" data-app="qase-react">
@@ -181,17 +185,28 @@ function AppShell() {
         </aside>
 
         <main className="conversation" id="main">
-          <Transcript />
+          <ErrorBoundary label="The transcript">
+            <Transcript />
+          </ErrorBoundary>
         </main>
 
-        <ViewerPanel />
+        <ErrorBoundary label="The viewer panel">
+          <ViewerPanel />
+        </ErrorBoundary>
 
         <nav className="mode-rail" aria-label="Modes and tools">
           <button type="button" className="rail-btn is-active" aria-pressed="true" title="QA mode">
             <BeakerIcon />
             <span>QA</span>
           </button>
-          <button type="button" className="rail-btn" title="SQA mode" disabled>
+          <button
+            type="button"
+            className="rail-btn"
+            title="SQA mode"
+            aria-label="Start an SQA assessment"
+            onClick={() => setSqaOpen(true)}
+            data-testid="open-sqa"
+          >
             <ClipboardIcon />
             <span>SQA</span>
           </button>
@@ -226,9 +241,18 @@ function AppShell() {
       </footer>
 
       <AuthGate />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
-      <QaLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} onRunCreated={openRun} />
+      <ErrorBoundary label="Settings">
+        <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      </ErrorBoundary>
+      <ErrorBoundary label="Profile">
+        <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
+      </ErrorBoundary>
+      <ErrorBoundary label="QA launcher">
+        <QaLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} onRunCreated={openRun} />
+      </ErrorBoundary>
+      <ErrorBoundary label="SQA launcher">
+        <SqaLauncher open={sqaOpen} onClose={() => setSqaOpen(false)} />
+      </ErrorBoundary>
     </div>
   );
 }
