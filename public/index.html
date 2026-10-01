@@ -90,6 +90,9 @@
       <button class="sidebar-nav-btn" id="nav-environments" type="button">
         <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
       </button>
+      <button class="sidebar-nav-btn" id="nav-analytics" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">◔</span> Analytics
+      </button>
     </nav>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
@@ -548,6 +551,23 @@
     </div>
   </form>
 </dialog>
+<!-- ── Analytics dashboard (UX U5) ───────────────────────────────── -->
+<dialog class="modal" id="analytics" aria-labelledby="analytics-title">
+  <div class="modal-inner analytics-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="analytics-title">Analytics</h2>
+        <p>Your run history at a glance — volume, outcomes, durations, feedback, and top targets.</p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost btn-sm" id="analytics-refresh" type="button">Refresh</button>
+        <button class="btn btn-ghost btn-sm" type="button" id="analytics-close">Close</button>
+      </div>
+    </header>
+    <div class="modal-body" id="analytics-body" aria-live="polite"></div>
+  </div>
+</dialog>
+
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">
   <form method="dialog" class="modal-inner">

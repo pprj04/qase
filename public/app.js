@@ -8,6 +8,7 @@ import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
 import { createDeviceMatrixView } from './deviceMatrixView.js';
 import { createTestCaseView } from './testCaseView.js';
 import { createBulkRunView } from './bulkRunView.js';
+import { createAnalyticsView } from './analyticsView.js';
 import { createDeviceDrawer, chipLabel } from './deviceDrawer.js';
 import {
 	lastRunByCase, caseStatus, platformsOf, caseEnvLines,
@@ -4891,7 +4892,8 @@ const sidebarNav = [
 	['nav-environments', openEnvironments],
 	['nav-device-matrix', () => deviceMatrix?.open()],
 	['nav-test-cases', () => testCaseView?.open?.()],
-	['nav-bulk-runs', () => bulkRunView?.open?.()]
+	['nav-bulk-runs', () => bulkRunView?.open?.()],
+	['nav-analytics', () => analyticsView?.open()]
 ];
 for (const [id, opener] of sidebarNav) {
 	const btn = $(id);
@@ -5029,6 +5031,19 @@ if (bulkRunView) {
 	bulkRunView.setWizardFilter((mode) => filterCasesForWizard(bulkRunView.state.cases, mode, bulkRunView.state.lastRuns));
 	bulkRunView.setLastRunIndex(lastRunByCase);
 }
+
+/* ── Analytics dashboard (UX U5) ────────────────────────────────── */
+const analyticsView = $('analytics') ? createAnalyticsView({
+	api,
+	fail,
+	elements: {
+		dialog: $('analytics'),
+		navButton: $('nav-analytics'),
+		closeButton: $('analytics-close'),
+		body: $('analytics-body'),
+		refreshButton: $('analytics-refresh')
+	}
+}) : null;
 
 /* ── Phase 11: run-target dialog + quick actions + presets ────────── */
 
