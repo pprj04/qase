@@ -13,7 +13,6 @@ import {
   connectSessionStream,
   type ConnectionState,
   type Finding,
-  type SessionActivity,
   type SessionEvent,
   type SessionMessage,
   type SessionStreamHandle,
@@ -39,8 +38,8 @@ export interface LiveSession {
   report?: unknown;
   usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
   browserUrl?: string;
-  frame?: { base64: string; mimeType: string } | undefined;
-  cursor?: { x: number; y: number } | undefined;
+  frame?: { base64: string; mimeType: string; viewport?: { width: number; height: number } } | undefined;
+  cursor?: LiveCursor | undefined;
   startedAt?: number;
   completedAt?: number;
   pausedAt?: number;
@@ -93,7 +92,7 @@ type LiveAction =
   | { type: 'usage'; usage: NonNullable<LiveSession['usage']> }
   | { type: 'browser'; url?: string }
   | { type: 'frame'; frame: { base64: string; mimeType: string } }
-  | { type: 'cursor'; cursor: { x: number; y: number } }
+  | { type: 'cursor'; cursor: LiveCursor }
   | { type: 'status'; status: string }
   | { type: 'connection'; state: ConnectionState }
   | { type: 'activities'; activities: SessionActivity[] }
@@ -103,6 +102,27 @@ type LiveAction =
   | { type: 'founder.target_bound'; targetUrl: string; authorizedTargetUrl?: string; title?: string }
   | { type: 'founder.observation'; observation?: { id: string } & Record<string, unknown> }
   | { type: 'founder.finalized'; report?: unknown; ts?: number };
+
+export interface SessionActivity {
+  id: string;
+  label?: string;
+  detail?: string;
+  status?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Pointer overlay payload (legacy applyCursor parity). Coordinates arrive in
+ * the page's viewport space and are scaled onto the rendered frame.
+ */
+export interface LiveCursor {
+  x: number;
+  y: number;
+  label?: string;
+  verb?: string;
+  viewport?: { width: number; height: number };
+  box?: { x: number; y: number; width: number; height: number };
+}
 
 /** Pure session reducer — exported for direct unit testing. */
 export function liveReducer(state: LiveState, action: LiveAction): LiveState {
@@ -337,7 +357,7 @@ export function LiveSessionProvider({ children, onRunEvent }: { children: ReactN
           }
           break;
         case 'cursor':
-          dispatch({ type: 'cursor', cursor: event.cursor as { x: number; y: number } });
+          dispatch({ type: 'cursor', cursor: event.cursor as LiveCursor });
           break;
         default:
           break;

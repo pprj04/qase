@@ -28,9 +28,10 @@ const slice = source
 const dir = mkdtempSync(join(tmpdir(), 'qase-reducer-'));
 writeFileSync(join(dir, 'reducer.ts'), `
 type SessionMessage = { id: string; role: string; [key: string]: unknown };
-type SessionActivity = { id: string; label?: string; detail?: string; status?: string; [key: string]: unknown };
 type Finding = { id: string; title?: string; severity?: string; [key: string]: unknown };
 type ConnectionState = 'connecting' | 'connected' | 'reconnecting';
+// Note: SessionActivity and LiveCursor are declared inside the sliced pure
+// section of liveSession.tsx itself — no stubs here.
 ${slice}
 `);
 const out = join(dir, 'out');

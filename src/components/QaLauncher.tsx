@@ -45,8 +45,10 @@ export function QaLauncher({ open, onClose, onRunCreated }: { open: boolean; onC
   const [engines, setEngines] = useState<EngineInfo[]>([]);
   const [chosenEngines, setChosenEngines] = useState<string[]>(['chromium']);
   const [devices, setDevices] = useState<DeviceProfile[]>([]);
-  const [device, setDevice] = useState('desktop');
-  const [deviceLandscape, setDeviceLandscape] = useState(false);
+  // Device + orientation persist across opens (legacy keys qase.device /
+  // qase.deviceLandscape parity).
+  const [device, setDevice] = useState(() => localStorage.getItem('qase.device') ?? 'desktop');
+  const [deviceLandscape, setDeviceLandscape] = useState(() => localStorage.getItem('qase.deviceLandscape') === '1');
   const [scopeAll, setScopeAll] = useState(true);
   const [scopeValues, setScopeValues] = useState<string[]>(QA_SCOPE_OPTIONS.map((o) => o.value));
   const [securityAuthorized, setSecurityAuthorized] = useState(false);
@@ -58,6 +60,9 @@ export function QaLauncher({ open, onClose, onRunCreated }: { open: boolean; onC
     setError('');
     setTargetUrl('');
     setSecurityAuthorized(false);
+    // Restore the remembered device + orientation on each open.
+    setDevice(localStorage.getItem('qase.device') ?? 'desktop');
+    setDeviceLandscape(localStorage.getItem('qase.deviceLandscape') === '1');
     setSelectedTests(new Set());
     setCatalog(null);
     setCatalogError('');
@@ -189,7 +194,16 @@ export function QaLauncher({ open, onClose, onRunCreated }: { open: boolean; onC
               ? `${kickoffText}\nFocus: core flows and cross-browser comparison on ${engine}; full sweep runs separately on Chromium.`
               : kickoffText,
           }),
-        }).catch(() => undefined);
+        }).catch((err: unknown) => {
+          // Session creation succeeded; a failed kickoff message shouldn't kill
+          // the multi-engine loop, but the user must hear about it.
+          toast(
+            `Run ${session.id.slice(0, 8)} was created but the kickoff message failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+            'bad',
+          );
+        });
         onRunCreated(session.id);
       }
       onClose();
@@ -241,14 +255,14 @@ export function QaLauncher({ open, onClose, onRunCreated }: { open: boolean; onC
           <div className="field-row">
             <label className="field">
               <span>Device</span>
-              <select value={device} onChange={(e) => setDevice(e.target.value)} data-testid="qa-device">
+              <select value={device} onChange={(e) => { setDevice(e.target.value); localStorage.setItem('qase.device', e.target.value); }} data-testid="qa-device">
                 {devices.map((profile) => (
                   <option key={profile.id} value={profile.id}>{profile.label}</option>
                 ))}
               </select>
             </label>
             <label className="checkbox-row qa-landscape">
-              <input type="checkbox" checked={deviceLandscape} onChange={(e) => setDeviceLandscape(e.target.checked)} data-testid="qa-landscape" />
+              <input type="checkbox" checked={deviceLandscape} onChange={(e) => { setDeviceLandscape(e.target.checked); localStorage.setItem('qase.deviceLandscape', e.target.checked ? '1' : '0'); }} data-testid="qa-landscape" />
               <span>Landscape</span>
             </label>
           </div>

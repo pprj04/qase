@@ -12,7 +12,7 @@ import { api, setSignedIn } from '../api/client';
 export interface User {
   email: string;
   displayName?: string;
-  profile?: { timezone?: string };
+  profile?: { timezone?: string; onboardingComplete?: boolean };
   [key: string]: unknown;
 }
 

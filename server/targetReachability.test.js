@@ -48,14 +48,28 @@ describe('probeTargetReachability', () => {
 	});
 
 	it('reports the split-horizon condition instead of a site defect', async () => {
-		// The dev container's split-horizon DNS resolves this CNAME chain to an
-		// internal pod IP; public DNS returns Cloudflare addresses. The probe
-		// must describe the environment, not blame the site.
+		// The dev container's split-horizon DNS may resolve this CNAME chain to
+		// an internal pod IP; public DNS returns public addresses. The probe
+		// must describe whichever environment it is actually running in.
+		const dns = spawnSync('getent', ['hosts', 'www.drytis.com'], { encoding: 'utf8' });
+		const ips = (dns.stdout ?? '')
+			.split(/\s+/)[0]
+			? [dns.stdout.trim().split(/\s+/)[0]]
+			: [];
+		const splitHorizonPresent = ips.some(ip => isPrivateOrReserved(ip));
 		const result = await probeTargetReachability('https://www.drytis.com/');
-		assert.equal(result.ok, true);
-		assert.equal(result.note, 'split-horizon-dns');
-		assert.match(result.detail, /run environment/);
-		assert.match(result.detail, /10\.3\.87\.24/);
+		if (splitHorizonPresent) {
+			assert.equal(result.ok, true);
+			assert.equal(result.note, 'split-horizon-dns');
+			assert.match(result.detail, /run environment/);
+			assert.match(result.detail, /10\.3\.87\.24/);
+		} else {
+			// Public resolution: the split-horizon note must not be claimed and
+			// the probe must report the public IPs it saw.
+			assert.notEqual(result.note, 'split-horizon-dns');
+			assert.ok(Array.isArray(result.resolvedIps) && result.resolvedIps.length > 0);
+			assert.ok(result.resolvedIps.every(ip => !isPrivateOrReserved(ip)));
+		}
 	}, 30_000);
 
 	it('verifies a healthy public HTTPS target end to end', async () => {

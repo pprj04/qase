@@ -451,6 +451,99 @@ button {
 
 .viewer-stage.is-collapsed .stage-frame { display: none; }
 
+/* Collapse note (legacy stage-note parity): visible only while collapsed. */
+.stage-note {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--sp-font-xs);
+  color: var(--theme-text-secondary, var(--sp-text-muted));
+  text-align: center;
+  border-top: 1px solid var(--sp-border);
+}
+
+/* ── Live pointer overlay (legacy cursor/target-box parity) ── */
+.cursor-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.stage-frame { position: relative; }
+.target-box {
+  position: absolute;
+  border: 2px solid var(--sp-accent, #2f5bea);
+  border-radius: var(--sp-radius-sm, 6px);
+  background: rgb(47 91 234 / 8%);
+  box-shadow: 0 0 0 3px rgb(47 91 234 / 18%);
+}
+.cursor-pointer {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  transform: translate(-2px, -2px);
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 40%));
+}
+.cursor-label {
+  font-size: var(--sp-font-xs);
+  background: var(--sp-bg-card);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm, 6px);
+  padding: 1px 6px;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Activity feed + plan list (legacy parity) ── */
+.activity-feed,
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.act {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+}
+.act-icon { flex: none; }
+.act.running .act-icon { color: var(--sp-accent, #2f5bea); }
+.act.failed .act-icon { color: var(--sp-danger, #d33); }
+.act-main { flex: 1; min-width: 0; }
+.act-label { font-weight: 500; }
+.act-detail {
+  font-size: var(--sp-font-xs);
+  color: var(--theme-text-secondary, var(--sp-text-muted));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.act-time {
+  flex: none;
+  font-size: var(--sp-font-xs);
+  color: var(--theme-text-secondary, var(--sp-text-muted));
+  font-variant-numeric: tabular-nums;
+}
+.todo {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-sm);
+}
+.todo-mark { flex: none; }
+.todo.completed .todo-mark { color: var(--sp-success, #1a9c5b); }
+.todo.in_progress .todo-mark { color: var(--sp-accent, #2f5bea); }
+.todo.completed .todo-text {
+  color: var(--theme-text-secondary, var(--sp-text-muted));
+  text-decoration: line-through;
+}
+
+
 .stage-collapse-btn { align-self: flex-end; }
 
 .viewer-tabpanel {
