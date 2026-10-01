@@ -77,7 +77,11 @@ export function QaLauncher({ open, onClose, onRunCreated }: { open: boolean; onC
         setCatalog(cat);
         setSelectedTests(new Set((cat.tests ?? []).map((t) => t.id)));
         setEngines(engineInfo.engines ?? []);
-        setDevices(deviceList.devices ?? []);
+        const list = deviceList.devices ?? [];
+        setDevices(list);
+        // A remembered device id that no longer exists falls back to desktop
+        // (legacy parity: pendingDeviceId validates against the catalog).
+        setDevice((current) => (list.length > 0 && !list.some((d) => d.id === current) ? 'desktop' : current));
       } catch (err) {
         setCatalogError('The standard test catalog could not be loaded.');
         setError(err instanceof Error ? err.message : String(err));

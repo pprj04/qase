@@ -36,6 +36,8 @@ test('pointer overlay ports the legacy cursor contract', () => {
   assert.match(viewer, /endsWith\(':done'\)/);
   assert.match(viewer, /1500/); // legacy fade timer
   assert.match(viewer, /M5 2\.5 19 12\.2l-6\.1\.55 3\.2 6\.6-2\.6 1\.25-3\.2-6\.6L5 18\.6Z/); // legacy cursor svg path
+  assert.match(viewer, /truncate\(String\(cursor\.label\), 34\)/); // legacy label cap
+  assert.match(viewer, /text\.length > max \? `\$\{text\.slice\(0, max - 1\)\}…` : text/); // legacy truncate semantics
   assert.match(css, /\.cursor-overlay \{/);
   assert.match(css, /\.target-box \{/);
 });

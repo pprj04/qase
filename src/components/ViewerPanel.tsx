@@ -9,6 +9,11 @@ import { FounderView } from './FounderView';
 import { QaReportView } from './QaReportView';
 const STAGE_COLLAPSE_STATUSES = new Set(['done', 'error', 'interrupted', 'idle']);
 
+/** Legacy truncate(String(cursor.label), 34) parity. */
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 export type StageCollapseState = { collapsed: boolean; manualExpand: boolean };
 
 /**
@@ -284,7 +289,7 @@ function CursorOverlay({ session, frameRef }: { session: LiveSession | undefined
           <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
                 fill="#fff" stroke="#0b0d12" strokeWidth="1.4" strokeLinejoin="round" />
         </svg>
-        {cursor?.label ? <span className="cursor-label">{cursor.label}</span> : null}
+        {cursor?.label ? <span className="cursor-label">{truncate(String(cursor.label), 34)}</span> : null}
       </div>
     </div>
   );
