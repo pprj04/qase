@@ -15,6 +15,8 @@ import { QaLauncher } from './components/QaLauncher';
 import { SqaLauncher } from './components/SqaLauncher';
 import { FounderLauncher } from './components/FounderLauncher';
 import { BugsView } from './components/BugsView';
+import { AdminFeedbackPanel } from './components/AdminFeedbackPanel';
+import { PerfPanel } from './components/PerfPanel';
 import { ViewerPanel } from './components/ViewerPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
@@ -192,6 +194,12 @@ function AppShell() {
         <main className="conversation" id="main">
           <ErrorBoundary label="The transcript">
             <Transcript />
+          </ErrorBoundary>
+          <ErrorBoundary label="The performance panel">
+            <PerfPanel />
+          </ErrorBoundary>
+          <ErrorBoundary label="The feedback review panel">
+            <AdminFeedbackPanel open={authed} />
           </ErrorBoundary>
         </main>
 
