@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useModelConfig } from '../state/configStore';
+import { useToast } from '../state/toastStore';
 import { useLiveSession } from '../state/liveSession';
 
 /** GET /sqa/catalog shape (profiles/sources are keyed objects, attributes is a string[]). */
@@ -46,6 +47,7 @@ function sqaValues(entries: unknown): CatalogEntry[] {
 }
 
 export function SqaLauncher({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
   const { ready, problem, refresh } = useModelConfig();
   const { openSession } = useLiveSession();
   const [catalog, setCatalog] = useState<SqaCatalog | null>(null);
@@ -158,10 +160,15 @@ export function SqaLauncher({ open, onClose }: { open: boolean; onClose: () => v
       openSession(sessionId);
       try {
         await api(`/sessions/${sessionId}/message`, { method: 'POST', body: JSON.stringify({ text: normalizedUrl }) });
-      } catch {
-        // Legacy parity: the assessment scope exists; the user can send the
-        // URL from the composer if the automated start fails.
-        setError(`The assessment scope was created, but the test could not start. Send the target URL in the chat.`);
+      } catch (startError) {
+        // Legacy parity: the assessment scope exists; surface the failure via
+        // toast (the dialog is closed) so the user knows to send the URL manually.
+        toast(
+          `The assessment scope was created, but the test could not start: ${
+            startError instanceof Error ? startError.message : String(startError)
+          } Send the target URL in the chat.`,
+          'bad',
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

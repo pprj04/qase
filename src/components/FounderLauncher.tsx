@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { useModelConfig } from '../state/configStore';
+import { useToast } from '../state/toastStore';
 import { useLiveSession } from '../state/liveSession';
 
 /** GET /founder/catalog shape. */
@@ -13,6 +14,7 @@ interface FounderCatalog {
 }
 
 export function FounderLauncher({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
   const { ready, problem, refresh } = useModelConfig();
   const { openSession } = useLiveSession();
   const [catalog, setCatalog] = useState<FounderCatalog | null>(null);
@@ -113,8 +115,15 @@ export function FounderLauncher({ open, onClose }: { open: boolean; onClose: () 
       openSession(sessionId);
       try {
         await api(`/sessions/${sessionId}/message`, { method: 'POST', body: JSON.stringify({ text: `Review ${normalizedUrl}` }) });
-      } catch {
-        setError('The review scope was created, but evidence collection could not start. Send "Review <url>" in the chat.');
+      } catch (startError) {
+        // Legacy parity: the review scope exists; surface the failure via
+        // toast (the dialog is closed) so the user knows to send it manually.
+        toast(
+          `The review scope was created, but evidence collection could not start: ${
+            startError instanceof Error ? startError.message : String(startError)
+          } Send "Review <url>" in the chat.`,
+          'bad',
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

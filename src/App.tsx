@@ -268,24 +268,24 @@ function AppShell() {
         </span>
       </footer>
 
-      <ErrorBoundary label="The bug tracker">
+      <ErrorBoundary label="The bug tracker"> resetKey={bugsOpen}
         <BugsView open={bugsOpen} onClose={() => setBugsOpen(false)} onOpenRun={openRun} />
       </ErrorBoundary>
 
       <AuthGate />
-      <ErrorBoundary label="Settings">
+      <ErrorBoundary label="Settings"> resetKey={settingsOpen}
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </ErrorBoundary>
-      <ErrorBoundary label="Profile">
+      <ErrorBoundary label="Profile"> resetKey={profileOpen}
         <ProfileDialog open={profileOpen} onClose={() => setProfileOpen(false)} />
       </ErrorBoundary>
-      <ErrorBoundary label="QA launcher">
+      <ErrorBoundary label="QA launcher"> resetKey={launcherOpen}
         <QaLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} onRunCreated={openRun} />
       </ErrorBoundary>
-      <ErrorBoundary label="SQA launcher">
+      <ErrorBoundary label="SQA launcher"> resetKey={sqaOpen}
         <SqaLauncher open={sqaOpen} onClose={() => setSqaOpen(false)} />
       </ErrorBoundary>
-      <ErrorBoundary label="Founder launcher">
+      <ErrorBoundary label="Founder launcher"> resetKey={founderOpen}
         <FounderLauncher open={founderOpen} onClose={() => setFounderOpen(false)} />
       </ErrorBoundary>
     </div>
