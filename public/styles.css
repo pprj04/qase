@@ -633,8 +633,9 @@ a {
 
 .chat {
   display: grid;
-  /* head | run-summary | transcript | thinking | question | choose-device | stage(preview) | tabs | tab-body | quick-actions | composer */
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto minmax(140px, 28%) auto minmax(120px, 1fr) auto auto;
+  /* head | run-summary | transcript | thinking | question | composer
+     (#14102: quick-actions removed; exec panel #14074: preview/tabs in right viewer) */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: var(--panel-chat);
 }
 
@@ -645,12 +646,7 @@ a {
 .chat > .transcript { grid-row: 3; }
 .chat > .thinking-strip { grid-row: 4; }
 .chat > .question-slot { grid-row: 5; }
-.chat > .choose-device { grid-row: 6; }
-.chat > .stage { grid-row: 7; border-top: 1px solid var(--border); }
-.chat > .tabs { grid-row: 8; }
-.chat > .tab-body { grid-row: 9; }
-.chat > .quick-actions { grid-row: 10; }
-.chat > .composer { grid-row: 11; }
+.chat > .composer { grid-row: 6; }
 
 .chat > .panel-head {
   justify-content: space-between;
@@ -1632,13 +1628,21 @@ a {
 
 .viewer {
   display: grid;
-  /* head (LIVE DEVICE VIEW card) | scrollable device detail column.
-     The browser preview itself now lives in the center execution workspace
-     (ticket #14068); the viewer keeps device identity + runtime detail. */
-  grid-template-rows: auto minmax(0, 1fr);
+  /* ONE right execution panel (#14074, #14102):
+     head (Browser/URL header + device card) | preview (stage) |
+     tabs | tab-content (scroll owner). Preview flexes; tab body scrolls. */
+  grid-template-rows: auto minmax(120px, 1.2fr) auto minmax(0, 1fr);
   background: var(--panel-viewer);
   overflow: hidden;
 }
+
+/* Hidden siblings must not shift later children into the flex tracks: pin
+   each viewer child to its declared row. min-width:0 lets each item shrink
+   inside its track — the narrow 300px viewer at ≤1280px otherwise clips. */
+.viewer > .panel-head { grid-row: 1; }
+.viewer > .stage { grid-row: 2; border-top: 1px solid var(--border); min-height: 0; min-width: 0; }
+.viewer > .tabs { grid-row: 3; min-width: 0; }
+.viewer > .tab-body { grid-row: 4; min-height: 0; min-width: 0; }
 
 .viewer > .panel-head {
   gap: 12px;
@@ -1893,27 +1897,16 @@ a {
   color: #ff9dbc;
 }
 
-.autoscroll-toggle {
-  margin-left: auto;
-  margin-right: 4px;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-}
-
-.autoscroll-toggle[aria-pressed='false'] {
-  opacity: 0.6;
-}
-
 .tab-body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-/* Center-column tab workspace (UI Fix Phase 1): the active pane gets the
-   tab-body's bounded row (min 140px) and scrolls inside it only — long
-   content never grows the page. */
-.chat > .tab-body {
+/* Execution-panel tab workspace (UI Fix Phase 1, relocated #14074): the
+   active pane gets the tab-body's bounded row and scrolls inside it only —
+   long content never grows the page. */
+.viewer > .tab-body {
   display: block;
   min-height: 0;
   overflow: hidden;
@@ -2989,7 +2982,7 @@ a {
 
   .viewer {
     grid-row: 3;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(140px, 1fr) auto minmax(0, 1fr);
   }
 
   .runs .panel-head {
@@ -3040,11 +3033,11 @@ a {
   }
 
   .chat {
-    grid-template-rows: 62px minmax(0, 1fr) auto auto auto auto auto auto auto auto;
+    grid-template-rows: 62px minmax(0, 1fr) auto auto auto;
   }
 
   .viewer {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(120px, 34vh) auto minmax(120px, 1fr);
   }
 
   .chat-target,
@@ -5147,9 +5140,9 @@ body.cli-theme {
 /* Agent terminal */
 
 .cli-theme .chat {
-  /* head | run-summary | transcript | thinking | question | choose-device | stage | tabs |
-     tab-body | quick-actions | composer */
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto auto auto auto auto;
+  /* head | run-summary | transcript | thinking | question | composer
+     (#14102: quick-actions removed; preview/tabs in right viewer) */
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   background: #070c12;
 }
 
@@ -5545,8 +5538,8 @@ body.cli-theme {
 /* Browser preview and diagnostics */
 
 .cli-theme .viewer {
-  /* Stage moved to the center workspace (#14068) — header + detail only. */
-  grid-template-rows: auto minmax(0, 1fr);
+  /* ONE right execution panel (#14074, #14102): head | stage | tabs | tab-body */
+  grid-template-rows: auto minmax(120px, 1.2fr) auto minmax(0, 1fr);
   background: #070c12;
 }
 
@@ -6166,13 +6159,13 @@ body.cli-theme {
   }
 
   .cli-theme .chat {
-    /* head | run-summary | transcript | thinking | question | choose-device |
-       stage | tabs | tab-body | quick-actions | composer (stacked keeps the same order) */
-    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto minmax(180px, 40dvh) auto minmax(140px, 1fr) auto auto;
+    /* head | run-summary | transcript | thinking | question | composer
+       (stacked keeps the same order; #14102: quick-actions removed) */
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   }
 
   .cli-theme .viewer {
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(180px, 40dvh) auto minmax(140px, 1fr);
   }
 
   .cli-theme .msg,
@@ -8219,24 +8212,6 @@ body.cli-theme {
 }
 
 /* ── Quick Actions + run-target + bulk wizard (Phase 11) ─────────────────── */
-/* In-flow toolbar directly above the composer inside the chat panel. It
-   occupies grid space, so it can never push content below the fold. */
-.quick-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin: 0 9px;
-  padding: 5px 8px;
-  border: 1px solid #263243;
-  border-radius: 10px;
-  background: #0f151f;
-}
-.qa-strip-title { flex: 0 0 auto; font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#899bb1; margin-right:2px; }
-.qa-chip { flex: 0 0 auto; border:1px solid #263243; background:#141a24; color:#c7d5e5; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; white-space:nowrap; }
-.qa-chip:hover { border-color:#3a5470; color:#fff; }
-.qa-preset-wrap { display:flex; flex:0 0 auto; align-items:center; gap:6px; font-size:11.5px; color:#899bb1; margin-left:auto; padding-left:8px; }
-.qa-preset-wrap select { background:#141a24; color:#e7eef7; border:1px solid #263243; border-radius:6px; padding:4px 8px; font-size:12.5px; }
 .rt-choices { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
 .rt-choice { display:flex; gap:10px; align-items:flex-start; border:1px solid #263243; border-radius:8px; padding:10px 12px; cursor:pointer; background:#141a24; }
 .rt-choice:has(input:checked) { border-color:#3a5470; }
@@ -8255,10 +8230,6 @@ body.cli-theme {
 .tc-status-failed { color:#ef6b6b; border-color:#ef6b6b55; }
 .tc-status-running { color:#e8b56b; border-color:#e8b56b55; }
 .tc-status-not-run { color:#899bb1; }
-@media (max-width:720px) {
-  .quick-actions { margin-inline: 4px; flex-wrap: wrap; }
-  .qa-preset-wrap { margin-left:0; width:100%; }
-}
 
 /* ── Run-screen env block + bulk progress (Phase 12) ─────────────────────── */
 .run-env-block { display:flex; flex-direction:column; gap:2px; margin-top:8px; font-size:12px; color:#899bb1; }
@@ -8583,27 +8554,9 @@ body.cli-theme {
 	z-index: 2;
 }
 
-/* Environment card (right panel). */
-.ldv-env-card {
-	width: 100%;
-	margin-top: 8px;
-	padding: 10px 12px;
-	border: 1px solid #263243;
-	border-radius: 10px;
-	background: #10161f;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	box-sizing: border-box;
-}
-.ldv-env-card[hidden] { display: none; }
-.ldv-env-kicker { font-size: 9px; letter-spacing: 0.12em; color: #7d92a8; text-transform: uppercase; }
-.ldv-env-name { font-size: 14px; font-weight: 600; color: #eef4fb; word-break: break-word; }
-.ldv-env-line { font-size: 11.5px; color: #aebdd0; }
-.ldv-env-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
-.ldv-env-runtime { font-size: 10.5px; color: #8fa3b8; }
-.ldv-env-runtime code { color: #c7d5e5; }
-.ldv-env-card-actions { display: flex; gap: 8px; margin-top: 6px; }
+/* Environment card (CURRENT TEST DEVICE) — removed in #14132. Device
+   identity now lives in the LIVE DEVICE VIEW header row (#ldv-change-device
+   opens the one Device Picker); #stage keeps the per-category device frame. */
 
 /* Unavailable state — honest panel, no fake preview. */
 .ldv-unavailable {
@@ -8626,29 +8579,6 @@ body.cli-theme {
 /* Status badge variants for the full lifecycle vocabulary. */
 .ldv-badge[data-exec="none"] { color: #66788c; }
 .ldv-live[data-live="false"] { color: #8fa3b8; }
-
-/* Viewer panel head must grow with the environment card (no clipping). */
-.panel.viewer .panel-head {
-	flex-wrap: wrap;
-	height: auto;
-	min-height: 0;
-	max-height: none;
-	align-content: flex-start;
-}
-.panel.viewer .panel-head .ldv-env-card-actions .btn {
-	white-space: nowrap;
-}
-
-/* Viewer head: the env card needs vertical room — override the fixed-height
-   theme rules (they win on specificity over the base fix above). */
-.cli-theme .panel.viewer .panel-head,
-.cli-theme .panel-head.panel-head.viewer-fix,
-.panel.viewer > header.panel-head {
-	height: auto !important;
-	max-height: none !important;
-	flex-wrap: wrap;
-	align-content: flex-start;
-}
 
 /* ── LDV Phase 3: execution targeting block (TARGET / TESTING / COMPLETED) ── */
 .exec-target-host { padding: 0 18px; }
@@ -8683,7 +8613,12 @@ body.cli-theme {
 .evidence-prov { font-size: 10.5px; color: #8fa3b8; word-break: break-word; }
 
 /* ── ONE Device Picker (DX Phase 1) ─────────────────────────────── */
-.dp-modal .modal-inner { width: min(720px, 94vw); }
+/* #14125: the modal-inner width must never exceed the .modal width
+   (min(600px, 100vw-28px)) — a 720px inner inside a 600px dialog overflows
+   left and gets clipped by .modal{overflow:hidden}. Widen the DIALOG, not
+   the inner wrapper. */
+.dp-modal { width: min(720px, calc(100vw - 28px)); max-width: 720px; }
+.dp-modal .modal-inner { width: auto; }
 .dp-body { display: flex; flex-direction: column; gap: 12px; }
 .dp-sub { margin: 4px 0 0; color: #8fa3b8; font-size: 11.5px; letter-spacing: 0.02em; }
 .dp-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -8706,10 +8641,6 @@ body.cli-theme {
 .dp-summary { margin: 0; padding: 8px 10px; border: 1px solid #263243; border-radius: 8px; background: #10161f; font-size: 11px; letter-spacing: 0.04em; color: #c3cfdf; word-break: break-word; }
 .dp-summary[data-empty='true'] { color: #fbbf24; font-weight: 700; letter-spacing: 0.08em; }
 
-/* ── CURRENT TEST DEVICE card + empty state (DX Phase 2) ────────── */
-.ldv-env-card-empty { align-items: flex-start; gap: 10px; }
-.ldv-env-prompt { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: #fbbf24; }
-
 /* ── TEST ON block in start dialogs (DX Phase 3) ─────────────────── */
 .test-on-fieldset { display: flex; flex-direction: column; gap: 8px; }
 .test-on-summary { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid #263243; border-radius: 8px; background: #10161f; min-height: 58px; justify-content: center; }
@@ -8730,129 +8661,3 @@ body.cli-theme {
 .dcl-empty { font-size: 11px; color: #6d8095; align-self: center; }
 .dcl-add { align-self: flex-start; }
 
-/* ── Choose Device collapsible section (exec layout #14069) ──────── */
-.choose-device {
-  position: relative;
-  z-index: 4; /* above the stage below it; dropdowns never clipped */
-  border-bottom: 1px solid var(--border);
-  background: var(--panel-chat);
-}
-.cd-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 42px;
-  padding: 6px 14px;
-  background: none;
-  border: 0;
-  border-left: 2px solid transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  user-select: none;
-}
-.cd-head:hover { background: rgba(131, 225, 201, 0.05); }
-.cd-head:focus-visible { outline: 2px solid rgba(125, 139, 255, 0.95); outline-offset: -2px; }
-.cd-label {
-  font: 600 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted, #899bb1);
-  flex: 0 0 auto;
-}
-.cd-summary {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--text, #e7eef7);
-  font-size: 13px;
-}
-.cd-head[data-empty="true"] .cd-summary { color: var(--muted, #899bb1); }
-.cd-exec-badge {
-  flex: 0 0 auto;
-  font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.08em;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border, #263243);
-  color: #899bb1;
-}
-.cd-chevron { flex: 0 0 auto; color: #899bb1; transition: transform 140ms ease; }
-.choose-device.is-open .cd-chevron { transform: rotate(180deg); }
-.cd-change {
-  flex: 0 0 auto;
-  height: 26px;
-  min-height: 0; /* beats .btn 40px / .btn-sm 34px min-heights */
-  padding: 0 10px;
-  font-size: 11.5px;
-  line-height: 1;
-  white-space: nowrap;
-}
-.cd-body {
-  padding: 10px 14px 14px;
-  border-top: 1px dashed var(--border, #263243);
-  background: #0c141f;
-}
-.cd-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-.cd-search input {
-  min-width: 180px;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid #344459;
-  border-radius: 8px;
-  background: #0c141f;
-  color: #e9eef5;
-  font: 13px Inter, Segoe UI, sans-serif;
-}
-.cd-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.cd-chip {
-  border: 1px solid #263243;
-  background: #141a24;
-  color: #c7d5e5;
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.cd-chip.is-active { background: #1d2b3d; color: #fff; border-color: #3a5470; }
-.cd-list {
-  max-height: min(300px, 32vh);
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 8px;
-  padding: 2px;
-  position: relative;
-  z-index: 5;
-}
-.cd-empty { grid-column: 1 / -1; color: #899bb1; font-size: 12.5px; padding: 10px 4px; }
-.cd-list .dp-card { border-radius: 8px; }
-.cd-secondary {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed #263243;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: flex-end;
-}
-.cd-secondary label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #899bb1; }
-.cd-secondary select {
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 1px solid #344459;
-  border-radius: 8px;
-  background: #0c141f;
-  color: #e9eef5;
-  font: 13px Inter, Segoe UI, sans-serif;
-  max-width: 220px;
-}
-@media (max-width: 1100px) {
-  .cd-list { grid-template-columns: 1fr; }
-  .cd-search input { min-width: 140px; }
-}

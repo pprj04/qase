@@ -93,7 +93,7 @@ function osFamilyRows() {
 	}));
 }
 
-const MACOS_CHRONOLOGICAL = ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'];
+const MACOS_CHRONOLOGICAL = ['High Sierra', 'Mojave', 'Catalina', 'Big Sur', 'Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'];
 
 function osVersionRows() {
 	const rows = [];

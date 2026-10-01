@@ -422,7 +422,7 @@ export function createApplication(options = {}) {
 		// Pre-register every environment on the availability board so the UI
 		// can show honest execution type / availability before first use.
 		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
-			void Promise.resolve(services.environments.list({ limit: 10000 }))
+			void Promise.resolve(services.environments.list({ limit: 20000 }))
 				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? []))
 				.catch(() => { /* board fills lazily via sessions */ });
 		}
@@ -511,8 +511,8 @@ export function createApplication(options = {}) {
 		try {
 			const query = request.query;
 			const limit = query.limit === undefined ? undefined : Number(query.limit);
-			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)) {
-				response.status(400).json({ error: 'limit must be an integer from 1 through 1000.' });
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 20000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 20000.' });
 				return;
 			}
 			const offset = query.offset === undefined ? undefined : Number(query.offset);

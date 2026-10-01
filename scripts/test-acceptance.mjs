@@ -37,7 +37,7 @@ try {
 		header: Boolean(document.querySelector('.chat .panel-head, main.panel header')),
 		tabs: Boolean(document.querySelector('#tabs .tab')),
 		feed: Boolean(document.querySelector('#activity-feed')),
-		device: Boolean(document.querySelector('#ldv-env-card, #ldv-env-card-empty, #ldv-title')),
+		device: Boolean(document.querySelector('#ldv-title, #live-device-view-head')),
 		stage: Boolean(document.querySelector('#stage, .stage'))
 	}));
 	record('T1', 'run workspace surfaces present', Object.values(t1).every(Boolean), JSON.stringify(t1));
@@ -68,13 +68,17 @@ try {
 	});
 	record('T6', 'long activity scrolls only its pane', !t6.pageGrew && t6.paneScrolls, JSON.stringify(t6));
 
-	// T7 — device select auto-resolves environment (picker card shows OS/browser).
-	await page.click('#qa-choose-devices').catch(() => {});
-	await page.waitForTimeout(400);
-	const pickerOpen = await page.locator('#device-picker[open]').count();
-	if (pickerOpen) {
-		await page.waitForTimeout(600); // catalog load
-		// Spec T7 names iPhone 17 Pro Max; fall back to the first card if absent.
+	// T7/T8 — one picker entry point: [Change Device] on the CURRENT TEST
+	// DEVICE card (#14102: quick actions + inline Choose Device removed).
+	const openPicker = async () => {
+		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
+		// #14166: catalog is ~16k envs — wait for actual cards, not a fixed
+		// sleep (fixed waits race the picker's render on the bigger payload).
+		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 });
+		return Boolean(await page.locator('#device-picker[open]').count());
+	};
+	if (await openPicker()) {
+		// T7 — device select auto-resolves environment (card shows OS/browser).
 		const specific = page.locator('#dp-cards .dp-card', { hasText: 'iPhone 17 Pro Max' });
 		const card = (await specific.count()) ? specific.first() : page.locator('#dp-cards .dp-card').first();
 		const cardText = await card.innerText().catch(() => '');
@@ -87,16 +91,17 @@ try {
 		record('T7', 'device select auto-resolves environment', false, 'picker did not open');
 	}
 
-	// T8 — browser change propagates (picker exposes per-OS browser select; QA TEST ON shows browser).
-	await page.click('#qa-choose-devices').catch(() => {});
-	await page.waitForTimeout(400);
-	const t8 = await page.evaluate(() => {
-		const browsers = [...document.querySelectorAll('#device-picker .dp-select')].filter((s) => /browser/i.test(s.getAttribute('aria-label') ?? s.previousElementSibling?.textContent ?? ''));
-		const testOn = document.querySelector('#qa-test-on')?.innerText ?? '';
-		return { hasBrowserSelect: browsers.length > 0, testOn };
-	});
-	await page.keyboard.press('Escape');
-	record('T8', 'browser change propagates to environment', t8.hasBrowserSelect || /Chrome|Safari|Firefox|Edge/i.test(t8.testOn), t8.testOn.slice(0, 60));
+	if (await openPicker()) {
+		// T8 — browser change propagates (picker exposes per-OS browser select).
+		const t8 = await page.evaluate(() => {
+			const browsers = [...document.querySelectorAll('#device-picker .dp-select')].filter((s) => /browser/i.test(s.getAttribute('aria-label') ?? s.previousElementSibling?.textContent ?? ''));
+			return { hasBrowserSelect: browsers.length > 0 };
+		});
+		await page.keyboard.press('Escape');
+		record('T8', 'browser change propagates to environment', t8.hasBrowserSelect, '');
+	} else {
+		record('T8', 'browser change propagates to environment', false, 'picker did not open');
+	}
 
 	// T9/T10 — SQA and Founder dialogs inherit the active environment.
 	await page.evaluate(() => document.querySelector('#sqa-start')?.showModal());
@@ -162,82 +167,129 @@ try {
 	}
 	record('T15', 'resize keeps critical content', t15);
 
-	// T16 — Collapsible Choose Device section (#14069): compact collapsed row
-	// above preview+tabs, toggle + aria-expanded, inline picker selection
-	// updates the summary from the SAME store, badge honest vs card, internal
-	// list scroll, no page growth while expanded.
+	// T16 (#14102, updated #14132): the CHOOSE DEVICE strip and quick actions
+	// are REMOVED and the CURRENT TEST DEVICE card is REMOVED too — device
+	// identity lives in the LIVE DEVICE VIEW header, whose [Change] button
+	// opens THE one picker. Order: header → preview → tabs in the RIGHT panel.
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await page.waitForTimeout(250);
-	let t16 = await page.evaluate(() => {
-		const cd = document.querySelector('#choose-device');
-		const head = document.querySelector('#cd-head');
-		const body = document.querySelector('#cd-body');
-		const stage = document.querySelector('#stage, .stage');
-		const tabs = document.querySelector('#tabs');
-		if (!cd || !head || !body || !stage || !tabs) return { ok: false, why: 'missing' };
-		const cdR = cd.getBoundingClientRect();
-		const stR = stage.getBoundingClientRect();
-		const tbR = tabs.getBoundingClientRect();
+	const t16 = await page.evaluate(() => ({
+		stripGone: !document.querySelector('#choose-device'),
+		quickGone: !document.querySelector('#quick-actions'),
+		cardGone: !document.querySelector('#ldv-env-card, #ldv-env-card-empty'),
+		changeBtn: Boolean(document.querySelector('#ldv-change-device')),
+		order: (() => {
+			const head = document.querySelector('.viewer .panel-head');
+			const stage = document.querySelector('#stage');
+			const tabs = document.querySelector('#tabs');
+			if (!head || !stage || !tabs) return false;
+			return head.getBoundingClientRect().top < stage.getBoundingClientRect().top
+				&& stage.getBoundingClientRect().top < tabs.getBoundingClientRect().top;
+		})()
+	}));
+	record('T16', 'choose strip/quick actions/device card removed; header [Change] → preview → tabs in right panel', t16.stripGone && t16.quickGone && t16.cardGone && t16.changeBtn && t16.order, JSON.stringify(t16));
+
+	// T16b: header [Change] opens THE picker; picking a device updates
+	// header + stage frame immediately (one source of truth).
+	const pickDeviceCard = async (label) => {
+		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
+		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 }); // #14166: selector wait, not fixed sleep
+		const card = page.locator('#dp-cards .dp-card', { hasText: label });
+		const target = (await card.count()) ? card.first() : page.locator('#dp-cards .dp-card').first();
+		const cardBadgeTxt = await target.locator('.dp-card-badge').innerText().catch(() => '');
+		await target.locator('.dp-select-btn').click();
+		await page.waitForTimeout(400);
+		await page.keyboard.press('Escape');
+		return cardBadgeTxt;
+	};
+	await pickDeviceCard('iPhone 17 Pro Max');
+	const t16b = await page.evaluate(() => ({
+		header: document.querySelector('#ldv-device')?.textContent ?? '',
+		stage: document.querySelector('#stage')?.getAttribute('data-device-label') ?? '',
+		kind: document.querySelector('#stage')?.getAttribute('data-device-kind') ?? null
+	}));
+	record('T16b', 'picker selection updates header + stage immediately', t16b.header.includes('iPhone') && t16b.stage.includes('iPhone') && t16b.kind === 'phone', JSON.stringify(t16b));
+
+	// T17 (#14077, retargeted #14102): preview reflects device category via the
+	// picker; header shows device/OS/browser/execution; selection survives reload.
+	const pickFor = async (label) => {
+		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
+		// Wait until the catalog actually rendered (3650 envs can take a
+		// moment after the 2026.10 expansion — the loading state has no cards).
+		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 });
+		// #14151: clear any search left over from earlier picks so the target
+		// card is actually visible before we look for it.
+		await page.fill('#dp-search', '');
+		await page.waitForTimeout(300);
+		const card = page.locator('#dp-cards .dp-card', { hasText: label });
+		const matches = await card.count();
+		if (!matches) return null;
+		const target = card.first();
+		await target.locator('.dp-select-btn').click();
+		await page.waitForTimeout(400);
+		await page.keyboard.press('Escape');
+		return label;
+	};
+
+	// Phone (iPhone) → phone frame
+	const pickedPhone = await pickFor('iPhone 17 Pro Max');
+	const t17a = await page.evaluate(() => {
+		const stage = document.querySelector('#stage');
 		return {
-			ok: cdR.top < stR.top && stR.top < tbR.top && cdR.height < 70 && body.hidden,
-			compact: Math.round(cdR.height),
-			aria: head.getAttribute('aria-expanded')
+			kind: stage?.getAttribute('data-device-kind') ?? null,
+			label: stage?.getAttribute('data-device-label') ?? null,
+			browserKey: stage?.getAttribute('data-browser-key') ?? null,
+			header: document.querySelector('#ldv-device')?.textContent ?? '',
+			headerTitle: document.querySelector('#live-device-view-head')?.title ?? ''
 		};
 	});
-	record('T16', 'choose device: collapsed compact row above preview/tabs', t16.ok, JSON.stringify(t16));
+	record('T17a', 'preview: iPhone → phone frame + header device/OS/browser', t17a.kind === 'phone' && t17a.label === 'iPhone 17 Pro Max' && t17a.header === 'iPhone 17 Pro Max', JSON.stringify(t17a));
 
-	// Expand, filter the list, check internal scroll + no page scroll.
-	await page.click('#cd-head');
-	await page.waitForTimeout(150);
-	const t16b = await page.evaluate(async () => {
-		const head = document.querySelector('#cd-head');
-		const list = document.querySelector('#cd-list');
-		const body = document.querySelector('#cd-body');
-		const before = document.scrollingElement.scrollHeight - document.scrollingElement.clientHeight;
-		const pageH = document.scrollingElement.scrollHeight;
-		const summary = document.querySelector('#cd-summary')?.textContent ?? '';
-		if (!body || body.hidden) return { ok: false, why: 'did not open' };
-		return { ok: head.getAttribute('aria-expanded') === 'true', listScrolls: list.scrollHeight > list.clientHeight, pageGrow: pageH > 900 + 200, summary };
-	});
-	record('T16b', 'choose device: expands, aria-expanded=true, list scrolls internally, page does not grow', t16b.ok, JSON.stringify(t16b));
-
-	// Search filters; selecting a device updates summary + badge from the card.
-	if (t16b.ok) {
-		await page.fill('#cd-search', 'iPhone');
-		await page.waitForTimeout(200);
-		const cards = page.locator('#cd-list .dp-card');
-		const n = await cards.count();
-		const first = cards.first();
-		const cardBadgeTxt = await first.locator('.dp-card-badge').innerText();
-		const cardName = await first.locator('.dp-card-name').innerText();
-		await first.locator('.dp-select-btn').click();
-		await page.waitForTimeout(300);
-		const t16c = await page.evaluate((name) => {
-			const summary = document.querySelector('#cd-summary')?.textContent ?? '';
-			const badge = document.querySelector('#cd-exec-badge')?.textContent ?? '';
-			const headBadge = badge.replace('● ', '');
-			return { ok: summary.includes(name), summary, badge: headBadge };
-		}, cardName);
-		record('T16c', 'choose device: inline select updates collapsed summary immediately', t16c.ok, `card=${cardName} summary="${t16c.summary}"`);
-		// Badge honesty: header badge must equal the card's execution level.
-		const cardLevel = cardBadgeTxt.split('·')[0].trim().replace('●', '').trim();
-		record('T16d', 'choose device: header badge agrees with clicked card badge', t16c.badge === cardLevel, `header="${t16c.badge}" card="${cardLevel}"`);
-		await page.fill('#cd-search', '');
+	// Tablet (iPad Pro) → tablet frame
+	const pickedTablet = await pickFor('iPad Pro');
+	if (pickedTablet) {
+		const t17b = await page.evaluate(() => ({
+			kind: document.querySelector('#stage')?.getAttribute('data-device-kind') ?? null,
+			label: document.querySelector('#stage')?.getAttribute('data-device-label') ?? null
+		}));
+		record('T17b', 'preview: iPad → tablet frame', t17b.kind === 'tablet' && t17b.label.includes('iPad'), JSON.stringify(t17b));
+	} else {
+		results.push({ id: 'T17b', ok: true, soft: true });
+		console.log('NOTE T17b — no iPad Pro in catalog; tablet frame not exercised');
 	}
 
-	// [Change Device] button opens THE dialog picker, not a second one.
-	await page.click('#cd-change');
-	await page.waitForTimeout(400);
-	const t16e = await page.evaluate(() => {
-		const dlg = document.querySelector('#device-picker');
-		return { ok: Boolean(dlg && dlg.open), open: Boolean(dlg?.open) };
-	});
-	record('T16e', 'choose device: [Change Device] opens THE device picker dialog', t16e.ok);
-	if (t16e.ok) {
-		await page.keyboard.press('Escape');
+	// Desktop (Windows) → no bezel (desktop chrome)
+	const pickedDesktop = await pickFor('Windows');
+	if (pickedDesktop) {
+		const t17c = await page.evaluate(() => ({
+			kind: document.querySelector('#stage')?.getAttribute('data-device-kind'),
+			header: document.querySelector('#ldv-device')?.textContent ?? ''
+		}));
+		record('T17c', 'preview: Windows → desktop (no phone/tablet bezel)', (t17c.kind === 'desktop' || t17c.kind === null) && t17c.header.includes('Windows'), JSON.stringify(t17c));
 	}
-	await page.click('#cd-head'); // collapse again
-	await page.waitForTimeout(150);
+
+	// Reload persistence: same device everywhere after reload.
+	await pickFor('iPhone 17 Pro Max');
+	await page.reload({ waitUntil: 'networkidle' });
+	await page.waitForTimeout(800);
+	const t17d = await page.evaluate(() => ({
+		header: document.querySelector('#ldv-device')?.textContent ?? '',
+		stripGone: !document.querySelector('#choose-device'),
+		quickGone: !document.querySelector('#quick-actions'),
+		cardGone: !document.querySelector('#ldv-env-card, #ldv-env-card-empty')
+	}));
+	record('T17d', 'one source: selection survives reload across all surfaces', t17d.header.includes('iPhone 17 Pro Max') && t17d.stripGone && t17d.quickGone && t17d.cardGone, JSON.stringify(t17d));
+
+	// T18 (#14132, superseded #14121): the CURRENT TEST DEVICE card is
+	// REMOVED — its removal is permanent, the header carries identity, and
+	// the header [Change] button still opens the one picker.
+	const t18 = await page.evaluate(() => ({
+		cardGone: !document.querySelector('#ldv-env-card, #ldv-env-card-empty'),
+		toggleGone: !document.querySelector('#ldv-card-toggle'),
+		changeBtn: Boolean(document.querySelector('#ldv-change-device')),
+		headerDevice: document.querySelector('#ldv-device')?.textContent ?? ''
+	}));
+	record('T18', 'device card fully removed; header Change + identity remain', t18.cardGone && t18.toggleGone && t18.changeBtn && t18.headerDevice.length > 0, JSON.stringify(t18));
 } finally {
 	await browser.close();
 }

@@ -123,9 +123,9 @@ test('GET /api/environments validates limit/offset bounds', async () => {
 	const fx = await startFixture();
 	try {
 		assert.equal((await fx.json('/api/environments?limit=0')).status, 400);
-		assert.equal((await fx.json('/api/environments?limit=1001')).status, 400);
+		assert.equal((await fx.json('/api/environments?limit=20001')).status, 400);
 		assert.equal((await fx.json('/api/environments?offset=-1')).status, 400);
-		assert.equal((await fx.json('/api/environments?limit=500&offset=0')).status, 200);
+		assert.equal((await fx.json('/api/environments?limit=20000&offset=0')).status, 200);
 	} finally {
 		await fx.close();
 	}

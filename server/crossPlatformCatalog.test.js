@@ -143,7 +143,9 @@ test('environment service creates Android and Windows environments end-to-end (l
 	);
 
 	// Both environments appear in the picker list alongside Apple ones.
-	const listed = await envs.list({ limit: 1000 });
+	// 2026.10 expansion: the catalog has 3650 rows — the raised cap covers it.
+	const listed = await envs.list({ limit: 20000 });
+	assert.ok(listed.length >= 3000, `expected the full expanded catalog, got ${listed.length}`);
 	assert.ok(listed.some((e) => e.envId === 'ENV-AND-GALS24-15-CHR-141'));
 	assert.ok(listed.some((e) => e.envId === 'ENV-WIN-11-EDG-141-WINLAPTOP'));
 	assert.ok(listed.some((e) => e.platform === 'ios'), 'apple environments still seeded');

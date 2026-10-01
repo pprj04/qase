@@ -68,7 +68,7 @@ test('local backend create enforces validation and uniqueness', async () => {
 	await backend.seed();
 
 	await assert.rejects(
-		() => backend.create(null, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'duckduckgo' }),
+		() => backend.create(null, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'nonexistent' }),
 		EnvironmentValidationError
 	);
 	const duplicate = await backend.create(null, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '140' })
@@ -94,9 +94,9 @@ test('environment service facade returns camelCase records and facets', async ()
 	}
 
 	const facets = await service.facets({ platform: 'ios' });
-	assert.ok(facets.total >= 250);
+	assert.ok(facets.total >= 500);
 	assert.ok(facets.browser.some((entry) => entry.value === 'Safari'));
-	assert.ok(!facets.browser.some((entry) => entry.value === 'Firefox'), 'Firefox never appears on iOS');
+	assert.ok(facets.browser.some((entry) => entry.value === 'Firefox'), 'Firefox appears on iOS after the 2026.10 expansion');
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -129,19 +129,19 @@ test('environment create carries screenResolution and orientation with device-ty
 
 test('local backend create/update persists resolution, orientation and description', async () => {
 	const dir = tempDir();
-	// Fresh catalog with an operator-added version (Chrome 153) so the created
+	// Fresh catalog with an operator-added version (Chrome 160) so the created
 	// environment is valid but NOT already in the deterministic seed matrix.
 	const { createLocalDeviceCatalogBackend } = await import('./localDeviceCatalog.js');
 	const catalogDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qase-catalog-env-'));
 	const catalog = createLocalDeviceCatalogBackend({ stateDir: catalogDir, stateFile: path.join(catalogDir, 'catalog.json') });
 	await catalog.seed();
-	await catalog.create('browserVersions', { browser_id: 'chrome', version: '153', sort_key: '000153' });
+	await catalog.create('browserVersions', { browser_id: 'chrome', version: '160', sort_key: '000160' });
 
 	const backend = createLocalEnvironmentBackend({ stateDir: dir, catalogBackend: catalog });
 	await backend.seed();
 
 	const created = await backend.create(null, {
-		platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '153',
+		platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '160',
 		screenResolution: '2622x1206', orientation: 'landscape', description: 'Portrait-first device lab iPhone'
 	});
 	assert.equal(created.screenResolution, '2622x1206');
@@ -163,26 +163,32 @@ test('disable excludes an environment from picker queries; enable restores it', 
 	const envId = 'ENV-IOS-IP16PRO-18.3-CHR-140';
 
 	await backend.update(null, envId, { active: false });
-	const inactive = await backend.list(null, { active: 'true', limit: 1000 });
+	const inactive = await backend.list(null, { active: 'true', limit: 20000 });
 	assert.ok(!inactive.some((env) => env.envId === envId), 'disabled env must not appear in active=true picker query');
-	const stillThere = await backend.list(null, { limit: 1000 });
+	// 2026.10 expansion: the catalog now has 3650 rows, so the unfiltered
+	// history query must use the raised cap to see them all.
+	const stillThere = await backend.list(null, { limit: 20000 });
 	assert.ok(stillThere.some((env) => env.envId === envId), 'disabled env remains in unfiltered history');
 
 	await backend.update(null, envId, { active: true });
-	const restored = await backend.list(null, { active: 'true', limit: 1000 });
+	const restored = await backend.list(null, { active: 'true', limit: 20000 });
 	assert.ok(restored.some((env) => env.envId === envId), 're-enabled env returns to the picker');
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('availability explains the Brave/DuckDuckGo gap', async () => {
+test('availability leaves only the Safari gap on Android/Windows', async () => {
 	const dir = tempDir();
 	const backend = createLocalEnvironmentBackend({ stateDir: dir });
 	const service = createEnvironmentService(backend);
 	const report = service.availability();
 	const mac = report.find((entry) => entry.platform === 'macos');
-	assert.ok(mac.unavailable.some((entry) => entry.browser === 'Brave' || entry.browser === 'DuckDuckGo'));
+	assert.equal(mac.unavailable.length, 0, 'macOS has no gaps after expansion');
 	const iosEntry = report.find((entry) => entry.platform === 'ios');
-	assert.ok(iosEntry.unavailable.some((entry) => entry.browser === 'Firefox'));
+	assert.equal(iosEntry.unavailable.length, 0, 'iOS has no gaps after expansion');
+	const android = report.find((entry) => entry.platform === 'android');
+	assert.ok(android.unavailable.some((entry) => entry.browser === 'Safari'));
+	const windows = report.find((entry) => entry.platform === 'windows');
+	assert.ok(windows.unavailable.some((entry) => entry.browser === 'Safari'));
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 

@@ -367,7 +367,7 @@ export function createLocalEnvironmentBackend(options = {}) {
 			loadFromDisk();
 			const all = filterRecords(filters);
 			const offset = Math.max(Number(filters.offset ?? 0), 0);
-			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 1000);
+			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 20000);
 			return all.slice(offset, offset + limit);
 		},
 		async get(tenant, envId) {
@@ -489,7 +489,7 @@ export function createEnvironmentService(backend, options = {}) {
 	/** Facet values (with counts) over the filtered set, for the admin UI dropdowns. */
 	async function facets(filters = {}) {
 		const clean = sanitizeFilters(filters);
-		const facetQuery = { ...clean, limit: 1000, offset: 0 };
+		const facetQuery = { ...clean, limit: 20000, offset: 0 };
 		const rows = (await backend.list(withTenant(), facetQuery)).map(rowToEnvironment);
 		const dimension = (key) => {
 			const counts = new Map();

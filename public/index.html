@@ -7,7 +7,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
-<link rel="stylesheet" href="styles.css?v=20260930-2">
+<link rel="stylesheet" href="styles.css?v=20261001-1">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
@@ -193,38 +193,36 @@
 
     <div class="question-slot" id="question-slot" aria-live="assertive"></div>
 
-    <!-- Collapsible Choose Device (exec layout #14069): sits above the
-         preview; ONE inline picker surface; right panel stays indicator-only.
-         Collapsed = compact summary row; expanded = full selection controls. -->
-    <section class="choose-device" id="choose-device" aria-labelledby="cd-title">
-      <div class="cd-head" id="cd-head" role="button" tabindex="0" aria-expanded="false" aria-controls="cd-body">
-        <span class="cd-label" id="cd-title">Choose Device</span>
-        <span class="cd-summary" id="cd-summary">No device selected</span>
-        <span class="cd-exec-badge" id="cd-exec-badge" data-exec="none" hidden>○ NO DEVICE</span>
-        <button type="button" class="btn btn-sm cd-change" id="cd-change" title="Change device (opens the full device picker)">Change Device</button>
-        <span class="cd-chevron" id="cd-chevron" aria-hidden="true">⌄</span>
+    <!-- Quick actions + inline Choose Device strip removed (#14102):
+         device selection happens ONLY via the #device-picker dialog,
+         opened from the LIVE DEVICE VIEW header's [Change] button. -->
+
+    <form class="composer" id="composer">
+      <label class="sr-only" for="composer-input">URL or instruction for the QA agent</label>
+      <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
+      <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
+      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+    </form>
+  </main>
+
+  <!-- ── Right: live browser + activity ─────────────────────────── -->
+  <aside class="panel viewer" aria-label="Live browser and test results">
+    <header class="panel-head" data-path="~/qase/browser.preview">
+      <div class="live-device-view-head" id="live-device-view-head">
+        <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
+        <span class="ldv-device" id="ldv-device">—</span>
+        <span class="ldv-badges">
+          <span class="ldv-badge" id="ldv-exec">○ NO DEVICE</span>
+          <span class="ldv-badge ldv-live" id="ldv-live">○ IDLE</span>
+        </span>
+        <button type="button" class="btn btn-ghost btn-sm ldv-change" id="ldv-change-device" title="Change the test device (opens the device picker)">Change</button>
       </div>
-      <div class="cd-body" id="cd-body" hidden>
-        <div class="cd-controls">
-          <label class="cd-search"><span class="sr-only">Search devices</span>
-            <input type="search" id="cd-search" placeholder="Search devices…" autocomplete="off"></label>
-          <div class="cd-chip-row" id="cd-platform-chips" role="group" aria-label="Platform filter">
-            <button type="button" class="cd-chip is-active" data-cd-platform="all">All</button>
-            <button type="button" class="cd-chip" data-cd-platform="apple">Apple</button>
-            <button type="button" class="cd-chip" data-cd-platform="android">Android</button>
-            <button type="button" class="cd-chip" data-cd-platform="windows">Windows</button>
-          </div>
-          <div class="cd-chip-row" id="cd-type-chips" role="group" aria-label="Device type filter">
-            <button type="button" class="cd-chip is-active" data-cd-type="all">All</button>
-            <button type="button" class="cd-chip" data-cd-type="phone">Phone</button>
-            <button type="button" class="cd-chip" data-cd-type="tablet">Tablet</button>
-            <button type="button" class="cd-chip" data-cd-type="desktop">Desktop</button>
-          </div>
-        </div>
-        <div class="cd-list" id="cd-list" role="list" aria-label="Devices"></div>
-        <div class="cd-secondary" id="cd-secondary" hidden></div>
+      <div class="urlbar">
+        <span class="dot" id="browser-dot" aria-hidden="true"></span>
+        <span class="url" id="browser-url">about:blank</span>
       </div>
-    </section>
+      <span class="subtle" id="browser-title"></span>
+    </header>
 
     <div class="stage" id="stage">
       <div class="ldv-unavailable" id="ldv-unavailable" hidden>
@@ -272,11 +270,10 @@
     </div>
 
     <!-- Run workspace tabs (UI Fix Phase 1): Activity/Plan/Findings/Bugs/Report
-         live INSIDE the center execution column — sticky tab bar, scrollable
+         live INSIDE the right execution panel — sticky tab bar, scrollable
          active pane, never a page footer. -->
     <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
       <button class="tab is-active" id="tab-activity" data-tab="activity" role="tab" aria-selected="true" aria-controls="pane-activity">Activity</button>
-      <button type="button" class="btn btn-ghost btn-sm autoscroll-toggle" id="activity-autoscroll" aria-pressed="true" title="Keep the latest activity visible">Auto-scroll ON</button>
       <button class="tab" id="tab-plan" data-tab="plan" role="tab" aria-selected="false" aria-controls="pane-plan" tabindex="-1">Plan <span class="count" id="count-plan"></span></button>
       <button class="tab" id="tab-findings" data-tab="findings" role="tab" aria-selected="false" aria-controls="pane-findings" tabindex="-1">Findings <span class="count" id="count-findings"></span></button>
       <button class="tab" id="tab-bugs" data-tab="bugs" role="tab" aria-selected="false" aria-controls="pane-bugs" tabindex="-1">Bugs <span class="count" id="count-bugs"></span></button>
@@ -293,80 +290,6 @@
       <section class="tab-pane" id="pane-sqa" data-pane="sqa" role="tabpanel" aria-labelledby="tab-sqa"><div class="feed sqa-view" id="sqa-view" aria-live="polite"></div></section>
       <section class="tab-pane" id="pane-founder" data-pane="founder" role="tabpanel" aria-labelledby="tab-founder"><div class="feed founder-view" id="founder-view" aria-live="polite"></div></section>
     </div>
-
-    <div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
-      <span class="qa-strip-title">Quick actions</span>
-      <button type="button" class="qa-chip" id="qa-run-all" title="Run every test case on its assigned environments">▶ Run all</button>
-      <button type="button" class="qa-chip" id="qa-run-failed" title="Re-run test cases whose last run failed">↻ Run failed</button>
-      <button type="button" class="qa-chip" id="qa-create-case" title="Create a reusable test case">＋ Test case</button>
-      <button type="button" class="qa-chip" id="qa-choose-devices" title="Choose the target device — OS, browser and environment resolve automatically">☰ Target device</button>
-      <button type="button" class="qa-chip" id="qa-view-results" title="Open the results view">◧ Results</button>
-      <button type="button" class="qa-chip" id="qa-create-bug" title="Generate a bug report from the latest findings">⚑ Bug</button>
-      <label class="qa-preset-wrap">Presets
-        <select id="qa-preset" aria-label="Environment presets">
-          <option value="">Choose…</option>
-          <option value="apple-mobile">Apple Mobile</option>
-          <option value="android-mobile">Android Mobile</option>
-          <option value="windows-desktop">Windows Desktop</option>
-          <option value="all-mobile">All Mobile</option>
-          <option value="all-browsers">All Browsers</option>
-          <option value="full-regression">Full Regression</option>
-        </select>
-      </label>
-    </div>
-
-    <form class="composer" id="composer">
-      <label class="sr-only" for="composer-input">URL or instruction for the QA agent</label>
-      <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
-      <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
-      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
-    </form>
-  </main>
-
-  <!-- ── Right: live browser + activity ─────────────────────────── -->
-  <aside class="panel viewer" aria-label="Live browser and test results">
-    <header class="panel-head" data-path="~/qase/browser.preview">
-      <div class="live-device-view-head" id="live-device-view-head">
-        <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
-        <span class="ldv-device" id="ldv-device">—</span>
-        <span class="ldv-badges">
-          <span class="ldv-badge" id="ldv-exec">○ NO DEVICE</span>
-          <span class="ldv-badge ldv-live" id="ldv-live">○ IDLE</span>
-        </span>
-      </div>
-      <div class="urlbar">
-        <span class="dot" id="browser-dot" aria-hidden="true"></span>
-        <span class="url" id="browser-url">about:blank</span>
-      </div>
-      <span class="subtle" id="browser-title"></span>
-      <div class="ldv-env-card" id="ldv-env-card" hidden>
-        <div class="ldv-env-card-head">
-          <span class="ldv-env-kicker" id="ldv-kicker">CURRENT TEST DEVICE</span>
-        </div>
-        <div class="ldv-env-name" id="ldv-env-device">—</div>
-        <div class="ldv-env-line" id="ldv-env-os">—</div>
-        <div class="ldv-env-line" id="ldv-env-browser">—</div>
-        <div class="ldv-env-badges">
-          <span class="ldv-badge" id="ldv-card-exec">○ NO DEVICE</span>
-          <span class="ldv-badge ldv-live" id="ldv-card-status">○ IDLE</span>
-        </div>
-        <div class="ldv-env-runtime" id="ldv-env-runtime" hidden>Runtime: <code id="ldv-runtime-id"></code></div>
-        <div class="ldv-env-card-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-device">Change Device</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-device-details">Device details</button>
-        </div>
-      </div>
-      <!-- Empty state (AC11): no device selected yet — the only action opens THE picker. -->
-      <div class="ldv-env-card ldv-env-card-empty" id="ldv-env-card-empty" hidden>
-        <div class="ldv-env-card-head">
-          <span class="ldv-env-kicker">CURRENT TEST DEVICE</span>
-        </div>
-        <p class="ldv-env-prompt">SELECT A DEVICE</p>
-        <button type="button" class="btn btn-primary btn-sm" id="ldv-choose-device">Choose device</button>
-      </div>
-    </header>
-
-
 
   </aside>
 

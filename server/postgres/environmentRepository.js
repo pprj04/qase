@@ -305,7 +305,7 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			`SELECT * FROM environments ${where}
 			 ORDER BY platform, device, os_version, browser, browser_version
 			 LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-			[...params, Math.min(Math.max(limit, 1), 1000), Math.max(offset, 0)]
+			[...params, Math.min(Math.max(limit, 1), 20000), Math.max(offset, 0)]
 		);
 		return result.rows;
 	}

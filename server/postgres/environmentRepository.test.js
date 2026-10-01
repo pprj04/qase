@@ -31,7 +31,7 @@ test('seed inserts every generated environment and upserts by env_id without tou
 	const pool = scriptedPool();
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	const result = await repo.seed();
-	assert.equal(result.catalogVersion, '2026.09.1');
+	assert.equal(result.catalogVersion, '2026.10.2');
 	const inserts = pool._calls.filter((call) => call.text.startsWith('INSERT INTO environments'));
 	assert.ok(inserts.length >= 250, `expected hundreds of upserts, got ${inserts.length}`);
 	for (const call of inserts) {
@@ -68,24 +68,31 @@ test('get returns the matching row and null otherwise', async () => {
 test('create validates through the catalog validator before touching the database', async () => {
 	const pool = scriptedPool();
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	// 2026.10 expansion: Brave is valid on macOS now — the still-invalid pair
+	// is Safari on Android.
 	await assert.rejects(
-		() => repo.create(TENANT, { platform: 'macos', device: 'macOS Sonoma', osVersion: 'Sonoma', browser: 'brave' }),
+		() => repo.create(TENANT, { platform: 'android', device: 'Galaxy S24', osVersion: '15', browser: 'safari' }),
 		(error) => {
 			assert.ok(error instanceof EnvironmentValidationError);
-			assert.match(error.message, /not supported on macOS/);
+			assert.match(error.message, /not (available|supported) on android/i);
 			return true;
 		}
 	);
 	assert.equal(pool._calls.length, 0, 'invalid input must never reach the database');
 });
 
-test('create rejects Firefox on iOS', async () => {
-	const pool = scriptedPool();
+test('create rejects Safari on Android (Firefox on iOS is valid after the 2026.10 expansion)', async () => {
+	const pool = scriptedPool(({ text }) => {
+		if (text.startsWith('INSERT INTO environments')) return { rows: [{ env_id: 'created' }] };
+		return { rows: [] };
+	});
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	await assert.rejects(
-		() => repo.create(TENANT, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'firefox', browserVersion: '142' }),
+		() => repo.create(TENANT, { platform: 'android', device: 'Galaxy S24', osVersion: '15', browser: 'safari' }),
 		EnvironmentValidationError
 	);
+	const accepted = await repo.create(TENANT, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'firefox', browserVersion: '142' });
+	assert.equal(accepted.env_id, 'created');
 });
 
 test('create rejects a Safari version that contradicts the OS version', async () => {
@@ -182,7 +189,8 @@ test('list clamps limit and offset', async () => {
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	await repo.list(TENANT, { limit: '99999', offset: '-5' });
 	const select = pool._calls.find((call) => call.text.includes('LIMIT'));
-	assert.equal(select.params.at(-2), 1000);
+	// 2026.10.2 (#14166): list cap raised 5000 → 20000 for the deep version catalog.
+	assert.equal(select.params.at(-2), 20000);
 	assert.equal(select.params.at(-1), 0);
 });
 

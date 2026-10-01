@@ -122,19 +122,19 @@ test('GET unknown catalog entity → 400', async () => {
 	}
 });
 
-test('POST /api/catalog/browserVersions adds Chrome 154, then env validation accepts it', async () => {
+test('POST /api/catalog/browserVersions adds Chrome 160, then env validation accepts it', async () => {
 	const fixture = await startFixture();
 	try {
 		const created = await fixture.json('/api/catalog/browserVersions', {
 			method: 'POST',
-			json: { browser_id: 'chrome', version: '154' }
+			json: { browser_id: 'chrome', version: '160' }
 		});
 		assert.equal(created.status, 201);
-		assert.equal(created.body.id, 'chrome:154');
+		assert.equal(created.body.id, 'chrome:160');
 
 		const duplicate = await fixture.json('/api/catalog/browserVersions', {
 			method: 'POST',
-			json: { browser_id: 'chrome', version: '154' }
+			json: { browser_id: 'chrome', version: '160' }
 		});
 		assert.equal(duplicate.status, 409);
 		assert.equal(duplicate.body.code, 'QASE_CATALOG_CONFLICT');
@@ -238,9 +238,14 @@ test('GET /api/catalog/validate rejects invalid pairs with reasons', async () =>
 		const crossPlatform = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=macos&osVersion=Sonoma&browser=chrome');
 		assert.equal(crossPlatform.body.ok, false);
 
-		const badBrowser = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=ios&osVersion=18.3&browser=firefox');
+		// 2026.10 expansion: Firefox IS available on iOS now — assert the new
+		// truth and keep a genuinely invalid pair (Safari on Android).
+		const goodBrowser = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=ios&osVersion=18.3&browser=firefox');
+		assert.equal(goodBrowser.body.ok, true);
+
+		const badBrowser = await fixture.json('/api/catalog/validate?device=GALS24&platform=android&osVersion=15&browser=safari');
 		assert.equal(badBrowser.body.ok, false);
-		assert.match(badBrowser.body.reason, /not available on ios/);
+		assert.match(badBrowser.body.reason, /not (available|supported) on android/i);
 
 		const noDevice = await fixture.json('/api/catalog/validate');
 		assert.equal(noDevice.status, 400);
@@ -332,7 +337,7 @@ test('GET /api/catalog/browsers/:id/versions lists versions for a browser', asyn
 	const fixture = await startFixture(stubCatalog((entity, filters = {}) => {
 		if (entity === 'browsers') return filters.id === 'chrome' ? [{ id: 'chrome', display_name: 'Chrome' }] : [];
 		if (entity === 'browserVersions') return filters.browser_id === 'chrome'
-			? [{ id: 'chrome:153', version: '153' }, { id: 'chrome:154', version: '154' }]
+			? [{ id: 'chrome:153', version: '153' }, { id: 'chrome:160', version: '160' }]
 			: [];
 		return [];
 	}));
@@ -342,7 +347,7 @@ test('GET /api/catalog/browsers/:id/versions lists versions for a browser', asyn
 		const { status, body } = await fixture.json('/api/catalog/browsers/chrome/versions');
 		assert.equal(status, 200);
 		assert.equal(body.count, 2);
-		assert.deepEqual(body.rows.map((r) => r.version), ['153', '154']);
+		assert.deepEqual(body.rows.map((r) => r.version), ['153', '160']);
 	} finally {
 		await fixture.close();
 	}

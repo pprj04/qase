@@ -20,10 +20,15 @@ test('settings dialog hosts Device Management; sidebar foot has no admin entries
 	}
 });
 
-test('device details buttons target the Settings-hosted Device Management entry', async () => {
+test('device details entry targets the Settings-hosted Device Management surface', async () => {
+	// #14132 removed the CURRENT TEST DEVICE card; Device Management stays
+	// reachable from Settings -> Device Management (deviceMatrix view wires
+	// #open-device-matrix inside the #settings dialog).
 	const app = await readFile('public/app.js', 'utf8');
-	const wire = app.slice(app.indexOf('wireEnvironmentCardActions'));
-	assert.match(wire, /getElementById\('open-device-matrix'\)\?\.click\(\)/);
+	const html = await readFile('public/index.html', 'utf8');
+	const settings = html.slice(html.indexOf('id="settings"'));
+	assert.ok(settings.includes('id="open-device-matrix"'), 'open-device-matrix must live inside #settings');
+	assert.match(app, /createDeviceMatrixView\(\{/, 'device matrix view must be wired');
 });
 
 test('dock chip reads the active selection via the store accessor, not drawer state', async () => {
@@ -42,11 +47,13 @@ test('chip execution label comes from requested/attested levels only (honest)', 
 	assert.ok(!paint.includes('env.isRealDevice'), 'catalog isRealDevice must not drive the chip badge');
 });
 
-test('Results quick action refreshes run history instead of a phantom foot click', async () => {
+test('quick actions strip is removed (#14102); results live in run history via sidebar', async () => {
+	const html = await readFile('public/index.html', 'utf8');
+	assert.ok(!html.includes('id="quick-actions"'), 'quick actions strip must not render');
+	assert.ok(!html.includes('id="choose-device"'), 'inline Choose Device strip must not render');
+	assert.ok(!html.includes('qa-run-all') && !html.includes('qa-preset'), 'quick action chips must not render');
 	const app = await readFile('public/app.js', 'utf8');
-	const qa = app.slice(app.indexOf('quickActions.viewResults'), app.indexOf('quickActions.createBug'));
-	assert.match(qa, /refreshRuns\(\)/);
-	assert.ok(!qa.includes('panel-foot .foot-btn'), 'must not click a random foot button');
+	assert.ok(!app.includes('quickActions.'), 'dead quick-actions controller must be gone');
 });
 
 test('runtime status vocabulary covers the agreed states via one map', async () => {

@@ -127,6 +127,39 @@ function attested(runtimeFacts) {
 }
 
 /**
+ * Build a runtime-environment view for the ACTIVE TEST ENVIRONMENT selection
+ * (the store), used when no run is actively executing so the preview header/
+ * frame reflect the user's chosen device instead of a stale session snapshot.
+ * Mirrors resolveActiveRuntimeEnvironment's output shape.
+ */
+export function viewForSelection(selection) {
+	if (!selection) return null;
+	const resolution = parseResolution(selection.resolution);
+	const kind = deviceKindFor({ deviceType: selection.deviceType, platform: selection.platform });
+	return Object.freeze({
+		device: selection.device ?? 'Unknown device',
+		deviceId: selection.envId ?? null,
+		manufacturer: null,
+		model: selection.device ?? null,
+		deviceType: kind,
+		os: selection.os ?? null,
+		osVersion: selection.osVersion ?? null,
+		browser: selection.browser ?? null,
+		browserVersion: selection.browserVersion ?? null,
+		browserKey: browserKeyFor(selection.browser ?? null),
+		resolution,
+		orientation: orientationFor({ orientation: selection.orientation, resolution }),
+		executionType: selection.executionType ? String(selection.executionType).toLowerCase() : 'none',
+		executionTypeAttested: false,
+		runtimeSessionId: selection.runtimeSessionId ?? null,
+		runtimeStatus: 'queued', // selection view: no run — treated as idle by consumers
+		label: selection.device ?? null,
+		targetUrl: null,
+		source: 'selection'
+	});
+}
+
+/**
  * Resolve the active runtime environment view-model for a session snapshot.
  * Returns null only when there is genuinely nothing to show.
  */

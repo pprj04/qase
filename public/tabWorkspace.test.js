@@ -29,8 +29,11 @@ test('report tab exposes an Export report action only when a report exists', asy
 	assert.match(renderReport, /application\/json/);
 });
 
-test('activity feed auto-scroll honours a single toggle source', async () => {
+test('activity feed auto-scroll is unconditional after toggle removal (#14124)', async () => {
 	const app = await readFile('public/app.js', 'utf8');
-	assert.match(app, /function feedAutoScrolls\(feed\) \{\s*\n\treturn autoScrollState\.activity;/);
-	assert.match(app, /const autoScrollState = \{ activity: true \};/);
+	const html = await readFile('public/index.html', 'utf8');
+	assert.ok(!html.includes('activity-autoscroll'), 'toggle must not render in the tab bar');
+	assert.ok(!app.includes('autoScrollState'), 'dead toggle state must be gone');
+	const scrollFeed = app.slice(app.indexOf('function scrollFeed'), app.indexOf('function scrollFeed') + 400);
+	assert.ok(!scrollFeed.includes('feedAutoScrolls'), 'scrollFeed must not gate on a removed toggle');
 });

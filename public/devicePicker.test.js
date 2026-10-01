@@ -70,6 +70,9 @@ test('filterDeviceCards: search, platform, device type', () => {
 	assert.equal(filterDeviceCards(cards, { deviceType: 'desktop' }).length, 1);
 	assert.equal(filterDeviceCards(cards, { platform: 'windows', search: 'edge' }).length, 1);
 	assert.equal(filterDeviceCards(cards, {}).length, 4);
+	// #14151: search matches ANY supported browser, not only the card's best
+	// env. The iPhone's best env is Safari — 'chrome' must still find it.
+	assert.ok(filterDeviceCards(cards, { search: 'chrome' }).some((c) => c.device === 'iPhone 17 Pro'));
 });
 
 test('cardBadge is honest: real only when the board attests it', () => {

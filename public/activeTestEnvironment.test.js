@@ -40,6 +40,19 @@ test('resolveForEnvironment produces the canonical single-source shape', () => {
 	assert.equal(resolveForEnvironment(null), null);
 });
 
+test('executionType falls back to the catalog field (#14132 exec badge)', () => {
+	// A fresh selection has no executionLevelRequested override — the honest
+	// level must come from the catalog's executionType, else the header badge
+	// reads "NO DEVICE".
+	const view = resolveForEnvironment({ ...ENV, executionType: 'VIRTUAL_DEVICE' });
+	assert.equal(view.executionType, 'virtual_device');
+	// An explicit requested level wins over the catalog field.
+	const override = resolveForEnvironment({ ...ENV, executionType: 'VIRTUAL_DEVICE', executionLevelRequested: 'simulated' });
+	assert.equal(override.executionType, 'simulated');
+	// Neither present → null (honest "NO DEVICE").
+	assert.equal(resolveForEnvironment(ENV).executionType, null);
+});
+
 test('store set/get/clear round-trips and persists', () => {
 	const storage = memoryStorage();
 	const store = createActiveTestEnvironmentStore({ storage });

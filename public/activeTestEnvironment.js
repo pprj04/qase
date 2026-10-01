@@ -32,7 +32,13 @@ export function resolveForEnvironment(env) {
 		browserVersion: env.browserVersion != null ? String(env.browserVersion) : null,
 		resolution: env.screenResolution ?? env.screenSize ?? null,
 		orientation: env.orientation ?? env.orientationScenario ?? 'portrait',
-		executionType: env.executionLevelRequested ?? env.runtimeAttestedLevel ?? null,
+		// #14132: the catalog carries the honest level in `executionType`
+		// (e.g. "VIRTUAL_DEVICE"); `executionLevelRequested` is only set when a
+		// user override chose one. Without the fallback a fresh selection loses
+		// its exec badge ("NO DEVICE") in the header.
+		executionType: env.executionLevelRequested
+			?? env.runtimeAttestedLevel
+			?? (env.executionType ? String(env.executionType).toLowerCase() : null),
 		availability: env.runtimeStatus ?? env.availability ?? null,
 		runtimeSessionId: env.runtimeSessionId ?? null,
 		selectedAt: env.selectedAt ?? null

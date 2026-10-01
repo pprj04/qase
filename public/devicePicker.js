@@ -109,14 +109,15 @@ export function buildDeviceCards(environments, boardByEnvId = null) {
  * osVersion overrides. Only combinations that exist as active environments
  * are resolvable — never an invented one.
  */
-export function resolveDeviceEnvironment(environments, { device, browser, osVersion } = {}) {
+export function resolveDeviceEnvironment(environments, { device, browser, osVersion, executionLevel } = {}) {
 	const candidates = (environments ?? []).filter((e) => e?.active !== false && String(e.device ?? '').trim() === String(device ?? '').trim());
 	if (!candidates.length) return null;
 	let filtered = candidates;
 	if (osVersion) filtered = filtered.filter((e) => String(e.osVersion ?? '') === String(osVersion));
 	if (browser) filtered = filtered.filter((e) => String(e.browser ?? '').toLowerCase() === String(browser).toLowerCase());
-	if (!filtered.length && browser) {
-		// Browser/os combination doesn't exist for this device — fall back to
+	if (executionLevel) filtered = filtered.filter((e) => (e?.runtimeAttestedLevel ?? e?.executionLevelRequested ?? null) === executionLevel);
+	if (!filtered.length && (browser || executionLevel)) {
+		// Browser/os/level combination doesn't exist for this device — fall back to
 		// the device's best environment rather than inventing one.
 		filtered = candidates;
 	}
@@ -130,7 +131,11 @@ export function filterDeviceCards(cards, { search = '', platform = 'all', device
 		if (platform !== 'all' && card.group !== platform) return false;
 		if (deviceType !== 'all' && card.deviceType !== deviceType) return false;
 		if (!q) return true;
-		const haystack = [card.device, card.best?.os, card.best?.osVersion, card.best?.browser, card.best?.browserVersion]
+		// Search matches the device name, its OS, AND every supported browser
+		// (#14151) — 'Firefox' must find every device that can run Firefox,
+		// not only the ones whose best environment happens to be Firefox.
+		const browsers = (card.browsers ?? []).map((b) => b?.browser).filter(Boolean);
+		const haystack = [card.device, card.best?.os, card.best?.osVersion, card.best?.browser, card.best?.browserVersion, ...browsers]
 			.filter(Boolean).join(' ').toLowerCase();
 		return haystack.includes(q);
 	});

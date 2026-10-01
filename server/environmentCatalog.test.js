@@ -53,29 +53,36 @@ test('macOS devices carry a numeric OS version', () => {
 });
 
 test('no environment exists for a browser unavailable on its platform', () => {
+	// 2026.10 expansion: the only forbidden pair left is Safari on
+	// Android/Windows (Apple ships no Safari for those platforms).
 	const environments = generateEnvironments();
 	const byBrowser = new Set(environments.map((env) => `${env.platform}:${env.browser}`));
-	assert.ok(!byBrowser.has('ios:Firefox'), 'Firefox must not appear on iOS');
-	assert.ok(!byBrowser.has('ios:Edge'), 'Edge must not appear on iOS');
-	assert.ok(!byBrowser.has('ios:Opera'), 'Opera must not appear on iOS');
-	assert.ok(!byBrowser.has('ipados:Firefox'), 'Firefox must not appear on iPadOS');
-	assert.ok(!byBrowser.has('ios:Brave'), 'Brave must never appear');
-	assert.ok(!byBrowser.has('macos:Brave'), 'Brave must never appear');
-	assert.ok(!byBrowser.has('macos:DuckDuckGo'), 'DuckDuckGo must never appear');
+	assert.ok(!byBrowser.has('android:Safari'), 'Safari must never appear on Android');
+	assert.ok(!byBrowser.has('windows:Safari'), 'Safari must never appear on Windows');
 });
 
-test('iOS/iPadOS environments only offer Safari and Chrome', () => {
+test('iOS/iPadOS environments offer all seven App Store browsers', () => {
 	const mobileBrowsers = new Set(
 		generateEnvironments()
 			.filter((env) => env.platform === 'ios' || env.platform === 'ipados')
 			.map((env) => env.browser)
 	);
-	assert.deepEqual([...mobileBrowsers].sort(), ['Chrome', 'Safari']);
+	assert.deepEqual([...mobileBrowsers].sort(),
+		['Brave', 'Chrome', 'DuckDuckGo', 'Edge', 'Firefox', 'Opera', 'Safari']);
 });
 
-test('macOS environments offer Safari, Chrome, Firefox, Edge, Opera', () => {
+test('macOS environments offer all seven browsers', () => {
 	const macBrowsers = new Set(generateEnvironments().filter((env) => env.platform === 'macos').map((env) => env.browser));
-	assert.deepEqual([...macBrowsers].sort(), ['Chrome', 'Edge', 'Firefox', 'Opera', 'Safari']);
+	assert.deepEqual([...macBrowsers].sort(),
+		['Brave', 'Chrome', 'DuckDuckGo', 'Edge', 'Firefox', 'Opera', 'Safari']);
+});
+
+test('Android and Windows environments offer six browsers, never Safari', () => {
+	for (const platform of ['android', 'windows']) {
+		const browsers = new Set(generateEnvironments().filter((env) => env.platform === platform).map((env) => env.browser));
+		assert.deepEqual([...browsers].sort(),
+			['Brave', 'Chrome', 'DuckDuckGo', 'Edge', 'Firefox', 'Opera'], platform);
+	}
 });
 
 test('every generated environment has a unique envId', () => {
@@ -114,7 +121,10 @@ test('Safari version derives from the OS version, never independent', () => {
 	assert.equal(safariVersionFor('ipados', '17.0'), '17.0');
 	assert.equal(safariVersionFor('macos', 'Sonoma'), '18.6');
 	assert.equal(safariVersionFor('macos', 'sequoia'), '26.2');
-	assert.equal(safariVersionFor('macos', 'Tahoe'), '26.2');
+	assert.equal(safariVersionFor('macos', 'Tahoe'), '26.4');
+	// #14166: multi-word macOS names resolve case-insensitively too.
+	assert.equal(safariVersionFor('macos', 'Big Sur'), '14.1.2');
+	assert.equal(safariVersionFor('macos', 'high sierra'), '11.1.2');
 	assert.equal(safariVersionFor('macos', 'Windows 98'), null);
 	assert.equal(safariVersionFor('android', '18.3'), null);
 });
@@ -134,16 +144,19 @@ test('every generated environment passes the combination validator', () => {
 });
 
 test('validator rejects unsupported combinations with readable reasons', () => {
-	const brave = isCombinationSupported('macos', 'macOS Sonoma', 'Sonoma', 'brave');
-	assert.equal(brave.ok, false);
-	assert.match(brave.reason, /not supported on macOS/);
+	// 2026.10 expansion: Safari remains the hard exclusion off Apple platforms.
+	const safariOnAndroid = isCombinationSupported('android', 'Galaxy S24', '15', 'safari');
+	assert.equal(safariOnAndroid.ok, false);
+	assert.match(safariOnAndroid.reason, /not supported on Android/);
 
-	const firefoxOnIos = isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'firefox', '142');
-	assert.equal(firefoxOnIos.ok, false);
-	assert.match(firefoxOnIos.reason, /not supported on iPhone/);
+	const safariOnWindows = isCombinationSupported('windows', 'Windows Desktop', '11', 'safari');
+	assert.equal(safariOnWindows.ok, false);
 
-	const ddg = isCombinationSupported('ios', 'iPhone 17 Pro', '26.0', 'duckduckgo');
-	assert.equal(ddg.ok, false);
+	// Expanded availability: these ARE supported now.
+	assert.equal(isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'firefox', '142').ok, true);
+	assert.equal(isCombinationSupported('macos', 'macOS Sonoma', 'Sonoma', 'brave', '140').ok, true);
+	assert.equal(isCombinationSupported('android', 'Galaxy S24', '15', 'brave', '140').ok, true);
+	assert.equal(isCombinationSupported('ipados', 'iPad Pro 13-inch', '26.0', 'duckduckgo', '1').ok, true);
 
 	const safariMismatch = isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'safari', '17');
 	assert.equal(safariMismatch.ok, false);
@@ -186,28 +199,32 @@ test('macOS Safari map covers every macOS device', () => {
 test('availability report explains gaps for every platform', () => {
 	const report = availabilityReport();
 	assert.equal(report.length, 5);
+	// 2026.10 expansion: all seven browsers available on Apple platforms; the
+	// only gaps left are Safari on Android/Windows.
 	const mac = report.find((entry) => entry.platform === 'macos');
-	assert.ok(mac.unavailable.some((entry) => entry.browser === 'Brave'));
+	assert.equal(mac.unavailable.length, 0);
 	const iosEntry = report.find((entry) => entry.platform === 'ios');
-	assert.ok(iosEntry.unavailable.some((entry) => entry.browser === 'Firefox'));
-	assert.ok(iosEntry.unavailable.every((entry) => entry.reason.length > 10));
+	assert.equal(iosEntry.unavailable.length, 0);
 	// Cross-platform (Phase 9): Chrome everywhere, Safari only on Apple.
 	const android = report.find((entry) => entry.platform === 'android');
 	assert.ok(android.available.includes('Chrome'));
 	assert.ok(android.unavailable.some((entry) => entry.browser === 'Safari'));
+	assert.ok(android.unavailable.every((entry) => entry.reason.length > 10));
 	const windows = report.find((entry) => entry.platform === 'windows');
 	assert.ok(windows.available.includes('Edge'));
 	assert.ok(windows.available.includes('Brave'));
 });
 
-test('generated matrix size is sane (hundreds, not thousands)', () => {
+test('generated matrix size covers the full expanded availability', () => {
+	// 2026.10.2 (#14166): deep browser-major back-catalog + 4 legacy macOS
+	// versions push the matrix to ~14.6k environments.
 	const count = generateEnvironments().length;
-	assert.ok(count >= 250 && count <= 1500, `unexpected matrix size: ${count}`);
+	assert.ok(count >= 14000 && count <= 16000, `unexpected matrix size: ${count}`);
 });
 
 test('chrome environments carry multiple versions per device/os', () => {
 	const chrome16Pro = generateEnvironments().filter(
 		(env) => env.envId.startsWith('ENV-IOS-IP16PRO-18.3-CHR-')
 	);
-	assert.deepEqual(chrome16Pro.map((env) => env.browserVersion).sort(), ['138', '139', '140', '141']);
+	assert.deepEqual(chrome16Pro.map((env) => env.browserVersion).sort(), ['140','141','142','143','144','145','146','147','148','149','150','151','152','153','154','155','156']);
 });

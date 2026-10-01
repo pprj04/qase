@@ -12,15 +12,20 @@
  * published platform lists and refreshed manually (see scripts/generate-environments.mjs
  * usage). Nothing in this module talks to the network or the database.
  *
- * Hard availability rules (verified 2026-09):
- *   - iOS / iPadOS real devices: Safari and Chrome ONLY.
- *     Firefox, Edge, Opera, Brave, DuckDuckGo are not offered on iOS/iPadOS
- *     automation and therefore never generate environments.
- *   - macOS: Safari, Chrome, Firefox, Edge, Opera.
- *     Brave and DuckDuckGo are Windows-desktop browsers only.
+ * Hard availability rules (expanded 2026-10, catalog 2026.10.1):
+ *   - iOS / iPadOS: all seven App Store browsers generate environments —
+ *     Safari + Chrome + Firefox + Edge + Opera + Brave + DuckDuckGo. Every
+ *     iOS browser is required to use WebKit under the hood, so they are
+ *     executable as distinct browser targets on real devices.
+ *   - macOS: all seven browsers (Safari, Chrome, Firefox, Edge, Opera,
+ *     Brave, DuckDuckGo).
+ *   - Android: Chrome, Firefox, Edge, Opera, Brave, DuckDuckGo. Safari is
+ *     NEVER generated — Apple does not ship Safari for Android.
+ *   - Windows: Chrome, Firefox, Edge, Opera, Brave, DuckDuckGo. Safari is
+ *     NEVER generated — Apple does not ship Safari for Windows.
  */
 
-export const ENVIRONMENT_CATALOG_VERSION = '2026.09.1';
+export const ENVIRONMENT_CATALOG_VERSION = '2026.10.2';
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -56,42 +61,45 @@ export const BROWSERS = [
 	},
 	{
 		code: 'firefox', name: 'Firefox', envCode: 'FF', independentlyVersioned: true,
-		platforms: ['macos', 'windows'],
-		note: 'Firefox is not installable on iOS/iPadOS devices (WebKit-only engine); Android Firefox is not scriptable.'
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		note: 'On iOS/iPadOS Firefox runs on the required WebKit engine; Android Firefox is scriptable via Gecko remote debugging.'
 	},
 	{
 		code: 'edge', name: 'Edge', envCode: 'EDG', independentlyVersioned: true,
-		platforms: ['macos', 'windows'],
-		note: 'Edge is not installable on iOS/iPadOS devices (WebKit-only engine).'
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		note: 'On iOS/iPadOS Edge runs on the required WebKit engine.'
 	},
 	{
 		code: 'opera', name: 'Opera', envCode: 'OPR', independentlyVersioned: true,
-		platforms: ['macos', 'windows'],
-		note: 'Opera is not installable on iOS/iPadOS devices (WebKit-only engine).'
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		note: 'On iOS/iPadOS Opera runs on the required WebKit engine.'
 	},
 	{
 		code: 'brave', name: 'Brave', envCode: 'BRV', independentlyVersioned: true,
-		platforms: ['windows'],
-		note: 'Brave runs as a Chromium variant on Windows desktops; not installable on Apple platforms.'
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		note: 'Chromium-based; on iOS/iPadOS it runs on the required WebKit engine.'
 	},
 	{
 		code: 'duckduckgo', name: 'DuckDuckGo', envCode: 'DDG', independentlyVersioned: true,
-		platforms: ['windows'],
-		note: 'DuckDuckGo runs as a desktop app on Windows; not installable on Apple platforms.'
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		note: 'Privacy browser on all five platforms; on iOS/iPadOS it runs on the required WebKit engine.'
 	}
 ];
 
 /**
- * Curated major browser versions available per browser family
- * (latest ~4 majors). Refreshed manually with each catalog release.
+ * Curated major browser versions available per browser family.
+ * 2026.10.2 (#14166): deepened to match the reference catalog UI — each family
+ * carries the latest majors plus a back-catalog (roughly the visible ~15 rows
+ * of the reference; the 'N more' links in that UI count sub-minors and betas
+ * which the environment model does not enumerate — majors only).
  */
 export const BROWSER_VERSIONS = {
-	chrome: ['138', '139', '140', '141'],
-	firefox: ['139', '140', '141', '142'],
-	edge: ['138', '139', '140', '141'],
-	opera: ['117', '118', '119'],
-	brave: ['138', '139', '140'],
-	duckduckgo: ['1']
+	chrome: ['140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156'],
+	firefox: ['141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156', '157', '158'],
+	edge: ['140', '141', '142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152', '153', '154', '155', '156'],
+	opera: ['122', '123', '124', '125', '126', '127', '128', '129', '130', '131', '132', '133', '134', '135', '136', '137'],
+	brave: ['136', '137', '138', '139', '140'],
+	duckduckgo: ['1', '2', '3']
 };
 
 /**
@@ -99,11 +107,15 @@ export const BROWSER_VERSIONS = {
  * available on that macOS). Curated — Safari on macOS is OS-bound.
  */
 export const MACOS_SAFARI_VERSIONS = {
+	'High Sierra': '11.1.2',
+	Mojave: '12.1.2',
+	Catalina: '13.1.3',
+	'Big Sur': '14.1.2',
 	Monterey: '16.6',
 	Ventura: '17.6',
 	Sonoma: '18.6',
 	Sequoia: '26.2',
-	Tahoe: '26.2'
+	Tahoe: '26.4'
 };
 
 /**
@@ -121,7 +133,14 @@ export function safariVersionFor(platformId, osVersion) {
 	}
 	if (platformId === 'macos') {
 		const key = typeof osVersion === 'string' ? osVersion.trim() : '';
-		return MACOS_SAFARI_VERSIONS[key.charAt(0).toUpperCase() + key.slice(1).toLowerCase()] ?? null;
+		if (MACOS_SAFARI_VERSIONS[key]) return MACOS_SAFARI_VERSIONS[key];
+		// Case-insensitive fallback (legacy single-word keys) — multi-word
+		// macOS names like 'Big Sur' match exactly above.
+		const lower = key.toLowerCase();
+		for (const [name, version] of Object.entries(MACOS_SAFARI_VERSIONS)) {
+			if (name.toLowerCase() === lower) return version;
+		}
+		return null;
 	}
 	return null;
 }
@@ -203,6 +222,10 @@ export const APPLE_DEVICES = [
 	ipad('IPADPRO13', 'iPad Pro 13-inch', 'iPad Pro 13 (M4)', '1032×1376', 2, '13.0 inch', ['18.3', '26.0']),
 
 	// --- macOS (one "device" per OS version; BrowserStack desktop has no deviceName) ---
+	mac('HIGH-SIERRA', 'macOS High Sierra', '10.13'),
+	mac('MOJAVE', 'macOS Mojave', '10.14'),
+	mac('CATALINA', 'macOS Catalina', '10.15'),
+	mac('BIG-SUR', 'macOS Big Sur', '11'),
 	mac('MONTEREY', 'macOS Monterey', '12'),
 	mac('VENTURA', 'macOS Ventura', '13'),
 	mac('SONOMA', 'macOS Sonoma', '14'),

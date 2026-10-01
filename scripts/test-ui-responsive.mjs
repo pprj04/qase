@@ -71,7 +71,9 @@ try {
 			const tabBody = document.querySelector('.tab-body');
 			const top = (el) => el ? Math.round(el.getBoundingClientRect().top) : null;
 			const tops = [top(stage), top(tabs), top(tabBody)];
-			const orderOk = Boolean(center) && [stage, tabs, tabBody].every((el) => el && center.contains(el))
+			// Exec panel order (#14074): stage (preview) → tabs → tab-body all
+			// inside the RIGHT viewer panel, tab bar reachable without page scroll.
+			const orderOk = Boolean(right) && [stage, tabs, tabBody].every((el) => el && right.contains(el))
 				&& tops.every((v, i) => v !== null && (i === 0 || v >= tops[i - 1]));
 			const tabsBottom = tabs ? Math.round(tabs.getBoundingClientRect().bottom) : -1;
 			return {
@@ -80,7 +82,7 @@ try {
 				cols, leftOk: vis(left), centerOk: vis(center), rightOk: vis(right),
 				centerRect: center?.getBoundingClientRect().toJSON(),
 				rightRect: (right ?? document.querySelector('.viewer'))?.getBoundingClientRect().toJSON(),
-				orderOk, orderDetail: `stage=${tops[0]} tabs=${tops[1]} tabBody=${tops[2]} inCenter=${[stage, tabs, tabBody].every((el) => el && center?.contains(el))}`,
+				orderOk, orderDetail: `stage=${tops[0]} tabs=${tops[1]} tabBody=${tops[2]} inViewer=${[stage, tabs, tabBody].every((el) => el && right?.contains(el))}`,
 				tabsReachable: tabsBottom >= 0 && tabsBottom <= window.innerHeight, tabsBottom
 			};
 		});
@@ -94,10 +96,34 @@ try {
 		const rightShare = rw / w;
 		// 28–32% band with small rounding tolerance.
 		note(rightShare >= 0.27 && rightShare <= 0.325, `${label} right-share`, `${(rightShare * 100).toFixed(1)}% of ${w}px`);
-		// Exec workspace order (ticket #14068): stage (preview) → tabs → tab-body
-		// all inside the center panel, tab bar reachable without page scroll.
+		// Exec panel order (#14074): stage (preview) → tabs → tab-body all
+		// inside the RIGHT viewer panel, tab bar reachable without page scroll.
 		note(m.orderOk, `${label} exec-order`, m.orderDetail);
 		note(m.tabsReachable, `${label} tabs-reachable`, `tabsBottom=${m.tabsBottom} viewport=${h}`);
+	}
+
+	// #14102: the inline Choose Device strip and quick actions are REMOVED.
+	// Verify their absence at the smallest and widest resolutions — no empty
+	// grid rows, no orphaned controls, and the card → preview → tabs order holds.
+	for (const [w, h] of [[1920, 1080], [1024, 768]]) {
+		await page.setViewportSize({ width: w, height: h });
+		await page.waitForTimeout(250);
+		const gone = await page.evaluate(() => {
+			const de = document.documentElement;
+			const head = document.querySelector('.viewer .panel-head');
+			const stage = document.querySelector('#stage');
+			const tabs = document.querySelector('#tabs');
+			return {
+				stripGone: !document.querySelector('#choose-device'),
+				quickGone: !document.querySelector('#quick-actions'),
+				order: head && stage && tabs
+					? head.getBoundingClientRect().top < stage.getBoundingClientRect().top && stage.getBoundingClientRect().top < tabs.getBoundingClientRect().top
+					: false,
+				overflow: de.scrollWidth - de.clientWidth,
+				pageScroll: de.scrollHeight - de.clientHeight
+			};
+		});
+		note(gone.stripGone && gone.quickGone && gone.order && gone.overflow <= 1 && gone.pageScroll <= 1, `${w}x${h} strip-gone`, `strip=${gone.stripGone} quick=${gone.quickGone} order=${gone.order} hOverflow=${gone.overflow}px pageScroll=${gone.pageScroll}px`);
 	}
 
 	note(errors.length === 0, 'console', errors.length ? errors.slice(0, 3).join(' | ') : 'no page/console errors');

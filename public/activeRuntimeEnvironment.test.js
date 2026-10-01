@@ -7,7 +7,8 @@ import {
 	orientationFor,
 	deviceKindFor,
 	runtimeStatusFor,
-	executionTypeFor
+	executionTypeFor,
+	viewForSelection
 } from './activeRuntimeEnvironment.js';
 
 const ENV = Object.freeze({
@@ -163,4 +164,45 @@ test('executionTypeFor edge cases', () => {
 	assert.equal(executionTypeFor({ runtimeFacts: null, environment: null }), 'none');
 	assert.equal(executionTypeFor({ runtimeFacts: null, environment: ENV }), 'simulated');
 	assert.equal(executionTypeFor({ runtimeFacts: { executionLevel: 'SIMULATED' }, environment: ENV }), 'simulated');
+});
+
+/* ── viewForSelection (#14077) ──────────────────────────────────────── */
+
+test('viewForSelection returns null for empty selection', () => {
+	assert.equal(viewForSelection(null), null);
+	assert.equal(viewForSelection(undefined), null);
+});
+
+test('viewForSelection mirrors the resolve shape for a store selection', () => {
+	const view = viewForSelection({
+		envId: 'ENV-X', device: 'iPhone 17 Pro Max', deviceType: 'mobile', platform: 'ios',
+		os: 'iOS', osVersion: '26.0', browser: 'Safari', browserVersion: '26.0',
+		resolution: '1179x2556', orientation: 'portrait', executionType: 'simulated'
+	});
+	assert.equal(view.device, 'iPhone 17 Pro Max');
+	assert.equal(view.deviceType, 'phone');
+	assert.equal(view.os, 'iOS');
+	assert.equal(view.osVersion, '26.0');
+	assert.equal(view.browser, 'Safari');
+	assert.equal(view.browserKey, 'safari');
+	assert.deepEqual(view.resolution, { width: 1179, height: 2556 });
+	assert.equal(view.orientation, 'portrait');
+	assert.equal(view.executionType, 'simulated');
+	assert.equal(view.source, 'selection');
+});
+
+test('viewForSelection is honest: never attested, unknown device fallback', () => {
+	const view = viewForSelection({ device: 'Pixel 9 Pro', deviceType: 'phone', platform: 'android', executionType: 'real_device' });
+	assert.equal(view.executionTypeAttested, false, 'selection view must never claim attestation');
+	assert.equal(view.device, 'Pixel 9 Pro');
+	assert.equal(view.os, null);
+	assert.ok(['unknown', 'other'].includes(view.browserKey), 'no browser → neutral key, got ' + view.browserKey);
+	assert.equal(view.runtimeStatus, 'queued');
+});
+
+test('viewForSelection survives sparse selections with defaults', () => {
+	const view = viewForSelection({ device: 'Windows Desktop', deviceType: 'desktop', platform: 'windows' });
+	assert.equal(view.executionType, 'none');
+	assert.equal(view.orientation, 'portrait'); // default when no orientation/resolution given
+	assert.ok(['unknown', 'other'].includes(view.browserKey), 'no browser → neutral key, got ' + view.browserKey);
 });

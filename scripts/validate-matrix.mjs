@@ -30,7 +30,7 @@ check(1, 'Every environment has a unique deterministic ID', new Set(envIds).size
 // 2. Only valid Platform→Device→OS→Browser→Version combinations
 const invalid = environments.filter(e =>
 	e.platform === 'macos' && e.isRealDevice === true
-	|| (e.platform === 'ios' || e.platform === 'ipados') && !e.browserstackCapabilities?.realMobile);
+	|| (e.platform === 'ios' || e.platform === 'ipados') && !e.runtimeCapabilities?.realMobile);
 check(2, 'Only valid hierarchy combinations generated (desktops never realMobile, mobiles always realMobile)',
 	invalid.length === 0, `${invalid.length} invalid rows`);
 
@@ -51,7 +51,7 @@ check(4, 'Regeneration is idempotent (same set of IDs)', (() => {
 // local emulation targets first; capability well-formedness only applies where
 // the catalog actually defines BrowserStack shapes.)
 const badCaps = environments.filter(e => {
-	const caps = e.browserstackCapabilities;
+	const caps = e.runtimeCapabilities;
 	if (e.platform === 'android' || e.platform === 'windows') return !caps?.browserName; // emulation-first platforms still name a browser
 	if (!caps?.browserName || !caps?.os || !caps?.osVersion) return true;
 	if (e.platform === 'macos') return caps.os !== 'OS X' || caps.deviceName !== undefined;
@@ -62,16 +62,12 @@ check(5, 'BrowserStack capability mapping well-formed per platform', badCaps.len
 	badCaps.slice(0, 3).map(e => e.envId).join(', '));
 
 // 6. Non-executable browser/platform combos never generate environments
-// (Phase 9 deliberately added Firefox/Edge/Opera on Windows and Brave/
-// DuckDuckGo as Windows desktop entries — they are executable emulation
-// targets. The genuinely impossible combos stay forbidden: any non-Chromium
-// browser on iOS/iPadOS, Brave/DuckDuckGo outside Windows, Safari on
-// Android/Windows.)
-const forbidden = environments.filter(e =>
-	(e.platform === 'ios' || e.platform === 'ipados') && ['Firefox', 'Edge', 'Opera'].includes(e.browser))
-	.concat(environments.filter(e => ['Brave', 'DuckDuckGo'].includes(e.browser) && e.platform !== 'windows'))
-	.concat(environments.filter(e => e.browser === 'Safari' && (e.platform === 'android' || e.platform === 'windows')));
-check(6, 'Non-executable combos (Firefox/Edge/Opera on iOS/iPadOS; Brave/DuckDuckGo outside Windows; Safari on Android/Windows) never generated',
+// (2026.10 expansion: Firefox/Edge/Opera/Brave/DuckDuckGo are available on
+// ALL five platforms as distinct browser targets. The genuinely impossible
+// combo stays forbidden: Safari on Android or Windows — Apple ships no
+// Safari for those platforms.)
+const forbidden = environments.filter(e => e.browser === 'Safari' && (e.platform === 'android' || e.platform === 'windows'));
+check(6, 'Safari never generated for Android or Windows',
 	forbidden.length === 0, forbidden.map(e => e.envId).join(', '));
 
 // 7. Deterministic regeneration ordering
