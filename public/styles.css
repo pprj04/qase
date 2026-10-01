@@ -8983,3 +8983,94 @@ body.cli-theme {
 .cli-theme .feature-dock::before {
   content: none;
 }
+
+/* ════════════════════════════════════════════════════════════════
+   R3 · Studio dialogs & modals (auth gate already Studio via R1)
+   Layered after pinned seams; cli-theme specificity preserved.
+   ════════════════════════════════════════════════════════════════ */
+.cli-theme .modal,
+.modal {
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 16px;
+  background: var(--surface, #ffffff);
+  color: var(--text, #171717);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.cli-theme .modal::backdrop,
+.modal::backdrop {
+  background: rgba(24, 24, 27, 0.42);
+  backdrop-filter: blur(4px);
+}
+.cli-theme .modal-head,
+.cli-theme .modal-foot,
+.modal-head,
+.modal-foot {
+  background: transparent;
+}
+.cli-theme .modal-head h2 {
+  color: var(--text, #171717);
+  font: 600 17px/1.3 var(--font-ui, sans-serif);
+  letter-spacing: -0.01em;
+}
+.cli-theme .modal-head h2::before {
+  content: none;
+}
+.cli-theme .modal-body {
+  padding: 6px 18px 18px;
+}
+.cli-theme .field > span {
+  color: var(--text-muted, #71717a);
+  font: 500 12px/1 var(--font-ui, sans-serif);
+}
+.cli-theme .field > span::before {
+  content: none;
+}
+.cli-theme .check,
+.cli-theme .test-result {
+  background: var(--surface-2, #f4f4f5);
+  border-radius: 8px;
+}
+.cli-theme .toast {
+  background: var(--surface, #ffffff);
+  color: var(--text, #171717);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 10px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.12);
+}
+/* account/profile dialog to Studio */
+.account-dialog {
+  background: var(--surface, #ffffff);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.18);
+}
+.account-dialog::backdrop {
+  background: rgba(24, 24, 27, 0.42);
+}
+.account-dialog hr {
+  border-top: 1px solid var(--border, #e5e5e5);
+}
+/* device drawer modal to Studio */
+.device-drawer {
+  background: var(--surface, #ffffff);
+  color: var(--text, #171717);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 16px;
+}
+/* dark variant */
+@media (prefers-color-scheme: dark) {
+  .cli-theme .modal,
+  .modal,
+  .account-dialog,
+  .device-drawer {
+    background: var(--surface-dark, #141416);
+    border-color: var(--border-dark, #2e2e32);
+    color: var(--text-dark, #e4e4e7);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  }
+  .cli-theme .modal-head h2 { color: var(--text-dark, #e4e4e7); }
+  .cli-theme .field > span { color: var(--text-muted-dark, #8b8b93); }
+  .cli-theme .check, .cli-theme .test-result { background: #1c1c1f; }
+  .account-dialog hr { border-top-color: var(--border-dark, #2e2e32); }
+  .cli-theme .toast { background: #1c1c1f; color: var(--text-dark, #e4e4e7); border-color: var(--border-dark, #2e2e32); }
+}
