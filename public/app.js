@@ -5,6 +5,25 @@ import { createFounderView } from './founderView.js';
 import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
 import { createBugsView } from './bugsView.js';
 import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
+import { createDeviceMatrixView } from './deviceMatrixView.js';
+import { createTestCaseView } from './testCaseView.js';
+import { createBulkRunView } from './bulkRunView.js';
+import { createBugView } from './bugView.js';
+import { createDeviceDrawer, chipLabel, RUNTIME_PROFILES } from './deviceDrawer.js';
+import { createActiveTestEnvironmentStore } from './activeTestEnvironment.js';
+import { createDevicePicker, createDeviceChipList, executionTypeText, buildDeviceCards, filterDeviceCards, resolveDeviceEnvironment, cardBadge, browsersForOS } from './devicePicker.js';
+import { fallbackOptionsFor, availabilityMeta, describeQueue } from './deviceRuntimeUi.js';
+import { resolveActiveRuntimeEnvironment } from './activeRuntimeEnvironment.js';
+import { chromeViewModel } from './browserChrome.js';
+import {
+	lastRunByCase, caseStatus, platformsOf, caseEnvLines,
+	filterCasesForWizard, resolveRunPairs,
+	environmentsForPreset, buildBugMarkdown
+} from './qaWorkflows.js';
+import {
+	loadBatches, recordBatch, aggregateBatch,
+	createBatchTracker, activeBatchRunId
+} from './bulkProgress.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
@@ -125,6 +144,9 @@ const el = {
 	activityFeed: $('activity-feed'),
 	planList: $('plan-list'),
 	findingsList: $('findings-list'),
+	bugsList: $('bugs-list'),
+	countBugs: $('count-bugs'),
+	bugViewHost: $('pane-bugs'),
 	reportView: $('report-view'),
 	reportTab: $('tab-report'),
 	activityTab: $('tab-activity'),
@@ -213,7 +235,13 @@ const state = {
 		stats: undefined
 	},
 	/** run id -> the current user's own feedback record (run-list badges). */
-	runRatings: new Map()
+	runRatings: new Map(),
+	/**
+	 * Single source of truth for the live view: the currently executing
+	 * device/browser context, resolved by activeRuntimeEnvironment.js.
+	 * Every live-view component reads this — never its own fallback chain.
+	 */
+	activeRuntimeEnvironment: undefined
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -361,6 +389,75 @@ function setBugsViewOpen(open) {
 }
 
 el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
+/* ── Bugs tab (Phase 6) ──────────────────────────────────────────── */
+
+const bugView = createBugView({
+	api,
+	toast,
+	openRun: (runId) => void selectSession(runId).catch(fail)
+});
+
+/** Refresh the Bugs tab from /api/bugs and repaint it (safe to fire-and-forget). */
+async function refreshBugs() {
+	if (!el.bugsList || !el.countBugs) return;
+	await bugView.refresh();
+	bugView.render(el.bugsList, el.countBugs);
+	paintBugFilterValues();
+}
+
+function paintBugFilterValues() {
+	const filters = bugView.filters;
+	const search = $('bug-search');
+	if (search) search.value = filters.search;
+	const status = $('bug-filter-status');
+	if (status) status.value = filters.status;
+	const severity = $('bug-filter-severity');
+	if (severity) severity.value = filters.severity;
+}
+
+function initBugFilters() {
+	const host = el.bugViewHost;
+	if (!host || host.dataset.bugFilters === 'on') return;
+	host.dataset.bugFilters = 'on';
+	const bar = document.createElement('div');
+	bar.className = 'bug-filter-bar';
+	const search = document.createElement('input');
+	search.id = 'bug-search';
+	search.type = 'search';
+	search.placeholder = 'Search bugs…';
+	search.setAttribute('aria-label', 'Search bugs');
+	const status = document.createElement('select');
+	status.id = 'bug-filter-status';
+	status.setAttribute('aria-label', 'Filter bugs by status');
+	status.append(new Option('Any status', ''));
+	for (const value of ['open', 'in_progress', 'resolved', 'wont_fix', 'reopened']) {
+		status.append(new Option(value.replace(/_/g, ' '), value));
+	}
+	const severity = document.createElement('select');
+	severity.id = 'bug-filter-severity';
+	severity.setAttribute('aria-label', 'Filter bugs by severity');
+	severity.append(new Option('Any severity', ''));
+	for (const value of ['critical', 'high', 'medium', 'low']) {
+		severity.append(new Option(value, value));
+	}
+	const rerender = () => {
+		bugView.setFilter({
+			search: search.value.trim(),
+			status: status.value,
+			severity: severity.value
+		});
+		bugView.render(el.bugsList, el.countBugs);
+	};
+	search.oninput = rerender;
+	status.onchange = rerender;
+	severity.onchange = rerender;
+	bar.append(search, status, severity);
+	const listHost = el.bugsList;
+	listHost.before(bar);
+}
+
+initBugFilters();
+
 
 /* ── Runs (left panel) ───────────────────────────────────────────── */
 
@@ -515,6 +612,26 @@ function renderRun(run) {
 		pill.title = `Run executed on ${run.engine}`;
 		meta.append(pill);
 	}
+	if (run.environmentSnapshot) {
+		const snap = run.environmentSnapshot;
+		const pill = document.createElement('span');
+		pill.className = 'run-device-pill';
+		pill.dataset.deviceKind = snap.platform === 'macos' ? 'desktop' : 'mobile';
+		pill.textContent = `${snap.device} · ${snap.browser} ${snap.browserVersion}`;
+		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime' : 'local (simulated)'}`;
+		meta.append(pill);
+		// Phase 22: honest execution-level badge — recorded facts only.
+		const level = run.runtimeFacts?.executionLevel ?? run.executionLevel;
+		if (level) {
+			const badge = document.createElement('span');
+			badge.className = 'run-exec-level-badge';
+			badge.dataset.level = level.toLowerCase();
+			badge.textContent = level === 'REAL_DEVICE' ? 'REAL DEVICE' : level === 'VIRTUAL_DEVICE' ? 'VIRTUAL DEVICE' : level;
+			badge.title = `Execution level recorded for this run: ${level}`
+				+ (run.executionProviderActual ? ` (${run.executionProviderActual})` : '');
+			meta.append(badge);
+		}
+	}
 
 	// Mini progress row: step count + slim bar, only when a plan exists.
 	let progress = null;
@@ -615,21 +732,360 @@ function pendingDeviceId() {
 	return (el.deviceSelect && el.deviceSelect.value) || localStorage.getItem(DEVICE_PREF_KEY) || deviceState.defaultId;
 }
 
+/* ── Cross-platform environments ──────────────────────────────── */
+
+const ENV_PREF_KEY = 'qase.environmentId';
+const envState = { list: [], loaded: false };
+
+function envLabel(env) {
+	return `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
+}
+
+/** Grouped optgroups: Platform → Device → OS version → browser + version. */
+function envOptionGroups(list) {
+	const groups = new Map();
+	for (const env of list) {
+		const platformKey = env.platformLabel;
+		if (!groups.has(platformKey)) groups.set(platformKey, new Map());
+		const byDevice = groups.get(platformKey);
+		if (!byDevice.has(env.device)) byDevice.set(env.device, []);
+		byDevice.get(env.device).push(env);
+	}
+	return [...groups.entries()].map(([platform, byDevice]) => ({
+		platform,
+		devices: [...byDevice.entries()].map(([device, envs]) => ({
+			device,
+			envs: envs.sort((a, b) => b.osVersion.localeCompare(a.osVersion, undefined, { numeric: true })
+				|| a.browser.localeCompare(b.browser)
+				|| Number(b.browserVersion) - Number(a.browserVersion))
+		}))
+	}));
+}
+
+async function loadEnvironments() {
+	if (envState.loaded) return envState.list;
+	try {
+		const payload = await api('/environments?active=true&limit=1000');
+		envState.list = Array.isArray(payload?.environments) ? payload.environments : [];
+		envState.loaded = true;
+	} catch {
+		envState.list = [];
+		envState.loaded = true;
+	}
+	return envState.list;
+}
+
+function pendingEnvironmentId() {
+	return localStorage.getItem(ENV_PREF_KEY) || '';
+}
+
+/* ── TEST ON block (DX Phase 3): the ONE selection shown in every start
+ * dialog. Reads the store — no per-dialog device/environment state. */
+function renderTestOn(containerId) {
+	const box = document.getElementById(containerId);
+	if (!box) return;
+	const sel = activeTestEnvStore?.get?.();
+	box.textContent = '';
+	if (!sel) {
+		box.dataset.empty = 'true';
+		const prompt = document.createElement('span');
+		prompt.className = 'test-on-prompt';
+		prompt.textContent = 'SELECT A DEVICE';
+		box.append(prompt);
+		return;
+	}
+	delete box.dataset.empty;
+	const name = document.createElement('strong');
+	name.className = 'test-on-device';
+	name.textContent = sel.device;
+	const line = document.createElement('span');
+	line.className = 'test-on-line';
+	line.textContent = [sel.os, sel.osVersion, '·', sel.browser, sel.browserVersion].filter(Boolean).join(' ');
+	const meta = document.createElement('span');
+	meta.className = 'test-on-meta';
+	meta.textContent = `● ${executionTypeText(sel)} · ${sel.resolution ?? ''} ${sel.orientation ?? ''}`.replace(/\s+/g, ' ').trim();
+	box.append(name, line, meta);
+}
+
+function renderAllTestOnBlocks() {
+	renderTestOn('qa-test-on');
+	renderTestOn('sqa-test-on');
+	renderTestOn('founder-test-on');
+	renderChooseDeviceSummary();
+}
+
+/* ── Choose Device collapsible section (exec layout #14069) ─────────
+ * ONE inline picker surface above the preview. Reads/writes the SAME
+ * activeTestEnvironment store as the dialog picker — no second state. */
+const chooseDeviceUi = {
+	root: $('choose-device'),
+	head: $('cd-head'),
+	body: $('cd-body'),
+	summary: $('cd-summary'),
+	execBadge: $('cd-exec-badge'),
+	chevron: $('cd-chevron'),
+	changeBtn: $('cd-change'),
+	search: $('cd-search'),
+	list: $('cd-list'),
+	secondary: $('cd-secondary')
+};
+let cdSelectedDevice = null;
+
+function renderChooseDeviceSummary() {
+	if (!chooseDeviceUi.head) return;
+	const sel = activeTestEnvStore?.get?.();
+	if (!sel) {
+		chooseDeviceUi.head.dataset.empty = 'true';
+		if (chooseDeviceUi.summary) chooseDeviceUi.summary.textContent = 'No device selected — click to choose';
+		if (chooseDeviceUi.execBadge) { chooseDeviceUi.execBadge.hidden = false; chooseDeviceUi.execBadge.textContent = '○ NO DEVICE'; chooseDeviceUi.execBadge.dataset.exec = 'none'; }
+		return;
+	}
+	delete chooseDeviceUi.head.dataset.empty;
+	if (chooseDeviceUi.summary) {
+		chooseDeviceUi.summary.textContent = [sel.device, [sel.os, sel.osVersion].filter(Boolean).join(' '), [sel.browser, sel.browserVersion].filter(Boolean).join(' ')]
+			.filter(Boolean).join(' · ');
+	}
+	const badgeLevel = cdBadgeText();
+	if (chooseDeviceUi.execBadge) {
+		chooseDeviceUi.execBadge.hidden = false;
+		chooseDeviceUi.execBadge.textContent = `● ${badgeLevel.toUpperCase()}`;
+		chooseDeviceUi.execBadge.dataset.exec = badgeLevel.toLowerCase().replace(/ /g, '_');
+	}
+}
+
+function cdEnvironments() {
+	// Reuse the dialog picker's live catalog (same data source, refreshed on open).
+	return devicePicker?.state?.environments ?? [];
+}
+
+/**
+ * Honest badge text for the collapsed header: derived from the SAME card
+ * model + runtime board the picker cards use (cardBadge), so the header can
+ * never contradict the card the user just clicked. Falls back to the store
+ * selection's executionType when the device isn't in the catalog.
+ */
+function cdBadgeText() {
+	const sel = activeTestEnvStore?.get?.();
+	if (!sel?.device) return executionTypeText(sel);
+	const envs = cdEnvironments();
+	if (!envs.length) return executionTypeText(sel);
+	const cards = buildDeviceCards(envs, cdBoardFor(envs));
+	const card = cards.find((c) => c.device === sel.device);
+	if (!card) return executionTypeText(sel);
+	return cardBadge(card).level;
+}
+
+function cdBoardFor(envs) {
+	const board = devicePicker?.state?.boardByEnvId;
+	const map = new Map();
+	if (!board) return map;
+	for (const env of envs) {
+		const entry = board.get(env.envId ?? env.id);
+		if (entry) map.set(env.envId ?? env.id, entry);
+	}
+	return map;
+}
+
+function cdFilters() {
+	const platform = chooseDeviceUi.root?.querySelector('.cd-chip.is-active[data-cd-platform]')?.dataset.cdPlatform ?? 'all';
+	const type = chooseDeviceUi.root?.querySelector('.cd-chip.is-active[data-cd-type]')?.dataset.cdType ?? 'all';
+	return { search: chooseDeviceUi.search?.value ?? '', platform, deviceType: type };
+}
+
+function renderCdList() {
+	if (!chooseDeviceUi.list) return;
+	chooseDeviceUi.list.textContent = '';
+	const envs = cdEnvironments();
+	if (!envs.length) {
+		const p = document.createElement('p');
+		p.className = 'cd-empty';
+		p.textContent = devicePicker?.state?.dataState === 'error'
+			? 'Could not load the device catalog — check your connection and reopen.'
+			: 'Loading device catalog…';
+		chooseDeviceUi.list.append(p);
+		return;
+	}
+	const cards = filterDeviceCards(buildDeviceCards(envs, cdBoardFor(envs)), cdFilters());
+	if (!cards.length) {
+		const p = document.createElement('p');
+		p.className = 'cd-empty';
+		p.textContent = 'No devices match — clear the search or filters.';
+		chooseDeviceUi.list.append(p);
+		return;
+	}
+	let currentGroup = null;
+	for (const card of cards) {
+		if (card.groupLabel !== currentGroup) {
+			currentGroup = card.groupLabel;
+			const head = document.createElement('div');
+			head.className = 'dp-group';
+			head.textContent = currentGroup;
+			chooseDeviceUi.list.append(head);
+		}
+		const el = document.createElement('div');
+		const selected = cdSelectedDevice === card.device;
+		el.className = `dp-card${selected ? ' is-selected' : ''}`;
+		el.setAttribute('role', 'listitem');
+		const badge = cardBadge(card);
+		const info = document.createElement('div');
+		info.className = 'dp-card-info';
+		const name = document.createElement('span');
+		name.className = 'dp-card-name';
+		name.textContent = card.device;
+		const sub = document.createElement('span');
+		sub.className = 'dp-card-sub';
+		sub.textContent = `${card.best.os ?? ''} ${card.best.osVersion ?? ''} · ${card.best.browser ?? ''} ${card.best.browserVersion ?? ''}`.trim();
+		const badgeEl = document.createElement('span');
+		badgeEl.className = 'dp-card-badge';
+		badgeEl.textContent = `● ${badge.level} · ${badge.availability}`;
+		info.append(name, sub, badgeEl);
+		const btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'btn btn-primary btn-sm dp-select-btn';
+		btn.textContent = selected ? 'Selected ✓' : 'Select';
+		btn.onclick = () => cdSelect(card);
+		el.append(info, btn);
+		chooseDeviceUi.list.append(el);
+	}
+	if (cdSelectedDevice) renderCdSecondary();
+}
+
+function renderCdSecondary() {
+	if (!chooseDeviceUi.secondary) return;
+	chooseDeviceUi.secondary.textContent = '';
+	const envs = cdEnvironments();
+	const card = buildDeviceCards(envs, cdBoardFor(envs)).find((c) => c.device === cdSelectedDevice);
+	if (!card) { chooseDeviceUi.secondary.hidden = true; return; }
+	chooseDeviceUi.secondary.hidden = false;
+	const sel = activeTestEnvStore?.get?.();
+
+	if (card.osVersions.length > 1) {
+		const label = document.createElement('label');
+		const span = document.createElement('span');
+		span.textContent = 'OS version';
+		const osSelect = document.createElement('select');
+		osSelect.setAttribute('aria-label', 'OS version');
+		for (const v of card.osVersions) {
+			const opt = document.createElement('option');
+			opt.value = v;
+			opt.textContent = `${card.best.os ?? ''} ${v}`.trim();
+			if (sel?.osVersion === v) opt.selected = true;
+			osSelect.append(opt);
+		}
+		osSelect.onchange = () => cdReselect(card, { osVersion: osSelect.value });
+		label.append(span, osSelect);
+		chooseDeviceUi.secondary.append(label);
+	}
+
+	const browsers = browsersForOS(card, sel?.osVersion ?? card.best.osVersion ?? null);
+	if (browsers.length > 1) {
+		const label = document.createElement('label');
+		const span = document.createElement('span');
+		span.textContent = 'Browser';
+		const bSelect = document.createElement('select');
+		bSelect.setAttribute('aria-label', 'Browser');
+		for (const b of browsers) {
+			const opt = document.createElement('option');
+			opt.value = b.browser;
+			opt.textContent = [b.browser, b.browserVersion].filter(Boolean).join(' ');
+			if (sel?.browser === b.browser) opt.selected = true;
+			bSelect.append(opt);
+		}
+		bSelect.onchange = () => cdReselect(card, { browser: bSelect.value });
+		label.append(span, bSelect);
+		chooseDeviceUi.secondary.append(label);
+	}
+}
+
+function cdSelect(card) {
+	cdSelectedDevice = card.device;
+	const env = resolveDeviceEnvironment(cdEnvironments(), { device: card.device })
+		?? card.best ?? null;
+	if (env) {
+		activeTestEnvStore.setSelection(env);
+		if (state.session) applySessionSnapshot(state.session);
+		renderAllTestOnBlocks();
+		renderCdList();
+	}
+}
+
+function cdReselect(card, overrides) {
+	const env = resolveDeviceEnvironment(cdEnvironments(), { device: card.device, ...overrides });
+	if (env) {
+		activeTestEnvStore.setSelection(env);
+		if (state.session) applySessionSnapshot(state.session);
+		renderAllTestOnBlocks();
+		renderCdList();
+	}
+}
+
+function setChooseDeviceOpen(open) {
+	if (!chooseDeviceUi.root) return;
+	chooseDeviceUi.root.classList.toggle('is-open', open);
+	if (chooseDeviceUi.body) chooseDeviceUi.body.hidden = !open;
+	if (chooseDeviceUi.head) chooseDeviceUi.head.setAttribute('aria-expanded', String(open));
+	if (open) {
+		cdSelectedDevice = activeTestEnvStore?.get?.()?.device ?? null;
+		renderCdList();
+	}
+}
+
+function cdSyncSelectedHighlight() {
+	// Dialog-picker selections can change the store while the inline body is
+	// open — keep the highlight/badge in sync (display only).
+	const storeDevice = activeTestEnvStore?.get?.()?.device ?? null;
+	if (cdSelectedDevice !== storeDevice) cdSelectedDevice = storeDevice;
+	renderChooseDeviceSummary();
+}
+
+if (chooseDeviceUi.head) {
+	const toggleFrom = (event) => {
+		// The [Change Device] button opens THE dialog picker instead of toggling.
+		if (event.target.closest?.('#cd-change')) return;
+		setChooseDeviceOpen(!chooseDeviceUi.root.classList.contains('is-open'));
+	};
+	chooseDeviceUi.head.onclick = toggleFrom;
+	// role=button div: keyboard parity with a real toggle button.
+	chooseDeviceUi.head.onkeydown = (event) => {
+		if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+		if (event.target.closest?.('#cd-change')) return;
+		event.preventDefault();
+		setChooseDeviceOpen(!chooseDeviceUi.root.classList.contains('is-open'));
+	};
+}
+if (chooseDeviceUi.changeBtn) {
+	chooseDeviceUi.changeBtn.onclick = () => {
+		setChooseDeviceOpen(false);
+		devicePicker?.open?.();
+	};
+}
+if (chooseDeviceUi.search) {
+	chooseDeviceUi.search.oninput = () => renderCdList();
+}
+for (const chip of chooseDeviceUi.root?.querySelectorAll('.cd-chip') ?? []) {
+	chip.onclick = () => {
+		for (const sibling of chip.parentElement.querySelectorAll('.cd-chip')) sibling.classList.remove('is-active');
+		chip.classList.add('is-active');
+		renderCdList();
+	};
+}
+// Keep the inline list fresh when the dialog picker refreshes its catalog.
+const cdRenderOnData = () => {
+	if (!chooseDeviceUi.root?.classList.contains('is-open')) return;
+	cdSyncSelectedHighlight();
+	renderCdList();
+};
+
+/** Submit-time source of truth (AC14): the store's envId, read at submit. */
+function selectedEnvironmentForRun() {
+	const sel = activeTestEnvStore?.get?.();
+	return sel?.envId || '';
+}
+
 const DEVICE_LANDSCAPE_KEY = 'qase.deviceLandscape';
 function pendingLandscape() {
 	if (el.deviceLandscape) return Boolean(el.deviceLandscape.checked);
 	return localStorage.getItem(DEVICE_LANDSCAPE_KEY) === '1';
-}
-function populateDeviceSelect(select, initialId) {
-	if (!select) return;
-	select.innerHTML = '';
-	for (const profile of deviceState.list) {
-		const option = document.createElement('option');
-		option.value = profile.id;
-		option.textContent = profile.label;
-		select.append(option);
-	}
-	if (initialId && deviceState.list.some(p => p.id === initialId)) select.value = initialId;
 }
 
 function applyStageDevice(session) {
@@ -667,6 +1123,230 @@ async function selectSession(id) {
 	void refreshPerformance();
 }
 
+let _runEnvHook = null;
+function setRunEnvHook(fn) { _runEnvHook = fn; }
+
+// Right-panel "LIVE DEVICE VIEW" header: every value comes from the single
+// activeRuntimeEnvironment view-model — never from local fallback chains.
+function renderLiveDeviceViewHeader(session, are = null) {
+	const ldv = document.getElementById('live-device-view-head');
+	if (!ldv) return;
+	const dev = ldv.querySelector('#ldv-device');
+	const exec = ldv.querySelector('#ldv-exec');
+	const live = ldv.querySelector('#ldv-live');
+	if (!dev || !exec || !live) return;
+
+	const view = are ?? resolveActiveRuntimeEnvironment({ session, environments: deviceState.list });
+	if (!view) {
+		dev.textContent = activeTestEnvStore?.get?.()?.device ?? '—';
+		exec.textContent = '○ NO DEVICE';
+		exec.dataset.exec = 'none';
+		live.textContent = '○ IDLE';
+		live.dataset.live = 'false';
+		ldv.title = 'Live device view — no active environment';
+		renderEnvironmentCard(null, null, null);
+		return;
+	}
+
+	state.activeRuntimeEnvironment = view;
+	const deviceLabel = view.device;
+	const execMap = {
+		real_device: view.executionTypeAttested ? 'REAL DEVICE' : 'REAL (UNVERIFIED)',
+		virtual_device: 'VIRTUAL DEVICE',
+		simulated: 'SIMULATED',
+		none: 'NO DEVICE'
+	};
+	const execLabel = execMap[view.executionType] ?? view.executionType.toUpperCase();
+	const statusMap = {
+		queued: '○ QUEUED',
+		reserving: '○ RESERVING…',
+		connecting: '◌ CONNECTING…',
+		connected: '● CONNECTED',
+		running: '● RUNNING',
+		blocked: '◆ BLOCKED',
+		completed: '○ COMPLETED',
+		failed: '✕ FAILED',
+		device_unavailable: '✕ DEVICE UNAVAILABLE',
+		released: '○ RELEASED'
+	};
+	const liveLabel = statusMap[view.runtimeStatus] ?? `○ ${view.runtimeStatus.toUpperCase()}`;
+
+	exec.dataset.exec = view.executionType;
+	exec.textContent = execLabel;
+	live.textContent = liveLabel;
+	live.dataset.live = String(['running', 'connected'].includes(view.runtimeStatus));
+	dev.textContent = deviceLabel;
+	ldv.title = `Live device view — ${view.device} · ${[view.os, view.osVersion].filter(Boolean).join(' ') || 'unknown OS'} · ${[view.browser, view.browserVersion].filter(Boolean).join(' ') || 'unknown browser'} · ${execLabel}`;
+
+	renderEnvironmentCard(view, execLabel, liveLabel);
+	renderBrowserChrome(view);
+	applyDeviceFrame(view);
+	renderUnavailableState(view, execLabel);
+}
+
+/* Environment card: readable CURRENT TEST DEVICE panel. While idle it shows
+ * the selection; during a run it becomes LIVE DEVICE. When no device is
+ * selected at all, the empty-state card invites choosing one (AC11). */
+function renderEnvironmentCard(view, execLabel, liveLabel) {
+	const card = document.getElementById('ldv-env-card');
+	const emptyCard = document.getElementById('ldv-env-card-empty');
+	if (!card) return;
+	const hasSelection = activeTestEnvStore?.get?.();
+	card.hidden = !hasSelection;
+	if (emptyCard) emptyCard.hidden = Boolean(hasSelection);
+	if (!hasSelection) return;
+	const kicker = document.getElementById('ldv-kicker');
+	if (kicker) {
+		const active = view && ['running', 'connected', 'connecting', 'reserving'].includes(view.runtimeStatus);
+		kicker.textContent = active
+			? (view?.deviceType === 'desktop' ? 'LIVE DESKTOP' : 'LIVE DEVICE')
+			: 'CURRENT TEST DEVICE';
+	}
+	const set = (id, text) => { const node = document.getElementById(id); if (node) node.textContent = text; };
+	const sel = activeTestEnvStore?.get?.();
+	// Card values: the resolved view ONLY while the session is actively
+	// executing; otherwise the STORE selection (a queued/idle/stale session
+	// must not own the card over the user's current choice).
+	const activeRun = view && ['running', 'connected', 'connecting', 'reserving'].includes(view.runtimeStatus);
+	const v = activeRun ? view : null;
+	set('ldv-env-device', v?.device ?? sel?.device ?? '—');
+	set('ldv-env-os', [v?.os ?? sel?.os, v?.osVersion ?? sel?.osVersion].filter(Boolean).join(' ') || '—');
+	set('ldv-env-browser', [v?.browser ?? sel?.browser, v?.browserVersion ?? sel?.browserVersion].filter(Boolean).join(' ') || '—');
+	// Secondary fields follow the same source as the device lines: while no
+	// run is actively executing, the stale session's status/runtime must not
+	// contradict the card's store-driven content.
+	set('ldv-card-exec', (activeRun ? execLabel : null) ?? (sel ? '○ READY' : '○ NO DEVICE'));
+	set('ldv-card-status', (activeRun ? liveLabel : null) ?? '○ IDLE');
+	const execBadge = document.getElementById('ldv-card-exec');
+	if (execBadge) execBadge.dataset.exec = (activeRun ? view?.executionType : null) ?? sel?.executionType ?? 'none';
+	const statusBadge = document.getElementById('ldv-card-status');
+	if (statusBadge) {
+		statusBadge.dataset.exec = (activeRun ? view?.executionType : null) ?? sel?.executionType ?? 'none';
+		statusBadge.dataset.live = String(activeRun && ['running', 'connected'].includes(view.runtimeStatus));
+	}
+	const runtimeRow = document.getElementById('ldv-env-runtime');
+	if (runtimeRow) {
+		runtimeRow.hidden = !(activeRun && view.runtimeSessionId);
+		const idNode = document.getElementById('ldv-runtime-id');
+		if (idNode) idNode.textContent = activeRun ? view?.runtimeSessionId ?? '' : '';
+	}
+}
+
+/* Browser chrome above the live screen — identity of the EXECUTING browser. */
+function renderBrowserChrome(view) {
+	const bar = document.getElementById('browser-chrome');
+	if (!bar) return;
+	if (view.source === 'none' || view.executionType === 'none') { bar.hidden = true; return; }
+	const vm = chromeViewModel({ browserKey: view.browserKey, url: el.browserUrl?.textContent, title: el.browserTitle?.textContent });
+	bar.hidden = false;
+	const dot = document.getElementById('chrome-brand-dot');
+	if (dot) dot.style.background = vm.brand.color;
+	const brand = document.getElementById('chrome-brand');
+	if (brand) { brand.textContent = vm.brand.name; brand.style.color = vm.brand.color; }
+	const lock = document.getElementById('chrome-lock');
+	if (lock) lock.textContent = vm.secure ? '🔒' : '⚠';
+	const url = document.getElementById('chrome-url');
+	if (url) { url.textContent = vm.url || 'about:blank'; url.title = vm.fullUrl || ''; }
+}
+
+/* Device frame category: phone / tablet / desktop on #stage. */
+function applyDeviceFrame(view) {
+	if (!el.stage) return;
+	if (view.source === 'none') {
+		el.stage.removeAttribute('data-device-kind');
+		el.stage.removeAttribute('data-device-label');
+		el.stage.removeAttribute('data-device-orientation');
+		return;
+	}
+	el.stage.setAttribute('data-device-kind', view.deviceType);
+	el.stage.setAttribute('data-device-label', view.device);
+	el.stage.setAttribute('data-device-orientation', view.orientation);
+	el.stage.setAttribute('data-browser-key', view.browserKey);
+	if (view.resolution) {
+		el.stage.style.setProperty('--ldv-res-w', String(view.resolution.width));
+		el.stage.style.setProperty('--ldv-res-h', String(view.resolution.height));
+		const ratio = view.orientation === 'landscape'
+			? view.resolution.width / view.resolution.height
+			: view.resolution.height / view.resolution.width;
+		el.stage.style.setProperty('--ldv-aspect', String(Math.min(Math.max(ratio, 0.4), 3.2)));
+	} else {
+		el.stage.style.removeProperty('--ldv-aspect');
+	}
+}
+
+/**
+ * Execution log targeting: a pinned block at the top of the transcript that
+ * names the EXACT environment under test (from the single view-model), the
+ * honest execution level, the runtime id, and the final result on completion.
+ */
+function renderExecutionTargeting(session) {
+	const host = document.getElementById('execution-target-block');
+	if (!host) return;
+	const view = state.activeRuntimeEnvironment;
+	if (!view || view.source === 'none') { host.hidden = true; host.replaceChildren(); return; }
+	host.hidden = false;
+	host.replaceChildren();
+
+	const block = document.createElement('div');
+	block.className = `exec-target exec-target--${view.runtimeStatus}`;
+
+	const head = document.createElement('div');
+	head.className = 'exec-target-head';
+	head.textContent = 'TARGET';
+	block.append(head);
+
+	const envLine = document.createElement('div');
+	envLine.className = 'exec-target-env';
+	envLine.textContent = [
+		view.device,
+		[view.os, view.osVersion].filter(Boolean).join(' '),
+		[view.browser, view.browserVersion].filter(Boolean).join(' ')
+	].filter(Boolean).join(' · ');
+	block.append(envLine);
+
+	const metaLine = document.createElement('div');
+	metaLine.className = 'exec-target-meta';
+	const execLabelMap = { real_device: 'REAL DEVICE', virtual_device: 'VIRTUAL DEVICE', simulated: 'SIMULATED', none: 'NO DEVICE' };
+	metaLine.textContent = ['EXECUTION', execLabelMap[view.executionType] ?? view.executionType.toUpperCase(), 'RUNTIME', view.runtimeSessionId ?? '—'].join('  ');
+	block.append(metaLine);
+
+	const status = view.runtimeStatus;
+	if (['running', 'connected'].includes(status)) {
+		const testing = document.createElement('div');
+		testing.className = 'exec-target-testing';
+		testing.textContent = `TESTING — ${view.device} · ${[view.browser, view.browserVersion].filter(Boolean).join(' ')}`;
+		block.append(testing);
+	} else if (status === 'completed') {
+		const done = document.createElement('div');
+		done.className = 'exec-target-done';
+		const verdict = String(session?.report?.verdict ?? session?.verdict ?? '').toUpperCase();
+		done.textContent = `TEST COMPLETED — ${view.device} · ${[view.os, view.osVersion].filter(Boolean).join(' ')} · ${[view.browser, view.browserVersion].filter(Boolean).join(' ')}` + (verdict ? ` — Result: ${verdict}` : '');
+		block.append(done);
+	} else if (status === 'failed') {
+		const failed = document.createElement('div');
+		failed.className = 'exec-target-failed';
+		failed.textContent = 'TEST FAILED — runtime reported an error for this environment.';
+		block.append(failed);
+	}
+
+	host.append(block);
+}
+
+/* Unavailable state: honest error panel, never a fake preview. */
+function renderUnavailableState(view, execLabel) {	const panel = document.getElementById('ldv-unavailable');
+	if (!panel) return;
+	if (view.runtimeStatus !== 'device_unavailable') { panel.hidden = true; return; }
+	panel.hidden = false;
+	const env = document.getElementById('ldv-unavailable-env');
+	if (env) env.textContent = [view.device, [view.os, view.osVersion].filter(Boolean).join(' '), [view.browser, view.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+	const reason = document.getElementById('ldv-unavailable-reason');
+	if (reason) reason.textContent = 'Reason: Runtime unavailable for this device/browser combination.';
+	const retry = document.getElementById('ldv-retry');
+	if (retry) retry.onclick = () => { panel.hidden = true; if (state.sessionId) void startRun(); };
+	const change = document.getElementById('ldv-change-env');
+	if (change) change.onclick = () => { panel.hidden = true; devicePicker?.open?.(); };
+}
+
 function applySessionSnapshot(session) {
 	const changedSession = state.session?.id !== session.id;
 	state.bubbles.clear();
@@ -681,6 +1361,7 @@ function applySessionSnapshot(session) {
 	// navigating between runs never unexpectedly expands/collapses the panel.
 	setRunSummaryCollapsed(state.runSummaryCollapsed);
 	renderTranscript();
+	renderExecutionTargeting(session);
 	resetThinking();
 	renderQuestion();
 	renderActivities();
@@ -693,9 +1374,26 @@ function applySessionSnapshot(session) {
 	showCompletedFounderReport();
 	renderStageCollapse();
 	updateRunTimer();
+	if (_runEnvHook) _runEnvHook(session);
+	// Recompute the single source of truth BEFORE anything renders from it.
+	state.activeRuntimeEnvironment = resolveActiveRuntimeEnvironment({
+		session,
+		environments: deviceState.list
+	});
+	renderLiveDeviceViewHeader(session, state.activeRuntimeEnvironment);
+	renderExecutionTargeting(session);
 
 	if (session.frame) {
 		applyFrame(session.frame);
+	} else if (
+		// Completion persistence (AC8): a run that finished with frames keeps
+		// its final captured view + environment until a NEW run starts. Only a
+		// genuinely frameless run shows the empty state.
+		['done', 'error', 'interrupted', 'cancelled'].includes(String(session.status)) &&
+		el.frame.getAttribute('src') &&
+		state.sessionId === session.id
+	) {
+		// Keep the last frame on screen — badge already reads COMPLETED/FAILED.
 	} else {
 		el.frame.removeAttribute('src');
 		el.stageInner.hidden = true;
@@ -709,7 +1407,10 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+async function createQaRun({
+	targetUrl, device, deviceLandscape, selectedTests, securityAuthorization,
+	kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId
+}) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
 	const session = await api('/sessions', {
@@ -719,7 +1420,8 @@ async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, 
 			deviceLandscape,
 			engine,
 			selectedTests,
-			...(securityAuthorization ? { securityAuthorization } : {})
+			...(securityAuthorization ? { securityAuthorization } : {}),
+			...(environmentId ? { environmentId } : {})
 		})
 	});
 	await selectSession(session.id);
@@ -735,6 +1437,222 @@ async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, 
 
 /** Compact token count: 820, 15.3k, 2.01M, 3.4B. Re-exported for callers importing from app.js. */
 export { formatTokens };
+
+/* ── One-click environment runs with honest fallbacks (Phase 23) ─── */
+const runtimeBoardCache = { devices: [], at: 0 };
+const RUNTIME_BOARD_TTL = 5000;
+
+async function fetchRuntimeBoard(force = false) {
+	if (!force && Date.now() - runtimeBoardCache.at < RUNTIME_BOARD_TTL) return runtimeBoardCache.devices;
+	const payload = await api('/device-runtime/devices').catch(() => null);
+	runtimeBoardCache.devices = payload?.devices ?? [];
+	runtimeBoardCache.at = Date.now();
+	return runtimeBoardCache.devices;
+}
+
+/**
+ * Start a run on an environment. The UI never pre-creates a device session
+ * for the direct path — the run engine (agent runTurn → deviceRuntime
+ * .selectForRun) creates, labels and releases the session itself, linked to
+ * the run. The UI's job is honest routing:
+ *   - requested level attainable + device free → start the run directly;
+ *   - otherwise → explicit fallback dialog (queue / virtualized / simulated),
+ *     never a silent downgrade.
+ */
+async function startEnvironmentRun(env, { targetUrl = '' } = {}) {
+	const devices = await fetchRuntimeBoard(true);
+	const boardEntry = devices.find((d) => d.envId === env.envId) ?? null;
+	const requestedLevel = boardEntry?.maximumLevel === 'REAL_DEVICE' ? 'REAL_DEVICE' : 'SIMULATED';
+	const resolution = fallbackOptionsFor(boardEntry, requestedLevel);
+	if (resolution.available) {
+		// Guard against double-clicks: reuse an existing idle run on this
+		// environment instead of piling up duplicates.
+		const existing = await api('/sessions?limit=20').catch(() => []);
+		const recent = (Array.isArray(existing) ? existing : [])
+			.find((run) => run.environmentId === env.envId && run.status === 'idle');
+		if (recent) {
+			await selectSession(recent.id);
+			toast(`${env.device} run is already waiting — send a URL to start testing.`);
+			return;
+		}
+		await createQaRun({ targetUrl, environmentId: env.envId });
+		toast(targetUrl
+			? `Testing on ${env.device}…`
+			: `${env.device} is ready — send a URL to start testing.`);
+		return;
+	}
+	openExecFallback(env, boardEntry, requestedLevel, targetUrl);
+}
+
+/* Fallback dialog: REAL DEVICE UNAVAILABLE + honest reason; the user must
+ * explicitly pick a fallback (queue / virtual / simulated) — never a silent
+ * downgrade. Retry re-checks availability; "Choose another device" opens the
+ * Device & Environment Matrix. */
+let fallbackCtx = null;
+function openExecFallback(env, boardEntry, requestedLevel, targetUrl) {
+	const dialog = $('exec-fallback');
+	if (!dialog) { fail(new Error('No runtime provider available for this environment.')); return; }
+	fallbackCtx = { env, targetUrl, requestedLevel };
+	const resolution = fallbackOptionsFor(boardEntry, requestedLevel);
+	// Busy devices get a dedicated DEVICE BUSY modal — never an auto-switch.
+	if (resolution.busy) {
+		openDeviceBusyModal(env, resolution, requestedLevel);
+		return;
+	}
+	$('exec-fallback-reason').textContent = `${resolution.reason} Choose how to proceed — every result is labeled with the execution type actually used.`;
+	const list = $('exec-fallback-options');
+	list.innerHTML = '';
+	for (const option of resolution.options) {
+		const btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'exec-fallback-option';
+		btn.innerHTML = `<strong></strong><small></small>`;
+		btn.querySelector('strong').textContent = option.label;
+		btn.querySelector('small').textContent = option.description;
+		btn.onclick = () => { void applyFallback(option); };
+		list.append(btn);
+	}
+	const retry = $('exec-fallback-retry');
+	if (retry) {
+		retry.onclick = async () => {
+			retry.disabled = true;
+			retry.textContent = 'Checking…';
+			const devices = await fetchRuntimeBoard(true).catch(() => []);
+			const fresh = devices.find((d) => d.envId === env.envId) ?? null;
+			retry.disabled = false;
+			retry.textContent = 'Retry';
+			const again = fallbackOptionsFor(fresh, requestedLevel);
+			if (again.available) {
+				dialog.close();
+				fallbackCtx = null;
+				await startEnvironmentRun(env, { targetUrl });
+			} else {
+				$('exec-fallback-reason').textContent = `${again.reason} Choose how to proceed — every result is labeled with the execution type actually used.`;
+			}
+		};
+	}
+	const change = $('exec-fallback-change');
+	if (change) {
+		change.onclick = () => {
+			dialog.close();
+			fallbackCtx = null;
+			deviceMatrix?.open();
+		};
+	}
+	dialog.showModal();
+}
+
+/* DEVICE BUSY modal: shows the current runtime session and offers Queue /
+ * Choose another device. Never moves the test automatically. */
+function openDeviceBusyModal(env, resolution, requestedLevel) {
+	const dialog = $('device-busy');
+	if (!dialog) { openExecFallbackPlain(env, resolution, requestedLevel); return; }
+	$('device-busy-detail').textContent = `${env.device ?? env.envId} — current session: ${resolution.busySessionId ?? 'unknown'}. New runs wait in queue.`;
+	const list = $('device-busy-options');
+	list.innerHTML = '';
+	for (const option of resolution.options) {
+		const btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'exec-fallback-option';
+		btn.innerHTML = `<strong></strong><small></small>`;
+		btn.querySelector('strong').textContent = option.label;
+		btn.querySelector('small').textContent = option.description;
+		btn.onclick = () => { dialog.close(); void applyFallback(option); };
+		list.append(btn);
+	}
+	const change = document.createElement('button');
+	change.type = 'button';
+	change.className = 'exec-fallback-option';
+	change.innerHTML = `<strong>Choose another device</strong><small>Open the Device &amp; Environment Matrix and pick a free device.</small>`;
+	change.onclick = () => { dialog.close(); deviceMatrix?.open(); };
+	list.append(change);
+	dialog.showModal();
+}
+
+/* Rare path: no busy dialog element — reuse the generic fallback dialog. */
+function openExecFallbackPlain(env, resolution, requestedLevel) {
+	$('exec-fallback-reason').textContent = `${resolution.reason} Choose how to proceed — every result is labeled with the execution type actually used.`;
+	$('exec-fallback').showModal();
+}
+
+async function applyFallback(option) {
+	$('exec-fallback')?.close();
+	const ctx = fallbackCtx;
+	fallbackCtx = null;
+	if (!ctx) return;
+	const { env, targetUrl } = ctx;
+	if (option.action === 'queue') {
+		// Explicit user choice to wait: reserve a queued slot now; when the
+		// device frees up, the queued session auto-starts and we launch the
+		// run against it (the engine creates its own labeled session).
+		const result = await api('/device-runtime/sessions', { method: 'POST', body: JSON.stringify({
+			environmentId: env.envId, requestedLevel: option.level, allowQueue: true
+		}) }).catch(fail);
+		if (result?.session) {
+			trackQueuePanel(result.session, { env, targetUrl });
+			toast('Queued — the run starts automatically when the device frees up.');
+		}
+		return;
+	}
+	// Explicit downgrade chosen by the user — recorded on the environment so
+	// the run reports the level it actually runs at (env service validates).
+	await api(`/environments/${encodeURIComponent(env.envId)}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ executionLevelRequested: option.level })
+	}).catch(() => { /* runTurn falls back to honest default labeling */ });
+	await createQaRun({ targetUrl, environmentId: env.envId });
+	toast(`Running ${option.label.toLowerCase()} — results will be labeled accordingly.`);
+}
+
+/* Queue panel: live position while a device session is queued. */
+const queuePanelState = { sessionId: null, timer: null, launched: false };
+function trackQueuePanel(session, runCtx = null) {
+	if (!session?.sessionId) return;
+	queuePanelState.sessionId = session.sessionId;
+	queuePanelState.launchCtx = runCtx;
+	queuePanelState.launched = false;
+	const panel = $('run-queue-panel');
+	if (!panel) return;
+	panel.hidden = false;
+	$('run-summary').hidden = false;
+	$('run-queue-detail').textContent = session.environment?.device ? `on ${session.environment.device}` : session.envId ?? '';
+	pollQueuePanel();
+	clearInterval(queuePanelState.timer);
+	queuePanelState.timer = setInterval(pollQueuePanel, 4000);
+}
+
+async function pollQueuePanel() {
+	if (!queuePanelState.sessionId) return hideQueuePanel();
+	const session = await api(`/device-runtime/sessions/${encodeURIComponent(queuePanelState.sessionId)}`).catch(() => null);
+	if (!session || ['done', 'failed', 'cancelled'].includes(session.status)) return hideQueuePanel();
+	const label = $('run-queue-label');
+	if (label) label.textContent = describeQueue(session) ?? 'Queued for device';
+	// Promoted from queued → running: the device is ours now — launch the run.
+	if (session.status === 'running' && !queuePanelState.launched) {
+		queuePanelState.launched = true;
+		const ctx = queuePanelState.launchCtx;
+		hideQueuePanel();
+		if (ctx?.env) {
+			await createQaRun({ targetUrl: ctx.targetUrl ?? '', environmentId: ctx.env.envId });
+			toast(`Device free — testing on ${ctx.env.device}.`);
+		}
+	}
+}
+
+function hideQueuePanel() {
+	clearInterval(queuePanelState.timer);
+	queuePanelState.timer = null;
+	queuePanelState.sessionId = null;
+	$('run-queue-panel').hidden = true;
+}
+
+$('run-queue-cancel')?.addEventListener('click', async () => {
+	if (!queuePanelState.sessionId) return hideQueuePanel();
+	const result = await api(`/device-runtime/sessions/${encodeURIComponent(queuePanelState.sessionId)}/cancel`, { method: 'POST' }).catch(fail);
+	hideQueuePanel();
+	toast(result?.cancelled ? 'Queued session cancelled.' : 'Cancel not possible — the run already started.');
+});
+
 
 
 /** A run with no counted usage yet: show a pending state, never a fake 0. */
@@ -1776,7 +2694,11 @@ async function initFeedbackAdmin() {
 /* ── Transcript ──────────────────────────────────────────────────── */
 
 function renderTranscript() {
-	el.transcript.replaceChildren();
+	// Keep the execution-target host alive across renders — only messages
+	// are replaced. (replaceChildren would destroy the pinned block.)
+	const targetHost = document.getElementById('execution-target-block');
+	const children = targetHost ? [targetHost] : [];
+	el.transcript.replaceChildren(...children);
 	const messages = state.session.messages ?? [];
 	if (messages.length === 0) {
 		el.transcript.append(el.chatEmpty);
@@ -2141,7 +3063,7 @@ function renderActivities() {
 	const activities = state.session.activities ?? [];
 	el.activityFeed.replaceChildren();
 	if (activities.length === 0) {
-		el.activityFeed.innerHTML = '<div class="feed-empty">Nothing yet</div>';
+		el.activityFeed.innerHTML = '<div class="feed-empty">No activity yet — start a QA run to see the agent execution log.</div>';
 		return;
 	}
 	for (const activity of activities) {
@@ -2185,7 +3107,15 @@ function renderActivity(activity) {
 	return node;
 }
 
+/* Auto-scroll toggle (UI Fix Phase 1): latest activity stays visible unless
+ * the user turned auto-scroll off for the session. */
+const autoScrollState = { activity: true };
+function feedAutoScrolls(feed) {
+	return autoScrollState.activity;
+}
+
 function scrollFeed(feed) {
+	if (!feedAutoScrolls(feed)) return;
 	const pane = feed.parentElement;
 	requestAnimationFrame(() => {
 		pane.scrollTop = pane.scrollHeight;
@@ -2212,7 +3142,7 @@ function renderTodos() {
 	el.countPlan.textContent = todos.length > 0 ? `${done}/${todos.length}` : '';
 	el.planList.replaceChildren();
 	if (todos.length === 0) {
-		el.planList.innerHTML = '<div class="feed-empty">The agent has not written a test plan yet</div>';
+		el.planList.innerHTML = '<div class="feed-empty">No test plan generated yet — the agent writes one at the start of each run.</div>';
 		return;
 	}
 	for (const todo of todos) {
@@ -2222,10 +3152,15 @@ function renderTodos() {
 		const mark = document.createElement('span');
 		mark.className = 'todo-mark';
 		mark.textContent = todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◉' : '○';
+		/* Status chip (UI Fix Phase 1): text label, not color-only — maps the
+		 * raw todo status onto the run vocabulary. */
+		const chip = document.createElement('span');
+		chip.className = `todo-chip todo-chip-${todo.status ?? 'pending'}`;
+		chip.textContent = { completed: 'Passed', in_progress: 'Running', failed: 'Failed', blocked: 'Blocked' }[todo.status ?? 'pending'] ?? 'Queued';
 		const text = document.createElement('span');
 		text.className = 'todo-text';
 		text.textContent = todo.text;
-		node.append(mark, text);
+		node.append(mark, chip, text);
 		el.planList.append(node);
 	}
 }
@@ -2241,7 +3176,7 @@ function renderFindings() {
 
 	el.findingsList.replaceChildren();
 	if (findings.length === 0) {
-		el.findingsList.innerHTML = '<div class="feed-empty">No findings filed yet</div>';
+		el.findingsList.innerHTML = '<div class="feed-empty">No findings yet — they appear here as the agent tests your target.</div>';
 		return;
 	}
 	const sorted = [...findings].sort(
@@ -2607,6 +3542,50 @@ function renderDrytisBoardRefresh() {
 	host.replaceWith(renderDrytisBoard());
 }
 
+/**
+ * Evidence provenance (Phase 4): every artifact the run captured already
+ * carries device/OS/browser/orientation/execution-level/runtime metadata in
+ * its sidecar (server/artifactStore.js). Render that metadata alongside the
+ * evidence so it is immediately clear which environment produced it.
+ */
+async function renderEvidenceSection(sessionId) {
+	try {
+		const payload = await api(`/sessions/${sessionId}/artifacts`);
+		const artifacts = Array.isArray(payload?.artifacts) ? payload.artifacts : [];
+		if (!artifacts.length || state.sessionId !== sessionId) return;
+		const host = document.createElement('div');
+		host.className = 'evidence-section';
+		host.dataset.forSession = sessionId;
+		const title = document.createElement('h3');
+		title.textContent = `Evidence (${artifacts.length})`;
+		host.append(title);
+		for (const [index, artifact] of artifacts.entries()) {
+			const card = document.createElement('div');
+			card.className = 'evidence-card';
+			const head = document.createElement('div');
+			head.className = 'evidence-head';
+			head.textContent = `Evidence #${index + 1} — ${artifact.kind ?? artifact.type ?? 'artifact'}`;
+			card.append(head);
+			const meta = artifact.meta ?? artifact;
+			const provParts = [
+				meta.evidenceHeader,
+				meta.orientation ? String(meta.orientation).toUpperCase() : null,
+				meta.capturedAt ? new Date(meta.capturedAt).toLocaleString() : null
+			].filter(Boolean);
+			const prov = document.createElement('div');
+			prov.className = 'evidence-prov';
+			prov.textContent = provParts.join(' · ') || 'No environment metadata recorded';
+			card.append(prov);
+			host.append(card);
+		}
+		// The report tab may have re-rendered while artifacts loaded.
+		if (state.sessionId !== sessionId) return;
+		el.reportView.append(host);
+	} catch {
+		// Artifacts endpoint unavailable — evidence section is additive; skip.
+	}
+}
+
 function renderReport() {
 	el.reportView.replaceChildren();
 	if (state.session?.mode === 'sqa') {
@@ -2620,9 +3599,29 @@ function renderReport() {
 
 	const report = state.session.report;
 	if (!report) {
-		el.reportView.innerHTML = '<div class="feed-empty">The report is published when the run finishes</div>';
+		el.reportView.innerHTML = '<div class="feed-empty">No report available — it is published when a run finishes.</div>';
 		return;
 	}
+
+	/* Export report (UI Fix Phase 1): JSON download of the finished report —
+	 * presented once, inside the Report tab workspace. */
+	const exportBar = document.createElement('div');
+	exportBar.className = 'report-export-bar';
+	const exportBtn = document.createElement('button');
+	exportBtn.type = 'button';
+	exportBtn.className = 'btn btn-ghost btn-sm';
+	exportBtn.textContent = 'Export report';
+	exportBtn.onclick = () => {
+		const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `qase-report-${state.sessionId ?? 'run'}.json`;
+		a.click();
+		URL.revokeObjectURL(url);
+	};
+	exportBar.append(exportBtn);
+	el.reportView.append(exportBar);
 
 	const verdict = VERDICTS[report.verdict] ?? { mark: '•', label: report.verdict, tone: 'dim' };
 	const banner = document.createElement('div');
@@ -2660,6 +3659,7 @@ function renderReport() {
 	if (report.covered?.length) el.reportView.append(section('Covered', list(report.covered)));
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
 	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
+	void renderEvidenceSection(state.sessionId);
 
 	const suggestions = followUpSuggestions(report);
 	if (suggestions.length > 0 && state.session?.targetUrl) {
@@ -2756,6 +3756,69 @@ function renderReport() {
 	provideFeedback.onclick = () => openFeedbackModal();
 
 	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	// The re-run control only applies to runs launched from a saved environment
+	// snapshot; runs without one keep the standard download/copy actions only.
+	const snapshot = state.session?.environmentSnapshot;
+	if (snapshot) {
+		const rerun = document.createElement('button');
+		rerun.className = 'btn btn-ghost btn-sm';
+		rerun.type = 'button';
+		rerun.textContent = 'Re-run with same environment';
+		rerun.title = `Starts a fresh run against ${snapshot.device ?? snapshot.deviceLabel} · ${snapshot.osVersion} · ${snapshot.browser} ${snapshot.browserVersion}`;
+		rerun.onclick = async () => {
+			const target = state.session?.targetUrl;
+			if (!target) { toast('This run has no target URL to reproduce.', 'bad'); return; }
+			try {
+				await createQaRun({ targetUrl: target, environmentId: snapshot.envId });
+				toast(`New run started on ${snapshot.envId}.`, 'good');
+			} catch (error) {
+				toast(error?.message ?? 'Could not start the re-run.', 'bad');
+			}
+		};
+		actions.append(rerun);
+	}
+
+	actions.append(download, copy, copyFixes, downloadFixes, pdf);
+
+	// Agent generation on demand: derive test cases from this completed run.
+	// Idempotent — a second click never duplicates the same cases.
+	if (state.sessionId && state.session.report) {
+		const generate = document.createElement('button');
+		generate.className = 'btn btn-ghost btn-sm';
+		generate.type = 'button';
+		generate.textContent = 'Generate test cases';
+		generate.title = 'Ask the agent to turn this run into reusable test cases';
+		generate.onclick = async () => {
+			generate.disabled = true;
+			generate.textContent = 'Generating…';
+			try {
+				const result = await api('/test-cases/generate', {
+					method: 'POST',
+					body: JSON.stringify({ runId: state.sessionId })
+				});
+				const count = Number(result?.count ?? 0);
+				if (count > 0) {
+					toast(`${count} test case${count === 1 ? '' : 's'} generated from this run.`, 'good');
+					testCaseView?.refresh?.();
+				} else if (result?.skipped === 'already-generated') {
+					toast('Test cases were already generated from this run.', 'good');
+				} else if (result?.skipped === 'from-test-case') {
+					toast('This run came from a test case, so nothing new was generated.', 'good');
+				} else if (result?.skipped === 'disabled') {
+					toast('Agent generation is disabled on this deployment.', 'bad');
+				} else {
+					toast('Nothing to generate from this run.', 'good');
+				}
+			} catch (error) {
+				fail(error);
+			} finally {
+				generate.disabled = false;
+				generate.textContent = 'Generate test cases';
+			}
+		};
+		actions.append(generate);
+	}
+
 	el.reportView.append(actions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
@@ -3831,6 +4894,12 @@ function handleEvent(event) {
 			if (event.detail && event.status === 'error') {
 				toast(event.detail, 'bad');
 			}
+			// Status changes move the runtime through the lifecycle — refresh the
+			// single source of truth so every live-view element follows.
+			if (session) {
+				state.activeRuntimeEnvironment = resolveActiveRuntimeEnvironment({ session, environments: deviceState.list });
+				renderLiveDeviceViewHeader(session, state.activeRuntimeEnvironment);
+			}
 			break;
 
 		case 'browser':
@@ -3866,7 +4935,8 @@ const qaUi = {
 	cancel: $('qa-cancel'),
 	submit: $('qa-submit'),
 	targetUrl: $('qa-target-url'),
-	deviceSelect: $('qa-device-select'),
+	testOn: $('qa-test-on'),
+	testOnChange: document.querySelector('#qa-start [data-test-on-change]'),
 	deviceLandscape: $('qa-device-landscape'),
 	testsFieldset: $('qa-tests-fieldset'),
 	testsState: $('qa-tests-state'),
@@ -4212,7 +5282,9 @@ function openQaStart() {
 	if (!qaUi.dialog) return;
 	setQaFormError();
 	qaUi.form.reset();
-	populateDeviceSelect(qaUi.deviceSelect, pendingDeviceId());
+	renderTestOn('qa-test-on');
+	qaUi._testCaseId = undefined;
+	qaUi._testCaseSnapshot = undefined;
 	if (qaUi.deviceLandscape) qaUi.deviceLandscape.checked = pendingLandscape();
 	qaUi.testsFieldset.disabled = true;
 	qaUi.testsState.hidden = false;
@@ -4225,6 +5297,9 @@ function openQaStart() {
 	// validity from a previous open must be cleared explicitly.
 	qaUi.securityAuthorized?.setCustomValidity('');
 	syncQaSecurityGate();
+	qaUi.submit.disabled = false;
+	qaUi.submit.textContent = 'Start QA run';
+	if (qaUi.testOnChange) qaUi.testOnChange.onclick = () => devicePicker?.open?.();
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	setTimeout(() => qaUi.targetUrl?.focus(), 0);
 	void loadQaTestCatalog()
@@ -4310,7 +5385,7 @@ if (qaUi.dialog) {
 			qaUi.securityAuthorized?.focus();
 			return;
 		}
-		const device = (qaUi.deviceSelect?.value) || pendingDeviceId();
+		const device = activeTestEnvStore?.get?.()?.device || (qaUi.deviceSelect?.value) || pendingDeviceId();
 		const deviceLandscape = (qaUi.deviceLandscape?.checked) === true;
 		const scopeValues = selectedQaScopeValues();
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
@@ -4324,6 +5399,10 @@ if (qaUi.dialog) {
 			setQaFormError('Check at least one browser engine.');
 			return;
 		}
+		// AC14: the run uses exactly the environment shown in the TEST ON block,
+		// read from the store at submit time (falls back to the QA form picker).
+		const environmentId = selectedEnvironmentForRun();
+		const testCaseId = qaUi._testCaseId || undefined;
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
@@ -4340,6 +5419,7 @@ if (qaUi.dialog) {
 					coreFlowsOnly: engines.length > 1
 				});
 			}
+			await createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId });
 			closeQaStart();
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
@@ -4363,8 +5443,9 @@ const sqaUi = {
 	catalogState: $('sqa-catalog-state'),
 	catalogVersion: $('sqa-catalog-version'),
 	disclaimer: $('sqa-catalog-disclaimer'),
-	deviceSelect: $('sqa-device-select'),
+	deviceSelect: null, // legacy select removed (DX Phase 3)
 	deviceLandscape: $('sqa-device-landscape'),
+	testOnChange: document.querySelector('#sqa-start [data-test-on-change]'),
 	profilesFieldset: $('sqa-profiles-fieldset'),
 	attributesFieldset: $('sqa-attributes-fieldset'),
 	profileOptions: $('sqa-profile-options'),
@@ -4470,7 +5551,8 @@ function syncSqaSubmitState() {
 async function openSqaStart() {
 	setSqaFormError();
 	sqaUi.form.reset();
-	populateDeviceSelect(sqaUi.deviceSelect, pendingDeviceId());
+	renderTestOn('sqa-test-on');
+	if (sqaUi.testOnChange) sqaUi.testOnChange.onclick = () => devicePicker?.open?.();
 	if (sqaUi.deviceLandscape) sqaUi.deviceLandscape.checked = pendingLandscape();
 	sqaUi.profilesFieldset.disabled = true;
 	sqaUi.attributesFieldset.disabled = true;
@@ -4544,8 +5626,9 @@ sqaUi.form.onsubmit = async event => {
 				target,
 				scopeNotes: sqaUi.scopeNotes.value.trim(),
 				authorizationConfirmed: true,
-				device: (sqaUi.deviceSelect?.value) || pendingDeviceId(),
-				deviceLandscape: (sqaUi.deviceLandscape?.checked) === true
+				device: activeTestEnvStore?.get?.()?.device || pendingDeviceId(),
+				deviceLandscape: (sqaUi.deviceLandscape?.checked) === true,
+				environmentId: selectedEnvironmentForRun() || undefined
 			})
 		});
 		const session = result?.session ?? result;
@@ -4577,8 +5660,9 @@ const founderUi = {
 	cancel: $('founder-cancel'),
 	submit: $('founder-submit'),
 	catalogMeta: $('founder-catalog-meta'),
-	deviceSelect: $('founder-device-select'),
+	deviceSelect: null, // legacy select removed (DX Phase 3)
 	deviceLandscape: $('founder-device-landscape'),
+	testOnChange: document.querySelector('#founder-start [data-test-on-change]'),
 	targetName: $('founder-target-name'),
 	targetUrl: $('founder-target-url'),
 	targetRelease: $('founder-target-release'),
@@ -4627,7 +5711,8 @@ function syncFounderSubmitState() {
 async function openFounderStart() {
 	setFounderFormError();
 	founderUi.form.reset();
-	populateDeviceSelect(founderUi.deviceSelect, pendingDeviceId());
+	renderTestOn('founder-test-on');
+	if (founderUi.testOnChange) founderUi.testOnChange.onclick = () => devicePicker?.open?.();
 	if (founderUi.deviceLandscape) founderUi.deviceLandscape.checked = pendingLandscape();
 	founderUi.submit.dataset.busy = 'false';
 	founderUi.catalogMeta.textContent = 'Loading review catalog…';
@@ -4701,8 +5786,9 @@ founderUi.form.onsubmit = async event => {
 			body: JSON.stringify({
 				authorizationConfirmed: true,
 				target,
-				device: (founderUi.deviceSelect?.value) || pendingDeviceId(),
+				device: activeTestEnvStore?.get?.()?.device || pendingDeviceId(),
 				deviceLandscape: (founderUi.deviceLandscape?.checked) === true,
+				environmentId: selectedEnvironmentForRun() || undefined,
 				...(Object.keys(productContext).length ? { productContext } : {})
 			})
 		});
@@ -4943,7 +6029,7 @@ function showAuthGate() {
 
 function hideAuthGate() {
 	if (el.authGate) el.authGate.hidden = true;
-	for (const node of document.querySelectorAll('.app, .skip-link, #settings, #toasts')) { node.inert = false; node.removeAttribute('aria-hidden'); }
+	for (const node of document.querySelectorAll('.app, .skip-link, #settings, #environments, #toasts')) { node.inert = false; node.removeAttribute('aria-hidden'); }
 }
 
 el.authSwitch?.addEventListener('click', () => {
@@ -4987,7 +6073,590 @@ el.authForm?.addEventListener('submit', async event => {
 });
 
 $('open-settings').onclick = openSettings;
-el.modelBadge.onclick = openSettings;
+
+const openDeviceMatrixButton = $('open-device-matrix');
+
+/* ── Device & Environment Matrix (Phase 3) ────────────────────── */
+const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({
+	api,
+	toast,
+	fail,
+	onRunEnvironment: (env) => startEnvironmentRun(env),
+	onOpenRun: (runId) => selectSession(runId),
+	elements: {
+		dialog: $('device-matrix'),
+		navButton: $('open-device-matrix'),
+		tabs: [...document.querySelectorAll('#device-matrix [data-dm-tab]')],
+		browseList: $('dm-browse-list'),
+		browseSearch: $('dm-browse-search'),
+		browseCategory: $('dm-browse-category'),
+		builderDevices: $('dm-builder-devices'),
+		builderOs: $('dm-builder-os'),
+		builderBrowsers: $('dm-builder-browsers'),
+		builderPreview: $('dm-builder-preview'),
+		builderCreate: $('dm-builder-create'),
+		envTbody: $('dm-env-tbody'),
+		envSummary: $('dm-env-summary'),
+		envFilterPlatform: $('dm-env-platform'),
+		envFilterBrowser: $('dm-env-browser'),
+		envFilterActive: $('dm-env-active'),
+		envFilterSearch: $('dm-env-search'),
+		envPrev: $('dm-env-prev'),
+		envNext: $('dm-env-next'),
+		envEditor: $('dm-env-editor'),
+		catalogForms: $('dm-catalog-forms'),
+		coverageMetrics: $('dm-coverage-metrics'),
+		coverageHead: $('dm-coverage-head'),
+		coverageTbody: $('dm-coverage-tbody'),
+		coverageDetail: $('dm-coverage-detail'),
+		facetSummary: $('dm-facet-summary')
+	}
+}) : null;
+
+/* ── Test cases (Phase 4) ───────────────────────────────────────── */
+function startRunForTestCase(testCase) {
+	openQaStart();
+	// DX Phase 3: assigned-env prefill goes through the ONE picker's data, not
+	// a disabled select. If the current selection isn't assigned to the case,
+	// switch to the first assigned environment (still one source of truth).
+	const assigned = testCase.environmentIds ?? [];
+	if (assigned.length) {
+		const current = activeTestEnvStore?.get?.();
+		if (!current || !assigned.includes(current.envId)) {
+			const env = (devicePicker?.state?.environments ?? []).find((e) => assigned.includes(e.envId));
+			if (env) {
+				activeTestEnvStore.setSelection(env);
+				if (devicePicker) devicePicker.state.selectedDevice = env.device;
+				renderAllTestOnBlocks();
+				deviceDrawer?.paintChip?.();
+			}
+		}
+	}
+	qaUi._testCaseId = testCase.caseNumber;
+	qaUi._testCaseSnapshot = testCase;
+	el.composerInput.placeholder = `Run ${testCase.caseNumber} — ${testCase.title}`;
+}
+
+function createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId }) {
+	if (!testCaseId) return createQaRun({ targetUrl, device, deviceLandscape, environmentId });
+	return api('/sessions', { method: 'POST', body: JSON.stringify({
+		device, deviceLandscape, ...(environmentId ? { environmentId } : {}), testCaseId
+	}) }).then(async (session) => {
+		await selectSession(session.id);
+		if (targetUrl) {
+			await api(`/sessions/${session.id}/message`, { method: 'POST', body: JSON.stringify({ text: targetUrl }) }).catch(fail);
+		}
+		return session;
+	});
+}
+
+const quickRunState = { testCase: null };
+
+const workflow = {
+	lastRunByCase,
+	caseStatus,
+	platformsOf,
+	caseEnvLines,
+	oneClickRun(testCase) {
+		const assigned = testCase.environmentIds ?? [];
+		if (!assigned.length) {
+			// Zero assigned environments → current device emulation with a note.
+			openRunTarget(testCase);
+			return;
+		}
+		if (assigned.length === 1) {
+			// One-click: no configuration steps.
+			void launchPairs([{ testCase, envId: assigned[0] }], `${testCase.caseNumber}: `);
+			return;
+		}
+		openRunTarget(testCase);
+	}
+};
+
+const testCaseView = $('test-cases') ? createTestCaseView({
+	api, toast, fail,
+	onStartRun: startRunForTestCase,
+	onOpenRun: (runId) => { void selectSession(runId).catch(fail); },
+	workflow,
+	elements: {
+		dialog: $('test-cases'),
+		navButton: $('open-test-cases'),
+		list: $('tc-tbody'),
+		search: $('tc-search'),
+		source: $('tc-source'),
+		form: $('tc-form'),
+		formTitle: $('tc-title'),
+		formDescription: $('tc-description'),
+		formExpected: $('tc-expected'),
+		formSteps: $('tc-steps'),
+		formTags: $('tc-tags'),
+		deviceChips: $('tc-device-chips'),
+		addDeviceBtn: $('tc-add-device'),
+		submitBtn: $('tc-submit'),
+		formCancel: $('tc-cancel'),
+		closeButton: $('tc-close'),
+		editorSummary: $('tc-summary')
+	}
+}) : null;
+
+const bulkRunView = $('bulk-run') ? createBulkRunView({
+	api, toast, fail,
+	onLaunch: (pairs, label) => launchPairs(pairs, label),
+	elements: {
+		dialog: $('bulk-run'),
+		navButton: $('open-bulk-run'),
+		close: $('bulk-close'),
+		what: $('bulk-what'),
+		casesField: $('bulk-cases-field'),
+		casesSelect: $('bulk-cases'),
+		where: $('bulk-where'),
+		deviceChips: $('bulk-device-chips'),
+		addDeviceBtn: $('bulk-add-device'),
+		preview: $('bulk-preview'),
+		launchBtn: $('bulk-launch'),
+		result: $('bulk-result'),
+		steps: [...document.querySelectorAll('#bulk-run [data-bulk-step]')]
+	}
+}) : null;
+if (bulkRunView) {
+	bulkRunView.setWizardFilter((mode) => filterCasesForWizard(bulkRunView.state.cases, mode, bulkRunView.state.lastRuns));
+	bulkRunView.setLastRunIndex(lastRunByCase);
+}
+
+/* ── Phase 11: run-target dialog + quick actions + presets ────────── */
+
+const runTarget = $('run-target') ? {
+	dialog: $('run-target'),
+	close: $('rt-close'),
+	cancel: $('rt-cancel'),
+	runBtn: $('rt-run'),
+	envsField: $('rt-envs-field'),
+	error: $('rt-error'),
+	sub: $('run-target-sub')
+} : null;
+
+/** Run-target dialog chip list (DX Phase 4) — same picker, add-mode. */
+const runTargetDevices = $('run-target') ? createDeviceChipList({
+	container: $('rt-device-chips'),
+	addBtn: $('rt-add-device'),
+	environmentsById: (id) => (testCaseView?.state.environmentsById ?? new Map()).get(id),
+	onChange: () => {}
+}) : null;
+
+
+async function defaultEnvironmentId() {
+	return localStorage.getItem('qase.environmentId') || '';
+}
+
+async function launchPairs(pairs, sourceLabel = '') {
+	let created = 0;
+	const failures = [];
+	const sessionIds = [];
+	const testCaseTitles = {};
+	for (const { testCase, envId } of pairs) {
+		try {
+			const session = await createQaRunWithCase({ testCaseId: testCase.caseNumber, environmentId: envId });
+			created += 1;
+			if (session?.id) {
+				sessionIds.push(session.id);
+				testCaseTitles[session.id] = `${testCase.caseNumber} ${testCase.title ?? ''}`.trim();
+			}
+		} catch (error) {
+			failures.push(`${testCase.caseNumber} @ ${envId}: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	if (batchTracker && sessionIds.length) {
+		batchTracker.track(recordBatch({ label: sourceLabel.trim() || 'Bulk run', sessionIds, testCaseTitles }));
+	}
+	toast(
+		created && !failures.length
+			? `${sourceLabel}${created} run${created === 1 ? '' : 's'} launched.`
+			: failures.length ? `${created} launched, ${failures.length} failed.` : 'Nothing launched.',
+		failures.length ? 'bad' : ''
+	);
+	return { created, failures };
+}
+
+function openRunTarget(testCase) {
+	if (!runTarget) return;
+	quickRunState.testCase = testCase;
+	runTarget.error.hidden = true;
+	runTarget.error.textContent = '';
+	const assigned = testCase.environmentIds ?? [];
+	if (runTarget.sub) {
+		runTarget.sub.textContent = assigned.length
+			? `${assigned.length} device${assigned.length === 1 ? '' : 's'} assigned to this test.`
+			: 'This test has no assigned devices — it will run on the current device emulation.';
+	}
+	runTargetDevices?.set(assigned);
+	runTarget.envsField.hidden = true;
+	for (const radio of runTarget.dialog.querySelectorAll('input[name="rt-choice"]')) radio.checked = radio.value === 'current';
+	runTarget.dialog.querySelectorAll('input[name="rt-choice"]').forEach((radio) => {
+		radio.onchange = () => { if (runTarget.envsField) runTarget.envsField.hidden = radio.value !== 'choose' || !radio.checked; };
+	});
+	if (!runTarget.dialog.open) runTarget.dialog.showModal();
+}
+
+async function submitRunTarget() {
+	if (!runTarget || !quickRunState.testCase) return;
+	const choice = runTarget.dialog.querySelector('input[name="rt-choice"]:checked')?.value ?? 'current';
+	const testCase = quickRunState.testCase;
+	const pairs = resolveRunPairs([testCase], choice, {
+		defaultEnvId: await defaultEnvironmentId(),
+		chosenEnvIds: runTargetDevices?.ids ?? []
+	});
+	runTarget.error.hidden = true;
+	if (!pairs.length) {
+		if (choice === 'current' && !(await defaultEnvironmentId())) {
+			runTarget.error.hidden = false;
+			runTarget.error.textContent = 'No current device chosen — open the device panel and pick one, or choose "All selected devices".';
+			return;
+		}
+		runTarget.error.hidden = false;
+		runTarget.error.textContent = 'Pick at least one device to run on.';
+		return;
+	}
+	runTarget.dialog.close();
+	await launchPairs(pairs, `${testCase.caseNumber}: `);
+}
+
+async function loadSessionsForFilters() {
+	try {
+		const sessions = await api('/sessions?limit=100');
+		return Array.isArray(sessions) ? sessions : [];
+	} catch {
+		return [];
+	}
+}
+
+async function runAllTests() {
+	if (!bulkRunView) return;
+	const sessions = await loadSessionsForFilters();
+	bulkRunView.state.lastRuns = lastRunByCase(sessions);
+	bulkRunView.state.cases = (await api('/test-cases').then((p) => p.testCases ?? []).catch(() => []));
+	const pairs = resolveRunPairs(bulkRunView.state.cases, 'all');
+	if (!pairs.length) {
+		toast('No test cases with assigned environments yet — create one first.');
+		return;
+	}
+	await launchPairs(pairs, 'Run all: ');
+}
+
+async function runFailedTests() {
+	const sessions = await loadSessionsForFilters();
+	const lastRuns = lastRunByCase(sessions);
+	const cases = (await api('/test-cases').then((p) => p.testCases ?? []).catch(() => []));
+	const failed = filterCasesForWizard(cases, 'failed', lastRuns);
+	if (!failed.length) {
+		toast('No failed runs to re-run — nice and green.');
+		return;
+	}
+	await launchPairs(resolveRunPairs(failed, 'all'), 'Re-run failed: ');
+}
+
+async function createBugReport() {
+	const sessions = await loadSessionsForFilters();
+	// Findings live on the full session object (list payload carries only
+	// findingCount) — load the freshest runs that have findings.
+	const candidates = sessions
+		.filter((s) => s.mode !== 'sqa' && s.mode !== 'founder' && Number(s.findingCount ?? 0) > 0)
+		.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+	if (!candidates.length) {
+		toast('No findings recorded yet — nothing to report.');
+		return;
+	}
+	// Prefer a run whose full detail (findings + snapshot) loads.
+	let session = null;
+	for (const candidate of candidates.slice(0, 3)) {
+		const full = await api(`/sessions/${encodeURIComponent(candidate.id)}`).catch(() => null);
+		if (full && Array.isArray(full.findings) && full.findings.length) { session = full; break; }
+		if (!session) session = candidate;
+	}
+	if (!session) { toast('No findings recorded yet — nothing to report.'); return; }
+	// Create the BUG-XXXX record — the server auto-associates the environment
+	// snapshot + execution level from the linked run.
+	let bug = null;
+	try {
+		bug = await api('/bugs', { method: 'POST', body: JSON.stringify({
+			title: `${session.findings?.[0]?.title ?? 'QA finding'} — ${session.title ?? 'run'}`.slice(0, 300),
+			description: buildBugMarkdown(session, null),
+			severity: 'high',
+			category: session.findings?.[0]?.category ?? 'general',
+			expected: session.findings?.[0]?.expected ?? null,
+			actual: session.findings?.[0]?.actual ?? null,
+			environmentId: session.environmentId ?? null,
+			environmentSnapshot: session.environmentSnapshot ?? undefined,
+			executionLevel: session.executionLevel ?? session.runtimeFacts?.executionLevel ?? null,
+			linkedRunId: session.id,
+			linkedTestCaseId: session.testCaseId ?? null
+		}) });
+	} catch (error) {
+		fail(error);
+	}
+	if (bug?.bugNumber) {
+		toast(`Bug ${bug.bugNumber} created${bug.environmentSnapshot?.device ? ` · ${bug.environmentSnapshot.device}` : ''}.`);
+		void refreshBugs();
+		return;
+	}
+	// Record creation unavailable — fall back to the markdown export.
+	const env = session.environmentSnapshot
+		?? (session.environmentId ? (await api(`/environments/${encodeURIComponent(session.environmentId)}`).catch(() => null)) : null);
+	const markdown = buildBugMarkdown(session, env);
+	try {
+		await navigator.clipboard.writeText(markdown);
+		toast('Bug report copied to the clipboard.');
+	} catch {
+		toast('Bug report generated (clipboard blocked) — downloading instead.');
+	}
+	const blob = new Blob([markdown], { type: 'text/markdown' });
+	const url = URL.createObjectURL(blob);
+	const link = document.createElement('a');
+	link.href = url;
+	link.download = `bug-${session.id?.slice(0, 8) ?? 'report'}.md`;
+	link.click();
+	URL.revokeObjectURL(url);
+}
+
+const quickActions = $('quick-actions') ? {
+	strip: $('quick-actions'),
+	runAll: $('qa-run-all'),
+	runFailed: $('qa-run-failed'),
+	createCase: $('qa-create-case'),
+	chooseDevices: $('qa-choose-devices'),
+	viewResults: $('qa-view-results'),
+	createBug: $('qa-create-bug'),
+	preset: $('qa-preset')
+} : null;
+
+if (quickActions) {
+	if (quickActions.runAll) quickActions.runAll.addEventListener('click', () => void runAllTests());
+	if (quickActions.runFailed) quickActions.runFailed.addEventListener('click', () => void runFailedTests());
+	if (quickActions.createCase) quickActions.createCase.addEventListener('click', () => testCaseView?.open?.());
+	if (quickActions.chooseDevices) quickActions.chooseDevices.addEventListener('click', () => devicePicker?.open?.());
+	quickActions.viewResults?.addEventListener('click', () => {
+		// Results live in the run history (left panel): refresh it and move
+		// focus there. No separate results dialog exists by design.
+		void refreshRuns();
+		document.getElementById('run-list')?.focus?.();
+		toast('Run history refreshed — pick a run to see its results.');
+	});
+	quickActions.createBug?.addEventListener('click', () => void createBugReport());
+	quickActions.preset?.addEventListener('change', async () => {
+		const presetId = quickActions.preset.value;
+		if (!presetId || !bulkRunView) return;
+		const environments = (await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []));
+		if (bulkRunView.runPreset(presetId, { environmentsFor: (id) => environmentsForPreset(id, environments) })) {
+			toast(`${quickActions.preset.selectedOptions[0]?.textContent ?? 'Preset'} ready — review the summary and run.`);
+		}
+		quickActions.preset.value = '';
+	});
+}
+
+if (runTarget) {
+	runTarget.close?.addEventListener('click', () => runTarget.dialog.close());
+	runTarget.cancel?.addEventListener('click', () => runTarget.dialog.close());
+	runTarget.runBtn?.addEventListener('click', () => void submitRunTarget());
+}
+
+/* ── Phase 12: run-screen environment block + bulk progress ───────── */
+
+const batchTracker = $('bulk-progress') ? createBatchTracker({
+	api,
+	elements: {
+		block: $('bulk-progress'),
+		label: $('bulk-progress-label'),
+		pct: $('bulk-progress-pct'),
+		bar: $('bulk-progress-bar'),
+		counts: $('bulk-progress-counts'),
+		list: $('bulk-progress-list')
+	},
+	// Phase 4: the live preview follows the ACTIVE batch run. When the
+	// executing run changes (RUN 1 finishes → RUN 2 starts), the whole live
+	// view — device frame, browser chrome, environment card, runtime id —
+	// switches to that run's environment automatically. One preview per
+	// execution; environments are never blended.
+	onTick: (batch, sessionsById) => {
+		const activeId = activeBatchRunId(batch, sessionsById);
+		if (!activeId || activeId === state.sessionId) return;
+		void selectSession(activeId);
+	}
+}) : null;
+
+// Environment block inside #run-summary-detail: test-case title, current
+// environment, batch size — driven from the selected session's snapshot.
+setRunEnvHook(renderRunEnvBlock);
+
+// Restore a persisted batch after reload so mid-batch progress reappears.
+if (batchTracker) {
+	const restored = loadBatches().at(-1);
+	if (restored?.sessionIds?.length) batchTracker.track(restored);
+}
+
+function renderRunEnvBlock(session) {
+	const block = $('run-env-block');
+	if (!block) return;
+	const testcaseLine = $('run-env-testcase');
+	const currentLine = $('run-env-current');
+	const countLine = $('run-env-count');
+	const snap = session?.environmentSnapshot;
+	const hasEnv = Boolean(snap || session?.environmentId);
+	block.hidden = !hasEnv && !session?.testCaseId;
+	if (testcaseLine) {
+		const title = session?.testCaseSnapshot?.title ?? session?.testCaseId;
+		testcaseLine.textContent = title ? `Test case: ${title}` : '';
+		testcaseLine.hidden = !title;
+	}
+	if (currentLine) {
+		const deviceText = snap
+			? [snap.device, [snap.os, snap.osVersion].filter(Boolean).join(' '), [snap.browser, snap.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
+			: session?.environmentId ?? '';
+		// Phase D2: execution type + live runtime state, always visible.
+		const execType = session?.runtimeFacts?.executionLevel
+			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : 'VIRTUAL_DEVICE');
+		const state = session?.status === 'running'
+			? '● RUNNING'
+			: session?.status === 'done' ? '● COMPLETED' : '● CONNECTED';
+		currentLine.textContent = deviceText ? `TARGET DEVICE: ${deviceText} — ${execType} ${state}` : '';
+		currentLine.hidden = !currentLine.textContent;
+	}
+	if (countLine) {
+		const batch = batchTracker?.current;
+		countLine.textContent = batch && batch.sessionIds.length > 1
+			? `${batch.sessionIds.length} environments in this batch`
+			: hasEnv ? '1 environment' : '';
+		countLine.hidden = !countLine.textContent;
+	}
+}
+
+// Paint on every snapshot and restore any persisted batch on load.
+// Re-render the env block on every snapshot without redefining the hoisted
+// function: a small post-hook invoked from applySessionSnapshot itself.
+
+/* ── ONE Device Picker + activeTestEnvironment store (DX Phase 1) ── */
+const activeTestEnvStore = createActiveTestEnvironmentStore();
+/* UI Fix Phase 3: the feature-dock device chip (deviceDrawer.js, non-module
+ * script scope boundary) reads the store through this accessor — one source
+ * of truth for the selection. */
+globalThis.__qaseActiveSelection = () => activeTestEnvStore.get();
+const devicePicker = $('device-picker') ? createDevicePicker({
+	elements: {
+		dialog: $('device-picker'),
+		search: $('dp-search'),
+		tabs: [...document.querySelectorAll('#device-picker [data-dp-tab]')],
+		types: [...document.querySelectorAll('#device-picker [data-dp-type]')],
+		cards: $('dp-cards'),
+		summary: $('dp-summary'),
+		closeBtn: $('dp-close')
+	},
+	store: activeTestEnvStore,
+	runtimeProfiles: RUNTIME_PROFILES,
+	onSelect: (selection, env) => {
+		if (deviceDrawer) deviceDrawer.state.defaultEnvId = env?.envId ?? null;
+		deviceDrawer?.paintChip?.();
+		if (state.session) applySessionSnapshot(state.session);
+		renderAllTestOnBlocks(); // start dialogs read the same selection (DX Phase 3)
+		cdSyncSelectedHighlight(); // inline Choose Device stays in sync (exec layout #14069)
+	},
+	onClose: () => void refreshDevicePickerData(),
+	onOpen: () => void refreshDevicePickerData()
+}) : null;
+
+async function refreshDevicePickerData() {
+	if (!devicePicker) return;
+	devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'loading' });
+	cdRenderOnData();
+	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => null);
+	if (!Array.isArray(environments)) {
+		// Catalog fetch failed: surface an honest error state, not empty data.
+		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
+		cdRenderOnData();
+		return;
+	}
+	let boardByEnvId = new Map();
+	try {
+		const board = await api('/device-runtime/devices').catch(() => null);
+		for (const device of board?.devices ?? []) {
+			for (const e of device.environments ?? []) {
+				if (e?.envId) boardByEnvId.set(e.envId, { status: device.status, maximumLevel: device.maximumLevel ?? null });
+			}
+		}
+	} catch { /* board unavailable — badges fall back to neutral */ }
+	devicePicker.setData({ environments, boardByEnvId, dataState: 'ready' });
+	cdRenderOnData();
+}
+
+// Hydrate the persisted selection once environments are known; data is
+// refreshed again every time the picker opens (onClose).
+void (async () => {
+	if (!devicePicker) return;
+	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => null);
+	if (!Array.isArray(environments)) {
+		// Boot fetch failed: keep the picker in its honest error state instead
+		// of an empty catalog (which would read as "nothing configured").
+		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
+		return;
+	}
+	devicePicker.setData({ environments, boardByEnvId: new Map() });
+	const persisted = activeTestEnvStore.persistedEnvId();
+	if (persisted) {
+		const env = environments.find((e) => e.envId === persisted);
+		if (env) devicePicker.hydrate(env);
+		else activeTestEnvStore.clear();
+	}
+	renderAllTestOnBlocks();
+})();
+
+/* ── Device Matrix drawer (Phase 10) ─────────────────────────────── */
+const deviceDrawer = $('device-drawer') ? createDeviceDrawer({
+	api, toast, fail,
+	onRunEnvironment: (env) => startEnvironmentRun(env),
+	onApplied: (created) => {
+		if (created?.length && testCaseView) testCaseView.refresh?.();
+	},
+	onOpenPicker: () => devicePicker?.open?.(),
+	elements: {
+		drawer: $('device-drawer'),
+		chip: $('device-chip'),
+		chipChange: $('device-chip-change'),
+		chipLabel: $('device-chip-env'),
+		search: $('dd-search'),
+		tabs: [...document.querySelectorAll('#device-drawer [data-dd-tab]')],
+		sections: $('dd-sections'),
+		detail: $('dd-detail'),
+		detailBody: $('dd-detail-body'),
+		selectionSummary: $('dd-selection-summary'),
+		applyBtn: $('dd-apply'),
+		clearSelection: $('dd-clear-selection'),
+		savedList: $('dd-saved-list'),
+		savedRefresh: $('dd-saved-refresh'),
+		closeBtn: $('dd-close'),
+		advancedToggle: $('dd-advanced-toggle'),
+		advancedBody: $('dd-advanced-body')
+	}
+}) : null;
+
+// Wire the live-view environment card actions: Change and Device details.
+// DX Phase 2: Change opens THE picker (single selection surface); details
+// opens the Device Management catalog.
+(function wireEnvironmentCardActions() {
+	const change = document.getElementById('ldv-change-device');
+	if (change) change.onclick = () => devicePicker?.open?.();
+	const choose = document.getElementById('ldv-choose-device');
+	if (choose) choose.onclick = () => devicePicker?.open?.();
+	const details = document.getElementById('ldv-device-details');
+	if (details) details.onclick = () => document.getElementById('open-device-matrix')?.click();
+})();
+
+// Paint the collapsed chip once environments are loaded (and refresh the
+// saved list so Run/Set-default actions target real envIds).
+// DX Phase 2: NO silent default device — if nothing was persisted, the chip
+// stays empty and the empty-state card invites the user to choose one.
+void (async () => {
+	if (!deviceDrawer) return;
+	await deviceDrawer.refreshEnvironments();
+	deviceDrawer.state.defaultEnvId = localStorage.getItem('qase.environmentId') ?? null;
+	deviceDrawer.paintChip();
+})();
 
 cfg.testBtn.onclick = async () => {
 	await probeModelEndpoint();
@@ -5112,9 +6781,29 @@ document.addEventListener('keydown', event => {
 		event.preventDefault();
 		void openSettings();
 	}
+	/* Escape closes the topmost open dialog (UI Fix Phase 4). Native <dialog>
+	 * cancels on Escape already; this is a safety net for dialogs whose close
+	 * is JS-driven (form method=dialog submit interception etc.). */
+	if (event.key === 'Escape') {
+		const top = [...document.querySelectorAll('dialog[open]')].pop();
+		if (top && !top.matches(':modal')) top.close();
+	}
 });
 
-const detailTabs = [...document.querySelectorAll('.tab')];
+const detailTabs = [...document.querySelectorAll('#tabs .tab')];
+
+/* Auto-scroll ON/OFF button (UI Fix Phase 1). */
+{
+	const toggle = document.getElementById('activity-autoscroll');
+	if (toggle) {
+		toggle.onclick = () => {
+			autoScrollState.activity = !autoScrollState.activity;
+			toggle.setAttribute('aria-pressed', String(autoScrollState.activity));
+			toggle.textContent = autoScrollState.activity ? 'Auto-scroll ON' : 'Auto-scroll OFF';
+			if (autoScrollState.activity && el.activityFeed) scrollFeed(el.activityFeed);
+		};
+	}
+}
 
 function activateDetailTab(tab, moveFocus = false) {
 	for (const other of detailTabs) {
@@ -5159,6 +6848,7 @@ async function bootWorkspace() {
 	}
 
 	await loadDevices();
+	void loadEnvironments();
 
 	const runs = await api('/sessions').catch(() => []);
 	const launchParameters = new URLSearchParams(window.location.search);
@@ -5190,7 +6880,11 @@ async function bootWorkspace() {
 		el.chatEmpty.hidden = false;
 		renderWelcomeChecklist();
 		await startRun();
+		// No runs yet: don't ambush a brand-new workspace with a blocking modal.
+		// Point at the composer; the QA dialog is one click (New run) away.
+		toast('Welcome! Paste a URL below or press “QA” to start your first run.');
 	}
+	void refreshBugs();
 	el.composerInput.focus();
 }
 
@@ -5312,3 +7006,12 @@ $('memory-form').onsubmit = event => { event.preventDefault(); accountAction(eve
   await api('/memory', { method:'PUT', body:JSON.stringify({key:$('memory-key').value,value:$('memory-value').value}) });
   $('memory-form').reset(); await refreshMemory(); $('profile-message').textContent = 'Memory saved.';
 }); };
+
+/* Wire the picker host into the chip lists (DX Phase 4). Runs at the very end
+ * of module evaluation, after devicePicker and runTargetDevices exist — the
+ * earlier placement hit a temporal-dead-zone ReferenceError. */
+if (devicePicker) {
+	testCaseView?.deviceList?.setPickerHost?.(devicePicker);
+	bulkRunView?.deviceList?.setPickerHost?.(devicePicker);
+	runTargetDevices?.setPickerHost?.(devicePicker);
+}

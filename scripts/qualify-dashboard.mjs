@@ -28,6 +28,13 @@ const services = {
 	configuration:{getPublic:()=>config,save:()=>config,testConnection:async()=>({ok:true,models:['dashboard-fixture']})},
 	secrets:{clear(){},names:()=>[],store:()=>[]}, reports:{buildMarkdown:buildReportMarkdown},
 	agent:{ensureRuntime(){},async runTurn(s,options){turns.push({mode:s.mode,options});await services.runs.setStatus(s,'idle');},closeBrowser:async()=>{},getLiveState:()=>({running:false}),stop(){},invalidateIdleRuntimes:()=>({kept:0})},
+	environments: {
+		seed(){}, async list(){ return []; },
+		async facets(){ return { total: 0, devices: [], osVersions: [], browsers: [] }; },
+		async get(){ return null; }, async create(){ return {}; }, async update(){ return null; },
+		async availability(){ return { available: 0, busy: 0 }; }, async catalogVersion(){ return 'fixture'; }
+	},
+	bugs: { async list(){ return []; }, async get(){ return null; }, async create(input){ return input; }, async update(){ return null; }, async remove(){ return null; } },
 	readiness:{check:async()=>({ready:true})}, lifecycle:{close:async()=>{}}
 };
 const application = createApplication({services,environment:{NODE_ENV:'production'}});
@@ -50,8 +57,9 @@ const screenshot = async (page, name) => {
 try {
 	const page = await browser.newPage({viewport:{width:1440,height:1000}});
 	page.on('pageerror',error=>errors.push(error.message));
-	await page.goto(base);await page.locator('#entry-begin').click();
-	await page.locator('#entry-experience').waitFor({state:'hidden'});
+	await page.goto(base);
+	// The decorative entry screen is gone — authentication owns the gate now.
+	await page.locator('#auth-gate').waitFor({state:'hidden'});
 	if (!await page.locator('#qa-start').evaluate(dialog=>dialog.open)) await page.locator('#new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
 	await page.locator('#qa-submit').click();assert.equal(sessions.size,0,'Empty URL cannot launch QA');

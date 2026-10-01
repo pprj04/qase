@@ -699,10 +699,16 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 		literalCount === 2,
 		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
 	);
-	assert.equal(runInsert.params[runInsert.params.length - 1], null);
-	assert.equal(runInsert.params[runInsert.params.length - 2], null);
-	assert.equal(runInsert.params[runInsert.params.length - 3], null);
-	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime());
+	// Trailing params (merged engine/device/cohort/security + environment/testCase/runtime columns):
+	// runtime_facts, execution_provider_actual, execution_level_actual, test_case_id(nullable),
+	// environment_snapshot(json), environment_id(nullable), security_authorization, selected_tests.
+	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // runtime_facts
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // execution_provider_actual
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_level_actual
+	// queued_at trails security_authorization + the environment block; a session
+	// without queuedAt writes null there (asNullableDate).
+	assert.equal(runInsert.params[runInsert.params.length - 11], null);         // queued_at
+	assert.equal(runInsert.params[runInsert.params.length - 12].getTime(), new Date(NOW).getTime()); // updated_at
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
@@ -891,7 +897,10 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		messageCount: 3,
 		todoTotal: 0,
 		todoCompleted: 0,
-		tokenUsage: undefined
+		tokenUsage: undefined,
+		executionLevel: undefined,
+		executionProviderActual: undefined,
+		runtimeFacts: undefined
 	}]);
 	const scopedRunReads = fake.calls.filter(call => call.text.includes('FROM qa_runs'));
 	assert.ok(scopedRunReads.every(call => /organization_id = \$1 AND project_id = \$2/.test(call.text)));

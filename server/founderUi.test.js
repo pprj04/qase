@@ -46,7 +46,7 @@ test('Founder frontend creates an idle scope, then starts through the existing m
 	assert.match(app, /api\('\/founder\/catalog'\)/);
 	assert.match(app, /api\('\/founder\/sessions',\s*\{\s*method:\s*'POST'/);
 	assert.match(app, /authorizationConfirmed:\s*true/);
-	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
+	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*environmentId:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
 	assert.match(app, /api\(`\/sessions\/\$\{session\.id\}\/message`,\s*\{/);
 	assert.match(app, /JSON\.stringify\(\{ text: `Review \$\{targetUrl\}` \}\)/);
 	assert.match(app, /case 'founder\.created':/);
@@ -103,6 +103,9 @@ test('feature dock reserves a fourth desktop column and becomes a bottom dock re
 	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
 	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+56px;/);
 	assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1024px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+52px;/);
+	assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);
 	assert.match(styles, /\.feature-action:focus-visible \.feature-tooltip/);
 	assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.feature-tooltip/);
 	assert.match(styles, /\.founder-evidence-grid/);

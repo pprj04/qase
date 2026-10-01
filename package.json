@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Qase — an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
+  "description": "Qase \u2014 an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
@@ -11,7 +11,7 @@
     "worker": "node server/worker.js",
     "control-plane": "node server/controlPlane/index.js",
     "cell-heartbeat": "node server/cellHeartbeatController.js",
-    "test": "node --test server/*.test.js server/postgres/*.test.js server/controlPlane/*.test.js",
+    "test": "node --test server/*.test.js server/postgres/*.test.js server/controlPlane/*.test.js public/*.test.js",
     "db:migrate": "node scripts/migrate.mjs",
     "control:db:migrate": "node scripts/migrate-control-plane.mjs",
     "db:import": "node scripts/import-sessions.mjs",
@@ -27,7 +27,9 @@
     "qualify:agent": "node scripts/qualify-agent.mjs",
     "install-browser": "playwright install chromium firefox webkit",
     "package": "node scripts/package.mjs",
-    "test:auth": "node scripts/test-auth-browser.mjs"
+    "test:auth": "node scripts/test-auth-browser.mjs",
+    "test:ui": "node scripts/test-ui-responsive.mjs",
+    "test:acceptance": "node scripts/test-acceptance.mjs"
   },
   "engines": {
     "node": ">=22 <25"

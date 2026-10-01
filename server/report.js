@@ -1,3 +1,5 @@
+import { getDeviceProfile } from './deviceProfiles.js';
+
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
 const VERDICT_LABELS = {
@@ -6,6 +8,34 @@ const VERDICT_LABELS = {
 	fail: 'Fail',
 	blocked: 'Blocked'
 };
+
+function deviceLine(session) {
+	const profile = getDeviceProfile(session.device);
+	const width = session.deviceLandscape ? profile.viewport.height : profile.viewport.width;
+	const height = session.deviceLandscape ? profile.viewport.width : profile.viewport.height;
+	const orientation = session.deviceLandscape ? 'landscape' : 'portrait';
+	return profile.label + ' (' + orientation + ', ' + width + '\u00d7' + height + ', DPR ' + profile.deviceScaleFactor + ', touch)';
+}
+
+function environmentLine(session) {
+	const snapshot = session.environmentSnapshot;
+	if (!snapshot) return undefined;
+	const parts = [
+		snapshot.device ?? snapshot.deviceLabel,
+		snapshot.osVersion,
+		[snapshot.browser, snapshot.browserVersion].filter(Boolean).join(' ')
+	].filter(Boolean);
+	const label = parts.join(' · ');
+	// Phase 22: the execution label comes from RECORDED facts, never from the
+	// catalog capability hint — a simulated run must never read "real device".
+	const level = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	if (level === 'REAL_DEVICE') return `${label} — REAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'VIRTUAL_DEVICE') return `${label} — VIRTUAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'SIMULATED') return `${label} — SIMULATED${provider ? ` (${provider})` : ''}`;
+	const legacy = provider === 'browserstack' ? 'remote environment runtime' : provider;
+	return legacy ? `${label} — ${legacy}` : label;
+}
 
 /** A deterministic completion reply, grounded in the saved QA results. */
 export function buildQaChatReport(session) {
@@ -45,9 +75,23 @@ export function buildReportMarkdown(session) {
 
 	lines.push(`# QA report — ${session.targetUrl ?? session.title}`);
 	lines.push('');
+	if (session.testCaseSnapshot?.title || session.testCaseId) {
+		lines.push(`- **Test case:** ${session.testCaseSnapshot?.title ?? session.testCaseId}${session.testCaseSnapshot?.caseNumber ? ` (${session.testCaseSnapshot.caseNumber})` : ''}`);
+	}
 	lines.push(`- **Run:** ${new Date(session.createdAt).toLocaleString()}`);
 	lines.push(`- **Verdict:** ${report ? VERDICT_LABELS[report.verdict] ?? report.verdict : 'Run not finished'}`);
 	lines.push(`- **Findings:** ${session.findings.length}`);
+	const environment = environmentLine(session) ?? deviceLine(session);
+	if (environment) lines.push(`- **Environment:** ${environment}`);
+	// Phase 22: execution level is always stated — from RECORDED facts, never
+	// the requested level — so no simulated run can pass as real-device evidence.
+	const execution = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	if (execution) {
+		const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		lines.push(`- **Execution:** ${execution === 'REAL_DEVICE' ? 'REAL DEVICE' : execution}${provider ? ` (${provider})` : ''}`);
+	} else if (session.environmentSnapshot) {
+		lines.push('- **Execution:** NOT AVAILABLE FOR REAL EXECUTION');
+	}
 	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
 		const usage = session.tokenUsage;
 		const fmt = value => (Number.isFinite(value) ? value.toLocaleString('en-US') : '—');

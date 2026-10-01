@@ -7,12 +7,12 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
-<link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="bugsView.css">
+<link rel="stylesheet" href="styles.css?v=20261001-1">
+<link rel="stylesheet" href="bugsView.css?v=20261001-1">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
-<body>
+<body class="cli-theme">
 
 <section class="auth-gate" id="auth-gate" hidden aria-labelledby="auth-title">
   <div class="terminal-atmosphere" aria-hidden="true"><canvas id="entry-motion"></canvas><div class="terminal-grid"></div><div class="terminal-scanlines"></div></div>
@@ -76,7 +76,7 @@
       </div>
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
-    <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
+    <div class="run-list" id="run-list" role="list" aria-label="Recent runs" tabindex="-1"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
       <header class="perf-head">
         <h2 class="perf-title">⏱ Performance</h2>
@@ -134,6 +134,8 @@
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-test-cases" title="Reusable QA scenarios with multi-environment assignment">Test cases</button>
+      <button class="btn btn-ghost btn-sm foot-btn" id="open-bulk-run" title="Launch one run per test case &times; environment">Bulk runs</button>
     </footer>
   </aside>
 
@@ -191,11 +193,35 @@
             <span class="ca-label">Current activity</span>
             <span class="ca-state" id="current-activity-state"></span>
           </div>
+          <div class="run-env-block" id="run-env-block" hidden>
+            <span class="re-line" id="run-env-testcase"></span>
+            <span class="re-line" id="run-env-current"></span>
+            <span class="re-line" id="run-env-count"></span>
+          </div>
+          <div class="run-queue-panel" id="run-queue-panel" hidden>
+            <span class="rq-dot" aria-hidden="true"></span>
+            <span class="rq-label" id="run-queue-label">Queued for device</span>
+            <span class="rq-detail" id="run-queue-detail"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="run-queue-cancel">Cancel</button>
+          </div>
+          <div class="bulk-progress" id="bulk-progress" hidden>
+            <div class="bp-top">
+              <span class="bp-label" id="bulk-progress-label"></span>
+              <span class="bp-pct" id="bulk-progress-pct"></span>
+            </div>
+            <div class="bp-bar" id="bulk-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Bulk run progress"><i></i></div>
+            <div class="bp-counts" id="bulk-progress-counts"></div>
+            <details class="bp-list-wrap">
+              <summary>Executions</summary>
+              <ul class="bp-list" id="bulk-progress-list"></ul>
+            </details>
+          </div>
         </div>
       </div>
     </section>
 
     <div class="transcript" id="transcript" role="log" aria-label="Agent conversation" aria-live="polite" aria-relevant="additions">
+      <div class="exec-target-host" id="execution-target-block" hidden></div>
       <div class="empty-state" id="chat-empty">
         <h2>Autonomous website QA</h2>
         <p>Paste the URL of the site you want tested. Qase opens it in a real
@@ -223,6 +249,38 @@
 
     <div class="question-slot" id="question-slot" aria-live="assertive"></div>
 
+    <!-- Collapsible Choose Device (exec layout #14069): sits above the
+         preview; ONE inline picker surface; right panel stays indicator-only.
+         Collapsed = compact summary row; expanded = full selection controls. -->
+    <section class="choose-device" id="choose-device" aria-labelledby="cd-title">
+      <div class="cd-head" id="cd-head" role="button" tabindex="0" aria-expanded="false" aria-controls="cd-body">
+        <span class="cd-label" id="cd-title">Choose Device</span>
+        <span class="cd-summary" id="cd-summary">No device selected</span>
+        <span class="cd-exec-badge" id="cd-exec-badge" data-exec="none" hidden>○ NO DEVICE</span>
+        <button type="button" class="btn btn-sm cd-change" id="cd-change" title="Change device (opens the full device picker)">Change Device</button>
+        <span class="cd-chevron" id="cd-chevron" aria-hidden="true">⌄</span>
+      </div>
+      <div class="cd-body" id="cd-body" hidden>
+        <div class="cd-controls">
+          <label class="cd-search"><span class="sr-only">Search devices</span>
+            <input type="search" id="cd-search" placeholder="Search devices…" autocomplete="off"></label>
+          <div class="cd-chip-row" id="cd-platform-chips" role="group" aria-label="Platform filter">
+            <button type="button" class="cd-chip is-active" data-cd-platform="all">All</button>
+            <button type="button" class="cd-chip" data-cd-platform="apple">Apple</button>
+            <button type="button" class="cd-chip" data-cd-platform="android">Android</button>
+            <button type="button" class="cd-chip" data-cd-platform="windows">Windows</button>
+          </div>
+          <div class="cd-chip-row" id="cd-type-chips" role="group" aria-label="Device type filter">
+            <button type="button" class="cd-chip is-active" data-cd-type="all">All</button>
+            <button type="button" class="cd-chip" data-cd-type="phone">Phone</button>
+            <button type="button" class="cd-chip" data-cd-type="tablet">Tablet</button>
+            <button type="button" class="cd-chip" data-cd-type="desktop">Desktop</button>
+          </div>
+        </div>
+        <div class="cd-list" id="cd-list" role="list" aria-label="Devices"></div>
+        <div class="cd-secondary" id="cd-secondary" hidden></div>
+      </div>
+    </section>
     <form class="composer" id="composer">
       <label class="sr-only" for="composer-input">URL or instruction for the QA agent</label>
       <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
@@ -244,6 +302,22 @@
     </header>
 
     <div class="stage" id="stage">
+      <div class="ldv-unavailable" id="ldv-unavailable" hidden>
+        <span class="ldv-unavailable-title">DEVICE/BROWSER UNAVAILABLE</span>
+        <div class="ldv-unavailable-env" id="ldv-unavailable-env"></div>
+        <div class="ldv-unavailable-reason" id="ldv-unavailable-reason"></div>
+        <div class="ldv-unavailable-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-retry">Retry</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-env">Change Environment</button>
+        </div>
+      </div>
+      <div class="browser-chrome" id="browser-chrome" hidden>
+        <span class="chrome-brand-dot" id="chrome-brand-dot" aria-hidden="true"></span>
+        <span class="chrome-brand" id="chrome-brand">Browser</span>
+        <span class="chrome-nav" id="chrome-nav">← → ↻</span>
+        <span class="chrome-lock" id="chrome-lock" aria-hidden="true">🔒</span>
+        <span class="chrome-url" id="chrome-url">about:blank</span>
+      </div>
       <div class="stage-inner" id="stage-inner" hidden>
         <img id="frame" alt="Live view of the site under test">
         <div class="overlay" id="overlay">
@@ -273,32 +347,124 @@
       <div class="stage-note" id="stage-note" hidden>Run complete — live view collapsed</div>
     </div>
 
+    <!-- Run workspace tabs (UI Fix Phase 1): Activity/Plan/Findings/Bugs/Report
+         live INSIDE the center execution column — sticky tab bar, scrollable
+         active pane, never a page footer. -->
     <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
       <button class="tab is-active" id="tab-activity" data-tab="activity" role="tab" aria-selected="true" aria-controls="pane-activity">Activity</button>
+      <button type="button" class="btn btn-ghost btn-sm autoscroll-toggle" id="activity-autoscroll" aria-pressed="true" title="Keep the latest activity visible">Auto-scroll ON</button>
       <button class="tab" id="tab-plan" data-tab="plan" role="tab" aria-selected="false" aria-controls="pane-plan" tabindex="-1">Plan <span class="count" id="count-plan"></span></button>
       <button class="tab" id="tab-findings" data-tab="findings" role="tab" aria-selected="false" aria-controls="pane-findings" tabindex="-1">Findings <span class="count" id="count-findings"></span></button>
+      <button class="tab" id="tab-bugs" data-tab="bugs" role="tab" aria-selected="false" aria-controls="pane-bugs" tabindex="-1">Bugs <span class="count" id="count-bugs"></span></button>
       <button class="tab" id="tab-report" data-tab="report" role="tab" aria-selected="false" aria-controls="pane-report" tabindex="-1">Report</button>
       <button class="tab tab-sqa" id="tab-sqa" data-tab="sqa" role="tab" aria-selected="false" aria-controls="pane-sqa" tabindex="-1" hidden>SQA <span class="count" id="count-sqa"></span></button>
       <button class="tab tab-founder" id="tab-founder" data-tab="founder" role="tab" aria-selected="false" aria-controls="pane-founder" tabindex="-1" hidden>Founder <span class="count" id="count-founder"></span></button>
     </nav>
-
     <div class="tab-body">
       <section class="tab-pane is-active" id="pane-activity" data-pane="activity" role="tabpanel" aria-labelledby="tab-activity"><div class="feed" id="activity-feed" role="list" aria-live="polite" aria-relevant="additions text"></div></section>
       <section class="tab-pane" id="pane-plan" data-pane="plan" role="tabpanel" aria-labelledby="tab-plan"><div class="feed" id="plan-list" role="list"></div></section>
       <section class="tab-pane" id="pane-findings" data-pane="findings" role="tabpanel" aria-labelledby="tab-findings"><div class="feed" id="findings-list" role="list"></div></section>
+      <section class="tab-pane" id="pane-bugs" data-pane="bugs" role="tabpanel" aria-labelledby="tab-bugs"><div class="feed" id="bugs-list" role="list"><div class="feed-empty">No bugs detected yet — use Report bug on a run with findings.</div></div></section>
       <section class="tab-pane" id="pane-report" data-pane="report" role="tabpanel" aria-labelledby="tab-report"><div class="feed" id="report-view"></div></section>
       <section class="tab-pane" id="pane-sqa" data-pane="sqa" role="tabpanel" aria-labelledby="tab-sqa"><div class="feed sqa-view" id="sqa-view" aria-live="polite"></div></section>
       <section class="tab-pane" id="pane-founder" data-pane="founder" role="tabpanel" aria-labelledby="tab-founder"><div class="feed founder-view" id="founder-view" aria-live="polite"></div></section>
     </div>
+
+    <div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
+      <span class="qa-strip-title">Quick actions</span>
+      <button type="button" class="qa-chip" id="qa-run-all" title="Run every test case on its assigned environments">▶ Run all</button>
+      <button type="button" class="qa-chip" id="qa-run-failed" title="Re-run test cases whose last run failed">↻ Run failed</button>
+      <button type="button" class="qa-chip" id="qa-create-case" title="Create a reusable test case">＋ Test case</button>
+      <button type="button" class="qa-chip" id="qa-choose-devices" title="Choose the target device — OS, browser and environment resolve automatically">☰ Target device</button>
+      <button type="button" class="qa-chip" id="qa-view-results" title="Open the results view">◧ Results</button>
+      <button type="button" class="qa-chip" id="qa-create-bug" title="Generate a bug report from the latest findings">⚑ Bug</button>
+      <label class="qa-preset-wrap">Presets
+        <select id="qa-preset" aria-label="Environment presets">
+          <option value="">Choose…</option>
+          <option value="apple-mobile">Apple Mobile</option>
+          <option value="android-mobile">Android Mobile</option>
+          <option value="windows-desktop">Windows Desktop</option>
+          <option value="all-mobile">All Mobile</option>
+          <option value="all-browsers">All Browsers</option>
+          <option value="full-regression">Full Regression</option>
+        </select>
+      </label>
+    </div>
+
+    <form class="composer" id="composer">
+      <label class="sr-only" for="composer-input">URL or instruction for the QA agent</label>
+      <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
+      <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
+      <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
+    </form>
+  </main>
+
+  <!-- ── Right: live browser + activity ─────────────────────────── -->
+  <aside class="panel viewer" aria-label="Live browser and test results">
+    <header class="panel-head" data-path="~/qase/browser.preview">
+      <div class="live-device-view-head" id="live-device-view-head">
+        <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
+        <span class="ldv-device" id="ldv-device">—</span>
+        <span class="ldv-badges">
+          <span class="ldv-badge" id="ldv-exec">○ NO DEVICE</span>
+          <span class="ldv-badge ldv-live" id="ldv-live">○ IDLE</span>
+        </span>
+      </div>
+      <div class="urlbar">
+        <span class="dot" id="browser-dot" aria-hidden="true"></span>
+        <span class="url" id="browser-url">about:blank</span>
+      </div>
+      <span class="subtle" id="browser-title"></span>
+      <div class="ldv-env-card" id="ldv-env-card" hidden>
+        <div class="ldv-env-card-head">
+          <span class="ldv-env-kicker" id="ldv-kicker">CURRENT TEST DEVICE</span>
+        </div>
+        <div class="ldv-env-name" id="ldv-env-device">—</div>
+        <div class="ldv-env-line" id="ldv-env-os">—</div>
+        <div class="ldv-env-line" id="ldv-env-browser">—</div>
+        <div class="ldv-env-badges">
+          <span class="ldv-badge" id="ldv-card-exec">○ NO DEVICE</span>
+          <span class="ldv-badge ldv-live" id="ldv-card-status">○ IDLE</span>
+        </div>
+        <div class="ldv-env-runtime" id="ldv-env-runtime" hidden>Runtime: <code id="ldv-runtime-id"></code></div>
+        <div class="ldv-env-card-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-device">Change Device</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-device-details">Device details</button>
+        </div>
+      </div>
+      <!-- Empty state (AC11): no device selected yet — the only action opens THE picker. -->
+      <div class="ldv-env-card ldv-env-card-empty" id="ldv-env-card-empty" hidden>
+        <div class="ldv-env-card-head">
+          <span class="ldv-env-kicker">CURRENT TEST DEVICE</span>
+        </div>
+        <p class="ldv-env-prompt">SELECT A DEVICE</p>
+        <button type="button" class="btn btn-primary btn-sm" id="ldv-choose-device">Choose device</button>
+      </div>
+    </header>
+
+
+
   </aside>
 
   <!-- Feature dock stays outside the three working panels so launch actions
        remain available without displacing the browser/results workspace. -->
   <nav class="feature-dock" aria-label="Qase features">
     <span class="feature-dock-title" aria-hidden="true">modes</span>
-    <div class="feature-device" title="Emulate a real mobile browser (User-Agent, viewport, touch) for the next run.">
-      <label for="device-select" class="feature-device-label">device</label>
-      <select id="device-select" class="feature-device-select" aria-label="Target device for the next run"></select>
+    <div class="feature-device" title="Choose where the next run executes (real device, OS and browser).">
+      <div id="device-chip" class="device-chip" data-ready="false">
+        <div class="device-chip-rows">
+          <div class="device-chip-row"><span class="device-chip-label" title="Device">DEVICE</span><span id="device-chip-env" class="device-chip-env">none yet</span></div>
+          <div class="device-chip-row"><span class="device-chip-label" title="Operating system">OS</span><span id="device-chip-os" class="device-chip-value">—</span></div>
+          <div class="device-chip-row"><span class="device-chip-label" title="Browser">BROWSER</span><span id="device-chip-browser" class="device-chip-value">—</span></div>
+          <div class="device-chip-row"><span class="device-chip-label" title="Execution type">EXECUTION</span><span id="device-chip-exec" class="device-chip-value device-chip-exec">—</span></div>
+          <div class="device-chip-row"><span class="device-chip-label" title="Status">STATUS</span><span id="device-chip-status" class="device-chip-value device-chip-status-label">○ Idle</span></div>
+          <div class="device-chip-row"><span class="device-chip-label" title="Runtime session">SESSION</span><span id="device-chip-session" class="device-chip-value device-chip-session">—</span></div>
+        </div>
+        <div class="device-chip-actions">
+          <button id="device-chip-change" class="btn btn-ghost btn-sm device-chip-change" type="button">Change</button>
+          <button id="device-chip-details" class="btn btn-ghost btn-sm device-chip-details" type="button">Device details</button>
+        </div>
+      </div>
       <label class="feature-device-landscape" title="Rotate the emulated device to landscape.">
         <input id="device-landscape" type="checkbox">
         <span>landscape</span>
@@ -397,6 +563,118 @@
 </section>
 
 <!-- ── Settings ─────────────────────────────────────────────────── -->
+<!-- ── Environments (device & environment matrix) ──────────────── -->
+
+<!-- ── Device & Environment Matrix ──────────────────────────────── -->
+<dialog class="modal dm-modal" id="device-matrix" aria-labelledby="dm-title">
+  <form class="modal-inner" method="dialog" id="dm-form">
+    <header class="modal-head">
+      <div>
+        <h2 id="dm-title">Device &amp; Environment Matrix</h2>
+        <p>Browse the device catalog, build testing environments in bulk, and extend the catalog with new devices, OS and browser versions.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm dm-close" type="button">Close</button>
+    </header>
+    <nav class="tabs dm-tabs" role="tablist" aria-label="Device Matrix views">
+      <button class="tab is-active" type="button" data-dm-tab="browse" role="tab" aria-selected="true">Catalog</button>
+      <button class="tab" type="button" data-dm-tab="builder" role="tab" aria-selected="false">Environment builder</button>
+      <button class="tab" type="button" data-dm-tab="environments" role="tab" aria-selected="false">Environments</button>
+      <button class="tab" type="button" data-dm-tab="catalogForms" role="tab" aria-selected="false">Add to catalog</button>
+      <button class="tab" type="button" data-dm-tab="coverage" role="tab" aria-selected="false">Coverage</button>
+    </nav>
+    <div class="modal-body">
+      <section data-dm-pane="browse" role="tabpanel" aria-label="Catalog browse">
+        <p class="dm-hint" id="dm-facet-summary" aria-live="polite">Loading catalog…</p>
+        <div class="field-row">
+          <label class="field"><span>Category</span><select id="dm-browse-category"><option value="">All categories</option></select></label>
+          <label class="field dm-search"><span>Search</span><input id="dm-browse-search" type="search" placeholder="iPhone 16 Pro…" autocomplete="off"></label>
+        </div>
+        <div class="dm-browse-list" id="dm-browse-list"></div>
+      </section>
+      <section data-dm-pane="builder" role="tabpanel" aria-label="Environment builder" hidden>
+        <p class="dm-hint">Pick devices, OS versions and browsers; every cross-combination is validated against the compatibility rules — invalid ones are skipped.</p>
+        <div class="dm-builder-grid">
+          <fieldset class="dm-picker"><legend>Devices</legend><div class="dm-check-list" id="dm-builder-devices"></div></fieldset>
+          <fieldset class="dm-picker"><legend>OS versions</legend><div class="dm-check-list" id="dm-builder-os"></div></fieldset>
+          <fieldset class="dm-picker"><legend>Browsers</legend><div class="dm-check-list" id="dm-builder-browsers"></div></fieldset>
+        </div>
+        <div class="dm-builder-preview" id="dm-builder-preview" aria-live="polite"></div>
+        <button class="btn" type="button" id="dm-builder-create" disabled>Create environments</button>
+      </section>
+      <section data-dm-pane="environments" role="tabpanel" aria-label="Environments" hidden>
+        <div class="field-row">
+          <label class="field"><span>Platform</span>
+            <select id="dm-env-platform"><option value="">All</option><option value="apple">Apple</option><option value="android">Android</option><option value="windows">Windows</option><option value="ios">iOS</option><option value="ipados">iPadOS</option><option value="macos">macOS</option></select>
+          </label>
+          <label class="field"><span>Browser</span><select id="dm-env-browser"><option value="">All</option></select></label>
+          <label class="field"><span>State</span>
+            <select id="dm-env-active"><option value="">All</option><option value="true">Active</option><option value="false">Inactive</option></select>
+          </label>
+          <label class="field dm-search"><span>Search</span><input id="dm-env-search" type="search" placeholder="ENV-IOS-…" autocomplete="off"></label>
+        </div>
+        <p class="env-summary" id="dm-env-summary" aria-live="polite"></p>
+        <div class="env-table-wrap">
+          <table class="env-table">
+            <thead><tr><th>Device</th><th>Manufacturer</th><th>Model</th><th>OS</th><th>OS Version</th><th>Browser</th><th>Browser Version</th><th>Resolution</th><th>Orientation</th><th>Execution</th><th>Capabilities</th><th>Availability</th><th>Last Tested</th><th>Last Result</th><th></th></tr></thead>
+            <tbody id="dm-env-tbody"></tbody>
+          </table>
+        </div>
+        <div class="dm-pager">
+          <button class="btn btn-ghost btn-sm" type="button" id="dm-env-prev">‹ Prev</button>
+          <button class="btn btn-ghost btn-sm" type="button" id="dm-env-next">Next ›</button>
+        </div>
+        <div class="dm-editor" id="dm-env-editor" hidden></div>
+      </section>
+      <section data-dm-pane="catalogForms" role="tabpanel" aria-label="Add to catalog" hidden>
+        <p class="dm-hint">Catalog entries are reference data shared by every environment. Adds are validated and effective immediately — no code changes.</p>
+        <div class="dm-forms" id="dm-catalog-forms"></div>
+      </section>
+      <section data-dm-pane="coverage" role="tabpanel" aria-label="Coverage matrix" hidden>
+        <div class="dm-coverage-metrics" id="dm-coverage-metrics" aria-live="polite"></div>
+        <div class="cov-matrix-wrap">
+          <table class="cov-matrix" id="dm-coverage-table">
+            <thead><tr id="dm-coverage-head"></tr></thead>
+            <tbody id="dm-coverage-tbody"></tbody>
+          </table>
+        </div>
+        <div class="dm-cov-detail" id="dm-coverage-detail" hidden></div>
+      </section>
+    </div>
+  </form>
+</dialog>
+<!-- ── Execution fallback (Phase 23) ─────────────────────────────── -->
+<dialog class="modal" id="exec-fallback" aria-labelledby="exec-fallback-title">
+  <form method="dialog" class="modal-inner">
+    <header class="modal-head">
+      <h2 id="exec-fallback-title">REAL DEVICE UNAVAILABLE</h2>
+      <button class="btn btn-ghost btn-sm" value="cancel" formnovalidate>Close</button>
+    </header>
+    <div class="modal-body">
+      <p id="exec-fallback-reason" class="dm-hint"></p>
+      <div class="exec-fallback-options" id="exec-fallback-options"></div>
+      <div class="exec-fallback-actions">
+        <button type="button" class="btn btn-ghost btn-sm" id="exec-fallback-retry">Retry</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="exec-fallback-change">Choose another device</button>
+      </div>
+      <p class="dm-hint exec-fallback-note">Results are always labeled with the execution type actually used — never reported as REAL DEVICE unless a device runtime is verified.</p>
+    </div>
+  </form>
+</dialog>
+<!-- ── Device busy (Phase D2) ───────────────────────────────────── -->
+<dialog class="modal" id="device-busy" aria-labelledby="device-busy-title">
+  <form method="dialog" class="modal-inner">
+    <header class="modal-head">
+      <h2 id="device-busy-title">DEVICE BUSY</h2>
+      <button class="btn btn-ghost btn-sm" value="cancel" formnovalidate>Close</button>
+    </header>
+    <div class="modal-body">
+      <p id="device-busy-detail" class="dm-hint"></p>
+      <div class="exec-fallback-options" id="device-busy-options"></div>
+      <p class="dm-hint exec-fallback-note">QASE never moves your test to another device automatically — you decide.</p>
+    </div>
+  </form>
+</dialog>
+<!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">
   <form method="dialog" class="modal-inner">
     <header class="modal-head" data-path="~/.qase/config.json">
@@ -452,6 +730,12 @@
         <span>Run Chromium off-screen<small>Uncheck to also open a real browser window on this machine.</small></span>
       </label>
 
+      <div class="field">
+        <span>Device management</span>
+        <small>Admin catalog: devices, environments, coverage &amp; runtimes. Not needed for everyday runs — the device picker handles that.</small>
+        <button type="button" class="btn btn-ghost btn-sm" id="open-device-matrix">Open Device Management</button>
+      </div>
+
       <div class="test-result" id="cfg-test" role="status" aria-live="polite"></div>
     </div>
 
@@ -483,19 +767,19 @@
         <small>Qase opens this URL immediately after the run is created.
           <button type="button" class="link-btn" id="qa-demo-fill">Try the demo site</button></small>
       </label>
-      <fieldset class="qa-device-fieldset">
-        <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="qa-device-select"></select>
-          </label>
+      <fieldset class="qa-device-fieldset test-on-fieldset">
+        <legend>TEST ON</legend>
+        <div class="test-on-summary" id="qa-test-on" data-empty="true">
+          <span class="test-on-prompt">SELECT A DEVICE</span>
+        </div>
+        <div class="field-row test-on-actions">
+          <button type="button" class="btn btn-primary btn-sm test-on-change" data-test-on-change>Change device</button>
           <label class="check qa-landscape">
             <input id="qa-device-landscape" type="checkbox">
             <span>Landscape orientation</span>
           </label>
         </div>
-        <small>Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+        <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere.</small>
       </fieldset>
       <fieldset class="qa-engine-fieldset">
         <legend>Browser engines</legend>
@@ -689,19 +973,19 @@
         <span>I confirm that I own this target or am authorized to test it, and I accept non-destructive testing only.<small>This confirmation is required before Qase can create the assessment session.</small></span>
       </label>
 
-      <fieldset class="qa-device-fieldset sqa-device-fieldset">
-        <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="sqa-device-select"></select>
-          </label>
+      <fieldset class="qa-device-fieldset sqa-device-fieldset test-on-fieldset">
+        <legend>TEST ON</legend>
+        <div class="test-on-summary" id="sqa-test-on" data-empty="true">
+          <span class="test-on-prompt">SELECT A DEVICE</span>
+        </div>
+        <div class="field-row test-on-actions">
+          <button type="button" class="btn btn-primary btn-sm test-on-change" data-test-on-change>Change device</button>
           <label class="check qa-landscape">
             <input id="sqa-device-landscape" type="checkbox">
             <span>Landscape orientation</span>
           </label>
         </div>
-        <small>Emulates a real mobile or tablet browser (User-Agent, viewport, touch) for the assessment.</small>
+        <small>The assessment executes on exactly this device, OS and browser.</small>
       </fieldset>
 
       <div class="test-result" id="sqa-form-error" role="alert" aria-live="assertive"></div>
@@ -777,19 +1061,19 @@
         <span>I confirm that I own this target or am authorized to review it using non-destructive browser testing.<small>Founder Mode observes and analyzes; it does not execute external business actions.</small></span>
       </label>
 
-      <fieldset class="qa-device-fieldset founder-device-fieldset">
-        <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="founder-device-select"></select>
-          </label>
+      <fieldset class="qa-device-fieldset founder-device-fieldset test-on-fieldset">
+        <legend>REVIEW ON</legend>
+        <div class="test-on-summary" id="founder-test-on" data-empty="true">
+          <span class="test-on-prompt">SELECT A DEVICE</span>
+        </div>
+        <div class="field-row test-on-actions">
+          <button type="button" class="btn btn-primary btn-sm test-on-change" data-test-on-change>Change device</button>
           <label class="check qa-landscape">
             <input id="founder-device-landscape" type="checkbox">
             <span>Landscape orientation</span>
           </label>
         </div>
-        <small>Founder Mode uses this profile when opening the target site.</small>
+        <small>The review executes on exactly this device, OS and browser.</small>
       </fieldset>
 
       <div class="test-result" id="founder-form-error" role="alert" aria-live="assertive"></div>
@@ -802,7 +1086,222 @@
   </form>
 </dialog>
 
+<!-- Test Cases (Phase 4): reusable QA scenarios with multi-environment assignment. -->
+<dialog class="modal" id="test-cases" aria-labelledby="test-cases-title">
+  <div class="modal-inner test-cases-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="test-cases-title">Test cases</h2>
+        <p>Create reusable QA scenarios and assign them to one or more devices.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="tc-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <p class="tc-summary" id="tc-summary"></p>
+      <label class="field">
+        <span>Search</span>
+        <input id="tc-search" type="search" placeholder="TC number, title, or tag" maxlength="120">
+      </label>
+      <label class="field tc-source-field">
+        <span>Source</span>
+        <select id="tc-source">
+          <option value="">All</option>
+          <option value="manual">Manual</option>
+          <option value="auto">Agent</option>
+        </select>
+      </label>
+      <table class="tc-table">
+        <thead><tr><th>Case</th><th>Test</th><th>Platforms</th><th>Last run</th><th>Tags</th><th></th></tr></thead>
+        <tbody id="tc-tbody"></tbody>
+      </table>
+      <form id="tc-form" class="tc-form">
+        <h3 id="tc-form-heading">New test case</h3>
+        <label class="field"><span>Title <em>(required)</em></span><input id="tc-title" required maxlength="300"></label>
+        <label class="field"><span>Description</span><textarea id="tc-description" maxlength="4000" rows="2"></textarea></label>
+        <label class="field"><span>Steps <small>(one per line)</small></span><textarea id="tc-steps" maxlength="50000" rows="4"></textarea></label>
+        <label class="field"><span>Expected result</span><textarea id="tc-expected" maxlength="4000" rows="2"></textarea></label>
+        <label class="field"><span>Tags <small>(comma-separated)</small></span><input id="tc-tags" maxlength="200"></label>
+        <label class="field tc-devices-field"><span>TEST ON DEVICES</span>
+          <div class="dcl-list" id="tc-device-chips"></div>
+          <button type="button" class="btn btn-ghost btn-sm dcl-add" id="tc-add-device">+ Add device</button>
+        </label>
+        <div class="tc-form-actions">
+          <button type="button" class="btn btn-ghost" id="tc-cancel">Reset</button>
+          <button type="submit" class="btn btn-primary" id="tc-submit">Create test case</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</dialog>
+
+<!-- Bulk run wizard (Phase 11): what → where → summary. -->
+<dialog class="modal" id="bulk-run" aria-labelledby="bulk-run-title">
+  <div class="modal-inner bulk-run-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="bulk-run-title">Launch bulk runs</h2>
+        <p>Three steps: what to run, where, then launch.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="bulk-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <ol class="bulk-steps" id="bulk-steps">
+        <li class="bulk-step is-active" data-bulk-step="1">
+          <h3>1 · What to run</h3>
+          <label class="field">
+            <span>Which tests?</span>
+            <select id="bulk-what">
+              <option value="all">All test cases</option>
+              <option value="selected">Selected test cases</option>
+              <option value="failed">Failed results only</option>
+              <option value="notRun">Not run yet</option>
+            </select>
+          </label>
+          <label class="field" id="bulk-cases-field">
+            <span>Test cases <small>(Ctrl/Cmd-click for multiple)</small></span>
+            <select id="bulk-cases" multiple size="8"></select>
+          </label>
+          <button type="button" class="btn btn-primary btn-sm bulk-next" data-bulk-next="2">Next: where →</button>
+        </li>
+        <li class="bulk-step" data-bulk-step="2" hidden>
+          <h3>2 · Where to run</h3>
+          <label class="field">
+            <span>On which devices?</span>
+            <select id="bulk-where">
+              <option value="assigned">Every environment assigned to each case</option>
+              <option value="default">The current default device</option>
+              <option value="pick">Pick environments</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>DEVICES</span>
+            <div class="dcl-list" id="bulk-device-chips"></div>
+            <button type="button" class="btn btn-ghost btn-sm dcl-add" id="bulk-add-device">+ Add device</button>
+          </label>
+          <div class="tc-form-actions">
+            <button type="button" class="btn btn-ghost btn-sm bulk-back" data-bulk-back="1">← Back</button>
+            <button type="button" class="btn btn-primary btn-sm bulk-next" data-bulk-next="3">Next: summary →</button>
+          </div>
+        </li>
+        <li class="bulk-step" data-bulk-step="3" hidden>
+          <h3>3 · Summary</h3>
+          <p class="bulk-preview" id="bulk-preview"></p>
+          <button type="button" class="btn btn-primary" id="bulk-launch">Run tests</button>
+          <button type="button" class="btn btn-ghost btn-sm bulk-back" data-bulk-back="2" style="margin-left:8px">← Back</button>
+          <pre class="bulk-result" id="bulk-result" hidden></pre>
+        </li>
+      </ol>
+    </div>
+  </div>
+</dialog>
+
+<!-- Run-target dialog (Phase 11): where should this test execute? -->
+<dialog class="modal" id="run-target" aria-labelledby="run-target-title">
+  <div class="modal-inner run-target-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="run-target-title">Where do you want to test?</h2>
+        <p id="run-target-sub">Pick the devices for this test run.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="rt-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <div class="rt-choices" role="radiogroup" aria-label="Run targets">
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="current" checked><span><strong>Current device</strong><small>Use the environment chosen in the device panel</small></span></label>
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="all"><span><strong>All selected devices</strong><small>Every environment assigned to this test</small></span></label>
+        <label class="rt-choice"><input type="radio" name="rt-choice" value="choose"><span><strong>Choose devices</strong><small>Pick specific environments</small></span></label>
+      </div>
+      <label class="field" id="rt-envs-field" hidden>
+        <span>DEVICES</span>
+        <div class="dcl-list" id="rt-device-chips"></div>
+        <button type="button" class="btn btn-ghost btn-sm dcl-add" id="rt-add-device">+ Add device</button>
+      </label>
+      <p class="form-error test-result" id="rt-error" hidden></p>
+      <div class="tc-form-actions">
+        <button type="button" class="btn btn-ghost" id="rt-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="rt-run">Run test</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<!-- Quick Actions strip (Phase 11). Sits inside the chat panel, directly
+     above the composer, so it takes flow space — never overflows the fold. -->
+
 <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false" inert aria-hidden="true"></div>
+
+<!-- Device Matrix drawer (Phase 10): selection surface over the catalog.
+     Overlay only — the workspace behind it keeps its full width. -->
+<dialog id="device-drawer" class="device-drawer" aria-labelledby="device-drawer-title">
+  <header class="dd-head">
+    <div>
+      <h2 id="device-drawer-title">Device matrix</h2>
+      <p class="dd-sub">Pick devices, operating systems and browsers to test on.</p>
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="dd-close">Close</button>
+  </header>
+  <div class="dd-body">
+    <label class="field"><span>Search devices</span><input id="dd-search" type="search" placeholder="e.g. Galaxy S24, Pixel, Laptop…" maxlength="120"></label>
+    <div class="dd-tabs" role="tablist" aria-label="Device platform">
+      <button type="button" class="dd-tab is-active" data-dd-tab="all" aria-selected="true">All</button>
+      <button type="button" class="dd-tab" data-dd-tab="apple" aria-selected="false">Apple</button>
+      <button type="button" class="dd-tab" data-dd-tab="android" aria-selected="false">Android</button>
+      <button type="button" class="dd-tab" data-dd-tab="windows" aria-selected="false">Windows</button>
+    </div>
+    <div id="dd-sections" class="dd-sections" aria-label="Devices by manufacturer"></div>
+    <div id="dd-detail" class="dd-detail" hidden>
+      <div id="dd-detail-body"></div>
+    </div>
+    <div class="dd-selection">
+      <span id="dd-selection-summary">0 environments selected</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="dd-clear-selection" hidden>Clear</button>
+      <button type="button" class="btn btn-primary btn-sm" id="dd-apply" disabled>Save environments</button>
+    </div>
+    <section class="dd-saved-section">
+      <header class="dd-saved-head">
+        <h3>Saved environments</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="dd-saved-refresh">Refresh</button>
+      </header>
+      <ul id="dd-saved-list" class="dd-saved-list"></ul>
+    </section>
+    <details class="dd-advanced">
+      <summary id="dd-advanced-toggle" aria-expanded="false">Advanced settings</summary>
+      <div id="dd-advanced-body" hidden></div>
+    </details>
+  </div>
+</dialog>
+
+<!-- ONE Device Picker (DX Phase 1): device-first selection; environment
+     auto-resolves from the device card. Overlay dialog, same visual language
+     as the device drawer. -->
+<dialog id="device-picker" class="modal dp-modal" aria-labelledby="device-picker-title">
+  <div class="modal-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="device-picker-title">TEST ON DEVICE</h2>
+        <p class="dp-sub">Pick a device — OS, browser and environment are resolved automatically.</p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="dp-close">Close</button>
+    </header>
+    <div class="modal-body dp-body">
+      <label class="field"><span>Search</span><input id="dp-search" type="search" placeholder="e.g. iPhone, Pixel, Windows…" maxlength="120"></label>
+      <div class="dp-chip-row" role="tablist" aria-label="Platform">
+        <button type="button" class="dp-chip is-active" data-dp-tab="all">All</button>
+        <button type="button" class="dp-chip" data-dp-tab="apple">Apple</button>
+        <button type="button" class="dp-chip" data-dp-tab="android">Android</button>
+        <button type="button" class="dp-chip" data-dp-tab="windows">Windows</button>
+      </div>
+      <div class="dp-chip-row" role="tablist" aria-label="Device type">
+        <button type="button" class="dp-chip is-active" data-dp-type="all">All types</button>
+        <button type="button" class="dp-chip" data-dp-type="phone">Phone</button>
+        <button type="button" class="dp-chip" data-dp-type="tablet">Tablet</button>
+        <button type="button" class="dp-chip" data-dp-type="desktop">Desktop</button>
+      </div>
+      <div id="dp-cards" class="dp-cards" aria-label="Devices"></div>
+      <p id="dp-summary" class="dp-summary" data-empty="true">SELECT A DEVICE</p>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="profile-dialog" class="account-dialog" aria-labelledby="profile-title">
   <header><div><p class="auth-eyebrow">YOUR PRIVATE WORKSPACE</p><h2 id="profile-title">My account</h2></div><button type="button" id="profile-close" class="btn btn-ghost">Close</button></header>

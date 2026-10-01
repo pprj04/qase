@@ -480,7 +480,7 @@ export function ensureRuntime(session, runStore) {
 	const modeTools = session.mode === 'founder'
 		? createFounderTools(session, runStore)
 		: [
-			...createQaTools(session, runStore),
+			...createQaTools(session, runStore, { deviceRuntime: null }),
 			...(session.mode === 'sqa' ? createSqaTools(session, runStore) : [])
 		];
 	const sessionTools = [...modeTools, ...createBrowserTools(() => record.bridge)]
@@ -524,7 +524,18 @@ export function ensureRuntime(session, runStore) {
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
-	const bridge = attachBrowserBridge(session, service, runStore, { device: session.device, deviceLandscape: session.deviceLandscape === true });
+	const bridge = attachBrowserBridge(session, service, runStore, {
+		device: session.device,
+		deviceLandscape: session.deviceLandscape === true,
+		environment: session.environmentSnapshot
+	});
+
+	// Phase 20: record the honest execution level + provider on the session as
+	// soon as the runtime exists. Runtime facts (observed UA/viewport/DPR) are
+	// attached by the bridge when the browser context is created; they flow
+	// into the same session fields so reports and history carry them.
+	session.executionLevel = bridge.execution?.level ?? null;
+	session.executionProviderActual = bridge.execution?.provider ?? null;
 
 	record.runtime = runtime;
 	record.bridge = bridge;
@@ -532,6 +543,9 @@ export function ensureRuntime(session, runStore) {
 	record.dispose = () => {
 		record.releaseUsageCapture?.();
 		record.releaseUsageCapture = undefined;
+		// Phase 21: release the device session (frees the device; queue advances).
+		record.releaseDeviceSession?.();
+		record.releaseDeviceSession = undefined;
 		bridge.dispose();
 		try {
 			runtime.dispose();
@@ -547,12 +561,41 @@ export function ensureRuntime(session, runStore) {
  * Returns when the model stops — either because the task is done or because it
  * asked a blocking question.
  */
-export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, incompleteAttempt = 0 }, runStore) {
+export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, incompleteAttempt = 0 }, runStore, deviceRuntime) {
 	// Rehydrate only placeholder names before rebuilding prompt context. Values
 	// remain inside the encrypted host vault and browser substitution boundary.
 	session.secretNames = secretNames(session.id);
 	const record = ensureRuntime(session, runStore);
 	const { runtime, bridge } = record;
+	// Consult the Device Runtime Manager (if attached) for the session's
+	// environment before executing — it decides the execution level honestly
+	// (REAL_DEVICE / VIRTUAL_DEVICE / SIMULATED) based on provider availability.
+	if (deviceRuntime) {
+		try {
+			const selected = await deviceRuntime.selectForRun({ session, ...record });
+			if (selected) {
+				record.executionLevel = selected.executionLevel;
+				record.executionProviderActual = selected.provider;
+				record.deviceSession = selected.deviceSession ?? null;
+				record.deviceSessionId = selected.deviceSession?.sessionId ?? null;
+				// Persist honest execution facts on the run (works for both
+				// stores; no-op when the run has not been committed yet).
+				if (typeof runStore.persistExecutionFacts === 'function') {
+					try {
+						runStore.persistExecutionFacts(session.id, {
+							executionLevel: selected.executionLevel,
+							executionProviderActual: selected.provider,
+							runtimeFacts: selected.runtimeFacts ?? null
+						}).catch?.(() => undefined);
+					} catch (persistError) {
+						console.warn('[agent] failed to persist execution facts:', persistError.message);
+					}
+				}
+			}
+		} catch (runtimeError) {
+			console.warn('[agent] device runtime manager selection failed:', runtimeError.message);
+		}
+	}
 	const previousArtifact = finalArtifact(session);
 	const pendingQuestionBeforeRun = session.pendingQuestion;
 	const canResumePendingQuestion = resumeAnswer !== undefined && Boolean(runtime.getPendingQuestion?.());
@@ -1031,11 +1074,54 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 		if (!continuing) {
 			record.running = false;
 			record.controller = undefined;
+			// Phase 21: release the device session when the turn truly ends —
+			// frees the device (board → AVAILABLE, queue advances).
+			if (deviceRuntime && record.deviceSessionId) {
+				const result = session.status === 'error' ? 'failed' : 'done';
+				const sessionId = record.deviceSessionId;
+				record.deviceSessionId = null;
+				Promise.resolve(deviceRuntime.completeSession?.(sessionId, { result }))
+					.catch(() => undefined);
+			}
 		}
 		session.secretNames = secretNames(session.id);
+		// Phase 20: capture runtime facts at turn END via the live page — the
+		// browser context is created lazily mid-turn, so reading at turn start
+		// would miss it. The record stores what the browser ACTUALLY sent
+		// (observed UA/viewport/DPR) with the honest execution level, never
+		// wishful catalog hints.
+		if (!session.runtimeFacts) {
+			const facts = (await bridge.readRuntimeFacts?.()) ?? null;
+			if (facts) {
+				session.runtimeFacts = {
+					...facts,
+					executionLevel: bridge.execution?.level ?? null,
+					provider: bridge.execution?.provider ?? null,
+					emulatedUserAgent: bridge.execution?.emulatedUserAgent ?? null,
+					// Phase D3: runtime session + attestation travel with the
+					// recorded facts — evidence must belong to a verifiable
+					// runtime session for PASS/FAIL to be reported.
+					runtimeSessionId: record.deviceSessionId ?? null,
+					attestation: record.deviceSession?.attestation ?? null,
+					capturedAt: new Date().toISOString()
+				};
+			}
+		}
 		// One last frame so the panel shows where the run actually finished.
 		void bridge.captureFrame();
 		bridge.stopFrames();
+		// Phase 22: promote the run's final frame into a persisted evidence
+		// artifact stamped with environment + execution-level metadata, so the
+		// run keeps tangible evidence that survives completion. Runs after the
+		// final frame so the artifact IS the final state of the page.
+		if (typeof runStore.saveEvidenceArtifact === 'function') {
+			try {
+				await bridge.frameCapture;
+				await runStore.saveEvidenceArtifact(session, { bridge });
+			} catch (artifactError) {
+				console.warn('[agent] evidence artifact capture failed:', sanitizeErrorDetail(artifactError));
+			}
+		}
 
 		// The browser stays with the session unless a timeout was asked for.
 		clearTimeout(record.idleTimer);

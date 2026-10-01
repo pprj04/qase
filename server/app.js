@@ -27,6 +27,9 @@ import {
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
+import { createCatalogRoutes } from './catalogApi.js';
+import { createTestCaseRoutes } from './testCaseApi.js';
+import { createBugRoutes } from './bugApi.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { publicQaTestCatalog } from './qaTestCatalog.js';
 import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
@@ -68,6 +71,47 @@ function track(name, dimensions) {
 /** Cohort dimension: pilot users' events carry cohort='pilot'. */
 function cohortFor(authRole) {
 	return authRole === 'pilot' ? { cohort: 'pilot' } : {};
+}
+
+/**
+ * Resolve an optional environmentId for run creation. Returns undefined for a
+ * run without an environment (back-compat), the frozen environment record on a
+ * hit, and a 422-worthy public error for unknown or deactivated environments.
+ */
+async function resolveEnvironmentForRun(services, environmentId) {
+	if (environmentId === undefined || environmentId === null || environmentId === '') return undefined;
+	if (typeof environmentId !== 'string') {
+		throw new PublicInputError('environmentId must be a string.', 422);
+	}
+	const environment = await services.environments.get(environmentId);
+	if (!environment) {
+		throw new PublicInputError(`Unknown environment "${environmentId}".`, 422);
+	}
+	if (environment.active !== true) {
+		throw new PublicInputError(`Environment "${environmentId}" is inactive (deprecated) and cannot start new runs.`, 422);
+	}
+	return environment;
+}
+
+/**
+ * Resolve an optional testCaseId for run creation (Phase 4). Returns undefined
+ * when no case is given (back-compat). When a case IS given, the environment
+ * (if any) must be assigned to the case. Returns the case for snapshotting.
+ */
+async function resolveTestCaseForRun(services, testCaseId, environmentId) {
+	if (testCaseId === undefined || testCaseId === null || testCaseId === '') return undefined;
+	if (typeof testCaseId !== 'string') {
+		throw new PublicInputError('testCaseId must be a string.', 422);
+	}
+	const { TestCaseValidationError } = await import('./testCaseService.js');
+	try {
+		return await services.testCases.resolveForRun(testCaseId, environmentId);
+	} catch (error) {
+		if (error instanceof TestCaseValidationError) {
+			throw new PublicInputError(error.message, 422);
+		}
+		throw error;
+	}
 }
 
 /** Pulls the site under test out of whatever the user typed. */
@@ -412,7 +456,12 @@ export function createApplication(options = {}) {
 	function startTurn(session, turnOptions) {
 		let turn;
 		try {
-			turn = Promise.resolve(services.agent.runTurn(session, turnOptions));
+			turn = Promise.resolve(services.agent.runTurn(
+				session,
+				turnOptions,
+				services.runs,
+				services.deviceRuntime
+			));
 		} catch (error) {
 			turn = Promise.reject(error);
 		}
@@ -481,6 +530,273 @@ export function createApplication(options = {}) {
 			default: 'chromium',
 			engines: await engineRegistryResolved()
 		});
+	});
+
+	// Apple compatibility matrix: list/filter environments. All facet dimensions
+	// are accepted as query params (platform, device, os, osVersion, browser,
+	// browserVersion, deviceType, executionProvider, active, isRealDevice, search,
+	// limit, offset).
+	// DB-backed catalog routes (Phase 2 of the device matrix): /api/catalog/*.
+	if (services.deviceCatalog) {
+		const { route: catalogRoutes } = createCatalogRoutes({
+			catalogBackend: services.deviceCatalog,
+			onError: safeErrorResponse
+		});
+		catalogRoutes(app);
+	}
+
+	// Device runtime control plane (Phase 21): availability board, sessions,
+	// queue, honest fallbacks. Never downgrades a level silently.
+	if (services.deviceRuntime) {
+		const runtime = services.deviceRuntime;
+		// Pre-register every environment on the availability board so the UI
+		// can show honest execution type / availability before first use.
+		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
+			void Promise.resolve(services.environments.list({ limit: 10000 }))
+				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? []))
+				.catch(() => { /* board fills lazily via sessions */ });
+		}
+		app.get('/api/device-runtime/devices', (request, response) => {
+			response.json({
+				devices: runtime.deviceBoard(),
+				providers: runtime.providers
+			});
+		});
+		app.post('/api/device-runtime/sessions', async (request, response) => {
+			try {
+				const body = request.body ?? {};
+				let environment = body.environment ?? null;
+				if (!environment && typeof body.environmentId === 'string') {
+					environment = await services.environments.get(body.environmentId).catch(() => null);
+				}
+				const result = await runtime.requestSession({
+					environment,
+					requestedLevel: body.requestedLevel,
+					linkedRunId: body.linkedRunId,
+					linkedTestCaseId: body.linkedTestCaseId,
+					allowQueue: body.allowQueue !== false
+				});
+				const statusByResult = { started: 201, queued: 202, busy: 409, not_available: 503, failed: 500 };
+				response.status(statusByResult[result.status] ?? 200).json(result);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+		app.get('/api/device-runtime/sessions', (request, response) => {
+			response.json({ sessions: services.deviceRuntime.listSessions({ status: request.query?.status }) });
+		});
+		app.get('/api/device-runtime/sessions/:id', (request, response) => {
+			const session = runtime.getSession(request.params.id);
+			if (!session) {
+				response.status(404).json({ error: 'Unknown device session.' });
+				return;
+			}
+			response.json(session);
+		});
+		app.post('/api/device-runtime/sessions/:id/cancel', async (request, response) => {
+			const result = await runtime.cancelSession(request.params.id);
+			if (!result.cancelled) {
+				response.status(409).json(result);
+				return;
+			}
+			response.json(result);
+		});
+	}
+
+	// Test cases with multi-environment assignment (Phase 4): /api/test-cases.
+	if (services.testCases) {
+		const testCaseRoutes = createTestCaseRoutes({
+			testCases: services.testCases,
+			runs: services.runs,
+			autogen: services.testCaseAutogen ?? null,
+			onError: safeErrorResponse
+		});
+		testCaseRoutes(app);
+	}
+
+	// Bug reports with BUG-XXXX ids + auto environment association (Phase 6).
+	if (services.bugs) {
+		createBugRoutes({
+			bugs: services.bugs,
+			onError: safeErrorResponse
+		})(app);
+	}
+
+	// Coverage dashboard aggregation (Phase 7): cases × environments × runs.
+	if (services.coverage) {
+		app.get('/api/coverage', async (request, response) => {
+			try {
+				const payload = await services.coverage.snapshot();
+				// Read-your-write matters for the dashboard (a run just finished
+				// must appear immediately), so never cache the snapshot.
+				response.set('Cache-Control', 'no-store');
+				response.json(payload);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+	}
+
+	app.get('/api/environments', async (request, response) => {
+		try {
+			const query = request.query;
+			const limit = query.limit === undefined ? undefined : Number(query.limit);
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 1000.' });
+				return;
+			}
+			const offset = query.offset === undefined ? undefined : Number(query.offset);
+			if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
+				response.status(400).json({ error: 'offset must be a non-negative integer.' });
+				return;
+			}
+			const rows = await services.environments.list(query);
+			const total = (await services.environments.facets(query)).total;
+			// Read-your-write matters for the admin UI (edit → refresh must show
+			// the new value), so the environment list is never cached.
+			response.set('Cache-Control', 'no-store');
+			response.json({ total, count: rows.length, environments: rows });
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Facet counts per filter dimension for the admin UI dropdowns.
+	app.get('/api/environments/facets', async (request, response) => {
+		try {
+			response.set('Cache-Control', 'no-store');
+			response.json(await services.environments.facets(request.query));
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Browser availability per platform, including why unavailable browsers
+	// (Brave, DuckDuckGo, Firefox-on-iOS) are excluded from the matrix.
+	app.get('/api/environments/availability', (_request, response) => {
+		response.set('Cache-Control', 'private, max-age=300');
+		response.json(services.environments.availability());
+	});
+
+	// Bulk environment operations (Phase 3 device matrix UI). Mounted BEFORE
+	// /api/environments/:envId so the literal "bulk" segment isn't treated as an id.
+	app.post('/api/environments/bulk', async (request, response) => {
+		try {
+			const body = request.body ?? {};
+			const result = await services.environments.bulkCreate(body.combinations ?? []);
+			response.status(201).json(result);
+		} catch (error) {
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.post('/api/environments/bulk-toggle', async (request, response) => {
+		try {
+			const body = request.body ?? {};
+			if (!Array.isArray(body.envIds)) {
+				response.status(400).json({ error: 'envIds must be an array.' });
+				return;
+			}
+			if (body.envIds.length > 1000) {
+				response.status(400).json({ error: 'envIds is limited to 1000 entries per request.' });
+				return;
+			}
+			const active = body.active !== false;
+			const result = await services.environments.bulkToggleActive(body.envIds, active);
+			response.json(result);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.get('/api/environments/:envId', async (request, response) => {
+		try {
+			const environment_ = await services.environments.get(request.params.envId);
+			if (!environment_) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.set('Cache-Control', 'private, max-age=60');
+			response.json(environment_);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.post('/api/environments', async (request, response) => {
+		try {
+			const created = await services.environments.create(request.body ?? {});
+			response.status(201).json(created);
+		} catch (error) {
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
+			if (error?.code === 'QASE_ENVIRONMENT_CONFLICT') {
+				response.status(409).json({ error: error.message, envId: error.envId });
+				return;
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	app.patch('/api/environments/:envId', async (request, response) => {
+		try {
+			const patch = request.body ?? {};
+			if (typeof patch.active !== 'boolean' && patch.active !== undefined) {
+				response.status(400).json({ error: 'active must be a boolean.' });
+				return;
+			}
+			if (patch.executionProvider !== undefined && !['local', 'browserstack'].includes(patch.executionProvider)) {
+				response.status(400).json({ error: 'executionProvider must be "environment" or "local".' });
+				return;
+			}
+			if (patch.executionLevelRequested !== undefined && patch.executionLevelRequested !== null
+				&& !['REAL_DEVICE', 'VIRTUAL_DEVICE', 'SIMULATED'].includes(patch.executionLevelRequested)) {
+				response.status(400).json({ error: 'executionLevelRequested must be REAL_DEVICE, VIRTUAL_DEVICE or SIMULATED.' });
+				return;
+			}
+			if (patch.orientation !== undefined && patch.orientation !== null && !['portrait', 'landscape'].includes(patch.orientation)) {
+				response.status(400).json({ error: 'orientation must be "portrait" or "landscape".' });
+				return;
+			}
+			if (patch.description !== undefined && patch.description !== null && typeof patch.description !== 'string') {
+				response.status(400).json({ error: 'description must be a string.' });
+				return;
+			}
+			const updated = await services.environments.update(request.params.envId, patch);
+			if (!updated) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.json(updated);
+		} catch (error) {
+			// Phase 20 scenario validation errors are user input errors, not 500s.
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// Delete a saved environment (Phase 10 drawer). Test cases / runs keep their
+	// envId references; history is never rewritten.
+	app.delete('/api/environments/:envId', async (request, response) => {
+		try {
+			const deleted = await services.environments.remove(request.params.envId);
+			if (!deleted) {
+				response.status(404).json({ error: 'Unknown environment.' });
+				return;
+			}
+			response.json({ deleted: true, envId: request.params.envId });
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
 	});
 
 	app.get('/api/sessions', async (request, response) => {
@@ -731,25 +1047,38 @@ export function createApplication(options = {}) {
 	});
 
 	app.post('/api/sessions', async (request, response) => {
-		const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
-		const deviceLandscape = request.body?.deviceLandscape === true;
-		const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
-		let selectedTests;
-		let securityAuthorization;
 		try {
-			selectedTests = validateQaSelectedTests(request.body?.selectedTests);
-			securityAuthorization = validateSecurityAuthorization(request.body?.securityAuthorization, selectedTests);
+			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
+			const deviceLandscape = request.body?.deviceLandscape === true;
+			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
+			let selectedTests;
+			let securityAuthorization;
+			try {
+				selectedTests = validateQaSelectedTests(request.body?.selectedTests);
+				securityAuthorization = validateSecurityAuthorization(request.body?.securityAuthorization, selectedTests);
+			} catch (error) {
+				response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
+				return;
+			}
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			const testCase = await resolveTestCaseForRun(services, request.body?.testCaseId, environment?.envId);
+			const cohort = cohortFor(request.auth?.role).cohort;
+			const session = await services.runs.create(
+				engine === 'chromium' ? undefined : `QA — ${engine}`,
+				{
+					device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+					cohort, selectedTests, securityAuthorization,
+					environmentId: environment?.envId,
+					environmentSnapshot: environment,
+					testCaseId: testCase?.caseNumber,
+					testCaseSnapshot: testCase
+				}
+			);
+			track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
+			response.status(201).json(session);
 		} catch (error) {
-			response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
-			return;
+			safeErrorResponse(request, response, error);
 		}
-		const cohort = cohortFor(request.auth?.role).cohort;
-		const session = await services.runs.create(
-			engine === 'chromium' ? undefined : `QA — ${engine}`,
-			{ device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, selectedTests, securityAuthorization }
-		);
-		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
-		response.status(201).json(session);
 	});
 
 	app.post('/api/sqa/sessions', async (request, response) => {
@@ -759,12 +1088,19 @@ export function createApplication(options = {}) {
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
-			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort });
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, {
+				device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+				cohort: cohortFor(request.auth?.role).cohort,
+				environmentId: environment?.envId, environmentSnapshot: environment
+			});
 			session.mode = 'sqa';
 			session.sqa = sqa;
 			session.todos = createSqaTodoPlan(sqa);
 			session.device = device;
 			session.deviceLandscape = deviceLandscape;
+			session.environmentId = environment?.envId;
+			session.environmentSnapshot = environment;
 			// Persist the host-owned assessment plan before the metadata-only SQA
 			// creation event so PostgreSQL and local mode expose identical progress.
 			await services.runs.commit(session, 'todos', { todos: session.todos });
@@ -793,12 +1129,19 @@ export function createApplication(options = {}) {
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
-			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort });
+			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
+			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, {
+				device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+				cohort: cohortFor(request.auth?.role).cohort,
+				environmentId: environment?.envId, environmentSnapshot: environment
+			});
 			session.mode = 'founder';
 			session.founder = founder;
 			session.todos = createFounderReviewTodos();
 			session.device = device;
 			session.deviceLandscape = deviceLandscape;
+			session.environmentId = environment?.envId;
+			session.environmentSnapshot = environment;
 			// `founder.created` intentionally skips relational child rewrites in the
 			// PostgreSQL repository. Persist the host-owned plan explicitly first so
 			// progress is visible before the model's first update_todo call.
@@ -917,6 +1260,7 @@ export function createApplication(options = {}) {
 		if (deleted) {
 			const cleanup = await Promise.allSettled([
 				Promise.resolve().then(() => services.secrets.clear(session.id)),
+				Promise.resolve().then(() => services.artifacts?.removeAll(session.id)),
 				Promise.resolve().then(() => services.agent.purgeArtifacts?.(session.id))
 			]);
 			const failed = cleanup
@@ -1114,6 +1458,27 @@ export function createApplication(options = {}) {
 		await services.runs.commit(session, 'run.stop_requested');
 		await services.agent.stop(session.id);
 		response.json({ ok: true });
+	});
+
+	// Phase 22: evidence artifacts with environment + execution-level metadata.
+	app.get('/api/sessions/:id/artifacts', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		response.json({ artifacts: services.artifacts?.list(session.id) ?? [] });
+	});
+
+	app.get('/api/sessions/:id/artifacts/:artifactId', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const found = services.artifacts?.get(session.id, request.params.artifactId);
+		if (!found) {
+			response.status(404).json({ error: 'Unknown artifact.' });
+			return;
+		}
+		response.set('Content-Type', found.meta.contentType);
+		response.set('X-Qase-Execution-Level', found.meta.executionLevel ?? 'UNKNOWN');
+		response.set('X-Qase-Execution-Provider', found.meta.executionProvider ?? 'unknown');
+		response.send(found.bytes);
 	});
 
 	app.get('/api/sessions/:id/report.md', async (request, response) => {

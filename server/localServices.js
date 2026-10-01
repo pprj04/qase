@@ -3,10 +3,12 @@ import { getPublicConfig, saveConfig, testConnection, withUserConfiguration } fr
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
-	addActivity, addMessage, aggregateFindings, bus, createSession, deleteSession, emit, getSession,
-	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
-	markReportPhase, peekLive, setFindingStatus, setStatus, updateActivity, watchRunBus
+	addActivity, addMessage, aggregateFindings, allSessions, bus, createSession, deleteSession, emit,
+	getSession, dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions,
+	markExecutionStarted, markReportPhase, persistSoon, peekLive, setFindingStatus, setStatus,
+	updateActivity, watchRunBus
 } from './store.js';
+import { createArtifactStore } from './artifactStore.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
@@ -30,6 +32,10 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 		return withUserConfiguration(settings, next => options.auth.saveSettings(userId, next), work);
 	}
 	const purgeWorkspace = options.purgeRunWorkspace ?? purgeRunWorkspace;
+	// Phase 21: device runtime manager consulted by every run turn; may be absent.
+	const deviceRuntime = options.deviceRuntime ?? null;
+	// Phase 22: persisted evidence artifacts with execution-level metadata.
+	const artifacts = options.artifactStore ?? createArtifactStore();
 	// subscribeGlobal exists only in local mode; PostgreSQL deployments
 	// fan events out through their realtime transport instead.
 	const subscribeGlobal = typeof runStore.subscribeGlobal === 'function'
@@ -49,6 +55,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 			stats: feedbackStats,
 			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
 		},
+		artifacts,
 		events: {
 			publish: runStore.publish,
 			subscribe: runStore.subscribe,
@@ -91,7 +98,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 				if (disposalError) throw disposalError;
 			},
 			ensureRuntime: session => inWorkspace(() => ensureRuntime(session, runStore), session),
-			runTurn: (session, turnOptions) => inWorkspace(() => runTurn(session, turnOptions, runStore), session),
+			runTurn: (session, turnOptions, fallbackRuntime) => inWorkspace(() => runTurn(session, turnOptions, runStore, deviceRuntime ?? fallbackRuntime), session),
 			getLiveState(sessionId) {
 				const record = runStore.peekLive?.(sessionId);
 				return {
@@ -172,6 +179,8 @@ export function createLocalApplicationServices(options = {}) {
 	let initialized = false;
 	let closed = false;
 	const ownerUserId = () => currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId;
+	// Phase 22: evidence artifacts shared by this run store and services.artifacts.
+	const artifactStore = options.artifactStore ?? createArtifactStore();
 
 	const runStore = {
 		async load() {
@@ -266,6 +275,11 @@ export function createLocalApplicationServices(options = {}) {
 		async getAny(id) {
 			return getSession(id, undefined);
 		},
+		/**
+		 * Unscoped full-record list for coverage aggregation (Phase 7). list()
+		 * caps at 100 and filters by owner; the coverage matrix needs every
+		 * case×environment pair's latest run.
+		 */
 		async listAll(options) {
 			return listSessions({ ...(options ?? {}), ownerUserId: undefined });
 		},
@@ -283,6 +297,35 @@ export function createLocalApplicationServices(options = {}) {
 		},
 		async aggregateFindings(options) {
 			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
+		},
+		/** Persist execution-level facts (level/provider/runtime facts) on a run. */
+		async persistExecutionFacts(runId, { executionLevel, executionProviderActual, runtimeFacts } = {}) {
+			const session = getSession(runId, undefined);
+			if (!session) return null;
+			if (executionLevel !== undefined) session.executionLevel = executionLevel;
+			if (executionProviderActual !== undefined) session.executionProviderActual = executionProviderActual;
+			if (runtimeFacts !== undefined) session.runtimeFacts = runtimeFacts;
+			persistSoon();
+			emit(session, 'execution_facts', {
+				executionLevel: session.executionLevel,
+				executionProviderActual: session.executionProviderActual,
+				runtimeFacts: session.runtimeFacts
+			});
+			return session;
+		},
+		/** Phase 22: persist a final-frame evidence artifact for the run. */
+		async saveEvidenceArtifact(session, bridgeHandle) {
+			// The agent passes { bridge } so runtime facts are available on it.
+			const bridge = bridgeHandle?.getLastFrame ? bridgeHandle : bridgeHandle?.bridge;
+			const frame = bridge?.getLastFrame?.();
+			if (!frame?.base64) return null;
+			return artifactStore.save(session, {
+				type: 'screenshot',
+				fileName: `final-frame-${session.id.slice(0, 8)}.jpg`,
+				bytes: frame.base64,
+				label: 'Final browser frame at end of run',
+				bridgeExecution: bridge?.execution ?? null
+			});
 		},
 		async addMessage(session, message) {
 			return addMessage(session, message);
@@ -327,5 +370,9 @@ export function createLocalApplicationServices(options = {}) {
 		tenantContext: options.tenantContext,
 		file: options.authFile
 	});
-	return createRuntimeApplicationServices(runStore, { ...options, auth: options.auth ?? auth });
+	return createRuntimeApplicationServices(runStore, {
+		...options,
+		auth: options.auth ?? auth,
+		deviceRuntime: options.deviceRuntime
+	});
 }
