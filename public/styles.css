@@ -9334,3 +9334,131 @@ body.cli-theme {
 .cli-theme .viewer > .panel-head {
   background: var(--surface-2);
 }
+
+/* ════════════════════════════════════════════════════════════════
+   Studio R5 · Dynamic panels — follow-ups, Drytis board, analytics,
+   pickers. All colors via project tokens (dark-mode safe).
+   ════════════════════════════════════════════════════════════════ */
+
+/* Follow-ups ("test these next"): soft blue-tinted card, Studio rows */
+.follow-ups {
+  padding: 14px 16px;
+  border: 1px solid rgba(47, 91, 234, 0.28);
+  border-radius: var(--radius-md, 10px);
+  background: var(--accent-softer, rgba(47, 91, 234, 0.06));
+}
+.follow-ups-head strong {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.follow-ups-head small { font-family: var(--font-ui); }
+.follow-ups-list {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+.follow-ups .btn { font-family: var(--font-ui); }
+
+/* Run feedback strip: quiet divider */
+.run-feedback { border-top: 1px solid var(--border); }
+.run-feedback-label { font-family: var(--font-ui); font-size: 12.5px; }
+
+/* Drytis board push panel: white card, Studio title, selectable rows */
+.drytis-board {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.drytis-board-title {
+  margin: 0 0 12px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.drytis-board-rows { margin-bottom: 12px; }
+.drytis-board-row {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.drytis-board-row:hover {
+  border-color: rgba(47, 91, 234, 0.40);
+  background: var(--accent-softer, rgba(47, 91, 234, 0.06));
+}
+.drytis-board-row em {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.drytis-board-acceptall {
+  font-family: var(--font-ui);
+  color: var(--text);
+}
+.drytis-board-done { color: var(--success); }
+.drytis-board-done,
+.drytis-board-busy,
+.drytis-board-empty {
+  font-family: var(--font-ui);
+  color: var(--text-muted);
+}
+.drytis-board-done { color: var(--success); }
+.drytis-board-failed { color: var(--danger); font-family: var(--font-ui); }
+
+/* Pilot banner: amber alpha tint (works on light + dark) */
+.pilot-banner {
+  background: var(--warning-soft);
+  border-bottom: 1px solid var(--warning);
+  color: var(--text);
+  font-family: var(--font-ui);
+}
+
+/* Performance / analytics panel: sans labels, tabular numbers, Studio current-run highlight */
+.perf-panel { box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.perf-grid dt { font-family: var(--font-ui); font-size: 12px; }
+.perf-grid dd {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+.perf-compare-title { font-family: var(--font-ui); font-size: 11px; }
+.perf-compare-list {
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.perf-compare-list .is-current {
+  color: #2F5BEA;
+  font-weight: 650;
+}
+
+/* Picker/drawer selects inside modals: light chrome + blue focus */
+.device-drawer { box-shadow: var(--shadow-float, 0 24px 80px rgba(0,0,0,0.18)); }
+.cli-theme select,
+select {
+  font-family: var(--font-ui);
+  color: var(--text);
+  background-color: var(--surface-1);
+}
+.cli-theme select:focus,
+select:focus {
+  border-color: #2F5BEA;
+  box-shadow: 0 0 0 3px rgba(47, 91, 234, 0.12);
+}
+
+/* Studio R5 · keep scrolled feed content clear of the composer */
+.cli-theme .transcript { padding-bottom: 28px; }
