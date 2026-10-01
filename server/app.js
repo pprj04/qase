@@ -114,19 +114,6 @@ async function resolveTestCaseForRun(services, testCaseId, environmentId) {
 	}
 }
 
-/** Local analytics counters live beside the session store. */
-const ANALYTICS_DIR = path.join(process.cwd(), '.qase', 'analytics');
-
-/** Fire-and-forget analytics; a counter failure must never break a request. */
-function track(name, dimensions) {
-	try { recordEvent(ANALYTICS_DIR, name, { dimensions }); } catch { /* best-effort */ }
-}
-
-/** Cohort dimension: pilot users' events carry cohort='pilot'. */
-function cohortFor(authRole) {
-	return authRole === 'pilot' ? { cohort: 'pilot' } : {};
-}
-
 /** Pulls the site under test out of whatever the user typed. */
 function extractUrl(text) {
 	const match = text.match(URL_PATTERN);
