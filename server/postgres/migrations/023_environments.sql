@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 015: Apple device & browser compatibility environments.
+-- Qase PostgreSQL migration 023: Apple device & browser compatibility environments.
 --
 -- First-class environment entity for the Apple compatibility matrix
 -- (iPhone / iPad / macOS × OS versions × browsers × browser versions).

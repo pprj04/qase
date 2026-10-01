@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 021: test case provenance for agent-generated cases (autogen).
+-- Qase PostgreSQL migration 029: test case provenance for agent-generated cases (autogen).
 --
 -- Adds source tracking: 'manual' (authored in the panel) vs 'auto' (generated
 -- by the agent from a completed run), plus the originating run id and target

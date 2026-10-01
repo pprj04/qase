@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 023
+-- Qase PostgreSQL migration 015
 -- Finding lifecycle tracking: status + note + timestamp, defaulting to open.
 ALTER TABLE qa_findings ADD COLUMN IF NOT EXISTS status text;
 UPDATE qa_findings SET status = 'open' WHERE status IS NULL;

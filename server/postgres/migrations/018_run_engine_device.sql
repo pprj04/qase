@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 026: engine and device emulation parity for QA runs.
+-- Qase PostgreSQL migration 018: engine and device emulation parity for QA runs.
 --
 -- Multi-engine and device-emulation parity for the Postgres run store.
 --

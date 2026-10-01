@@ -201,6 +201,9 @@ export function createSession(title = 'New test run', options = {}) {
 	if (options.deviceLandscape !== undefined && typeof options.deviceLandscape !== 'boolean') {
 		throw new TypeError('Run creation received an invalid landscape flag.');
 	}
+	if (options.engine !== undefined && !isEngineId(options.engine)) {
+		throw new TypeError('Run creation received an unknown browser engine.');
+	}
 	if (options.environmentId !== undefined && typeof options.environmentId !== 'string') {
 		throw new TypeError('Run creation received an invalid environment id.');
 	}
@@ -258,6 +261,10 @@ export function createSession(title = 'New test run', options = {}) {
 		targetUrl: options.targetUrl,
 		device: isDeviceId(options.device) ? options.device : DEFAULT_DEVICE_ID,
 		deviceLandscape: options.deviceLandscape === true,
+		engine: isEngineId(options.engine) ? options.engine : 'chromium',
+		/** Analytics cohort ('pilot' for invite-admitted users) — read by the
+		 *  run_started/run_finished status hook, which has no request context. */
+		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
 		/** Apple compatibility environment this run executes in (frozen snapshot). */
 		environmentId: options.environmentId,
 		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
@@ -318,6 +325,7 @@ export function listSessions({ limit = 100, ownerUserId } = {}) {
 			targetUrl: session.targetUrl,
 			device: isDeviceId(session.device) ? session.device : DEFAULT_DEVICE_ID,
 			deviceLandscape: session.deviceLandscape === true,
+			engine: isEngineId(session.engine) ? session.engine : 'chromium',
 			// Test-case join key (Phase 11 bulk flows): last-run aggregation
 			// and per-environment records map runs to cases without full loads.
 			testCaseId: session.testCaseId ?? undefined,

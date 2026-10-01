@@ -31,9 +31,15 @@ export function createBrowserstackRuntimeProvider({ credentials = browserstackCr
 		 * the environment's BrowserStack capability map — never from the name.
 		 */
 		attestPhysicalDevice(environment) {
-			const caps = environment?.browserstackCapabilities ?? {};
+			// Catalog rows carry the capability map as runtimeCapabilities; a raw
+			// BrowserStack session may carry it as browserstackCapabilities. Both
+			// attestations are trusted equally: realMobile must be explicitly true
+			// AND a concrete deviceName must be present — never attested by name alone.
+			const caps = environment?.runtimeCapabilities
+				?? environment?.browserstackCapabilities
+				?? {};
 			if (caps.realMobile === true && typeof caps.deviceName === 'string' && caps.deviceName.length > 0) {
-				return { physical: true, deviceName: caps.deviceName, evidence: 'browserstackCapabilities.realMobile + deviceName' };
+				return { physical: true, deviceName: caps.deviceName, evidence: 'capability map realMobile + deviceName' };
 			}
 			return { physical: false, reason: 'No realMobile attestation in the environment capability map.' };
 		},

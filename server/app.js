@@ -60,6 +60,19 @@ function safeErrorResponse(request, response, error, status = 400) {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const URL_PATTERN = /\bhttps?:\/\/[^\s<>"']+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i;
 
+/** Local analytics counters live beside the session store. */
+const ANALYTICS_DIR = path.join(process.cwd(), '.qase', 'analytics');
+
+/** Fire-and-forget analytics; a counter failure must never break a request. */
+function track(name, dimensions) {
+	try { recordEvent(ANALYTICS_DIR, name, { dimensions }); } catch { /* best-effort */ }
+}
+
+/** Cohort dimension: pilot users' events carry cohort='pilot'. */
+function cohortFor(authRole) {
+	return authRole === 'pilot' ? { cohort: 'pilot' } : {};
+}
+
 /**
  * Resolve an optional environmentId for run creation. Returns undefined for a
  * run without an environment (back-compat), the frozen environment record on a
@@ -522,6 +535,13 @@ export function createApplication(options = {}) {
 		response.json({
 			default: DEFAULT_DEVICE_ID,
 			devices: DEVICE_PROFILES.map(profile => publicDeviceProfile(profile.id))
+		});
+	});
+
+	app.get('/api/engines', async (_request, response) => {
+		response.json({
+			default: 'chromium',
+			engines: await engineRegistryResolved()
 		});
 	});
 

@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 017: test cases with multi-environment assignment.
+-- Qase PostgreSQL migration 025: test cases with multi-environment assignment.
 --
 -- Test cases are reusable QA scenarios (title, steps, expected result, tags) assigned
 -- to one or more testing environments. Runs link to a case via qa_runs.test_case_id;

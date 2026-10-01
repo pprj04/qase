@@ -121,6 +121,9 @@ async function resolveA(host) {
  * Returns [{ name, cname, ips }] for every alias hop that resolved.
  */
 async function chaseCnameChain(host) {
+	if (typeof __internals.chaseOverride === 'function') {
+		return __internals.chaseOverride(host);
+	}
 	const hops = [];
 	let current = host;
 	const seen = new Set([host]);
@@ -182,4 +185,4 @@ function delay(ms) {
 }
 
 /** Exposed for tests. */
-export const __internals = { isPrivateOrReserved };
+export const __internals = { isPrivateOrReserved, chaseOverride: undefined };

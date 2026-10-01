@@ -5,6 +5,10 @@ import { runMobileAudit } from './mobileAudit.js';
 import { inspectFormValidation } from './browserFormAudit.js';
 import { resolveEngine, ENGINE_IDS } from './browserEngines.js';
 import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
+import {
+	SECURITY_CHECK_IDS, XSS_CANARY,
+	checkResponseHeaders, checkCookies, checkXssReflection, checkSqlErrorSignature, checkMixedContent
+} from './securityChecks.js';
 import { browserstackCredentials, connectBrowserstack, environmentEmulationOptions, resolveExecution } from './browserstackProvider.js';
 import {
 	userAgentFor,
@@ -12,10 +16,6 @@ import {
 	platformRuntimeProfile,
 	EXECUTION_LEVELS
 } from './deviceRuntimeProfiles.js';
-import {
-	SECURITY_CHECK_IDS, XSS_CANARY,
-	checkResponseHeaders, checkCookies, checkXssReflection, checkSqlErrorSignature, checkMixedContent
-} from './securityChecks.js';
 
 /**
  * Makes the agent's browser watchable.
@@ -534,17 +534,28 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
+				// Multi-engine: the session's engine decides the browser type.
+				// Chromium keeps synthetic-media args; secondary engines launch
+				// plainly (synthetic media is a Chromium-only capability).
+				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
+				const engine = await resolveEngine(engineId);
+				if (!engine.available) {
+					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
+					error.code = 'ENGINE_UNAVAILABLE';
+					throw error;
+				}
 				if (execution.mode === 'environment') {
 					// Remote real device / desktop via BrowserStack CDP. The
 					// capability map comes from the environment snapshot; no
 					// local launch, no synthetic media (that is local-only).
-					// Multi-engine note: remote environments always run the
-					// provider's Chromium; secondary engines are local-only.
-					service.browser = await connectBrowserstack(chromium, execution.connectOptions);
+					service.browser = await connectBrowserstack(engine.type, execution.connectOptions);
 					try {
 						service.context = service.browser.contexts()[0] ?? await service.browser.newContext();
 						syntheticMedia = false;
 						await installNetworkPolicy(service.context);
+						// Remote runtime facts: read the genuine UA/viewport from the
+						// provider's page — REAL_DEVICE/VIRTUAL_DEVICE facts are never
+						// synthesized locally.
 						try {
 							const probe = await service.context.newPage();
 							bridge.runtimeFacts = await probe.evaluate(() => ({
@@ -566,21 +577,15 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						throw error;
 					}
 				}
-				// Multi-engine: the session's engine decides the browser type.
-				// Chromium keeps synthetic-media args; secondary engines launch
-				// plainly (synthetic media is a Chromium-only capability).
-				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
-				const engine = await resolveEngine(engineId);
-				if (!engine.available) {
-					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
-					error.code = 'ENGINE_UNAVAILABLE';
-					throw error;
-				}
 				const launch = { headless };
 				if (engine.id === 'chromium') {
 					launch.args = [...SYNTHETIC_MEDIA_ARGS];
+					// Full Chromium supports native media on Windows; the separate
+					// headless-shell build can expose getUserMedia but reject every call.
 					const bundledExecutable = engine.type.executablePath();
 					const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
+					// Launch ourselves because the SDK exposes no argument hook.
+					// Native getUserMedia can only receive synthetic devices in this process.
 					try {
 						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath });
 					} catch (error) {

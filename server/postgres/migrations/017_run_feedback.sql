@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 025: user feedback on test runs.
+-- Qase PostgreSQL migration 017: user feedback on test runs.
 -- One feedback record per run per user, kept outside the run aggregate so a
 -- submission never touches run data, reports or timing. RLS mirrors qa_runs.
 

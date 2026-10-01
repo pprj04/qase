@@ -316,6 +316,13 @@ const finishReport = {
 				recommendations: boundedList(input.recommendations),
 				targetUrl: session.targetUrl,
 				findings: session.findings.length,
+				securityOutcomes: Array.isArray(input.security_outcomes) && input.security_outcomes.every(validInput)
+					? input.security_outcomes.map(entry => ({
+						check: entry.check,
+						outcome: entry.outcome,
+						...(hasText(entry.reason) ? { reason: boundedText(entry.reason, 2_000) } : {})
+					}))
+					: undefined,
 				attestation: attestationFor(session),
 				securityOutcomes: Array.isArray(input.security_outcomes) && input.security_outcomes.every(validInput)
 					? input.security_outcomes.map(entry => ({

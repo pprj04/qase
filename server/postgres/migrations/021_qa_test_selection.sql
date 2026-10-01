@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 029: standard-QA test selection per run.
+-- Qase PostgreSQL migration 021: standard-QA test selection per run.
 -- NULL (the default) preserves the historical full-coverage run; a non-empty
 -- id array must reference the server catalog (validated at the API boundary).
 -- Qase PostgreSQL migration 021

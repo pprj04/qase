@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 020: bug reports with BUG-XXXX ids.
+-- Qase PostgreSQL migration 028: bug reports with BUG-XXXX ids.
 --
 -- Bugs are auto-associated with the environment (frozen snapshot) and the run
 -- that produced them, mirroring the environment_snapshot pattern from

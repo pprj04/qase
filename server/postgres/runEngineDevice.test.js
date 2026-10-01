@@ -41,8 +41,8 @@ const TENANT = Object.freeze({
 });
 const RUN_ID = '00000000-0000-4000-8000-00000000000a';
 
-describe('migration 026_run_engine_device.sql', () => {
-	const sql = readFileSync(join(here, 'migrations', '026_run_engine_device.sql'), 'utf8');
+describe('migration 018_run_engine_device.sql', () => {
+	const sql = readFileSync(join(here, 'migrations', '018_run_engine_device.sql'), 'utf8');
 
 	it('adds engine, device, and device_landscape columns with safe defaults', () => {
 		assert.match(sql, /ADD COLUMN engine text NOT NULL DEFAULT 'chromium'/);
@@ -146,8 +146,8 @@ describe('runEngine / runDevice normalization', () => {
 	});
 });
 
-describe('migration 027_run_cohort.sql (Phase 12 cohort parity)', () => {
-	const sql = readFileSync(join(here, 'migrations', '027_run_cohort.sql'), 'utf8');
+describe('migration 019_run_cohort.sql (Phase 12 cohort parity)', () => {
+	const sql = readFileSync(join(here, 'migrations', '019_run_cohort.sql'), 'utf8');
 
 	it('adds a nullable cohort column constrained to pilot/NULL', () => {
 		assert.match(sql, /ADD COLUMN cohort text/);
@@ -231,7 +231,7 @@ describe('runRepository cohort persistence (Phase 12)', () => {
 
 	it('postgresServices exposes unscoped listAll/getAny for operator review', () => {
 		const source = readFileSync(join(here, '..', 'postgresServices.js'), 'utf8');
-		assert.match(source, /async listAll\(_?options\)/);
+		assert.match(source, /async listAll\(options\)/);
 		assert.match(source, /async getAny\(id\)/);
 	});
 });

@@ -46,11 +46,21 @@ async function startFixture(catalogOverride = null) {
 		events: { publish: async () => undefined, subscribe: () => ({ dispose() {} }) },
 		configuration: { getPublic: async () => ({}), save: async () => ({}), testConnection: async () => ({}) },
 		secrets: { clear: async () => undefined, names: () => [], store: async () => undefined },
+feedback: {
+		create: async () => ({}),
+		get: async () => null,
+		list: async () => [],
+		update: async () => ({}),
+		remove: async () => true,
+		stats: async () => ({}),
+		forRun: async () => null
+		},
 		reports: { buildMarkdown: async () => '' },
 		agent: { ensureRuntime: async () => ({}), runTurn: async () => ({}), closeBrowser: async () => undefined, getLiveState: () => ({}), stop: async () => undefined, invalidateIdleRuntimes: () => undefined },
 		readiness: { check: async () => ({ ready: true }) },
 		feedback: { create: async () => ({}), get: async () => undefined, list: async () => [], update: async () => ({}), remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		lifecycle: { close: async () => undefined },
+		feedback: { create: async () => undefined, get: async () => undefined, list: async () => [], update: async () => undefined, remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		deviceCatalog,
 		environments: {
 			seed: async () => ({ inserted: 0 }),

@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 018: cross-platform catalog (Phase 9).
+-- Qase PostgreSQL migration 026: cross-platform catalog (Phase 9).
 -- The catalog grows from Apple-only to Apple + Android + Windows. These are
 -- additive changes only — no existing rows, columns or ids are touched.
 --

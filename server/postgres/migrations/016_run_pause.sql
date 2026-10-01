@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 024: timer pause tracking.
+-- Qase PostgreSQL migration 016: timer pause tracking.
 -- Stop = pause: elapsed execution time excludes paused intervals, and a
 -- stopped run is Paused, not Cancelled.
 -- (Renumbered from 014 on DEV: DEV already has 014_token_usage / 015_finding_status.)

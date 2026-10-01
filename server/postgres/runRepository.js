@@ -714,11 +714,11 @@ async function appendEvent(client, tenant, runId, sequence, event, createdAt) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, token_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
-				engine, device, device_landscape, cohort,
-				created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization,
-				environment_id, environment_snapshot, test_case_id,
-				execution_level_actual, execution_provider_actual, runtime_facts
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+			engine, device, device_landscape, cohort,
+			created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization,
+			environment_id, environment_snapshot, test_case_id,
+			execution_level_actual, execution_provider_actual, runtime_facts
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
 			RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -856,10 +856,8 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names,
-					engine, device, device_landscape, cohort, selected_tests, security_authorization,
-					created_at, updated_at, lock_version,
-					environment_id, environment_snapshot, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}
+					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, created_at, updated_at, lock_version,
+					environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 				 ORDER BY updated_at DESC, id ASC`,
@@ -876,10 +874,8 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names,
-					engine, device, device_landscape, cohort, selected_tests, security_authorization,
-					created_at, updated_at, lock_version,
-					environment_id, environment_snapshot, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}
+					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, created_at, updated_at, lock_version,
+					environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND deleted_at IS NULL
@@ -896,7 +892,7 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, title, status, run_mode, target_url, engine, device, device_landscape, cohort, created_at, updated_at,
-					message_count, finding_count, token_usage, environment_id, environment_snapshot, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}, ${timingSelect()},
+					message_count, finding_count, token_usage, environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, ${TIMING_COLUMNS}, ${timingSelect()},
 					(SELECT COUNT(*)::int FROM qa_plan_items
 						WHERE organization_id = $1 AND project_id = $2 AND run_id = id) AS todo_total,
 					(SELECT COUNT(*)::int FROM qa_plan_items

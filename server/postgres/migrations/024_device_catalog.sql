@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 016: DB-backed device / OS / browser catalog.
+-- Qase PostgreSQL migration 024: DB-backed device / OS / browser catalog.
 --
 -- Replaces the code-frozen catalog (server/environmentCatalog.js) as the runtime
 -- source of truth. The frozen module remains the seed source for fresh installs.

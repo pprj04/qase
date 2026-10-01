@@ -2,6 +2,9 @@ import { describeSqaLifecycle, groupSqaUnresolvedResults } from './sqaPresentati
 import { isCredentialQuestion } from './questionPresentation.js';
 import { buildFindingFixPrompt, buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
 import { createFounderView } from './founderView.js';
+import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
+import { createBugsView } from './bugsView.js';
+import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
 import { createDeviceMatrixView } from './deviceMatrixView.js';
 import { createTestCaseView } from './testCaseView.js';
 import { createBulkRunView } from './bulkRunView.js';
@@ -20,8 +23,6 @@ import {
 	loadBatches, recordBatch, aggregateBatch,
 	createBatchTracker, activeBatchRunId
 } from './bulkProgress.js';
-import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
-import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 
 /**
@@ -42,6 +43,8 @@ const el = {
 	newRun: $('new-run'),
 	newSqa: $('new-sqa'),
 	newFounder: $('new-founder'),
+	openBugs: $('open-bugs'),
+	bugsView: $('bugs-view'),
 	connDot: $('conn-dot'),
 	connLabel: $('conn-label'),
 	modelBadge: $('model-badge'),
@@ -173,6 +176,7 @@ const state = {
 	session: undefined,
 	config: undefined,
 	stream: undefined,
+	bugsViewOpen: false,
 	/** Message id -> the nodes streamed text is appended to. */
 	bubbles: new Map(),
 	viewport: { width: 1440, height: 900 },
@@ -206,6 +210,31 @@ const state = {
 		/** run id -> live duration node in the runs list. */
 		runLiveTimers: new Map()
 	},
+	/** Performance panel UI state — visibility only, never data. */
+	perfUi: { minimized: false, closed: false },
+	/**
+	 * Post-run feedback UI state. `existing` is the submitter's record for the
+	 * current run (null = not submitted yet); `rating` mirrors the star row;
+	 * `submitting` guards duplicate submissions while a request is in flight.
+	 */
+	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false, editing: false },
+	/**
+	 * Admin feedback review panel. Visibility-only UI state plus the loaded
+	 * list/stats; `feedbackAdmin.allowed` flips true only for owner/admin.
+	 */
+	feedbackAdmin: {
+		allowed: false,
+		minimized: false,
+		closed: false,
+		search: '',
+		rating: '',
+		category: '',
+		status: '',
+		records: [],
+		stats: undefined
+	},
+	/** run id -> the current user's own feedback record (run-list badges). */
+	runRatings: new Map(),
 	/**
 	 * Single source of truth for the live view: the currently executing
 	 * device/browser context, resolved by activeRuntimeEnvironment.js.
@@ -236,7 +265,15 @@ const state = {
 		stats: undefined
 	},
 	/** run id -> the current user's own feedback record (run-list badges). */
-	runRatings: new Map()
+	runRatings: new Map(),
+	/**
+	 * Single source of truth for the live view: the currently executing
+	 * device/browser context, resolved by activeRuntimeEnvironment.js.
+	 * Every live-view component reads this — never its own fallback chain.
+	 */
+	activeRuntimeEnvironment: undefined,
+	/** Performance panel UI state — visibility only, never data. */
+	perfUi: { minimized: false, closed: false }
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -334,6 +371,56 @@ const founderView = createFounderView({
 const renderFounder = founderView.render;
 const renderFounderReportTab = founderView.renderReportTab;
 
+/* ── Bug tracker (standalone view) ───────────────────────────────── */
+
+const bugsView = createBugsView({
+	elements: {
+		statusFilter: $('bugs-status-filter'),
+		severityFilter: $('bugs-severity-filter'),
+		runSelect: $('bugs-run-filter-select'),
+		searchInput: $('bugs-search-input'),
+		summary: $('bugs-summary'),
+		tableWrap: $('bugs-table-wrap'),
+		tbody: $('bugs-tbody'),
+		empty: $('bugs-empty'),
+		refresh: $('bugs-refresh')
+	},
+	api,
+	toast,
+	fail,
+	openRun: runId => {
+		setBugsViewOpen(false);
+		void selectSession(runId);
+	}
+});
+bugsView.bind();
+
+el.bugsClose = $('bugs-close');
+el.bugsClose.onclick = () => setBugsViewOpen(false);
+
+// The SSE stream is per-run, so findings filed by agents in OTHER runs never
+// reach the open backlog view. While it is open, poll on a slow cadence via
+// the view's own coalesced scheduleRefresh (max one refetch per 4s window).
+let bugsViewLiveTimer;
+function setBugsViewOpen(open) {
+	state.bugsViewOpen = open;
+	el.bugsView.hidden = !open;
+	el.openBugs.setAttribute('aria-pressed', String(open));
+	// The three-panel workspace and the bugs view are exclusive regions.
+	document.querySelector('.app')?.classList.toggle('is-hidden', open);
+	if (open) {
+		// Coming back to the view: filters may be stale after runs finished.
+		bugsView.load().catch(fail);
+		if (bugsViewLiveTimer === undefined) {
+			bugsViewLiveTimer = setInterval(() => bugsView.scheduleRefresh(), 10_000);
+		}
+	} else {
+		clearInterval(bugsViewLiveTimer);
+		bugsViewLiveTimer = undefined;
+	}
+}
+
+el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
 /* ── Bugs tab (Phase 6) ──────────────────────────────────────────── */
 
 const bugView = createBugView({
@@ -550,13 +637,20 @@ function renderRun(run) {
 		pill.title = (profile?.label ?? run.device) + (run.deviceLandscape ? ' (landscape)' : '');
 		meta.append(pill);
 	}
+	if (run.engine && run.engine !== 'chromium') {
+		const pill = document.createElement('span');
+		pill.className = 'run-engine-pill';
+		pill.textContent = run.engine;
+		pill.title = `Run executed on ${run.engine}`;
+		meta.append(pill);
+	}
 	if (run.environmentSnapshot) {
 		const snap = run.environmentSnapshot;
 		const pill = document.createElement('span');
 		pill.className = 'run-device-pill';
 		pill.dataset.deviceKind = snap.platform === 'macos' ? 'desktop' : 'mobile';
 		pill.textContent = `${snap.device} · ${snap.browser} ${snap.browserVersion}`;
-		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime' : 'local (simulated)'}`;
+		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime (BrowserStack)' : 'local (simulated)'}`;
 		meta.append(pill);
 		// Phase 22: honest execution-level badge — recorded facts only.
 		const level = run.runtimeFacts?.executionLevel ?? run.executionLevel;
@@ -1063,7 +1157,10 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, environmentId, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+async function createQaRun({
+	targetUrl, device, deviceLandscape, selectedTests, securityAuthorization,
+	kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId
+}) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
 	const session = await api('/sessions', {
@@ -1073,8 +1170,8 @@ async function createQaRun({ targetUrl, device, deviceLandscape, environmentId, 
 			deviceLandscape,
 			engine,
 			selectedTests,
-			...(environmentId ? { environmentId } : {}),
-			...(securityAuthorization ? { securityAuthorization } : {})
+			...(securityAuthorization ? { securityAuthorization } : {}),
+			...(environmentId ? { environmentId } : {})
 		})
 	});
 	await selectSession(session.id);
@@ -2971,50 +3068,6 @@ const VERDICTS = {
 	blocked: { mark: '—', label: 'Blocked', tone: 'dim' }
 };
 
-/**
- * Evidence provenance (Phase 4): every artifact the run captured already
- * carries device/OS/browser/orientation/execution-level/runtime metadata in
- * its sidecar (server/artifactStore.js). Render that metadata alongside the
- * evidence so it is immediately clear which environment produced it.
- */
-async function renderEvidenceSection(sessionId) {
-	try {
-		const payload = await api(`/sessions/${sessionId}/artifacts`);
-		const artifacts = Array.isArray(payload?.artifacts) ? payload.artifacts : [];
-		if (!artifacts.length || state.sessionId !== sessionId) return;
-		const host = document.createElement('div');
-		host.className = 'evidence-section';
-		host.dataset.forSession = sessionId;
-		const title = document.createElement('h3');
-		title.textContent = `Evidence (${artifacts.length})`;
-		host.append(title);
-		for (const [index, artifact] of artifacts.entries()) {
-			const card = document.createElement('div');
-			card.className = 'evidence-card';
-			const head = document.createElement('div');
-			head.className = 'evidence-head';
-			head.textContent = `Evidence #${index + 1} — ${artifact.kind ?? artifact.type ?? 'artifact'}`;
-			card.append(head);
-			const meta = artifact.meta ?? artifact;
-			const provParts = [
-				meta.evidenceHeader,
-				meta.orientation ? String(meta.orientation).toUpperCase() : null,
-				meta.capturedAt ? new Date(meta.capturedAt).toLocaleString() : null
-			].filter(Boolean);
-			const prov = document.createElement('div');
-			prov.className = 'evidence-prov';
-			prov.textContent = provParts.join(' · ') || 'No environment metadata recorded';
-			card.append(prov);
-			host.append(card);
-		}
-		// The report tab may have re-rendered while artifacts loaded.
-		if (state.sessionId !== sessionId) return;
-		el.reportView.append(host);
-	} catch {
-		// Artifacts endpoint unavailable — evidence section is additive; skip.
-	}
-}
-
 /** "Test these next": pre-checked follow-ups that start a scoped follow-up run. */
 function renderFollowUps(targetUrl, suggestions) {
 	const wrap = document.createElement('div');
@@ -3233,6 +3286,50 @@ function renderDrytisBoardRefresh() {
 	host.replaceWith(renderDrytisBoard());
 }
 
+/**
+ * Evidence provenance (Phase 4): every artifact the run captured already
+ * carries device/OS/browser/orientation/execution-level/runtime metadata in
+ * its sidecar (server/artifactStore.js). Render that metadata alongside the
+ * evidence so it is immediately clear which environment produced it.
+ */
+async function renderEvidenceSection(sessionId) {
+	try {
+		const payload = await api(`/sessions/${sessionId}/artifacts`);
+		const artifacts = Array.isArray(payload?.artifacts) ? payload.artifacts : [];
+		if (!artifacts.length || state.sessionId !== sessionId) return;
+		const host = document.createElement('div');
+		host.className = 'evidence-section';
+		host.dataset.forSession = sessionId;
+		const title = document.createElement('h3');
+		title.textContent = `Evidence (${artifacts.length})`;
+		host.append(title);
+		for (const [index, artifact] of artifacts.entries()) {
+			const card = document.createElement('div');
+			card.className = 'evidence-card';
+			const head = document.createElement('div');
+			head.className = 'evidence-head';
+			head.textContent = `Evidence #${index + 1} — ${artifact.kind ?? artifact.type ?? 'artifact'}`;
+			card.append(head);
+			const meta = artifact.meta ?? artifact;
+			const provParts = [
+				meta.evidenceHeader,
+				meta.orientation ? String(meta.orientation).toUpperCase() : null,
+				meta.capturedAt ? new Date(meta.capturedAt).toLocaleString() : null
+			].filter(Boolean);
+			const prov = document.createElement('div');
+			prov.className = 'evidence-prov';
+			prov.textContent = provParts.join(' · ') || 'No environment metadata recorded';
+			card.append(prov);
+			host.append(card);
+		}
+		// The report tab may have re-rendered while artifacts loaded.
+		if (state.sessionId !== sessionId) return;
+		el.reportView.append(host);
+	} catch {
+		// Artifacts endpoint unavailable — evidence section is additive; skip.
+	}
+}
+
 function renderReport() {
 	el.reportView.replaceChildren();
 	if (state.session?.mode === 'sqa') {
@@ -3402,8 +3499,10 @@ function renderReport() {
 		: 'Rate this QASE testing run and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
+	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
 	// The re-run control only applies to runs launched from a saved environment
-	// snapshot; runs without one keep the standard download/copy actions only.
+	// snapshot (environmentSnapshot carries envId for createQaRun); runs without
+	// one keep the standard download/copy actions only.
 	const snapshot = state.session?.environmentSnapshot;
 	if (snapshot) {
 		const rerun = document.createElement('button');
@@ -3423,8 +3522,6 @@ function renderReport() {
 		};
 		actions.append(rerun);
 	}
-
-	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
 
 	// Agent generation on demand: derive test cases from this completed run.
 	// Idempotent — a second click never duplicates the same cases.
@@ -3451,8 +3548,6 @@ function renderReport() {
 				} else if (result?.skipped === 'from-test-case') {
 					toast('This run came from a test case, so nothing new was generated.', 'good');
 				} else if (result?.skipped === 'disabled') {
-					toast('Agent generation is disabled on this deployment.', 'bad');
-				} else {
 					toast('Nothing to generate from this run.', 'good');
 				}
 			} catch (error) {
@@ -4411,9 +4506,9 @@ function handleEvent(event) {
 			session.findings.push(event.finding);
 			renderFindings();
 			renderProgressCard();
-			// The Bugs tab is server-sourced; a new finding anywhere in this
-			// account's stream coalesces to one throttled refetch.
-			void refreshBugs();
+			// The backlog view is server-sourced; a new finding anywhere in
+			// this account's stream coalesces to one throttled refetch.
+			if (state.bugsViewOpen) bugsView.scheduleRefresh();
 			if (event.finding.severity === 'critical' || event.finding.severity === 'high') {
 				toast(`${event.finding.severity.toUpperCase()}: ${event.finding.title}`, 'bad');
 			}
@@ -4599,7 +4694,7 @@ const qaUi = {
 	deselectAll: $('qa-deselect-all'),
 	scopeAll: $('qa-scope-all'),
 	scopeOptions: $('qa-scope-options'),
-	engineOptions: $('qa-engine-options'),
+	engineOptions: $('qa-engine-options'),	environmentSelect: $('qa-environment-select'),
 	error: $('qa-form-error')
 };
 
@@ -4937,6 +5032,12 @@ function openQaStart() {
 	qaUi.testsState.textContent = 'Loading standard tests…';
 	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
+	qaUi.submit.disabled = true;
+	qaUi.submit.textContent = 'Start test';
+	// form.reset() restores the confirmation checkbox, but a stale custom
+	// validity from a previous open must be cleared explicitly.
+	qaUi.securityAuthorized?.setCustomValidity('');
+	syncQaSecurityGate();
 	qaUi.submit.disabled = false;
 	qaUi.submit.textContent = 'Start QA run';
 	if (qaUi.testOnChange) qaUi.testOnChange.onclick = () => devicePicker?.open?.();
@@ -5027,12 +5128,8 @@ if (qaUi.dialog) {
 			qaUi.securityAuthorized?.focus();
 			return;
 		}
-		// AC14: the run uses exactly the environment shown in the TEST ON block,
-		// read from the store at submit time.
-		const device = activeTestEnvStore?.get?.()?.device || pendingDeviceId();
+		const device = activeTestEnvStore?.get?.()?.device || (qaUi.deviceSelect?.value) || pendingDeviceId();
 		const deviceLandscape = (qaUi.deviceLandscape?.checked) === true;
-		const environmentId = selectedEnvironmentForRun();
-		const testCaseId = qaUi._testCaseId || undefined;
 		const scopeValues = selectedQaScopeValues();
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
 		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
@@ -5045,29 +5142,28 @@ if (qaUi.dialog) {
 			setQaFormError('Check at least one browser engine.');
 			return;
 		}
+		// AC14: the run uses exactly the environment shown in the TEST ON block,
+		// read from the store at submit time (falls back to the QA form's
+		// advanced BrowserStack environment picker when no TEST ON device is set).
+		const environmentId = selectedEnvironmentForRun() || (qaUi.environmentSelect?.value) || '';
+		const testCaseId = qaUi._testCaseId || qaUi.environmentSelect?._testCaseId || undefined;
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
-			const environmentId = selectedEnvironmentForRun();
-			const testCaseId = qaUi._testCaseId || undefined;
-			if (testCaseId) {
-				await createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId });
-			} else {
-				for (const engine of engines) {
-					await createQaRun({
-						targetUrl,
-						device,
-						deviceLandscape,
-						environmentId,
-						selectedTests,
-						securityAuthorization,
-						kickoffText,
-						engine,
-						coreFlowsOnly: engines.length > 1
-					});
-				}
+			for (const engine of engines) {
+				await createQaRun({
+					targetUrl,
+					device,
+					deviceLandscape,
+					selectedTests,
+					securityAuthorization,
+					kickoffText,
+					engine,
+					coreFlowsOnly: engines.length > 1
+				});
 			}
+			await createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId });
 			closeQaStart();
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
@@ -5723,6 +5819,147 @@ el.authForm?.addEventListener('submit', async event => {
 $('open-settings').onclick = openSettings;
 
 const openDeviceMatrixButton = $('open-device-matrix');
+
+const envUi = {
+	dialog: $('environments'),
+	close: $('env-close'),
+	filters: {
+		platform: $('env-filter-platform'),
+		osVersion: $('env-filter-osversion'),
+		browser: $('env-filter-browser'),
+		browserVersion: $('env-filter-browserversion'),
+		active: $('env-filter-active'),
+		search: $('env-filter-search')
+	},
+	summary: $('env-summary'),
+	tbody: $('env-tbody'),
+	detail: $('env-detail'),
+	availabilityBody: $('env-availability-body')
+};
+
+function fillEnvFilterOptions(select, values) {
+	if (!select) return;
+	const current = select.value;
+	select.innerHTML = '';
+	const all = document.createElement('option');
+	all.value = '';
+	all.textContent = 'All';
+	select.append(all);
+	for (const value of values) {
+		const option = document.createElement('option');
+		option.value = String(value);
+		option.textContent = String(value);
+		select.append(option);
+	}
+	if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function envActiveQuery() {
+	const filters = {};
+	for (const [key, select] of Object.entries(envUi.filters)) {
+		if (!select || !select.value) continue;
+		filters[key === 'osVersion' ? 'osVersion' : key === 'browserVersion' ? 'browserVersion' : key] = select.value;
+	}
+	return filters;
+}
+
+async function refreshEnvTable() {
+	if (!envUi.tbody) return;
+	const filters = envActiveQuery();
+	const params = new URLSearchParams(filters);
+	params.set('limit', '300');
+	const payload = await api(`/environments?${params.toString()}`).catch(() => ({ total: 0, environments: [] }));
+	const rows = payload.environments ?? [];
+	envUi.tbody.innerHTML = '';
+	for (const env of rows) {
+		const tr = document.createElement('tr');
+		tr.dataset.envId = env.envId;
+		tr.className = env.active ? '' : 'env-inactive';
+		const cells = [
+			env.envId,
+			env.device,
+			`${env.os} ${env.osVersion}`,
+			env.browser,
+			env.browserVersion,
+			env.deviceType,
+			env.executionProvider === 'browserstack' ? 'BrowserStack' : env.executionProvider,
+			env.active ? 'active' : 'inactive'
+		];
+		for (const [index, text] of cells.entries()) {
+			const td = document.createElement('td');
+			td.textContent = String(text);
+			if (index === 7) td.dataset.state = env.active ? 'active' : 'inactive';
+			tr.append(td);
+		}
+		tr.title = `${env.screenSize}${env.isRealDevice ? ' · real device' : ' · desktop VM'} — click to inspect capabilities`;
+		tr.onclick = () => {
+			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.browserstackCapabilities)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`;
+		};
+		envUi.tbody.append(tr);
+	}
+	envUi.summary.textContent = `${payload.total} environment${payload.total === 1 ? '' : 's'} match the current filters (showing first ${rows.length}).`;
+}
+
+async function refreshEnvFacets() {
+	const payload = await api(`/environments/facets?${new URLSearchParams(envActiveQuery()).toString()}`).catch(() => null);
+	if (!payload) return;
+	fillEnvFilterOptions(envUi.filters.platform, payload.platform.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.osVersion, payload.osVersion.map(entry => entry.value).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
+	fillEnvFilterOptions(envUi.filters.browser, payload.browser.map(entry => entry.value));
+	fillEnvFilterOptions(envUi.filters.browserVersion, payload.browserVersion.map(entry => entry.value).sort((a, b) => Number(b) - Number(a)));
+}
+
+async function openEnvironments() {
+	if (!envUi.dialog) return;
+	if (!envUi.dialog.open) envUi.dialog.showModal();
+	await Promise.all([refreshEnvFacets(), refreshEnvTable()]);
+	if (envUi.availabilityBody && !envUi.availabilityBody.dataset.filled) {
+		const report = await api('/environments/availability').catch(() => []);
+		envUi.availabilityBody.innerHTML = '';
+		for (const entry of report) {
+			const p = document.createElement('p');
+			const strong = document.createElement('strong');
+			strong.textContent = entry.platformLabel;
+			p.append(strong, ` — available: ${entry.available.join(', ') || 'none'}.`);
+			if (entry.unavailable.length) {
+				const ul = document.createElement('ul');
+				for (const { browser, reason } of entry.unavailable) {
+					const li = document.createElement('li');
+					li.textContent = `${browser}: ${reason}`;
+					ul.append(li);
+				}
+				p.append(ul);
+			}
+			envUi.availabilityBody.append(p);
+		}
+		envUi.availabilityBody.dataset.filled = '1';
+	}
+}
+
+if (envUi.dialog) {
+	envUi.close.onclick = () => envUi.dialog.close();
+	for (const select of Object.values(envUi.filters)) {
+		select?.addEventListener('change', () => {
+			void refreshEnvFacets();
+			void refreshEnvTable();
+		});
+	}
+	envUi.filters.search?.addEventListener('input', () => {
+		clearTimeout(envUi.filters.search._timer);
+		envUi.filters.search._timer = setTimeout(() => void refreshEnvTable(), 250);
+	});
+}
+/* ── Sidebar workspace nav (UX U2) ─────────────────────────────── */
+const sidebarNav = [
+	['nav-environments', openEnvironments],
+	['nav-device-matrix', () => deviceMatrix?.open()],
+	['nav-test-cases', () => testCaseView?.open?.()],
+	['nav-bulk-runs', () => bulkRunView?.open?.()]
+];
+for (const [id, opener] of sidebarNav) {
+	const btn = $(id);
+	if (btn) btn.onclick = () => opener();
+}
 
 /* ── Device & Environment Matrix (Phase 3) ────────────────────── */
 const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({
@@ -6381,6 +6618,11 @@ async function bootWorkspace() {
 	if (target) {
 		await selectSession(target.id);
 	} else {
+		// Fresh account: show the welcome checklist behind the launcher dialog.
+		el.transcript.append(el.chatEmpty);
+		el.chatEmpty.hidden = false;
+		renderWelcomeChecklist();
+		await startRun();
 		// No runs yet: don't ambush a brand-new workspace with a blocking modal.
 		// Point at the composer; the QA dialog is one click (New run) away.
 		toast('Welcome! Paste a URL below or press “QA” to start your first run.');

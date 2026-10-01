@@ -3,25 +3,14 @@ import { getPublicConfig, saveConfig, testConnection, withUserConfiguration } fr
 import { buildReportMarkdown } from './report.js';
 import { clearSecrets, secretNames, storeSecrets } from './secrets.js';
 import {
-	addActivity,
-	addMessage,
-	aggregateFindings,
-	allSessions,
-	bus,
-	createSession,
-	deleteSession,
-	emit,
-	getSession,
-	dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions, markExecutionStarted,
-	markReportPhase,
-	peekLive,
-	persistSoon,
-	setFindingStatus,
-	setStatus,
-	updateActivity,
-	watchRunBus,
+	addActivity, addMessage, aggregateFindings, allSessions, bus, createSession, deleteSession, emit,
+	getSession, dropLive, flushSessions, listSessions, liveEntries, liveFor, loadSessions,
+	markExecutionStarted, markReportPhase, persistSoon, peekLive, setFindingStatus, setStatus,
+	updateActivity, watchRunBus
 } from './store.js';
 import { createArtifactStore } from './artifactStore.js';
+import { createEnvironmentService, createLocalEnvironmentBackend } from './environmentService.js';
+import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
@@ -49,6 +38,18 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 	const deviceRuntime = options.deviceRuntime ?? null;
 	// Phase 22: persisted evidence artifacts with execution-level metadata.
 	const artifacts = options.artifactStore ?? createArtifactStore();
+	// Device-matrix environment service (NIHARIKA). The runtime contract
+	// (contracts.js) requires `environments`; compose a local backend-backed
+	// instance so every local composition is contract-complete. Real startup
+	// (serviceFactory) may override with its own configured instance.
+	let environments = options.environments;
+	if (!environments) {
+		const catalogBackend = options.deviceCatalogBackend ?? createLocalDeviceCatalogBackend();
+		environments = createEnvironmentService(
+			createLocalEnvironmentBackend({ catalogBackend }),
+			{ tenantContext: options.tenantContext ?? null }
+		);
+	}
 	// subscribeGlobal exists only in local mode; PostgreSQL deployments
 	// fan events out through their realtime transport instead.
 	const subscribeGlobal = typeof runStore.subscribeGlobal === 'function'
@@ -69,6 +70,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 			forRun: (runId, submittedBy) => findFeedbackForRun(runId, submittedBy)
 		},
 		artifacts,
+		environments,
 		events: {
 			publish: runStore.publish,
 			subscribe: runStore.subscribe,
@@ -291,11 +293,10 @@ export function createLocalApplicationServices(options = {}) {
 		/**
 		 * Unscoped full-record list for coverage aggregation (Phase 7). list()
 		 * caps at 100 and filters by owner; the coverage matrix needs every
-		 * case×environment pair's latest run. Options (e.g. ownerUserId
-		 * overrides) are ignored here: the local store returns full records.
+		 * case×environment pair's latest run.
 		 */
-		async listAll(_options) {
-			return allSessions();
+		async listAll(options) {
+			return listSessions({ ...(options ?? {}), ownerUserId: undefined });
 		},
 		async delete(id) {
 			return deleteSession(id, ownerUserId());
@@ -303,6 +304,14 @@ export function createLocalApplicationServices(options = {}) {
 		async commit(session, type, payload = {}) {
 			emit(session, type, payload);
 			return session;
+		},
+		async setFindingStatus(session, findingId, patch) {
+			const finding = setFindingStatus(session, findingId, patch ?? {});
+			emit(session, 'finding_status', { finding });
+			return finding;
+		},
+		async aggregateFindings(options) {
+			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
 		},
 		/** Persist execution-level facts (level/provider/runtime facts) on a run. */
 		async persistExecutionFacts(runId, { executionLevel, executionProviderActual, runtimeFacts } = {}) {
@@ -332,14 +341,6 @@ export function createLocalApplicationServices(options = {}) {
 				label: 'Final browser frame at end of run',
 				bridgeExecution: bridge?.execution ?? null
 			});
-		},
-		async setFindingStatus(session, findingId, patch) {
-			const finding = setFindingStatus(session, findingId, patch ?? {});
-			emit(session, 'finding_status', { finding });
-			return finding;
-		},
-		async aggregateFindings(options) {
-			return aggregateFindings({ ...options, ownerUserId: options?.ownerUserId ?? ownerUserId() });
 		},
 		async addMessage(session, message) {
 			return addMessage(session, message);
@@ -384,5 +385,9 @@ export function createLocalApplicationServices(options = {}) {
 		tenantContext: options.tenantContext,
 		file: options.authFile
 	});
-	return createRuntimeApplicationServices(runStore, { ...options, auth: options.auth ?? auth, deviceRuntime: options.deviceRuntime });
+	return createRuntimeApplicationServices(runStore, {
+		...options,
+		auth: options.auth ?? auth,
+		deviceRuntime: options.deviceRuntime
+	});
 }

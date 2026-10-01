@@ -323,25 +323,26 @@ export function createPostgresApplicationServices({
 				.map(summary);
 		},
 		/**
-		 * Unscoped full-record list for coverage aggregation (Phase 7). list()
-		 * caps at 100 and filters by owner; the coverage matrix needs every
-		 * case×environment pair's latest run. PostgreSQL is authoritative:
-		 * repository.loadAll() hydrates full records for the tenant.
+		 * Unscoped accessors, two consumers:
+		 * - Operator feedback-review endpoint (app.js /api/analytics/feedback):
+		 *   request-scoped get/list filter by the current actor, which would
+		 *   hide pilot users' sessions from the operator. The caller re-applies
+		 *   its own role gate before use.
+		 * - Coverage aggregation (Phase 7): the matrix needs every
+		 *   case×environment pair's latest run. PostgreSQL is authoritative:
+		 *   repository.loadAll() hydrates full records for the tenant.
 		 */
-		async listAll(_options) {
+		async listAll(options) {
+			if (typeof repository.listAll === 'function') return repository.listAll(options);
 			if (typeof repository.loadAll === 'function') {
 				const records = await repository.loadAll();
 				return records.map(record => record.session).filter(Boolean);
 			}
-			return [...sessions.values()];
+			return [...sessions.values()]
+				.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
+				.slice(0, Math.min(100, Math.max(1, Number(options?.limit) || 100)))
+				.map(summary);
 		},
-		/**
-		 * Unscoped cross-user accessors for the operator feedback-review
-		 * endpoint (app.js /api/analytics/feedback) — same rationale as
-		 * localServices: the request-scoped get/list above filter by the
-		 * current actor, which would hide pilot users' sessions from the
-		 * operator. The caller re-applies its own role gate before use.
-		 */
 		async getAny(id) {
 			// Same lookup as get(), minus the owner filter.
 			if (queues.has(id) && sessions.has(id)) return sessions.get(id);

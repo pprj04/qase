@@ -100,6 +100,11 @@ test('the generic Report tab renders the finalized Founder brief and live finali
 });
 
 test('feature dock reserves a fourth desktop column and becomes a bottom dock responsively', () => {
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+56px;/);
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
+	assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);
 	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
 	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1024px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+52px;/);
 	assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);

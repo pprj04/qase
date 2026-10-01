@@ -8,6 +8,7 @@
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
 <link rel="stylesheet" href="styles.css?v=20261001-1">
+<link rel="stylesheet" href="bugsView.css?v=20261001-1">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
@@ -75,6 +76,21 @@
       </div>
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
+    <nav class="sidebar-nav" aria-label="Workspace">
+      <span class="sidebar-nav-label">Workspace</span>
+      <button class="sidebar-nav-btn" id="nav-test-cases" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">▤</span> Test cases
+      </button>
+      <button class="sidebar-nav-btn" id="nav-device-matrix" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">◧</span> Device matrix
+      </button>
+      <button class="sidebar-nav-btn" id="nav-bulk-runs" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span> Bulk runs
+      </button>
+      <button class="sidebar-nav-btn" id="nav-environments" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
+      </button>
+    </nav>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs" tabindex="-1"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
       <header class="perf-head">
@@ -390,12 +406,82 @@
       <span class="feature-label">Founder</span>
       <span class="feature-tooltip" id="feature-tip-founder" role="tooltip">Founder Mode product review</span>
     </button>
+    <button id="open-bugs" class="feature-action" type="button" aria-label="Open the bug tracker" aria-describedby="feature-tip-bugs" data-feature="bugs" aria-pressed="false">
+      <span class="feature-icon" aria-hidden="true">⬡</span>
+      <span class="feature-label">Bugs</span>
+      <span class="feature-tooltip" id="feature-tip-bugs" role="tooltip">Track every bug across runs</span>
+    </button>
     <span class="feature-dock-status" aria-hidden="true">03 tools</span>
   </nav>
 
 </div>
 
 <!-- ── Bug tracker ─────────────────────────────────────────────── -->
+<section class="bugs-view" id="bugs-view" hidden aria-labelledby="bugs-title">
+  <header class="bugs-head">
+    <div class="bugs-head-id">
+      <p class="bugs-eyebrow"><span aria-hidden="true">❯</span> qase bugs --all</p>
+      <h2 id="bugs-title">Bug tracker</h2>
+      <p class="subtle" id="bugs-subtitle">Every finding from every run, one backlog</p>
+    </div>
+    <div class="bugs-head-actions">
+      <button class="btn btn-ghost btn-sm" id="bugs-refresh" type="button">Refresh</button>
+      <button class="btn btn-primary btn-sm" id="bugs-close" type="button">Back to runs</button>
+    </div>
+  </header>
+
+  <div class="bugs-toolbar" role="search">
+    <div class="bugs-filter-group" role="group" aria-label="Filter by status" id="bugs-status-filter">
+      <button class="bugs-chip is-active" data-status="" type="button" aria-pressed="true">All</button>
+      <button class="bugs-chip" data-status="open" type="button" aria-pressed="false">Open</button>
+      <button class="bugs-chip" data-status="in_progress" type="button" aria-pressed="false">In progress</button>
+      <button class="bugs-chip" data-status="fixed" type="button" aria-pressed="false">Fixed</button>
+      <button class="bugs-chip" data-status="wont_fix" type="button" aria-pressed="false">Won't fix</button>
+    </div>
+    <div class="bugs-filter-group" role="group" aria-label="Filter by severity" id="bugs-severity-filter">
+      <button class="bugs-chip bugs-chip--sev" data-severity="" type="button" aria-pressed="true">Any severity</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="critical" type="button" aria-pressed="false">Critical</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="high" type="button" aria-pressed="false">High</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="medium" type="button" aria-pressed="false">Medium</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="low" type="button" aria-pressed="false">Low</button>
+      <button class="bugs-chip bugs-chip--sev" data-severity="info" type="button" aria-pressed="false">Info</button>
+    </div>
+    <label class="bugs-run-filter">
+      <span class="sr-only">Filter by run</span>
+      <select id="bugs-run-filter-select" aria-label="Filter by run">
+        <option value="">All runs</option>
+      </select>
+    </label>
+    <label class="bugs-search">
+      <span class="sr-only">Search bugs</span>
+      <input id="bugs-search-input" type="search" placeholder="Search title, category, page…" autocomplete="off" maxlength="200">
+    </label>
+  </div>
+
+  <div class="bugs-summary" id="bugs-summary" role="status" aria-live="polite"></div>
+
+  <div class="bugs-table-wrap" id="bugs-table-wrap">
+    <table class="bugs-table" id="bugs-table">
+      <thead>
+        <tr>
+          <th scope="col" class="bugs-col-sev">Severity</th>
+          <th scope="col" class="bugs-col-status">Status</th>
+          <th scope="col" class="bugs-col-title">Bug</th>
+          <th scope="col" class="bugs-col-run">Run</th>
+          <th scope="col" class="bugs-col-page">Page</th>
+          <th scope="col" class="bugs-col-found">Found</th>
+        </tr>
+      </thead>
+      <tbody id="bugs-tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="bugs-empty" id="bugs-empty" hidden>
+    <span class="bugs-empty-glyph" aria-hidden="true">⬡</span>
+    <span>No bugs match the current filters</span>
+    <small>New findings appear here as the QA agent files them</small>
+  </div>
+</section>
 
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <!-- ── Environments (device & environment matrix) ──────────────── -->
@@ -509,6 +595,50 @@
     </div>
   </form>
 </dialog>
+<!-- ── Environments (Apple compatibility matrix) ────────────────── -->
+<dialog class="modal" id="environments" aria-labelledby="environments-title">
+  <form class="modal-inner" id="env-form" method="dialog">
+    <header class="modal-head">
+      <div>
+        <h2 id="environments-title">Apple environments</h2>
+        <p>iPhone · iPad · macOS × Safari, Chrome, Firefox, Edge, Opera — only BrowserStack-executable combinations.</p>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" id="env-close">Close</button>
+    </header>
+    <div class="modal-body">
+      <div class="field-row" id="env-filters">
+        <label class="field"><span>Platform</span><select id="env-filter-platform"><option value="">All</option></select></label>
+        <label class="field"><span>OS version</span><select id="env-filter-osversion"><option value="">All</option></select></label>
+        <label class="field"><span>Browser</span><select id="env-filter-browser"><option value="">All</option></select></label>
+        <label class="field"><span>Browser version</span><select id="env-filter-browserversion"><option value="">All</option></select></label>
+        <label class="field"><span>State</span>
+          <select id="env-filter-active">
+            <option value="">All</option>
+            <option value="true">Active</option>
+            <option value="false">Inactive</option>
+          </select>
+        </label>
+        <label class="field env-search"><span>Search</span><input id="env-filter-search" type="search" placeholder="ENV-IOS-IP16PRO…" autocomplete="off"></label>
+      </div>
+      <p class="env-summary" id="env-summary" aria-live="polite"></p>
+      <div class="env-table-wrap">
+        <table class="env-table" id="env-table">
+          <thead>
+            <tr>
+              <th>Environment ID</th><th>Device</th><th>OS</th><th>Browser</th><th>Version</th><th>Type</th><th>Provider</th><th>State</th>
+            </tr>
+          </thead>
+          <tbody id="env-tbody"></tbody>
+        </table>
+      </div>
+      <p class="env-detail" id="env-detail" aria-live="polite"></p>
+      <details class="env-availability">
+        <summary>Why some browsers are missing (Brave, DuckDuckGo, Firefox-on-iOS…)</summary>
+        <div id="env-availability-body">Loading availability…</div>
+      </details>
+    </div>
+  </form>
+</dialog>
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <dialog class="modal" id="settings" aria-labelledby="settings-title" inert aria-hidden="true">
   <form method="dialog" class="modal-inner">
@@ -614,7 +744,83 @@
             <span>Landscape orientation</span>
           </label>
         </div>
-        <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere.</small>
+        <details class="qa-advanced">
+          <summary>Advanced device options</summary>
+          <div class="qa-advanced-body">
+            <label class="field">
+              <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
+              <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+            </label>
+            <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere. Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
+          </div>
+        </details>
+      </fieldset>
+      <fieldset class="qa-engine-fieldset">
+        <legend>Browser engines</legend>
+        <div class="scope-options" id="qa-engine-options">
+          <label class="check"><input class="qa-engine" type="checkbox" value="chromium" checked><span>Chromium (Chrome)</span></label>
+          <label class="check"><input class="qa-engine" type="checkbox" value="firefox" checked><span>Firefox</span></label>
+          <label class="check"><input class="qa-engine" type="checkbox" value="webkit" checked><span>WebKit (Safari engine)</span></label>
+        </div>
+        <small>Each checked engine starts its own run of this site. Chromium runs the full sweep; other engines focus on core flows for cross-browser comparison.</small>
+      </fieldset>
+      <fieldset class="qa-scope-fieldset">
+        <legend>What to test</legend>
+        <div class="scope-controls">
+          <label class="check scope-all">
+            <input id="qa-scope-all" type="checkbox" checked>
+            <span><strong>Select all</strong> — test everything below</span>
+          </label>
+        </div>
+        <div class="scope-options" id="qa-scope-options">
+          <label class="check"><input class="qa-scope" type="checkbox" value="desktop-layout" checked><span>Desktop layout &amp; responsive behaviour</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="mobile-layout" checked><span>Mobile layout (if device profile allows)</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="forms" checked><span>Forms &amp; input validation</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked><span>Console &amp; network errors</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked><span>Navigation &amp; links</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked><span>Accessibility basics</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="security" checked><span>Security checks (headers, XSS reflection, SQL error signs)</span></label>
+        </div>
+        <small>Everything is pre-checked so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
+      </fieldset>
+      <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
+        <legend>Tests</legend>
+        <div class="qa-tests-toolbar">
+          <span class="qa-tests-count" id="qa-tests-count" aria-live="polite"></span>
+          <span class="qa-tests-bulk">
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-select-all">Select all</button>
+            <button class="btn btn-ghost btn-sm" type="button" id="qa-deselect-all">Deselect all</button>
+          </span>
+        </div>
+        <div class="sqa-catalog-state" id="qa-tests-state" role="status" aria-live="polite">Loading standard tests…</div>
+        <section class="qa-category" id="qa-category-standard">
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-standard-toggle" checked>
+              <span>Standard tests</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-test-options"></div>
+        </section>
+        <section class="qa-category" id="qa-category-security" hidden>
+          <h4 class="qa-category-heading">
+            <label class="check qa-category-toggle">
+              <input type="checkbox" id="qa-category-security-toggle" checked>
+              <span>Security testing</span>
+            </label>
+          </h4>
+          <div class="sqa-option-grid" id="qa-security-options"></div>
+          <div class="qa-security-auth" id="qa-security-auth" hidden>
+            <label class="check qa-security-auth-confirm">
+              <input type="checkbox" id="qa-security-authorized">
+              <span>I confirm the target is an explicitly authorized, isolated test environment for security testing.</span>
+            </label>
+            <label class="field qa-security-auth-scope">
+              <span>Scope notes (optional)</span>
+              <textarea id="qa-security-notes" rows="2" placeholder="e.g. isolated staging copy, no production data"></textarea>
+            </label>
+          </div>
+        </section>
       </fieldset>
       <fieldset class="qa-engine-fieldset">
         <legend>Browser engines</legend>

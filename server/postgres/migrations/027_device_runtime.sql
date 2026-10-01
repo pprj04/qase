@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 019: device runtime (Phase 20).
+-- Qase PostgreSQL migration 027: device runtime (Phase 20).
 -- Structured device runtime data: user agents, DPR, touch/input, media and
 -- permission capabilities on device models; permission + orientation
 -- scenarios and requested execution level on environments; the ACTUAL

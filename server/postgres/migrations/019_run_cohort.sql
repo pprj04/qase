@@ -1,4 +1,4 @@
--- Qase PostgreSQL migration 027: persist the analytics cohort on qa_runs (Phase 12 launch parity).
+-- Qase PostgreSQL migration 019: persist the analytics cohort on qa_runs (Phase 12 launch parity).
 -- Nullable; only ever 'pilot' (invite-admitted beta users) or NULL.
 -- Forward-only and additive: older server versions ignore the column safely.
 ALTER TABLE qa_runs ADD COLUMN cohort text;
