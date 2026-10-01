@@ -4,6 +4,7 @@ import type { LiveSession } from '../state/liveSession';
 import { useToast } from '../state/toastStore';
 import { buildAllFixPromptsMarkdown } from '../lib/fixPromptBuilder';
 import { buildFollowUpMessage, followUpSuggestions } from '../lib/followUp';
+import { DrytisBoardPanel } from './DrytisBoardPanel';
 
 const VERDICTS: Readonly<Record<string, { mark: string; label: string; tone: string }>> = {
 	pass: { mark: '✓', label: 'Pass', tone: 'ok' },
@@ -364,6 +365,7 @@ export function QaReportView({ session }: { session: LiveSession & { feedback?: 
 					</button>
 				</div>
 			</section>
+			<DrytisBoardPanel session={session} />
 		</div>
 	);
 }

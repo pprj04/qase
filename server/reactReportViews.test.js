@@ -1,23 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-// The React libs are TS modules; import via the compiled bundle is not
-// available in node:test, so exercise the pure logic through a tiny esbuild
-// transform using node's built-in strip-types when available, else eval the
-// shared fixtures directly through the legacy modules they must stay in
-// behavioral sync with, plus a fresh tsc-compiled copy under tmp.
-// Simpler and deterministic: run the same behavioral assertions against the
-// legacy modules (source of truth) AND the compiled TS output.
+// The pure presentation libs now live ONLY as the React TS ports (legacy UI
+// modules were removed in Phase 7). Each test compiles the TS source and
+// asserts the behavioral contract directly — these assertions were validated
+// against the legacy implementations before removal.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
-
-import { groupSqaUnresolvedResults as legacyGroup, describeSqaLifecycle as legacyLifecycle } from '../public/sqaPresentation.js';
-import { followUpSuggestions as legacySuggestions, buildFollowUpMessage as legacyMessage } from '../public/followUp.js';
-import { buildAllFixPromptsMarkdown as legacyFixPrompts } from '../public/fixPromptBuilder.js';
 
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -40,7 +33,7 @@ function compileTs(sources) {
 const fs = require('node:fs');
 const src = (name) => fs.readFileSync(join(root, 'src/lib', name), 'utf8');
 
-test('React sqaPresentation matches legacy grouping behavior', async () => {
+test('React sqaPresentation groups unresolved results by evidence mode', async () => {
 	const out = compileTs({
 		'sqaPresentation.ts': src('sqaPresentation.ts'),
 	});
@@ -53,16 +46,15 @@ test('React sqaPresentation matches legacy grouping behavior', async () => {
 		{ status: 'blocked', controlId: 'c', title: 'C', automationLevel: 'hybrid' },
 		{ status: 'blocked', controlId: 'd', title: 'D' },
 	];
-	const legacyGroups = legacyGroup(results);
 	const reactGroups = react.groupSqaUnresolvedResults(results);
-	assert.equal(reactGroups.failures.length, legacyGroups.failures.length);
-	assert.equal(reactGroups.reviewer.length, legacyGroups.reviewer.length);
-	assert.equal(reactGroups.mixed.length, legacyGroups.mixed.length);
-	assert.equal(reactGroups.automated.length, legacyGroups.automated.length);
+	assert.equal(reactGroups.failures.length, 1);
+	assert.equal(reactGroups.reviewer.length, 1);
+	assert.equal(reactGroups.mixed.length, 1);
+	assert.equal(reactGroups.automated.length, 1);
 
-	// Lifecycle parity: only finalizedAt is final.
+	// Lifecycle contract: only finalizedAt is final.
 	const draft = { assessment: { verdict: 'blocked' }, observations: [] };
-	assert.equal(react.describeSqaLifecycle(draft, 'idle', 0).phase, legacyLifecycle(draft, 'idle', 0).phase);
+	assert.equal(react.describeSqaLifecycle(draft, 'idle', 0).phase, 'ready');
 	const finalised = react.describeSqaLifecycle({ ...draft, finalizedAt: '2026-08-15T00:00:00.000Z' }, 'idle', 0);
 	assert.equal(finalised.phase, 'finalized');
 	assert.equal(finalised.badge, 'blocked');
@@ -90,7 +82,7 @@ test('React founderPresentation lifecycle and trace helpers are truthful', async
 	assert.match(complete.detail, /2\/3 lenses reviewed/);
 });
 
-test('React followUp helpers match legacy suggestions and message building', async () => {
+test('React followUp helpers dedupe case-insensitively and gate on inputs', async () => {
 	const out = compileTs({
 		'followUp.ts': src('followUp.ts'),
 	});
@@ -99,14 +91,16 @@ test('React followUp helpers match legacy suggestions and message building', asy
 		notCovered: ['Checkout flow', '  Search  ', 'checkout flow'],
 		recommendations: ['Test mobile nav'],
 	};
-	assert.deepEqual(react.followUpSuggestions(report), legacySuggestions(report));
+	// Dedupe is case-insensitive and trims whitespace.
+	assert.deepEqual(react.followUpSuggestions(report), ['Checkout flow', 'Search', 'Test mobile nav']);
 	const message = react.buildFollowUpMessage('https://example.com', ['Checkout flow', 'Test mobile nav']);
-	assert.equal(message, legacyMessage('https://example.com', ['Checkout flow', 'Test mobile nav']));
+	assert.match(message, /https:\/\/example\.com/);
+	assert.match(message, /Checkout flow/);
 	assert.equal(react.buildFollowUpMessage(undefined, ['a']), null);
 	assert.equal(react.buildFollowUpMessage('https://example.com', []), null);
 });
 
-test('React fix prompt builder produces the legacy prompt shape', async () => {
+test('React fix prompt builder produces the canonical prompt shape', async () => {
 	const out = compileTs({
 		'fixPromptBuilder.ts': src('fixPromptBuilder.ts'),
 	});
@@ -121,9 +115,8 @@ test('React fix prompt builder produces the legacy prompt shape', async () => {
 		],
 	};
 	const reactMarkdown = react.buildAllFixPromptsMarkdown(session);
-	const legacyMarkdown = legacyFixPrompts(session);
-	const stripStamp = (text) => text.replace(/Generated: [^\n]+/, 'Generated: <ts>');
-	assert.equal(stripStamp(reactMarkdown), stripStamp(legacyMarkdown));
 	assert.match(reactMarkdown, /# Fix prompts — 2 findings/);
 	assert.match(reactMarkdown, /CRITICAL\] Checkout broken/);
+	assert.match(reactMarkdown, /What I need from you/);
+	assert.ok(reactMarkdown.includes('Open /cart'), 'steps included');
 });

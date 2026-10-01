@@ -1,4 +1,8 @@
 import type { ReactNode } from 'react';
+import { apiText, apiResponse } from '../api/client';
+import { useLiveSession } from '../state/liveSession';
+import { useToast } from '../state/toastStore';
+import { buildAllFixPromptsMarkdown } from '../lib/fixPromptBuilder';
 import {
 	SQA_RESULT_META,
 	describeSqaLifecycle,
@@ -11,8 +15,7 @@ import {
 	type SqaState,
 } from '../lib/sqaPresentation';
 
-/** Render only http(s) references as links — everything else as text. */
-function SafeLink({ label, href }: { label: string; href?: string }) {
+/** Render only http(s) references as links — everything else as text. */function SafeLink({ label, href }: { label: string; href?: string }) {
 	let safeUrl: string | undefined;
 	try {
 		const candidate = new URL(String(href ?? ''));
@@ -307,6 +310,118 @@ function SqaSources({ frameworks }: { frameworks: NonNullable<SqaAssessment['fra
 	);
 }
 
+/** Map export failures to a friendly message (409 → still finalizing). */
+function exportError(error: unknown, fallback: string): string {
+	const status = (error as { status?: number })?.status;
+	if (status === 409 || (error instanceof Error && error.message.includes('not ready'))) {
+		return 'The report is still being finalized — try again once the run completes.';
+	}
+	return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** SQA report export actions (legacy renderSqaReportActions parity). */
+export function SqaReportActions() {
+	const { session } = useLiveSession();
+	const sessionId = session?.id;
+	const findings = session?.findings ?? [];
+	const { toast } = useToast();
+
+	const downloadReport = async () => {
+		if (!sessionId) return;
+		try {
+			const markdownText = await apiText(`/sessions/${sessionId}/report.md`);
+			const url = URL.createObjectURL(new Blob([markdownText], { type: 'text/markdown;charset=utf-8' }));
+			const save = document.createElement('a');
+			save.href = url;
+			save.download = 'qase-sqa-assessment.md';
+			document.body.append(save);
+			save.click();
+			save.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
+		} catch (error) {
+			toast(exportError(error, 'The SQA report download failed.'), 'bad');
+		}
+	};
+
+	const copyReport = async () => {
+		if (!sessionId) return;
+		try {
+			const markdownText = await apiText(`/sessions/${sessionId}/report.md`);
+			await navigator.clipboard.writeText(markdownText);
+			toast('SQA assessment copied to the clipboard.', 'good');
+		} catch (error) {
+			toast(exportError(error, 'The SQA report copy failed.'), 'bad');
+		}
+	};
+
+	const downloadPdf = async () => {
+		if (!sessionId) return;
+		try {
+			const pdf = await apiResponse(`/sessions/${sessionId}/report.pdf`);
+			const blob = await pdf.blob();
+			const url = URL.createObjectURL(blob);
+			const save = document.createElement('a');
+			save.href = url;
+			save.download = 'qase-sqa-assessment.pdf';
+			document.body.append(save);
+			save.click();
+			save.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
+		} catch (error) {
+			toast(exportError(error, 'The PDF export failed.'), 'bad');
+		}
+	};
+
+	const downloadFixes = () => {
+		if (!session) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		const markdown = buildAllFixPromptsMarkdown(session as never);
+		if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+		const save = document.createElement('a');
+		save.href = url;
+		save.download = 'qase-sqa-fix-prompts.md';
+		document.body.append(save);
+		save.click();
+		save.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+	};
+
+	const copyFixes = async () => {
+		if (!session) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		const markdown = buildAllFixPromptsMarkdown(session as never);
+		if (!markdown) { toast('No findings to build fix prompts from.', 'bad'); return; }
+		try { await navigator.clipboard.writeText(markdown); toast('All fix prompts copied.', 'good'); }
+		catch { toast('Clipboard is blocked in this browser.', 'bad'); }
+	};
+
+	return (
+		<div className="report-actions sqa-report-actions" aria-label="SQA assessment report actions">
+			<button type="button" className="btn btn-ghost btn-sm" onClick={() => void downloadReport()}>Download .md</button>
+			<button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyReport()}>Copy report</button>
+			<button
+				type="button"
+				className="btn btn-ghost btn-sm"
+				disabled={findings.length === 0}
+				title={findings.length === 0
+					? 'No findings to generate fix prompts for.'
+					: 'Copies one long markdown block containing a fix prompt for every finding.'}
+				onClick={() => void copyFixes()}
+			>
+				Copy fix prompts
+			</button>
+			<button
+				type="button"
+				className="btn btn-ghost btn-sm"
+				disabled={findings.length === 0}
+				onClick={() => void downloadFixes()}
+			>
+				Download fix prompts (.md)
+			</button>
+			<button type="button" className="btn btn-primary btn-sm" onClick={() => void downloadPdf()}>Download PDF</button>
+		</div>
+	);
+}
+
 export function SqaView({ session }: { session: { sqa?: SqaState; status: string; title?: string; activities?: unknown[] } }) {
 	const sqa = session.sqa ?? {};
 	const scope = (sqa.scope ?? {}) as Record<string, unknown>;
@@ -323,6 +438,7 @@ export function SqaView({ session }: { session: { sqa?: SqaState; status: string
 			</aside>
 			<SqaVerdict assessment={assessment} lifecycle={lifecycle} />
 			<SqaScope scope={scope} assessment={assessment} />
+			{lifecycle.finalized ? <SqaReportActions /> : null}
 			{!lifecycle.finalized && lifecycle.phase === 'ready' ? (
 				<div className="sqa-pending">
 					<strong>Ready to begin</strong>

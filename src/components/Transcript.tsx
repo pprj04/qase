@@ -3,6 +3,7 @@ import { useLiveSession, isCredentialQuestion } from '../state/liveSession';
 import { useToast } from '../state/toastStore';
 import { renderMarkdown, tailOf } from '../lib/markdown';
 import type { SessionMessage } from '../api/sse';
+import { hostOf } from '../state/sessionStore';
 
 const ROLE_LABELS: Record<string, string> = { agent: 'Qase', user: 'You', system: 'System' };
 
@@ -68,6 +69,27 @@ export function Transcript() {
 
   return (
     <div className="conversation-live">
+      {/* Chat header (legacy renderHeader parity): run title, engine tag for
+          non-chromium runs, LIVE pill while running. */}
+      <header className="conversation-head">
+        <div className="conversation-head-main">
+          <span className="conversation-title">
+            {session.mode === 'founder'
+              ? ((session.founder as { scope?: { target?: { name?: string } } } | undefined)?.scope?.target?.name
+                  ?? session.title
+                  ?? 'Founder review')
+              : session.mode === 'sqa'
+                ? ((session.sqa as { scope?: { target?: { name?: string } } } | undefined)?.scope?.target?.name
+                    ?? session.title
+                    ?? 'SQA assessment')
+                : (session.targetUrl ? hostOf(session.targetUrl) : session.title)}
+          </span>
+          {session.engine && session.engine !== 'chromium' && (
+            <span className="run-engine-pill" title={`Run executed on ${session.engine}`}>{session.engine}</span>
+          )}
+        </div>
+        {running && <span className="live-pill" data-testid="live-pill">LIVE</span>}
+      </header>
       <div className="transcript" ref={scrollRef} onScroll={onScroll} data-testid="transcript">
         {messages.length === 0 && Object.keys(session.deltas).length === 0 && !running && (
           <div className="msg msg--agent">
@@ -114,6 +136,19 @@ export function Transcript() {
           data-testid="composer-input"
         />
         <div className="composer-actions">
+          {(session.status === 'interrupted' || session.status === 'error') && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() =>
+                void sendMessage('continue').catch((error) =>
+                  toast(error instanceof Error ? error.message : String(error), 'bad'))
+              }
+              data-testid="resume-run"
+            >
+              Resume
+            </button>
+          )}
           {running && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => void stopRun()} data-testid="stop-run">
               Stop

@@ -50,6 +50,26 @@ type Tab = 'browser' | 'activity' | 'plan' | 'findings' | 'report';
 export function ViewerPanel() {
   const { session } = useLiveSession();
   const [tab, setTab] = useState<Tab>('browser');
+  // Founder auto-open (legacy showCompletedFounderReport parity): when a
+  // founder run completes with a finalized report, switch to the Report tab
+  // once per report version — but never yank a tab the user chose manually
+  // afterwards.
+  const shownFounderReport = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const founder = session?.founder as { report?: unknown; finalizedAt?: string } | undefined;
+    if (
+      session?.mode === 'founder' &&
+      session.status === 'done' &&
+      founder?.report &&
+      founder.finalizedAt
+    ) {
+      const reportKey = `${session.id}:${founder.finalizedAt}`;
+      if (shownFounderReport.current !== reportKey) {
+        shownFounderReport.current = reportKey;
+        setTab('report');
+      }
+    }
+  }, [session?.id, session?.mode, session?.status, session?.founder]);
   // At ≤900px the viewer becomes an overlay; this dismisses it so it can't
   // opaquely cover the transcript (restored by clicking any tab in the rail
   // or re-selecting a run).

@@ -7,13 +7,11 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 
-test('react deep link: RUN_ID_PATTERN is identical to the legacy contract', () => {
-  const legacy = read('public/app.js');
+test('react deep link: RUN_ID_PATTERN matches the canonical run-id contract', () => {
   const react = read('src/lib/runDeepLink.ts');
-  const legacyPattern = /const RUN_ID_PATTERN = (.+);/.exec(legacy)?.[1];
-  const reactPattern = /export const RUN_ID_PATTERN = (.+);/.exec(react)?.[1];
-  assert.ok(legacyPattern, 'legacy pattern found');
-  assert.equal(reactPattern, legacyPattern, 'React pattern must match legacy byte-for-byte');
+  // Canonical shape: v1-v8 UUID, case-insensitive (pinned independently of
+  // the legacy file, which was removed in Phase 7).
+  assert.match(react, /export const RUN_ID_PATTERN = \/\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[1-8\]\[0-9a-f\]\{3\}-\[89ab\]\[0-9a-f\]\{3\}-\[0-9a-f\]\{12\}\$\/i/);
 });
 
 test('react deep link: URL param is consumed unconditionally (valid or stale)', () => {
@@ -52,15 +50,11 @@ test('react bugs view: optimistic status change rolls back on failure', () => {
   assert.match(view, /const previous = row\.status;/, 'previous status captured before optimistic update');
   assert.match(view, /r\.id === row\.id \? \{ \.\.\.r, status: next \} : r/, 'optimistic patch applied first');
   assert.match(view, /status: previous \} : r/, 'rollback restores previous on error');
-  // BUG_STATUS_LABELS must stay identical to the legacy tracker contract.
-  const legacy = read('public/bugsView.js');
+  // BUG_STATUS_LABELS vocabulary (legacy tracker contract).
   assert.match(view, /open: 'Open',/, 'status label open');
   assert.match(view, /in_progress: 'In progress',/, 'status label in_progress');
   assert.match(view, /fixed: 'Fixed',/, 'status label fixed');
   assert.match(view, /wont_fix: "Won't fix",/, 'status label wont_fix');
-  for (const label of ['Open', 'In progress', 'Fixed', "Won't fix"]) {
-    assert.ok(legacy.includes(label), `legacy also used ${label}`);
-  }
 });
 
 test('react error boundary: resetKey clears a caught error so a reopened dialog retries', () => {
