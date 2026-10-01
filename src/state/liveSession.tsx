@@ -13,6 +13,7 @@ import {
   connectSessionStream,
   type ConnectionState,
   type Finding,
+  type SessionActivity,
   type SessionEvent,
   type SessionMessage,
   type SessionStreamHandle,
@@ -42,6 +43,19 @@ export interface LiveSession {
   pausedAt?: number;
   pausedSeconds?: number;
   failureReason?: string;
+  activities?: SessionActivity[];
+  todos?: unknown[];
+  sqa?: { scope?: Record<string, unknown>; assessment?: unknown; finalizedAt?: string; observations?: unknown[]; [key: string]: unknown };
+  founder?: {
+    schemaVersion?: number;
+    scope?: { categories?: string[]; target?: Record<string, unknown>; [key: string]: unknown };
+    observations?: { id: string }[];
+    report?: unknown;
+    finalizedAt?: string;
+    [key: string]: unknown;
+  };
+  feedback?: { rating?: string; [key: string]: unknown };
+  drytisIntegration?: unknown;
 }
 
 export interface PendingQuestion {
@@ -78,9 +92,17 @@ type LiveAction =
   | { type: 'frame'; frame: { base64: string; mimeType: string } }
   | { type: 'cursor'; cursor: { x: number; y: number } }
   | { type: 'status'; status: string }
-  | { type: 'connection'; state: ConnectionState };
+  | { type: 'connection'; state: ConnectionState }
+  | { type: 'activities'; activities: SessionActivity[] }
+  | { type: 'todos'; todos: unknown[] }
+  | { type: 'sqa'; assessment: unknown; final?: boolean; ts?: number }
+  | { type: 'founder.created'; schemaVersion?: number; categories?: string[] }
+  | { type: 'founder.target_bound'; targetUrl: string; authorizedTargetUrl?: string; title?: string }
+  | { type: 'founder.observation'; observation?: { id: string } & Record<string, unknown> }
+  | { type: 'founder.finalized'; report?: unknown; ts?: number };
 
-function liveReducer(state: LiveState, action: LiveAction): LiveState {
+/** Pure session reducer — exported for direct unit testing. */
+export function liveReducer(state: LiveState, action: LiveAction): LiveState {
   const withSession = (patch: Partial<LiveSession>): LiveState =>
     state.session ? { ...state, session: { ...state.session, ...patch } } : state;
 
@@ -150,6 +172,64 @@ function liveReducer(state: LiveState, action: LiveAction): LiveState {
       return withSession({ status: action.status });
     case 'connection':
       return { ...state, connection: action.state };
+    case 'activities':
+      return withSession({ activities: action.activities });
+    case 'todos':
+      return withSession({ todos: action.todos });
+    case 'sqa': {
+      if (!state.session) return state;
+      const sqa = { ...(state.session.sqa ?? { scope: {} }) };
+      sqa.assessment = action.assessment;
+      if (action.final) sqa.finalizedAt = new Date(action.ts ?? Date.now()).toISOString();
+      else delete sqa.finalizedAt;
+      return { ...state, session: { ...state.session, mode: 'sqa', sqa } };
+    }
+    case 'founder.created': {
+      if (!state.session) return state;
+      const founder = { ...(state.session.founder ?? { scope: {} }) };
+      if (action.schemaVersion) founder.schemaVersion = action.schemaVersion;
+      const scope = { ...(founder.scope ?? {}) };
+      if (action.categories) scope.categories = action.categories;
+      founder.scope = scope;
+      return { ...state, session: { ...state.session, mode: 'founder', founder } };
+    }
+    case 'founder.target_bound': {
+      if (!state.session) return state;
+      const founder = { ...(state.session.founder ?? { scope: {} }) };
+      const scope = { ...(founder.scope ?? {}) };
+      const target = { ...(scope.target as Record<string, unknown> | undefined ?? {}) };
+      target.url = action.authorizedTargetUrl ?? action.targetUrl;
+      scope.target = target;
+      founder.scope = scope;
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          mode: 'founder',
+          targetUrl: action.targetUrl,
+          title: action.title,
+          founder,
+        },
+      };
+    }
+    case 'founder.observation': {
+      if (!state.session || !action.observation) return state;
+      const founder = { ...(state.session.founder ?? { scope: {} }) };
+      const observations = [...(founder.observations ?? [])];
+      const index = observations.findIndex((item) => item.id === action.observation!.id);
+      if (index === -1) observations.push(action.observation as { id: string });
+      else observations[index] = action.observation as { id: string };
+      founder.observations = observations;
+      return { ...state, session: { ...state.session, mode: 'founder', founder } };
+    }
+    case 'founder.finalized': {
+      if (!state.session) return state;
+      const founder = { ...(state.session.founder ?? { scope: {} }) };
+      founder.report = action.report;
+      founder.finalizedAt = (action.report as { generatedAt?: string } | undefined)?.generatedAt
+        ?? new Date(action.ts ?? Date.now()).toISOString();
+      return { ...state, session: { ...state.session, mode: 'founder', founder } };
+    }
     default:
       return state;
   }
@@ -201,13 +281,23 @@ export function LiveSessionProvider({ children, onRunEvent }: { children: ReactN
             dispatch({ type: 'thinking', action: `${event.activity.label ?? ''}${event.activity.detail ? ` — ${event.activity.detail}` : ''}` });
           }
           break;
+        case 'sqa':
+          dispatch({ type: 'sqa', assessment: event.assessment, final: event.final, ts: event.ts });
+          break;
+        case 'founder.created':
+          dispatch({ type: 'founder.created', schemaVersion: event.schemaVersion, categories: event.categories });
+          break;
+        case 'founder.target_bound':
+          dispatch({ type: 'founder.target_bound', targetUrl: event.targetUrl, authorizedTargetUrl: event.authorizedTargetUrl, title: event.title });
+          break;
+        case 'founder.observation':
+          dispatch({ type: 'founder.observation', observation: event.observation });
+          break;
+        case 'founder.finalized':
+          dispatch({ type: 'founder.finalized', report: event.report, ts: event.ts });
+          break;
         case 'todos':
         case 'context':
-        case 'sqa':
-        case 'founder.created':
-        case 'founder.target_bound':
-        case 'founder.observation':
-        case 'founder.finalized':
           // Rendered in later phases; run-list side effects handled by caller.
           break;
         case 'usage':

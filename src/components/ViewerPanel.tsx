@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
+import { apiText } from '../api/client';
 import { useLiveSession } from '../state/liveSession';
 import { renderMarkdown } from '../lib/markdown';
 import type { Finding } from '../api/sse';
+import { SqaView } from './SqaView';
+import { FounderView } from './FounderView';
+import { QaReportView } from './QaReportView';
 const STAGE_COLLAPSE_STATUSES = new Set(['done', 'error', 'interrupted', 'idle']);
 
 export type StageCollapseState = { collapsed: boolean; manualExpand: boolean };
@@ -174,10 +178,34 @@ export function ViewerPanel() {
       </div>
 
       <div role="tabpanel" id="panel-report" aria-labelledby="tab-report" hidden={tab !== 'report'} className="viewer-tabpanel">
-        <ReportView />
+        <ModeReportView />
       </div>
     </div>
   );
+}
+
+/**
+ * Mode-aware report surface: SQA sessions render the assessment view,
+ * Founder sessions the founder brief, everything else the enriched QA report
+ * (which still falls back to the raw markdown when no structured report
+ * payload exists yet).
+ */
+function ModeReportView() {
+  const { session } = useLiveSession();
+  if (!session) {
+    return <div className="empty-hint">Select a run to see its report.</div>;
+  }
+  if (session.mode === 'sqa') {
+    return <SqaView session={session as never} />;
+  }
+  if (session.mode === 'founder') {
+    return <FounderView session={session as never} />;
+  }
+  // Structured report payload present → enriched QA report; otherwise the
+  // markdown fallback.
+  return session.report
+    ? <QaReportView session={session as never} />
+    : <ReportView />;
 }
 
 function FindingsList({ findings }: { findings: Finding[] }) {
@@ -205,6 +233,11 @@ function FindingsList({ findings }: { findings: Finding[] }) {
   );
 }
 
+/**
+ * Markdown fallback: rendered when no structured report payload exists yet
+ * (e.g. a run that finished before the structured report event arrived).
+ * Uses apiText so CSRF/auth handling matches every other surface.
+ */
 function ReportView() {
   const { session } = useLiveSession();
   const [markdown, setMarkdown] = useState<string | null>(null);
@@ -215,11 +248,7 @@ function ReportView() {
     let cancelled = false;
     setMarkdown(null);
     setError('');
-    fetch(`/api/sessions/${session.id}/report.md`, { credentials: 'same-origin' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? `Report not available (${response.status})`);
-        return response.text();
-      })
+    apiText(`/sessions/${session.id}/report.md`)
       .then((text) => { if (!cancelled) setMarkdown(text); })
       .catch((err: Error) => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
