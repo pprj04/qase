@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { useToast } from '../state/toastStore';
+import { useModelConfig } from '../state/configStore';
 
 export interface ModelConfig {
   providers: string[];
@@ -37,6 +38,7 @@ interface ProbeResult {
  */
 export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
+  const { refresh: refreshModelConfig } = useModelConfig();
   const [config, setConfig] = useState<ModelConfig | null>(null);
   const [provider, setProvider] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -163,6 +165,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
         body: JSON.stringify(payload),
       });
       setConfig(saved);
+      // Keep the app-wide gate in sync so the launcher unblocks immediately.
+      void refreshModelConfig();
       if (saved.problem) {
         setProbe({ state: 'bad', text: saved.problem });
         return;
