@@ -27,6 +27,9 @@ export interface LiveSession {
   mode?: string;
   title?: string;
   targetUrl?: string;
+  device?: string;
+  deviceLandscape?: boolean;
+  engine?: string;
   messages: SessionMessage[];
   deltas: Record<string, string>;
   thinkingText: string;

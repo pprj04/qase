@@ -68,7 +68,7 @@ function ListBlock({ items }: { items: string[] }) {
 	);
 }
 
-function FollowUps({ targetUrl, suggestions }: { targetUrl: string; suggestions: string[] }) {
+function FollowUps({ targetUrl, suggestions, currentSession }: { targetUrl: string; suggestions: string[]; currentSession: LiveSession & { device?: string; deviceLandscape?: boolean; engine?: string } }) {
 	const { toast } = useToast();
 	const [selected, setSelected] = useState<Set<string>>(() => new Set(suggestions));
 	const [running, setRunning] = useState(false);
@@ -85,9 +85,16 @@ function FollowUps({ targetUrl, suggestions }: { targetUrl: string; suggestions:
 		}
 		setRunning(true);
 		try {
+			// Legacy createQaRun parity: carry the originating run's device,
+			// orientation and engine into the follow-up so a mobile/WebKit run
+			// produces a mobile/WebKit follow-up.
 			const session = await api<{ id: string }>('/sessions', {
 				method: 'POST',
-				body: JSON.stringify({}),
+				body: JSON.stringify({
+					device: currentSession.device,
+					deviceLandscape: currentSession.deviceLandscape === true,
+					engine: currentSession.engine,
+				}),
 			});
 			await api(`/sessions/${session.id}/message`, { method: 'POST', body: JSON.stringify({ text: message }) });
 			toast('Follow-up run started.', 'good');
@@ -283,7 +290,7 @@ export function QaReportView({ session }: { session: LiveSession & { feedback?: 
 			{report.recommendations?.length ? <Section title="Recommendations"><ListBlock items={report.recommendations} /></Section> : null}
 
 			{suggestions.length > 0 && session.targetUrl ? (
-				<FollowUps targetUrl={session.targetUrl} suggestions={suggestions} />
+				<FollowUps targetUrl={session.targetUrl} suggestions={suggestions} currentSession={session} />
 			) : null}
 
 			<div className="report-actions" role="group" aria-label="Report actions">
