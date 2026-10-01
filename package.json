@@ -7,8 +7,6 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "build:react": "tsc --noEmit && vite build && cp public/app-react/index-react.html public/app-react/index.html && rm public/app-react/index-react.html && cp scripts/theme-bootstrap.js public/app-react/theme-bootstrap.js",
-    "typecheck": "tsc --noEmit",
     "dev": "node --watch server/index.js",
     "worker": "node server/worker.js",
     "control-plane": "node server/controlPlane/index.js",
@@ -40,15 +38,6 @@
     "express": "^5.2.1",
     "pg": "^8.22.0",
     "playwright": "1.62.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
     "redis": "6.2.0"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.1"
   }
 }

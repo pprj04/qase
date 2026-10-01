@@ -368,15 +368,14 @@ test('application construction has no startup side effects and validates its ser
 	);
 });
 
-test('login entry route serves the React application without masking unknown routes', async t => {
+test('login entry route serves the existing application without masking unknown routes', async t => {
 	const fixture = await startFixture();
 	t.after(() => fixture.close());
 
 	const login = await fixture.request('/login');
 	assert.equal(login.status, 200);
 	assert.match(login.headers.get('content-type') ?? '', /^text\/html\b/);
-	// Post-cutover: /login serves the React app (title from the React build).
-	assert.match(await login.text(), /<title>QASE — new UI<\/title>/);
+	assert.match(await login.text(), /<title>Qase — autonomous QA agent<\/title>/);
 
 	const loginHead = await fixture.request('/login', { method: 'HEAD' });
 	assert.equal(loginHead.status, 200);

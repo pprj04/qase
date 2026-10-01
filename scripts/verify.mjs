@@ -34,7 +34,7 @@ function filesUnder(directory, extensions) {
 const required = [
 	'package.json',
 	'package-lock.json',
-	'public/app-react/index.html',
+	'public/index.html',
 	'server/index.js',
 	'server/agent.js'
 ];

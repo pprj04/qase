@@ -13,7 +13,7 @@ import { createFounderTools, founderFinishReadiness } from './founderTools.js';
 import { createFounderReviewTodos } from './founderService.js';
 import { buildSqaContext } from './sqaPrompt.js';
 import { createSqaTools } from './sqaTools.js';
-import { isCredentialQuestion } from './questionPresentation.js';
+import { isCredentialQuestion } from '../public/questionPresentation.js';
 import { clearSecrets, redact, secretNames } from './secrets.js';
 import { sanitizeErrorDetail } from './errorSanitizer.js';
 import { guardSqaBrowserTool } from './sqaBrowserBudget.js';

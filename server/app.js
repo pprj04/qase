@@ -179,19 +179,8 @@ export function createApplication(options = {}) {
 	drytisIntegrationApi?.mount(app);
 
 	app.use(express.json({ limit: '1mb' }));
-	// Cutover (Phase 7): the React app is the served UI at / and /login.
-	// Assets are built to public/app-react (vite base '/app-react/'), so the
-	// asset URLs inside this HTML resolve regardless of the serving path.
-	// Legacy files remain on disk until the source-pinning tests are reworked.
-	const reactIndex = path.join(publicDirectory, 'app-react', 'index.html');
-	app.get('/', (_request, response) => {
-		response.sendFile(reactIndex);
-	});
 	app.get('/login', (_request, response) => {
-		response.sendFile(reactIndex);
-	});
-	app.get('/app-react/', (_request, response) => {
-		response.sendFile(reactIndex);
+		response.sendFile(path.join(publicDirectory, 'index.html'));
 	});
 	app.use(express.static(publicDirectory));
 	if (demoEnabled) {
