@@ -3857,7 +3857,8 @@ const qaUi = {
 	targetUrl: $('qa-target-url'),
 	deviceSelect: $('qa-device-select'),
 	deviceLandscape: $('qa-device-landscape'),
-	scopeAll: $('qa-scope-all'),
+	scopeSelectAll: $('qa-scope-select-all'),
+	scopeDeselectAll: $('qa-scope-deselect-all'),
 	scopeOptions: $('qa-scope-options'),
 	engineOptions: $('qa-engine-options'),
 	error: $('qa-form-error')
@@ -4010,23 +4011,16 @@ if (qaUi.dialog) {
 		}
 	});
 
-	// Select-all drives the individual scope checkboxes; clearing one unchecks it.
-	if (qaUi.scopeAll && qaUi.scopeOptions) {
+	// Select All / Deselect All drive the individual coverage checkboxes.
+	// Individual toggles change only their own option — nothing else resets.
+	if (qaUi.scopeOptions) {
 		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
-		const syncSelectAll = () => {
-			const boxes = scopeBoxes();
-			qaUi.scopeAll.checked = boxes.length > 0 && boxes.every(box => box.checked);
-			qaUi.scopeAll.indeterminate = !qaUi.scopeAll.checked && boxes.some(box => box.checked);
-		};
-		qaUi.scopeAll.addEventListener('change', () => {
-			for (const box of scopeBoxes()) {
-				box.checked = qaUi.scopeAll.checked;
-			}
-			syncSelectAll();
+		qaUi.scopeSelectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = true;
 		});
-		for (const box of scopeBoxes()) {
-			box.addEventListener('change', syncSelectAll);
-		}
+		qaUi.scopeDeselectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = false;
+		});
 	}
 
 	qaUi.form.onsubmit = async event => {
@@ -4049,7 +4043,7 @@ if (qaUi.dialog) {
 		const scopeValues = selectedQaScopeValues();
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
 		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
-			setQaFormError('Check at least one item under “What to test”.');
+			setQaFormError('Select at least one coverage area under “Supported Coverage”.');
 			return;
 		}
 		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;

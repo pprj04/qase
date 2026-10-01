@@ -1816,7 +1816,7 @@ a {
   flex: 0 0 auto;
 }
 
-/* QA launcher "What to test" checkbox group */
+/* QA launcher "Supported Coverage" checkbox group */
 
 .qa-scope-fieldset {
   display: grid;
@@ -1837,8 +1837,17 @@ a {
   text-transform: uppercase;
 }
 
+.coverage-heading {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .scope-controls {
-  padding-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
   border-bottom: 1px dashed rgba(193, 209, 229, 0.1);
 }
 

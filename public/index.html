@@ -508,23 +508,22 @@
         <small>Each checked engine starts its own run of this site. Chromium runs the full sweep; other engines focus on core flows for cross-browser comparison.</small>
       </fieldset>
       <fieldset class="qa-scope-fieldset">
-        <legend>What to test</legend>
+        <legend>Coverage selection</legend>
+        <div class="coverage-heading">Supported Coverage</div>
         <div class="scope-controls">
-          <label class="check scope-all">
-            <input id="qa-scope-all" type="checkbox" checked>
-            <span><strong>Select all</strong> — test everything below</span>
-          </label>
+          <button type="button" class="btn btn-ghost btn-sm" id="qa-scope-select-all">Select All</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="qa-scope-deselect-all">Deselect All</button>
         </div>
         <div class="scope-options" id="qa-scope-options">
-          <label class="check"><input class="qa-scope" type="checkbox" value="desktop-layout" checked><span>Desktop layout &amp; responsive behaviour</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="mobile-layout" checked><span>Mobile layout (if device profile allows)</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="forms" checked><span>Forms &amp; input validation</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked><span>Console &amp; network errors</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked><span>Navigation &amp; links</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked><span>Accessibility basics</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="security" checked><span>Security checks (headers, XSS reflection, SQL error signs)</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="desktop-layout" checked title="desktop layout and responsive behaviour across viewport widths"><span>Web Application Testing</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="mobile-layout" checked title="mobile layout using an emulated phone viewport"><span>Mobile Testing</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="forms" checked title="forms and input validation (required fields, invalid input handling, submission feedback)"><span>Functional Testing</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked title="console errors and failed network requests while browsing"><span>Console &amp; Network Health</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked title="navigation and internal links (broken links, dead ends, back-navigation)"><span>Navigation &amp; Links</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked title="accessibility basics (labels, contrast, keyboard reachability, focus visibility)"><span>Accessibility Testing</span></label>
+          <label class="check"><input class="qa-scope" type="checkbox" value="security" checked title="security basics (header presence, cookie flags, XSS reflection, SQL injection error signatures) using the security_check tool"><span>Security Testing</span></label>
         </div>
-        <small>Everything is pre-checked so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
+        <small>Everything is preselected so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
       </fieldset>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
     </div>
