@@ -40,6 +40,10 @@ type Tab = 'browser' | 'findings' | 'report';
 export function ViewerPanel() {
   const { session } = useLiveSession();
   const [tab, setTab] = useState<Tab>('browser');
+  // At ≤900px the viewer becomes an overlay; this dismisses it so it can't
+  // opaquely cover the transcript (restored by clicking any tab in the rail
+  // or re-selecting a run).
+  const [overlayHidden, setOverlayHidden] = useState(false);
   const sessionId = session?.id;
   // Manual overrides are per-session (legacy state.stageExpanded parity):
   // keying by id means expanding run A never suppresses auto-collapse on run B.
@@ -93,7 +97,7 @@ export function ViewerPanel() {
   }, [session?.frame]);
 
   return (
-    <div className="viewer-pane">
+    <div className={`viewer-pane${overlayHidden ? ' is-overlay-hidden' : ''}`} data-testid={overlayHidden ? undefined : 'viewer-pane'}>
       <div className="viewer-tabs" role="tablist" aria-label="Viewer panels">
         {(['browser', 'findings', 'report'] as Tab[]).map((id) => (
           <button
@@ -110,6 +114,15 @@ export function ViewerPanel() {
             {id === 'browser' ? 'Browser' : id === 'findings' ? `Findings${session?.findings.length ? ` (${session.findings.length})` : ''}` : 'Report'}
           </button>
         ))}
+        <button
+          type="button"
+          className="icon-btn viewer-overlay-close"
+          aria-label="Hide browser panel"
+          onClick={() => setOverlayHidden(true)}
+          data-testid="viewer-overlay-close"
+        >
+          ×
+        </button>
       </div>
 
       <div

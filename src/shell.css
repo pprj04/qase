@@ -1963,7 +1963,21 @@ button {
     z-index: 20;
     box-shadow: var(--shadow-xl);
   }
+  /* The overlay viewer can be dismissed so it never opaquely covers the
+     transcript; the close button only exists in this narrow layout. */
+  .viewer-pane.is-overlay-hidden {
+    display: none;
+  }
+  .viewer-overlay-close { display: inline-flex; }
+  .composer textarea {
+    font-size: 16px; /* prevents iOS zoom-on-focus */
+  }
+  .viewer-stage {
+    max-height: 55%;
+  }
 }
+
+.viewer-overlay-close { display: none; }
 
 @media (max-width: 700px) {
   .sidebar:not(.collapsed) {
