@@ -20,7 +20,7 @@
  */
 
 const EXECUTION_TYPES = Object.freeze(['real_device', 'virtual_device', 'simulated', 'none']);
-const RUNTIME_STATUSES = Object.freeze(['queued', 'reserving', 'connecting', 'connected', 'running', 'completed', 'failed', 'device_unavailable']);
+const RUNTIME_STATUSES = Object.freeze(['queued', 'reserving', 'connecting', 'connected', 'running', 'blocked', 'completed', 'failed', 'device_unavailable', 'released']);
 const DEVICE_KINDS = Object.freeze(['phone', 'tablet', 'desktop']);
 
 const BROWSER_KEYS = Object.freeze([
@@ -90,11 +90,14 @@ export function runtimeStatusFor({ sessionStatus, deviceSessionStatus, availabil
 	const ds = String(deviceSessionStatus ?? '').toLowerCase();
 	if (ds === 'queued') return 'queued';
 	if (ds === 'created') return 'connecting';
+	if (ds === 'blocked') return 'blocked';
+	if (ds === 'released') return 'released';
 	if (ds === 'failed' || ds === 'cancelled') return 'failed';
 	const status = String(sessionStatus ?? '').toLowerCase();
 	if (status === 'queued' || status === 'starting') return 'queued';
 	if (status === 'resuming') return 'connecting';
 	if (status === 'awaiting_input') return 'connected';
+	if (status === 'blocked') return 'blocked';
 	if (status === 'running') return 'running';
 	if (status === 'done') return 'completed';
 	if (['error', 'interrupted', 'cancelled', 'failed'].includes(status)) return 'failed';

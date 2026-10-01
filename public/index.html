@@ -7,7 +7,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=20260930-2">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
@@ -73,7 +73,7 @@
       </div>
       <p class="run-explorer-label"><span aria-hidden="true">./</span> recent sessions</p>
     </header>
-    <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
+    <div class="run-list" id="run-list" role="list" aria-label="Recent runs" tabindex="-1"></div>
     <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
       <h2 class="perf-title">⏱ Performance</h2>
       <dl class="perf-grid" id="perf-grid"></dl>
@@ -88,7 +88,6 @@
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-device-matrix" title="Device management: catalog, environments &amp; coverage">Device Management</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-test-cases" title="Reusable QA scenarios with multi-environment assignment">Test cases</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-bulk-run" title="Launch one run per test case &times; environment">Bulk runs</button>
     </footer>
@@ -194,6 +193,107 @@
 
     <div class="question-slot" id="question-slot" aria-live="assertive"></div>
 
+    <!-- Collapsible Choose Device (exec layout #14069): sits above the
+         preview; ONE inline picker surface; right panel stays indicator-only.
+         Collapsed = compact summary row; expanded = full selection controls. -->
+    <section class="choose-device" id="choose-device" aria-labelledby="cd-title">
+      <div class="cd-head" id="cd-head" role="button" tabindex="0" aria-expanded="false" aria-controls="cd-body">
+        <span class="cd-label" id="cd-title">Choose Device</span>
+        <span class="cd-summary" id="cd-summary">No device selected</span>
+        <span class="cd-exec-badge" id="cd-exec-badge" data-exec="none" hidden>○ NO DEVICE</span>
+        <button type="button" class="btn btn-sm cd-change" id="cd-change" title="Change device (opens the full device picker)">Change Device</button>
+        <span class="cd-chevron" id="cd-chevron" aria-hidden="true">⌄</span>
+      </div>
+      <div class="cd-body" id="cd-body" hidden>
+        <div class="cd-controls">
+          <label class="cd-search"><span class="sr-only">Search devices</span>
+            <input type="search" id="cd-search" placeholder="Search devices…" autocomplete="off"></label>
+          <div class="cd-chip-row" id="cd-platform-chips" role="group" aria-label="Platform filter">
+            <button type="button" class="cd-chip is-active" data-cd-platform="all">All</button>
+            <button type="button" class="cd-chip" data-cd-platform="apple">Apple</button>
+            <button type="button" class="cd-chip" data-cd-platform="android">Android</button>
+            <button type="button" class="cd-chip" data-cd-platform="windows">Windows</button>
+          </div>
+          <div class="cd-chip-row" id="cd-type-chips" role="group" aria-label="Device type filter">
+            <button type="button" class="cd-chip is-active" data-cd-type="all">All</button>
+            <button type="button" class="cd-chip" data-cd-type="phone">Phone</button>
+            <button type="button" class="cd-chip" data-cd-type="tablet">Tablet</button>
+            <button type="button" class="cd-chip" data-cd-type="desktop">Desktop</button>
+          </div>
+        </div>
+        <div class="cd-list" id="cd-list" role="list" aria-label="Devices"></div>
+        <div class="cd-secondary" id="cd-secondary" hidden></div>
+      </div>
+    </section>
+
+    <div class="stage" id="stage">
+      <div class="ldv-unavailable" id="ldv-unavailable" hidden>
+        <span class="ldv-unavailable-title">DEVICE/BROWSER UNAVAILABLE</span>
+        <div class="ldv-unavailable-env" id="ldv-unavailable-env"></div>
+        <div class="ldv-unavailable-reason" id="ldv-unavailable-reason"></div>
+        <div class="ldv-unavailable-actions">
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-retry">Retry</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-env">Change Environment</button>
+        </div>
+      </div>
+      <div class="browser-chrome" id="browser-chrome" hidden>
+        <span class="chrome-brand-dot" id="chrome-brand-dot" aria-hidden="true"></span>
+        <span class="chrome-brand" id="chrome-brand">Browser</span>
+        <span class="chrome-nav" id="chrome-nav">← → ↻</span>
+        <span class="chrome-lock" id="chrome-lock" aria-hidden="true">🔒</span>
+        <span class="chrome-url" id="chrome-url">about:blank</span>
+      </div>
+      <div class="stage-inner" id="stage-inner" hidden>
+        <img id="frame" alt="Live view of the site under test">
+        <div class="overlay" id="overlay">
+          <div class="target-box" id="target-box"></div>
+          <div class="cursor" id="cursor">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+              <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
+                    fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+            <span class="ripple" id="ripple"></span>
+            <span class="cursor-label" id="cursor-label"></span>
+          </div>
+        </div>
+      </div>
+      <div class="stage-empty" id="stage-empty">
+        <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true">
+          <rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="6" cy="5" r="1.2" fill="currentColor"/>
+          <circle cx="10.5" cy="5" r="1.2" fill="currentColor"/>
+          <circle cx="15" cy="5" r="1.2" fill="currentColor"/>
+          <path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>No browser yet</span>
+        <small>The live view appears when the agent opens the site</small>
+      </div>
+    </div>
+
+    <!-- Run workspace tabs (UI Fix Phase 1): Activity/Plan/Findings/Bugs/Report
+         live INSIDE the center execution column — sticky tab bar, scrollable
+         active pane, never a page footer. -->
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
+      <button class="tab is-active" id="tab-activity" data-tab="activity" role="tab" aria-selected="true" aria-controls="pane-activity">Activity</button>
+      <button type="button" class="btn btn-ghost btn-sm autoscroll-toggle" id="activity-autoscroll" aria-pressed="true" title="Keep the latest activity visible">Auto-scroll ON</button>
+      <button class="tab" id="tab-plan" data-tab="plan" role="tab" aria-selected="false" aria-controls="pane-plan" tabindex="-1">Plan <span class="count" id="count-plan"></span></button>
+      <button class="tab" id="tab-findings" data-tab="findings" role="tab" aria-selected="false" aria-controls="pane-findings" tabindex="-1">Findings <span class="count" id="count-findings"></span></button>
+      <button class="tab" id="tab-bugs" data-tab="bugs" role="tab" aria-selected="false" aria-controls="pane-bugs" tabindex="-1">Bugs <span class="count" id="count-bugs"></span></button>
+      <button class="tab" id="tab-report" data-tab="report" role="tab" aria-selected="false" aria-controls="pane-report" tabindex="-1">Report</button>
+      <button class="tab tab-sqa" id="tab-sqa" data-tab="sqa" role="tab" aria-selected="false" aria-controls="pane-sqa" tabindex="-1" hidden>SQA <span class="count" id="count-sqa"></span></button>
+      <button class="tab tab-founder" id="tab-founder" data-tab="founder" role="tab" aria-selected="false" aria-controls="pane-founder" tabindex="-1" hidden>Founder <span class="count" id="count-founder"></span></button>
+    </nav>
+    <div class="tab-body">
+      <section class="tab-pane is-active" id="pane-activity" data-pane="activity" role="tabpanel" aria-labelledby="tab-activity"><div class="feed" id="activity-feed" role="list" aria-live="polite" aria-relevant="additions text"></div></section>
+      <section class="tab-pane" id="pane-plan" data-pane="plan" role="tabpanel" aria-labelledby="tab-plan"><div class="feed" id="plan-list" role="list"></div></section>
+      <section class="tab-pane" id="pane-findings" data-pane="findings" role="tabpanel" aria-labelledby="tab-findings"><div class="feed" id="findings-list" role="list"></div></section>
+      <section class="tab-pane" id="pane-bugs" data-pane="bugs" role="tabpanel" aria-labelledby="tab-bugs"><div class="feed" id="bugs-list" role="list"><div class="feed-empty">No bugs detected yet — use Report bug on a run with findings.</div></div></section>
+      <section class="tab-pane" id="pane-report" data-pane="report" role="tabpanel" aria-labelledby="tab-report"><div class="feed" id="report-view"></div></section>
+      <section class="tab-pane" id="pane-sqa" data-pane="sqa" role="tabpanel" aria-labelledby="tab-sqa"><div class="feed sqa-view" id="sqa-view" aria-live="polite"></div></section>
+      <section class="tab-pane" id="pane-founder" data-pane="founder" role="tabpanel" aria-labelledby="tab-founder"><div class="feed founder-view" id="founder-view" aria-live="polite"></div></section>
+    </div>
+
     <div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
       <span class="qa-strip-title">Quick actions</span>
       <button type="button" class="qa-chip" id="qa-run-all" title="Run every test case on its assigned environments">▶ Run all</button>
@@ -266,70 +366,8 @@
       </div>
     </header>
 
-    <div class="stage" id="stage">
-      <div class="ldv-unavailable" id="ldv-unavailable" hidden>
-        <span class="ldv-unavailable-title">DEVICE/BROWSER UNAVAILABLE</span>
-        <div class="ldv-unavailable-env" id="ldv-unavailable-env"></div>
-        <div class="ldv-unavailable-reason" id="ldv-unavailable-reason"></div>
-        <div class="ldv-unavailable-actions">
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-retry">Retry</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="ldv-change-env">Change Environment</button>
-        </div>
-      </div>
-      <div class="browser-chrome" id="browser-chrome" hidden>
-        <span class="chrome-brand-dot" id="chrome-brand-dot" aria-hidden="true"></span>
-        <span class="chrome-brand" id="chrome-brand">Browser</span>
-        <span class="chrome-nav" id="chrome-nav">← → ↻</span>
-        <span class="chrome-lock" id="chrome-lock" aria-hidden="true">🔒</span>
-        <span class="chrome-url" id="chrome-url">about:blank</span>
-      </div>
-      <div class="stage-inner" id="stage-inner" hidden>
-        <img id="frame" alt="Live view of the site under test">
-        <div class="overlay" id="overlay">
-          <div class="target-box" id="target-box"></div>
-          <div class="cursor" id="cursor">
-            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-              <path d="M5 2.5 19 12.2l-6.1.55 3.2 6.6-2.6 1.25-3.2-6.6L5 18.6Z"
-                    fill="#fff" stroke="#0b0d12" stroke-width="1.4" stroke-linejoin="round"/>
-            </svg>
-            <span class="ripple" id="ripple"></span>
-            <span class="cursor-label" id="cursor-label"></span>
-          </div>
-        </div>
-      </div>
-      <div class="stage-empty" id="stage-empty">
-        <svg class="stage-empty-art" viewBox="0 0 48 36" width="44" height="33" aria-hidden="true">
-          <rect x="1" y="1" width="46" height="30" rx="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M1 9h46" stroke="currentColor" stroke-width="1.5"/>
-          <circle cx="6" cy="5" r="1.2" fill="currentColor"/>
-          <circle cx="10.5" cy="5" r="1.2" fill="currentColor"/>
-          <circle cx="15" cy="5" r="1.2" fill="currentColor"/>
-          <path d="M18 35h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-        <span>No browser yet</span>
-        <small>The live view appears when the agent opens the site</small>
-      </div>
-    </div>
 
-    <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
-      <button class="tab is-active" id="tab-activity" data-tab="activity" role="tab" aria-selected="true" aria-controls="pane-activity">Activity</button>
-      <button class="tab" id="tab-plan" data-tab="plan" role="tab" aria-selected="false" aria-controls="pane-plan" tabindex="-1">Plan <span class="count" id="count-plan"></span></button>
-      <button class="tab" id="tab-findings" data-tab="findings" role="tab" aria-selected="false" aria-controls="pane-findings" tabindex="-1">Findings <span class="count" id="count-findings"></span></button>
-      <button class="tab" id="tab-bugs" data-tab="bugs" role="tab" aria-selected="false" aria-controls="pane-bugs" tabindex="-1">Bugs <span class="count" id="count-bugs"></span></button>
-      <button class="tab" id="tab-report" data-tab="report" role="tab" aria-selected="false" aria-controls="pane-report" tabindex="-1">Report</button>
-      <button class="tab tab-sqa" id="tab-sqa" data-tab="sqa" role="tab" aria-selected="false" aria-controls="pane-sqa" tabindex="-1" hidden>SQA <span class="count" id="count-sqa"></span></button>
-      <button class="tab tab-founder" id="tab-founder" data-tab="founder" role="tab" aria-selected="false" aria-controls="pane-founder" tabindex="-1" hidden>Founder <span class="count" id="count-founder"></span></button>
-    </nav>
 
-    <div class="tab-body">
-      <section class="tab-pane is-active" id="pane-activity" data-pane="activity" role="tabpanel" aria-labelledby="tab-activity"><div class="feed" id="activity-feed" role="list" aria-live="polite" aria-relevant="additions text"></div></section>
-      <section class="tab-pane" id="pane-plan" data-pane="plan" role="tabpanel" aria-labelledby="tab-plan"><div class="feed" id="plan-list" role="list"></div></section>
-      <section class="tab-pane" id="pane-findings" data-pane="findings" role="tabpanel" aria-labelledby="tab-findings"><div class="feed" id="findings-list" role="list"></div></section>
-      <section class="tab-pane" id="pane-bugs" data-pane="bugs" role="tabpanel" aria-labelledby="tab-bugs"><div class="feed" id="bugs-list" role="list"><div class="feed-empty">No bugs filed yet — use Report bug on a run with findings.</div></div></section>
-      <section class="tab-pane" id="pane-report" data-pane="report" role="tabpanel" aria-labelledby="tab-report"><div class="feed" id="report-view"></div></section>
-      <section class="tab-pane" id="pane-sqa" data-pane="sqa" role="tabpanel" aria-labelledby="tab-sqa"><div class="feed sqa-view" id="sqa-view" aria-live="polite"></div></section>
-      <section class="tab-pane" id="pane-founder" data-pane="founder" role="tabpanel" aria-labelledby="tab-founder"><div class="feed founder-view" id="founder-view" aria-live="polite"></div></section>
-    </div>
   </aside>
 
   <!-- Feature dock stays outside the three working panels so launch actions
@@ -378,49 +416,7 @@
 
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <!-- ── Environments (device & environment matrix) ──────────────── -->
-<dialog class="modal" id="environments" aria-labelledby="environments-title">
-  <form class="modal-inner" id="env-form" method="dialog">
-    <header class="modal-head">
-      <div>
-        <h2 id="environments-title">Apple environments</h2>
-        <p>iPhone · iPad · Android · Windows × Safari, Chrome, Firefox, Edge, Opera — only executable combinations.</p>
-      </div>
-      <button class="btn btn-ghost btn-sm" type="button" id="env-close">Close</button>
-    </header>
-    <div class="modal-body">
-      <div class="field-row" id="env-filters">
-        <label class="field"><span>Platform</span><select id="env-filter-platform"><option value="">All</option></select></label>
-        <label class="field"><span>OS version</span><select id="env-filter-osversion"><option value="">All</option></select></label>
-        <label class="field"><span>Browser</span><select id="env-filter-browser"><option value="">All</option></select></label>
-        <label class="field"><span>Browser version</span><select id="env-filter-browserversion"><option value="">All</option></select></label>
-        <label class="field"><span>State</span>
-          <select id="env-filter-active">
-            <option value="">All</option>
-            <option value="true">Active</option>
-            <option value="false">Inactive</option>
-          </select>
-        </label>
-        <label class="field env-search"><span>Search</span><input id="env-filter-search" type="search" placeholder="ENV-IOS-IP16PRO…" autocomplete="off"></label>
-      </div>
-      <p class="env-summary" id="env-summary" aria-live="polite"></p>
-      <div class="env-table-wrap">
-        <table class="env-table" id="env-table">
-          <thead>
-            <tr>
-              <th>Environment ID</th><th>Device</th><th>OS</th><th>Browser</th><th>Version</th><th>Type</th><th>Provider</th><th>State</th>
-            </tr>
-          </thead>
-          <tbody id="env-tbody"></tbody>
-        </table>
-      </div>
-      <p class="env-detail" id="env-detail" aria-live="polite"></p>
-      <details class="env-availability">
-        <summary>Why some browsers are missing (Brave, DuckDuckGo, Firefox-on-iOS…)</summary>
-        <div id="env-availability-body">Loading availability…</div>
-      </details>
-    </div>
-  </form>
-</dialog>
+
 <!-- ── Device & Environment Matrix ──────────────────────────────── -->
 <dialog class="modal dm-modal" id="device-matrix" aria-labelledby="dm-title">
   <form class="modal-inner" method="dialog" id="dm-form">
@@ -585,6 +581,12 @@
         <input id="cfg-headless" type="checkbox">
         <span>Run Chromium off-screen<small>Uncheck to also open a real browser window on this machine.</small></span>
       </label>
+
+      <div class="field">
+        <span>Device management</span>
+        <small>Admin catalog: devices, environments, coverage &amp; runtimes. Not needed for everyday runs — the device picker handles that.</small>
+        <button type="button" class="btn btn-ghost btn-sm" id="open-device-matrix">Open Device Management</button>
+      </div>
 
       <div class="test-result" id="cfg-test" role="status" aria-live="polite"></div>
     </div>
@@ -851,7 +853,7 @@
     <header class="modal-head">
       <div>
         <h2 id="test-cases-title">Test cases</h2>
-        <p>Create reusable QA scenarios and assign them to one or more Apple environments.</p>
+        <p>Create reusable QA scenarios and assign them to one or more devices.</p>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" id="tc-close">Close</button>
     </header>
@@ -932,7 +934,7 @@
               <option value="pick">Pick environments</option>
             </select>
           </label>
-          <label class="field" id="bulk-envs-field" hidden>
+          <label class="field">
             <span>DEVICES</span>
             <div class="dcl-list" id="bulk-device-chips"></div>
             <button type="button" class="btn btn-ghost btn-sm dcl-add" id="bulk-add-device">+ Add device</button>
@@ -1070,14 +1072,6 @@
   <form id="password-form"><label for="current-password">Current password</label><input id="current-password" type="password" required maxlength="200" autocomplete="current-password"><label for="new-password">New password</label><input id="new-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"><button class="btn btn-primary" type="submit">Update password</button></form>
   <hr><h3>Saved memory</h3><p class="auth-copy">Preferences and context used by your agents. Never add credentials.</p><ul id="profile-memory"></ul>
   <form id="memory-form"><label for="memory-key">Name</label><input id="memory-key" required maxlength="80" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}" placeholder="preferred-browser"><label for="memory-value">Value</label><textarea id="memory-value" required maxlength="4000"></textarea><button class="btn btn-primary" type="submit">Save memory</button></form>
-  <p id="profile-message" role="status" aria-live="polite"></p>
-</dialog>
-<script src="entry.js" type="module"></script>
-<script src="entry-motion.js" type="module"></script>
-<script src="app.js" type="module"></script>
-</body>
-</html>
-wser"><label for="memory-value">Value</label><textarea id="memory-value" required maxlength="4000"></textarea><button class="btn btn-primary" type="submit">Save memory</button></form>
   <p id="profile-message" role="status" aria-live="polite"></p>
 </dialog>
 <script src="entry.js" type="module"></script>

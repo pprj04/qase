@@ -399,11 +399,12 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 				env.screenResolution ?? '—', env.orientation ?? (env.deviceType === 'desktop' ? 'landscape' : 'portrait'),
 				executionTypeLabel(boardEntry?.maximumLevel)
 			];
-			for (const text of cells) {
-				const td = document.createElement('td');
-				td.textContent = String(text);
-				tr.append(td);
-			}
+		for (const text of cells) {
+			const td = document.createElement('td');
+			td.textContent = String(text);
+			td.title = String(text); // tooltip for ellipsized cells (UI Fix Phase 4)
+			tr.append(td);
+		}
 			// Capabilities cell (honest: from env metadata, not the profile alone).
 			const capTd = document.createElement('td');
 			const caps = [

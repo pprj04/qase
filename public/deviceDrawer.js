@@ -138,11 +138,14 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, onRunEnvironme
 	// ── Chip (collapsed indicator) ──────────────────────────────────────────
 	function paintChip() {
 		if (!chipLabelEl) return;
-		const env = state.environments.find((e) => e.envId === state.defaultEnvId)
-			?? state.environments.find((e) => e.envId === localStorage.getItem('qase.environmentId'))
-			?? null;
+		// DX Phase 3 / UI Fix Phase 3: the chip reads the ACTIVE SELECTION
+		// (store), not the drawer's own default-env state — one source of
+		// truth. Falls back to the legacy key only if the store is empty.
+		const sel = globalThis.__qaseActiveSelection?.();
+		const envId = sel?.envId ?? state.defaultEnvId ?? localStorage.getItem('qase.environmentId');
+		const env = state.environments.find((e) => e.envId === envId) ?? null;
 		chipLabelEl.textContent = env ? env.device : 'none yet';
-		chipLabelEl.title = env ? chipLabel(env) : 'Open the device matrix to choose a test environment';
+		chipLabelEl.title = env ? chipLabel(env) : 'Choose where the next run executes';
 		// Phase D5: full compact panel — all six labeled fields, no truncation.
 		const osEl = document.getElementById('device-chip-os');
 		const browserEl = document.getElementById('device-chip-browser');
@@ -151,7 +154,7 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, onRunEnvironme
 		const sessionEl = document.getElementById('device-chip-session');
 		if (osEl) osEl.textContent = env ? [env.os, env.osVersion].filter(Boolean).join(' ') : '—';
 		if (browserEl) browserEl.textContent = env ? [env.browser, env.browserVersion].filter(Boolean).join(' ') : '—';
-		if (execEl) execEl.textContent = env ? executionTypeLabel(env.executionType === 'SIMULATED' ? 'SIMULATED' : env.isRealDevice ? 'VIRTUAL_DEVICE' : null).toUpperCase() : '—';
+		if (execEl) execEl.textContent = env ? executionTypeLabel(env.executionLevelRequested ?? env.runtimeAttestedLevel ?? null).toUpperCase() : '—';
 		if (statusEl) {
 			statusEl.textContent = env ? '● Available' : '○ Not selected';
 		}

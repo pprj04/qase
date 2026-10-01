@@ -8,7 +8,7 @@ import { createBulkRunView } from './bulkRunView.js';
 import { createBugView } from './bugView.js';
 import { createDeviceDrawer, chipLabel, RUNTIME_PROFILES } from './deviceDrawer.js';
 import { createActiveTestEnvironmentStore } from './activeTestEnvironment.js';
-import { createDevicePicker, createDeviceChipList, executionTypeText } from './devicePicker.js';
+import { createDevicePicker, createDeviceChipList, executionTypeText, buildDeviceCards, filterDeviceCards, resolveDeviceEnvironment, cardBadge, browsersForOS } from './devicePicker.js';
 import { fallbackOptionsFor, availabilityMeta, describeQueue } from './deviceRuntimeUi.js';
 import { resolveActiveRuntimeEnvironment } from './activeRuntimeEnvironment.js';
 import { chromeViewModel } from './browserChrome.js';
@@ -617,7 +617,270 @@ function renderAllTestOnBlocks() {
 	renderTestOn('qa-test-on');
 	renderTestOn('sqa-test-on');
 	renderTestOn('founder-test-on');
+	renderChooseDeviceSummary();
 }
+
+/* ── Choose Device collapsible section (exec layout #14069) ─────────
+ * ONE inline picker surface above the preview. Reads/writes the SAME
+ * activeTestEnvironment store as the dialog picker — no second state. */
+const chooseDeviceUi = {
+	root: $('choose-device'),
+	head: $('cd-head'),
+	body: $('cd-body'),
+	summary: $('cd-summary'),
+	execBadge: $('cd-exec-badge'),
+	chevron: $('cd-chevron'),
+	changeBtn: $('cd-change'),
+	search: $('cd-search'),
+	list: $('cd-list'),
+	secondary: $('cd-secondary')
+};
+let cdSelectedDevice = null;
+
+function renderChooseDeviceSummary() {
+	if (!chooseDeviceUi.head) return;
+	const sel = activeTestEnvStore?.get?.();
+	if (!sel) {
+		chooseDeviceUi.head.dataset.empty = 'true';
+		if (chooseDeviceUi.summary) chooseDeviceUi.summary.textContent = 'No device selected — click to choose';
+		if (chooseDeviceUi.execBadge) { chooseDeviceUi.execBadge.hidden = false; chooseDeviceUi.execBadge.textContent = '○ NO DEVICE'; chooseDeviceUi.execBadge.dataset.exec = 'none'; }
+		return;
+	}
+	delete chooseDeviceUi.head.dataset.empty;
+	if (chooseDeviceUi.summary) {
+		chooseDeviceUi.summary.textContent = [sel.device, [sel.os, sel.osVersion].filter(Boolean).join(' '), [sel.browser, sel.browserVersion].filter(Boolean).join(' ')]
+			.filter(Boolean).join(' · ');
+	}
+	const badgeLevel = cdBadgeText();
+	if (chooseDeviceUi.execBadge) {
+		chooseDeviceUi.execBadge.hidden = false;
+		chooseDeviceUi.execBadge.textContent = `● ${badgeLevel.toUpperCase()}`;
+		chooseDeviceUi.execBadge.dataset.exec = badgeLevel.toLowerCase().replace(/ /g, '_');
+	}
+}
+
+function cdEnvironments() {
+	// Reuse the dialog picker's live catalog (same data source, refreshed on open).
+	return devicePicker?.state?.environments ?? [];
+}
+
+/**
+ * Honest badge text for the collapsed header: derived from the SAME card
+ * model + runtime board the picker cards use (cardBadge), so the header can
+ * never contradict the card the user just clicked. Falls back to the store
+ * selection's executionType when the device isn't in the catalog.
+ */
+function cdBadgeText() {
+	const sel = activeTestEnvStore?.get?.();
+	if (!sel?.device) return executionTypeText(sel);
+	const envs = cdEnvironments();
+	if (!envs.length) return executionTypeText(sel);
+	const cards = buildDeviceCards(envs, cdBoardFor(envs));
+	const card = cards.find((c) => c.device === sel.device);
+	if (!card) return executionTypeText(sel);
+	return cardBadge(card).level;
+}
+
+function cdBoardFor(envs) {
+	const board = devicePicker?.state?.boardByEnvId;
+	const map = new Map();
+	if (!board) return map;
+	for (const env of envs) {
+		const entry = board.get(env.envId ?? env.id);
+		if (entry) map.set(env.envId ?? env.id, entry);
+	}
+	return map;
+}
+
+function cdFilters() {
+	const platform = chooseDeviceUi.root?.querySelector('.cd-chip.is-active[data-cd-platform]')?.dataset.cdPlatform ?? 'all';
+	const type = chooseDeviceUi.root?.querySelector('.cd-chip.is-active[data-cd-type]')?.dataset.cdType ?? 'all';
+	return { search: chooseDeviceUi.search?.value ?? '', platform, deviceType: type };
+}
+
+function renderCdList() {
+	if (!chooseDeviceUi.list) return;
+	chooseDeviceUi.list.textContent = '';
+	const envs = cdEnvironments();
+	if (!envs.length) {
+		const p = document.createElement('p');
+		p.className = 'cd-empty';
+		p.textContent = devicePicker?.state?.dataState === 'error'
+			? 'Could not load the device catalog — check your connection and reopen.'
+			: 'Loading device catalog…';
+		chooseDeviceUi.list.append(p);
+		return;
+	}
+	const cards = filterDeviceCards(buildDeviceCards(envs, cdBoardFor(envs)), cdFilters());
+	if (!cards.length) {
+		const p = document.createElement('p');
+		p.className = 'cd-empty';
+		p.textContent = 'No devices match — clear the search or filters.';
+		chooseDeviceUi.list.append(p);
+		return;
+	}
+	let currentGroup = null;
+	for (const card of cards) {
+		if (card.groupLabel !== currentGroup) {
+			currentGroup = card.groupLabel;
+			const head = document.createElement('div');
+			head.className = 'dp-group';
+			head.textContent = currentGroup;
+			chooseDeviceUi.list.append(head);
+		}
+		const el = document.createElement('div');
+		const selected = cdSelectedDevice === card.device;
+		el.className = `dp-card${selected ? ' is-selected' : ''}`;
+		el.setAttribute('role', 'listitem');
+		const badge = cardBadge(card);
+		const info = document.createElement('div');
+		info.className = 'dp-card-info';
+		const name = document.createElement('span');
+		name.className = 'dp-card-name';
+		name.textContent = card.device;
+		const sub = document.createElement('span');
+		sub.className = 'dp-card-sub';
+		sub.textContent = `${card.best.os ?? ''} ${card.best.osVersion ?? ''} · ${card.best.browser ?? ''} ${card.best.browserVersion ?? ''}`.trim();
+		const badgeEl = document.createElement('span');
+		badgeEl.className = 'dp-card-badge';
+		badgeEl.textContent = `● ${badge.level} · ${badge.availability}`;
+		info.append(name, sub, badgeEl);
+		const btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'btn btn-primary btn-sm dp-select-btn';
+		btn.textContent = selected ? 'Selected ✓' : 'Select';
+		btn.onclick = () => cdSelect(card);
+		el.append(info, btn);
+		chooseDeviceUi.list.append(el);
+	}
+	if (cdSelectedDevice) renderCdSecondary();
+}
+
+function renderCdSecondary() {
+	if (!chooseDeviceUi.secondary) return;
+	chooseDeviceUi.secondary.textContent = '';
+	const envs = cdEnvironments();
+	const card = buildDeviceCards(envs, cdBoardFor(envs)).find((c) => c.device === cdSelectedDevice);
+	if (!card) { chooseDeviceUi.secondary.hidden = true; return; }
+	chooseDeviceUi.secondary.hidden = false;
+	const sel = activeTestEnvStore?.get?.();
+
+	if (card.osVersions.length > 1) {
+		const label = document.createElement('label');
+		const span = document.createElement('span');
+		span.textContent = 'OS version';
+		const osSelect = document.createElement('select');
+		osSelect.setAttribute('aria-label', 'OS version');
+		for (const v of card.osVersions) {
+			const opt = document.createElement('option');
+			opt.value = v;
+			opt.textContent = `${card.best.os ?? ''} ${v}`.trim();
+			if (sel?.osVersion === v) opt.selected = true;
+			osSelect.append(opt);
+		}
+		osSelect.onchange = () => cdReselect(card, { osVersion: osSelect.value });
+		label.append(span, osSelect);
+		chooseDeviceUi.secondary.append(label);
+	}
+
+	const browsers = browsersForOS(card, sel?.osVersion ?? card.best.osVersion ?? null);
+	if (browsers.length > 1) {
+		const label = document.createElement('label');
+		const span = document.createElement('span');
+		span.textContent = 'Browser';
+		const bSelect = document.createElement('select');
+		bSelect.setAttribute('aria-label', 'Browser');
+		for (const b of browsers) {
+			const opt = document.createElement('option');
+			opt.value = b.browser;
+			opt.textContent = [b.browser, b.browserVersion].filter(Boolean).join(' ');
+			if (sel?.browser === b.browser) opt.selected = true;
+			bSelect.append(opt);
+		}
+		bSelect.onchange = () => cdReselect(card, { browser: bSelect.value });
+		label.append(span, bSelect);
+		chooseDeviceUi.secondary.append(label);
+	}
+}
+
+function cdSelect(card) {
+	cdSelectedDevice = card.device;
+	const env = resolveDeviceEnvironment(cdEnvironments(), { device: card.device })
+		?? card.best ?? null;
+	if (env) {
+		activeTestEnvStore.setSelection(env);
+		if (state.session) applySessionSnapshot(state.session);
+		renderAllTestOnBlocks();
+		renderCdList();
+	}
+}
+
+function cdReselect(card, overrides) {
+	const env = resolveDeviceEnvironment(cdEnvironments(), { device: card.device, ...overrides });
+	if (env) {
+		activeTestEnvStore.setSelection(env);
+		if (state.session) applySessionSnapshot(state.session);
+		renderAllTestOnBlocks();
+		renderCdList();
+	}
+}
+
+function setChooseDeviceOpen(open) {
+	if (!chooseDeviceUi.root) return;
+	chooseDeviceUi.root.classList.toggle('is-open', open);
+	if (chooseDeviceUi.body) chooseDeviceUi.body.hidden = !open;
+	if (chooseDeviceUi.head) chooseDeviceUi.head.setAttribute('aria-expanded', String(open));
+	if (open) {
+		cdSelectedDevice = activeTestEnvStore?.get?.()?.device ?? null;
+		renderCdList();
+	}
+}
+
+function cdSyncSelectedHighlight() {
+	// Dialog-picker selections can change the store while the inline body is
+	// open — keep the highlight/badge in sync (display only).
+	const storeDevice = activeTestEnvStore?.get?.()?.device ?? null;
+	if (cdSelectedDevice !== storeDevice) cdSelectedDevice = storeDevice;
+	renderChooseDeviceSummary();
+}
+
+if (chooseDeviceUi.head) {
+	const toggleFrom = (event) => {
+		// The [Change Device] button opens THE dialog picker instead of toggling.
+		if (event.target.closest?.('#cd-change')) return;
+		setChooseDeviceOpen(!chooseDeviceUi.root.classList.contains('is-open'));
+	};
+	chooseDeviceUi.head.onclick = toggleFrom;
+	// role=button div: keyboard parity with a real toggle button.
+	chooseDeviceUi.head.onkeydown = (event) => {
+		if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+		if (event.target.closest?.('#cd-change')) return;
+		event.preventDefault();
+		setChooseDeviceOpen(!chooseDeviceUi.root.classList.contains('is-open'));
+	};
+}
+if (chooseDeviceUi.changeBtn) {
+	chooseDeviceUi.changeBtn.onclick = () => {
+		setChooseDeviceOpen(false);
+		devicePicker?.open?.();
+	};
+}
+if (chooseDeviceUi.search) {
+	chooseDeviceUi.search.oninput = () => renderCdList();
+}
+for (const chip of chooseDeviceUi.root?.querySelectorAll('.cd-chip') ?? []) {
+	chip.onclick = () => {
+		for (const sibling of chip.parentElement.querySelectorAll('.cd-chip')) sibling.classList.remove('is-active');
+		chip.classList.add('is-active');
+		renderCdList();
+	};
+}
+// Keep the inline list fresh when the dialog picker refreshes its catalog.
+const cdRenderOnData = () => {
+	if (!chooseDeviceUi.root?.classList.contains('is-open')) return;
+	cdSyncSelectedHighlight();
+	renderCdList();
+};
 
 /** Submit-time source of truth (AC14): the store's envId, read at submit. */
 function selectedEnvironmentForRun() {
@@ -700,9 +963,11 @@ function renderLiveDeviceViewHeader(session, are = null) {
 		connecting: '◌ CONNECTING…',
 		connected: '● CONNECTED',
 		running: '● RUNNING',
+		blocked: '◆ BLOCKED',
 		completed: '○ COMPLETED',
 		failed: '✕ FAILED',
-		device_unavailable: '✕ DEVICE UNAVAILABLE'
+		device_unavailable: '✕ DEVICE UNAVAILABLE',
+		released: '○ RELEASED'
 	};
 	const liveLabel = statusMap[view.runtimeStatus] ?? `○ ${view.runtimeStatus.toUpperCase()}`;
 
@@ -1898,7 +2163,7 @@ function renderActivities() {
 	const activities = state.session.activities ?? [];
 	el.activityFeed.replaceChildren();
 	if (activities.length === 0) {
-		el.activityFeed.innerHTML = '<div class="feed-empty">Nothing yet</div>';
+		el.activityFeed.innerHTML = '<div class="feed-empty">No activity yet — start a QA run to see the agent execution log.</div>';
 		return;
 	}
 	for (const activity of activities) {
@@ -1942,7 +2207,15 @@ function renderActivity(activity) {
 	return node;
 }
 
+/* Auto-scroll toggle (UI Fix Phase 1): latest activity stays visible unless
+ * the user turned auto-scroll off for the session. */
+const autoScrollState = { activity: true };
+function feedAutoScrolls(feed) {
+	return autoScrollState.activity;
+}
+
 function scrollFeed(feed) {
+	if (!feedAutoScrolls(feed)) return;
 	const pane = feed.parentElement;
 	requestAnimationFrame(() => {
 		pane.scrollTop = pane.scrollHeight;
@@ -1969,7 +2242,7 @@ function renderTodos() {
 	el.countPlan.textContent = todos.length > 0 ? `${done}/${todos.length}` : '';
 	el.planList.replaceChildren();
 	if (todos.length === 0) {
-		el.planList.innerHTML = '<div class="feed-empty">The agent has not written a test plan yet</div>';
+		el.planList.innerHTML = '<div class="feed-empty">No test plan generated yet — the agent writes one at the start of each run.</div>';
 		return;
 	}
 	for (const todo of todos) {
@@ -1979,10 +2252,15 @@ function renderTodos() {
 		const mark = document.createElement('span');
 		mark.className = 'todo-mark';
 		mark.textContent = todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◉' : '○';
+		/* Status chip (UI Fix Phase 1): text label, not color-only — maps the
+		 * raw todo status onto the run vocabulary. */
+		const chip = document.createElement('span');
+		chip.className = `todo-chip todo-chip-${todo.status ?? 'pending'}`;
+		chip.textContent = { completed: 'Passed', in_progress: 'Running', failed: 'Failed', blocked: 'Blocked' }[todo.status ?? 'pending'] ?? 'Queued';
 		const text = document.createElement('span');
 		text.className = 'todo-text';
 		text.textContent = todo.text;
-		node.append(mark, text);
+		node.append(mark, chip, text);
 		el.planList.append(node);
 	}
 }
@@ -1998,7 +2276,7 @@ function renderFindings() {
 
 	el.findingsList.replaceChildren();
 	if (findings.length === 0) {
-		el.findingsList.innerHTML = '<div class="feed-empty">No findings filed yet</div>';
+		el.findingsList.innerHTML = '<div class="feed-empty">No findings yet — they appear here as the agent tests your target.</div>';
 		return;
 	}
 	const sorted = [...findings].sort(
@@ -2197,9 +2475,29 @@ function renderReport() {
 
 	const report = state.session.report;
 	if (!report) {
-		el.reportView.innerHTML = '<div class="feed-empty">The report is published when the run finishes</div>';
+		el.reportView.innerHTML = '<div class="feed-empty">No report available — it is published when a run finishes.</div>';
 		return;
 	}
+
+	/* Export report (UI Fix Phase 1): JSON download of the finished report —
+	 * presented once, inside the Report tab workspace. */
+	const exportBar = document.createElement('div');
+	exportBar.className = 'report-export-bar';
+	const exportBtn = document.createElement('button');
+	exportBtn.type = 'button';
+	exportBtn.className = 'btn btn-ghost btn-sm';
+	exportBtn.textContent = 'Export report';
+	exportBtn.onclick = () => {
+		const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `qase-report-${state.sessionId ?? 'run'}.json`;
+		a.click();
+		URL.revokeObjectURL(url);
+	};
+	exportBar.append(exportBtn);
+	el.reportView.append(exportBar);
 
 	const verdict = VERDICTS[report.verdict] ?? { mark: '•', label: report.verdict, tone: 'dim' };
 	const banner = document.createElement('div');
@@ -3978,137 +4276,6 @@ el.authForm?.addEventListener('submit', async event => {
 
 $('open-settings').onclick = openSettings;
 
-/* ── Environments admin modal ────────────────────────────────────── */
-
-const envUi = {
-	dialog: $('environments'),
-	close: $('env-close'),
-	filters: {
-		platform: $('env-filter-platform'),
-		osVersion: $('env-filter-osversion'),
-		browser: $('env-filter-browser'),
-		browserVersion: $('env-filter-browserversion'),
-		active: $('env-filter-active'),
-		search: $('env-filter-search')
-	},
-	summary: $('env-summary'),
-	tbody: $('env-tbody'),
-	detail: $('env-detail'),
-	availabilityBody: $('env-availability-body')
-};
-
-function fillEnvFilterOptions(select, values) {
-	if (!select) return;
-	const current = select.value;
-	select.innerHTML = '';
-	const all = document.createElement('option');
-	all.value = '';
-	all.textContent = 'All';
-	select.append(all);
-	for (const value of values) {
-		const option = document.createElement('option');
-		option.value = String(value);
-		option.textContent = String(value);
-		select.append(option);
-	}
-	if ([...select.options].some(option => option.value === current)) select.value = current;
-}
-
-function envActiveQuery() {
-	const filters = {};
-	for (const [key, select] of Object.entries(envUi.filters)) {
-		if (!select || !select.value) continue;
-		filters[key === 'osVersion' ? 'osVersion' : key === 'browserVersion' ? 'browserVersion' : key] = select.value;
-	}
-	return filters;
-}
-
-async function refreshEnvTable() {
-	if (!envUi.tbody) return;
-	const filters = envActiveQuery();
-	const params = new URLSearchParams(filters);
-	params.set('limit', '300');
-	const payload = await api(`/environments?${params.toString()}`).catch(() => ({ total: 0, environments: [] }));
-	const rows = payload.environments ?? [];
-	envUi.tbody.innerHTML = '';
-	for (const env of rows) {
-		const tr = document.createElement('tr');
-		tr.dataset.envId = env.envId;
-		tr.className = env.active ? '' : 'env-inactive';
-		const cells = [
-			env.envId,
-			env.device,
-			`${env.os} ${env.osVersion}`,
-			env.browser,
-			env.browserVersion,
-			env.deviceType,
-			env.executionProvider === 'browserstack' ? 'Environment runtime' : env.executionProvider === 'local' ? 'Local runtime' : env.executionProvider,
-			env.active ? 'active' : 'inactive'
-		];
-		for (const [index, text] of cells.entries()) {
-			const td = document.createElement('td');
-			td.textContent = String(text);
-			if (index === 7) td.dataset.state = env.active ? 'active' : 'inactive';
-			tr.append(td);
-		}
-		tr.title = `${env.screenSize}${env.isRealDevice ? ' · real device' : ' · desktop VM'} — click to inspect capabilities`;
-		tr.onclick = () => {
-			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.runtimeCapabilities)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`.replace(/runtimeCapabilities/g, 'runtimeCapabilities');
-		};
-		envUi.tbody.append(tr);
-	}
-	envUi.summary.textContent = `${payload.total} environment${payload.total === 1 ? '' : 's'} match the current filters (showing first ${rows.length}).`;
-}
-
-async function refreshEnvFacets() {
-	const payload = await api(`/environments/facets?${new URLSearchParams(envActiveQuery()).toString()}`).catch(() => null);
-	if (!payload) return;
-	fillEnvFilterOptions(envUi.filters.platform, payload.platform.map(entry => entry.value));
-	fillEnvFilterOptions(envUi.filters.osVersion, payload.osVersion.map(entry => entry.value).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })));
-	fillEnvFilterOptions(envUi.filters.browser, payload.browser.map(entry => entry.value));
-	fillEnvFilterOptions(envUi.filters.browserVersion, payload.browserVersion.map(entry => entry.value).sort((a, b) => Number(b) - Number(a)));
-}
-
-async function openEnvironments() {
-	if (!envUi.dialog) return;
-	if (!envUi.dialog.open) envUi.dialog.showModal();
-	await Promise.all([refreshEnvFacets(), refreshEnvTable()]);
-	if (envUi.availabilityBody && !envUi.availabilityBody.dataset.filled) {
-		const report = await api('/environments/availability').catch(() => []);
-		envUi.availabilityBody.innerHTML = '';
-		for (const entry of report) {
-			const p = document.createElement('p');
-			const strong = document.createElement('strong');
-			strong.textContent = entry.platformLabel;
-			p.append(strong, ` — available: ${entry.available.join(', ') || 'none'}.`);
-			if (entry.unavailable.length) {
-				const ul = document.createElement('ul');
-				for (const { browser, reason } of entry.unavailable) {
-					const li = document.createElement('li');
-					li.textContent = `${browser}: ${reason}`;
-					ul.append(li);
-				}
-				p.append(ul);
-			}
-			envUi.availabilityBody.append(p);
-		}
-		envUi.availabilityBody.dataset.filled = '1';
-	}
-}
-
-if (envUi.dialog) {
-	envUi.close.onclick = () => envUi.dialog.close();
-	for (const select of Object.values(envUi.filters)) {
-		select?.addEventListener('change', () => {
-			void refreshEnvFacets();
-			void refreshEnvTable();
-		});
-	}
-	envUi.filters.search?.addEventListener('input', () => {
-		clearTimeout(envUi.filters.search._timer);
-		envUi.filters.search._timer = setTimeout(() => void refreshEnvTable(), 250);
-	});
-}
 const openDeviceMatrixButton = $('open-device-matrix');
 
 /* ── Device & Environment Matrix (Phase 3) ────────────────────── */
@@ -4245,7 +4412,6 @@ const bulkRunView = $('bulk-run') ? createBulkRunView({
 		casesField: $('bulk-cases-field'),
 		casesSelect: $('bulk-cases'),
 		where: $('bulk-where'),
-		envsField: $('bulk-envs-field'),
 		deviceChips: $('bulk-device-chips'),
 		addDeviceBtn: $('bulk-add-device'),
 		preview: $('bulk-preview'),
@@ -4469,7 +4635,13 @@ if (quickActions) {
 	if (quickActions.runFailed) quickActions.runFailed.addEventListener('click', () => void runFailedTests());
 	if (quickActions.createCase) quickActions.createCase.addEventListener('click', () => testCaseView?.open?.());
 	if (quickActions.chooseDevices) quickActions.chooseDevices.addEventListener('click', () => devicePicker?.open?.());
-	quickActions.viewResults?.addEventListener('click', () => document.querySelector('.panel-foot .foot-btn')?.click?.() ?? window.qaseShowTab?.('runs'));
+	quickActions.viewResults?.addEventListener('click', () => {
+		// Results live in the run history (left panel): refresh it and move
+		// focus there. No separate results dialog exists by design.
+		void refreshRuns();
+		document.getElementById('run-list')?.focus?.();
+		toast('Run history refreshed — pick a run to see its results.');
+	});
 	quickActions.createBug?.addEventListener('click', () => void createBugReport());
 	quickActions.preset?.addEventListener('change', async () => {
 		const presetId = quickActions.preset.value;
@@ -4564,6 +4736,10 @@ function renderRunEnvBlock(session) {
 
 /* ── ONE Device Picker + activeTestEnvironment store (DX Phase 1) ── */
 const activeTestEnvStore = createActiveTestEnvironmentStore();
+/* UI Fix Phase 3: the feature-dock device chip (deviceDrawer.js, non-module
+ * script scope boundary) reads the store through this accessor — one source
+ * of truth for the selection. */
+globalThis.__qaseActiveSelection = () => activeTestEnvStore.get();
 const devicePicker = $('device-picker') ? createDevicePicker({
 	elements: {
 		dialog: $('device-picker'),
@@ -4581,13 +4757,23 @@ const devicePicker = $('device-picker') ? createDevicePicker({
 		deviceDrawer?.paintChip?.();
 		if (state.session) applySessionSnapshot(state.session);
 		renderAllTestOnBlocks(); // start dialogs read the same selection (DX Phase 3)
+		cdSyncSelectedHighlight(); // inline Choose Device stays in sync (exec layout #14069)
 	},
-	onClose: () => void refreshDevicePickerData()
+	onClose: () => void refreshDevicePickerData(),
+	onOpen: () => void refreshDevicePickerData()
 }) : null;
 
 async function refreshDevicePickerData() {
 	if (!devicePicker) return;
-	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []);
+	devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'loading' });
+	cdRenderOnData();
+	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => null);
+	if (!Array.isArray(environments)) {
+		// Catalog fetch failed: surface an honest error state, not empty data.
+		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
+		cdRenderOnData();
+		return;
+	}
 	let boardByEnvId = new Map();
 	try {
 		const board = await api('/device-runtime/devices').catch(() => null);
@@ -4597,14 +4783,21 @@ async function refreshDevicePickerData() {
 			}
 		}
 	} catch { /* board unavailable — badges fall back to neutral */ }
-	devicePicker.setData({ environments, boardByEnvId });
+	devicePicker.setData({ environments, boardByEnvId, dataState: 'ready' });
+	cdRenderOnData();
 }
 
 // Hydrate the persisted selection once environments are known; data is
 // refreshed again every time the picker opens (onClose).
 void (async () => {
 	if (!devicePicker) return;
-	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []);
+	const environments = await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => null);
+	if (!Array.isArray(environments)) {
+		// Boot fetch failed: keep the picker in its honest error state instead
+		// of an empty catalog (which would read as "nothing configured").
+		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
+		return;
+	}
 	devicePicker.setData({ environments, boardByEnvId: new Map() });
 	const persisted = activeTestEnvStore.persistedEnvId();
 	if (persisted) {
@@ -4766,9 +4959,29 @@ document.addEventListener('keydown', event => {
 		event.preventDefault();
 		void openSettings();
 	}
+	/* Escape closes the topmost open dialog (UI Fix Phase 4). Native <dialog>
+	 * cancels on Escape already; this is a safety net for dialogs whose close
+	 * is JS-driven (form method=dialog submit interception etc.). */
+	if (event.key === 'Escape') {
+		const top = [...document.querySelectorAll('dialog[open]')].pop();
+		if (top && !top.matches(':modal')) top.close();
+	}
 });
 
-const detailTabs = [...document.querySelectorAll('.tab')];
+const detailTabs = [...document.querySelectorAll('#tabs .tab')];
+
+/* Auto-scroll ON/OFF button (UI Fix Phase 1). */
+{
+	const toggle = document.getElementById('activity-autoscroll');
+	if (toggle) {
+		toggle.onclick = () => {
+			autoScrollState.activity = !autoScrollState.activity;
+			toggle.setAttribute('aria-pressed', String(autoScrollState.activity));
+			toggle.textContent = autoScrollState.activity ? 'Auto-scroll ON' : 'Auto-scroll OFF';
+			if (autoScrollState.activity && el.activityFeed) scrollFeed(el.activityFeed);
+		};
+	}
+}
 
 function activateDetailTab(tab, moveFocus = false) {
 	for (const other of detailTabs) {

@@ -32,7 +32,7 @@ export function resolveForEnvironment(env) {
 		browserVersion: env.browserVersion != null ? String(env.browserVersion) : null,
 		resolution: env.screenResolution ?? env.screenSize ?? null,
 		orientation: env.orientation ?? env.orientationScenario ?? 'portrait',
-		executionType: env.executionLevelRequested ?? (env.isRealDevice ? 'REAL_DEVICE' : null),
+		executionType: env.executionLevelRequested ?? env.runtimeAttestedLevel ?? null,
 		availability: env.runtimeStatus ?? env.availability ?? null,
 		runtimeSessionId: env.runtimeSessionId ?? null,
 		selectedAt: env.selectedAt ?? null

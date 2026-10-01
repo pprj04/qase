@@ -279,9 +279,9 @@ export function selectionSummary(selection, runtimeProfiles) {
  * selecting a device auto-resolves its environment (browser/OS overrides
  * re-resolve it). Selection is written through the caller's store.
  */
-export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSelect, onClose }) {
+export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSelect, onClose, onOpen }) {
 	const { dialog, search, tabs, types, cards, summary, closeBtn } = elements;
-	const state = { environments: [], boardByEnvId: new Map(), filters: { search: '', platform: 'all', deviceType: 'all' }, selectedDevice: null };
+	const state = { environments: [], boardByEnvId: new Map(), filters: { search: '', platform: 'all', deviceType: 'all' }, selectedDevice: null, dataState: 'loading' };
 
 	function boardFor(envs) {
 		const map = new Map();
@@ -385,6 +385,30 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 	function renderCards() {
 		if (!cards) return;
 		cards.textContent = '';
+		// Contextual loading / error states (UI Fix Phase 4).
+		if (state.dataState === 'loading') {
+			const loading = document.createElement('p');
+			loading.className = 'dp-empty';
+			loading.setAttribute('aria-live', 'polite');
+			loading.textContent = 'Loading device catalog…';
+			cards.appendChild(loading);
+			return;
+		}
+		if (state.dataState === 'error') {
+			const err = document.createElement('p');
+			err.className = 'dp-empty';
+			err.setAttribute('role', 'alert');
+			err.textContent = 'Could not load the device catalog — check your connection and reopen the picker.';
+			cards.appendChild(err);
+			return;
+		}
+		if (!state.environments.length) {
+			const empty = document.createElement('p');
+			empty.className = 'dp-empty';
+			empty.textContent = 'Device catalog is empty — ask an admin to add devices in Device Management.';
+			cards.appendChild(empty);
+			return;
+		}
 		const visible = filterDeviceCards(cardsModel(), state.filters);
 		if (!visible.length) {
 			const empty = document.createElement('p');
@@ -453,6 +477,9 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 			setFilter({});
 			dialog?.showModal?.();
 			renderSummary();
+			// Fresh catalog on every open (UI Fix Phase 5): a boot-time fetch
+			// that failed pre-login must not leave a stale error/empty state.
+			onOpen?.();
 		},
 		close() { dialog?.close?.(); },
 		/**
@@ -465,9 +492,10 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 			if (onPick) renderSummary();
 		},
 		endAddMode() { state.addPick = null; },
-		setData({ environments, boardByEnvId }) {
+		setData({ environments, boardByEnvId, dataState = 'ready' }) {
 			state.environments = environments ?? [];
 			state.boardByEnvId = boardByEnvId ?? new Map();
+			state.dataState = dataState;
 			renderCards();
 		},
 		hydrate(env) {
