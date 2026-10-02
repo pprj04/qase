@@ -1317,9 +1317,9 @@ const FEEDBACK_STAR_LABELS = {
 };
 
 function feedbackEligible(session) {
-	// The feedback feature is scoped to New QA Run executions — SQA and
-	// Founder reviews each have their own completion flows.
-	return Boolean(session?.id) && session.mode !== 'sqa' && session.mode !== 'founder'
+	// Feedback applies to QA runs and SQA assessments once they finish;
+	// Founder reviews keep their own completion flow without feedback.
+	return Boolean(session?.id) && session.mode !== 'founder'
 		&& FEEDBACK_TERMINAL_STATUSES.has(session.status);
 }
 
@@ -2962,6 +2962,10 @@ function renderSqaReportTab() {
 		renderSqaSources(assessment.frameworkCoverage ?? []),
 		renderSqaReportActions()
 	);
+	// USER FEEDBACK section — the submitter's own feedback for THIS SQA run,
+	// same rendering and run-scoping as the QA report.
+	renderReportFeedbackSection(state.runRatings.get(state.session.id)
+		?? (state.feedback.existingLoadedFor === state.session.id ? state.feedback.existing : undefined));
 }
 
 /* ── Event stream ────────────────────────────────────────────────── */
@@ -3157,7 +3161,19 @@ function renderSqaReportActions() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
-	actions.append(download, copy, copyFixes, downloadFixes, pdf);
+	const rated = state.runRatings.get(state.sessionId)
+		?? (state.feedback.existingLoadedFor === state.sessionId ? state.feedback.existing : undefined);
+	const provideFeedback = document.createElement('button');
+	provideFeedback.className = 'btn btn-ghost btn-sm';
+	provideFeedback.type = 'button';
+	provideFeedback.textContent = rated ? 'View Feedback' : 'Provide Feedback';
+	provideFeedback.title = rated
+		? 'View your submitted feedback for this assessment.'
+		: 'Rate this SQA assessment experience and tell us how it went.';
+	provideFeedback.onclick = () => openFeedbackModal();
+
+	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	el.reportView.append(actions);
 	return actions;
 }
 
