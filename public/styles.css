@@ -1,7 +1,7 @@
 /* Qase — Drytis Studio design language (light-first) */
 
 :root {
-or-scheme: light dark;
+  color-scheme: light dark;
   --bg: #07090d;
   --panel-sidebar: #0a0d12;
   --panel-chat: #0c1016;
@@ -3344,7 +3344,7 @@ a {
   }
 
   .chat {
-    grid-template-rows: 62px minmax(0, 1fr) auto auto auto;
+    grid-template-rows: 62px auto minmax(0, 1fr) auto auto auto;
   }
 
   .viewer {
@@ -3405,7 +3405,7 @@ a {
 
 /* Feature dock + Founder Mode ------------------------------------------- */
 
-theme .app {
+.cli-theme .app {
   grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;}
 
 .run-explorer-label {
@@ -3547,7 +3547,7 @@ theme .app {
   right: calc(100% + 9px);
   width: max-content;
   max-width: 220px;
-ding: 8px 11px;
+padding: 8px 11px;
   border: 1px solid var(--border, #e5e5e5);
   border-radius: var(--radius-sm, 8px);
   background: var(--surface-1, #ffffff);
@@ -3999,7 +3999,7 @@ ding: 8px 11px;
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
-i-theme .app {
+.cli-theme .app {
     grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;  }
 }
 
@@ -5066,6 +5066,7 @@ html.entry-active body {
    intentionally remain unchanged.
    -------------------------------------------------------------------------- */
 
+/* Dr
 ytis Studio tokens — light-first. This layer redefines the shared custom
    properties (same names as the base layer) so the entire application inherits
    the Studio palette. Dark users get a zinc dark variant below. */
@@ -5249,7 +5250,7 @@ body.cli-theme {
 
 .panel {
   position: relative;
-der-color: var(--border);
+border-color: var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);}
 
@@ -5281,7 +5282,7 @@ der-bottom-color: var(--border);
 
 /* Commands */
 
-theme .btn {
+.cli-theme .btn {
   min-height: 36px;
   padding: 0 14px;
   border-radius: var(--radius-sm, 8px);
@@ -5291,7 +5292,7 @@ theme .btn {
   transition: box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
-theme .btn-primary {
+.cli-theme .btn-primary {
   border-color: #171717;
   background: #171717;
   color: #ffffff;
@@ -5340,7 +5341,7 @@ theme .btn-primary {
 
 /* Explorer / runs */
 
-theme .runs {  background: var(--panel-sidebar);
+.cli-theme .runs {  background: var(--panel-sidebar);
 }
 
 .runs .panel-head {
@@ -5356,7 +5357,7 @@ theme .runs {  background: var(--panel-sidebar);
   gap: 8px;
 }
 
-theme .brand-glyph {
+.cli-theme .brand-glyph {
   width: 28px;
   height: 28px;
   border-color: #171717;
@@ -5366,7 +5367,7 @@ theme .brand-glyph {
   font-size: 0;
 }
 
-theme .brand-glyph::before {
+.cli-theme .brand-glyph::before {
   content: "Q";
   color: #ffffff;
   font-size: 13px;  font-weight: 700;
@@ -5374,7 +5375,7 @@ theme .brand-glyph::before {
   letter-spacing: 0;
 }
 
-theme .brand-mark {
+.cli-theme .brand-mark {
   color: var(--text);
   font-family: var(--font-ui);
   font-size: 15px;
@@ -5400,7 +5401,7 @@ theme .brand-mark {
   font-size: 11px;
 }
 
-theme .run-list {
+.cli-theme .run-list {
   padding: 8px;
   background: transparent;}
 
@@ -5418,7 +5419,7 @@ theme .run-list {
   background: transparent;
 }
 
-theme .run::before {
+.cli-theme .run::before {
   content: none;
 }
 
@@ -5455,7 +5456,7 @@ theme .run::before {
 .run-progress-bar {
   height: 3px;
   border-radius: 1.5px;
-kground:var(--surface-hover);
+background:var(--surface-hover);
 }
 
 .cli-theme .run-progress-bar > i {
@@ -5463,7 +5464,7 @@ kground:var(--surface-hover);
 
 .run.is-active .run-title { color: #eff8f4; }
 
-theme .run-meta,
+.cli-theme .run-meta,
 .cli-theme .run-badge {
   font-family: var(--font-ui);  font-size: 9px;
 }
@@ -5478,7 +5479,7 @@ theme .run-meta,
 
 .panel-foot {
   min-height: 46px;
-ding: 6px 10px;
+padding: 6px 10px;
   border-top-color: var(--border);
   background: var(--panel-sidebar);
   font-family: var(--font-ui);
@@ -5489,7 +5490,7 @@ ding: 6px 10px;
   height: 6px;
 }
 
-theme .dot.is-live {
+.cli-theme .dot.is-live {
   background: var(--accent);  box-shadow: 0 0 8px rgba(47, 91, 234, 0.55);
 }
 
@@ -5502,7 +5503,7 @@ theme .dot.is-live {
 
 .chat {
   grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
-kground:var(--panel-chat);}
+background:var(--panel-chat);}
 
 /* Terminal treatment for the run-summary region: token row + progress card. */
 .run-summary {
@@ -5520,7 +5521,7 @@ der-bottom-color:var(--border);
   padding: 0 2px;
 }
 
-theme .mini-tokens,
+.cli-theme .mini-tokens,
 .cli-theme .mini-status,
 .cli-theme .mini-progress,
 .cli-theme .mini-findings {
@@ -5534,7 +5535,7 @@ theme .mini-tokens,
   font-weight: 500;
 }
 
-theme .mini-status[data-status="running"] { color:var(--accent); }
+.cli-theme .mini-status[data-status="running"] { color:var(--accent); }
 
 .cli-theme .run-summary-toggle {
   width: 24px;
@@ -5555,7 +5556,7 @@ theme .mini-status[data-status="running"] { color:var(--accent); }
   font-family: "Geist Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
-theme .token-glyph {
+.cli-theme .token-glyph {
   color:var(--accent);
   font-size: 10.5px;
 }
@@ -5569,7 +5570,7 @@ theme .token-glyph {
   gap: 7px 10px;
 }
 
-theme .progress-steps,
+.cli-theme .progress-steps,
 .cli-theme .progress-pct {
   color:var(--text-muted);  font-size: 10px;
 }
@@ -5578,7 +5579,7 @@ theme .progress-steps,
   font-size: 9px;
 }
 
-theme .progress-bar {
+.cli-theme .progress-bar {
   background:var(--surface-hover);
 }
 
@@ -5589,7 +5590,7 @@ theme .progress-bar {
   font-size: 10px;
 }
 
-theme .current-activity .ca-state {
+.cli-theme .current-activity .ca-state {
   color:var(--text-muted);
 }
 
@@ -5606,8 +5607,7 @@ theme .current-activity .ca-state {
 }
 
 .chat-id h1::before {
-  content: "$ ";
-or:var(--accent);}
+  content: "$ "; color:var(--accent);}
 
 .chat-target {
   color: #5f7280;
@@ -5624,7 +5624,7 @@ or:var(--accent);}
   letter-spacing: 0.04em;
 }
 
-theme .status-chip[data-status="running"] {  border-color: rgba(47, 91, 234, 0.32);
+.cli-theme .status-chip[data-status="running"] {  border-color: rgba(47, 91, 234, 0.32);
   background: rgba(47, 91, 234, 0.07);
   color: #80e9b0;
 }
@@ -5635,7 +5635,7 @@ theme .status-chip[data-status="running"] {  border-color: rgba(47, 91, 234, 0.3
   color: #e7c77e;
 }
 
-theme .status-chip[data-status="done"] {
+.cli-theme .status-chip[data-status="done"] {
   border-color: rgba(47, 91, 234, 0.16);
   background: var(--accent-softer);
   color: #72dca4;}
@@ -5757,22 +5757,22 @@ t-family: var(--font-ui);
 
 .msg.agent .msg-body::before { display: none; }
 
-theme .msg.user .msg-body {
+.cli-theme .msg.user .msg-body {
   border-left-color: var(--accent);  background: rgba(31, 76, 58, 0.11);
   color: #d5eee1;
 }
 
-theme .msg.system .msg-body {
+.cli-theme .msg.system .msg-body {
   border-left-color: var(--danger);  background: rgba(89, 37, 35, 0.13);
   color: #f4a19b;
 }
 
-theme .msg.credentials .msg-body {
+.cli-theme .msg.credentials .msg-body {
   border-left-color: var(--accent);  background: rgba(40, 91, 66, 0.12);
   color: #a8dfc0;
 }
 
-theme .msg.commentary .msg-body {
+.cli-theme .msg.commentary .msg-body {
   border-left-color: var(--info);  background: rgba(31, 80, 96, 0.11);
 }
 
@@ -5796,12 +5796,12 @@ theme .msg.commentary .msg-body {
 .finding pre {
   border-color: #20303b;
   border-radius: 3px;
-kground:var(--canvas);  color: #afc4ce;
+background:var(--canvas);  color: #afc4ce;
 }
 
 .thinking-strip {
   margin: 0 12px 7px;
-der-color: rgba(47, 91, 234, 0.16);  border-radius: 3px;
+border-color: rgba(47, 91, 234, 0.16);  border-radius: 3px;
   background: rgba(47, 91, 234, 0.045);
 }
 
@@ -5810,7 +5810,7 @@ der-color: rgba(47, 91, 234, 0.16);  border-radius: 3px;
   padding: 0 10px;
 }
 
-theme .thinking-dots i { background: var(--accent); }
+.cli-theme .thinking-dots i { background: var(--accent); }
 .cli-theme .thinking-label { color: #8beab7; font-size: 10.5px; }
 .cli-theme .thinking-peek,
 .cli-theme .thinking-body { font-size: 9.5px; }
@@ -5852,12 +5852,11 @@ theme .thinking-dots i { background: var(--accent); }
   top: 13px;
   left: 13px;
   z-index: 1;
-  content: "❯";
-or:var(--accent);  font-size: 13px;
+  content: "❯"; color:var(--accent);  font-size: 13px;
   font-weight: 700;
 }
 
-theme .composer:focus-within {
+.cli-theme .composer:focus-within {
   border-color: rgba(47, 91, 234, 0.58);
   background: #050b10;
   box-shadow: 0 0 0 2px rgba(47, 91, 234, 0.08);
@@ -5879,7 +5878,7 @@ theme .composer:focus-within {
 
 .viewer {
   grid-template-rows: 64px minmax(270px, 52%) 43px minmax(0, 1fr);
-kground:var(--panel-chat);}
+background:var(--panel-chat);}
 
 .viewer.stage-collapsed {
   grid-template-rows: 64px 40px 43px minmax(0, 1fr);
@@ -5889,7 +5888,7 @@ kground:var(--panel-chat);}
   height: 29px;
   border-color: #1c2a35;
   border-radius: 3px;
-kground:var(--canvas);}
+background:var(--canvas);}
 
 .urlbar::before {
   content: "http";
@@ -5975,7 +5974,7 @@ der-bottom-color:var(--border);
   color: #33444f;
 }
 
-theme .tab.is-active {
+.cli-theme .tab.is-active {
   background:var(--surface-1);
   box-shadow: inset 0 -1px var(--accent);
   color: #b9d2c5;
@@ -5990,7 +5989,7 @@ theme .tab.is-active {
 
 .feed {
   padding: 8px;
-kground:var(--panel-chat);}
+background:var(--panel-chat);}
 
 .feed-empty {
   color: #485b67;
@@ -6016,7 +6015,7 @@ kground:var(--panel-chat);}
   background: #1c2b35;
 }
 
-theme .act.running {  border-color: rgba(47, 91, 234, 0.18);
+.cli-theme .act.running {  border-color: rgba(47, 91, 234, 0.18);
   background: rgba(47, 91, 234, 0.045);
 }
 
@@ -6027,7 +6026,7 @@ theme .act.running {  border-color: rgba(47, 91, 234, 0.18);
   border-color:var(--panel-chat);
 }
 
-theme .act.running .act-icon {
+.cli-theme .act.running .act-icon {
   background: var(--accent);  box-shadow: 0 0 0 2px rgba(47, 91, 234, 0.08);
 }
 
@@ -6041,7 +6040,7 @@ theme .act.running .act-icon {
   border-radius: 3px;
 }
 
-theme .todo.in_progress {  border-color: rgba(47, 91, 234, 0.2);
+.cli-theme .todo.in_progress {  border-color: rgba(47, 91, 234, 0.2);
   background: rgba(47, 91, 234, 0.045);
 }
 
@@ -6051,14 +6050,14 @@ theme .todo.in_progress {  border-color: rgba(47, 91, 234, 0.2);
 
 .todo-text { font-size: 10.5px; }
 
-theme .finding {
+.cli-theme .finding {
   border-color: var(--text-faint);
   border-radius: 3px;
   background:var(--panel-sidebar);}
 
 .finding.is-open {
   border-color: #2c3f4c;
-kground:var(--surface-1);  box-shadow: none;
+background:var(--surface-1);  box-shadow: none;
 }
 
 .finding-head {
@@ -6074,7 +6073,7 @@ kground:var(--surface-1);  box-shadow: none;
 .verdict,
 .sev-stat {
   border-radius: 3px;
-kground:var(--panel-sidebar);
+background:var(--panel-sidebar);
 }
 
 .cli-theme .verdict-mark { border-radius: 3px; }
@@ -6085,7 +6084,7 @@ kground:var(--panel-sidebar);
 .modal {
   border-color: #2b3e4b;
   border-radius: 7px;
-kground:var(--panel-chat);  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.72);
+background:var(--panel-chat);  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.72);
 }
 
 .modal::backdrop {
@@ -6111,8 +6110,7 @@ kground:var(--panel-chat);  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.72);
 }
 
 .modal-head h2::before {
-  content: "❯ ";
-or:var(--accent);}
+  content: "❯ "; color:var(--accent);}
 
 .modal-body {
   gap: 13px;
@@ -6129,7 +6127,7 @@ or:var(--accent);}
   color: var(--success);
 }
 
-theme .field input,
+.cli-theme .field input,
 .cli-theme .field select {
   min-height: 44px;
   border-color: var(--border-strong, #d4d4d8);
@@ -6149,7 +6147,7 @@ theme .field input,
 .check,
 .test-result {
   border-radius: 3px;
-kground:var(--panel-sidebar);
+background:var(--panel-sidebar);
 }
 
 .cli-theme .check input { accent-color: var(--accent); }
@@ -6173,7 +6171,7 @@ kground:var(--panel-sidebar);
 .entry-experience::before {
   z-index: 1;
   background:
-inear-gradient(rgba(47, 91, 234, 0.025) 1px, transparent 1px),    linear-gradient(90deg, rgba(47, 91, 234, 0.018) 1px, transparent 1px),
+    linear-gradient(rgba(47, 91, 234, 0.025) 1px, transparent 1px),    linear-gradient(90deg, rgba(47, 91, 234, 0.018) 1px, transparent 1px),
     radial-gradient(circle at 50% 38%, rgba(35, 104, 76, 0.13), transparent 43%);
   background-size: 26px 26px, 26px 26px, auto;
 }
@@ -6216,7 +6214,7 @@ inear-gradient(rgba(47, 91, 234, 0.025) 1px, transparent 1px),    linear-gradien
   background: rgba(5, 10, 14, 0.86);
 }
 
-theme .entry-mini-brand {
+.cli-theme .entry-mini-brand {
   color: var(--text-secondary);  font-size: 9px;
   letter-spacing: 0.12em;
 }
@@ -6241,7 +6239,7 @@ theme .entry-mini-brand {
 .entry-system-dot {
   width: 5px;
   height: 5px;
-kground: var(--accent);
+background: var(--accent);
   box-shadow: 0 0 10px rgba(47, 91, 234, 0.58);}
 
 .entry-stage {
@@ -6303,8 +6301,7 @@ kground: var(--accent);
 }
 
 .entry-eyebrow::before {
-  content: "$ ./qase --initialize";
-or:var(--accent);}
+  content: "$ ./qase --initialize"; color:var(--accent);}
 
 .entry-eyebrow > span,
 .entry-eyebrow {
@@ -6333,7 +6330,7 @@ or:var(--accent);}
   width: 0.11em;
   height: 0.14em;
   margin: 0 0 0.08em 0.08em;
-kground: var(--accent);
+background: var(--accent);
   box-shadow: 0 0 12px rgba(47, 91, 234, 0.48);  content: "";
   animation: terminal-cursor 1.05s steps(1, end) infinite;
 }
@@ -6357,15 +6354,14 @@ kground: var(--accent);
   padding: 5px 5px 5px 15px;
   border-color: rgba(47, 91, 234, 0.43);
   border-radius: 4px;
-kground: rgba(47, 91, 234, 0.075);  box-shadow: none;
+background: rgba(47, 91, 234, 0.075);  box-shadow: none;
   color: #a5f3c8;
   font-size: 10.5px;
   backdrop-filter: none;
 }
 
 .entry-cta::before {
-  content: "❯";
-or:var(--accent);
+  content: "❯"; color:var(--accent);
 }
 
 .cli-theme .entry-cta:hover {
@@ -6405,7 +6401,7 @@ or:var(--accent);
   font-size: 8px;
 }
 
-theme .entry-progress { height: 1px; background: #1d2c35; }
+.cli-theme .entry-progress { height: 1px; background: #1d2c35; }
 .cli-theme .entry-progress i { background: var(--accent); }
 @keyframes terminal-cursor {
   0%, 48% { opacity: 1; }
@@ -6488,7 +6484,14 @@ theme .entry-progress { height: 1px; background: #1d2c35; }
   }
 
   .chat {
+    /* Six children (head, run-summary, transcript, thinking, question, composer):
+       run-summary shares row 2; transcript flexes; composer's auto track must
+       size to its content so the send bar never collapses to 0px. */
     grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  }
+
+  .composer {
+    min-height: max-content;
   }
 
   .viewer {
@@ -7517,7 +7520,7 @@ theme .entry-progress { height: 1px; background: #1d2c35; }
 .sqa-view {
   gap: 7px;
   padding: 8px;
-kground:var(--panel-chat);  font-family: var(--font-mono);
+background:var(--panel-chat);  font-family: var(--font-mono);
 }
 
 :is(.sqa-notice, .sqa-pending, .sqa-section, .sqa-verdict, .sqa-control, .sqa-source-card, .sqa-metric) {
@@ -7530,7 +7533,7 @@ kground:var(--panel-chat);  font-family: var(--font-mono);
   color:var(--info);
 }
 
-theme .sqa-control summary code,
+.cli-theme .sqa-control summary code,
 .cli-theme .sqa-source-title {
   color:var(--info);
 }
@@ -7556,11 +7559,11 @@ theme .sqa-control summary code,
   background: linear-gradient(135deg, rgba(95, 196, 223, 0.07), rgba(47, 91, 234, 0.035));
 }
 
-theme .sqa-option:has(input:checked) {  border-color: rgba(47, 91, 234, 0.35);
+.cli-theme .sqa-option:has(input:checked) {  border-color: rgba(47, 91, 234, 0.35);
   background: var(--accent-softer);
 }
 
-theme .sqa-option input {
+.cli-theme .sqa-option input {
   accent-color: var(--accent);
 }
 
@@ -7571,7 +7574,7 @@ theme .sqa-option input {
   font-size: 11px;
 }
 
-theme .sqa-modal .field textarea:focus {  border-color: rgba(47, 91, 234, 0.5);
+.cli-theme .sqa-modal .field textarea:focus {  border-color: rgba(47, 91, 234, 0.5);
   box-shadow: 0 0 0 2px rgba(47, 91, 234, 0.08);
 }
 
@@ -7785,12 +7788,12 @@ theme .sqa-modal .field textarea:focus {  border-color: rgba(47, 91, 234, 0.5);
 }
 
 @media (min-width: 1281px) {
-i-theme .app {
+.cli-theme .app {
     grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;  }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
-i-theme .app {
+.cli-theme .app {
     grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;  }
 }
 
@@ -8001,7 +8004,7 @@ i-theme .app {
   padding: 39px 7px 7px;
 }
 
-theme .panel,
+.cli-theme .panel,
 .cli-theme .feature-dock {
   border-color: var(--text-faint);  border-radius: 7px;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.012);
@@ -8086,7 +8089,8 @@ theme .panel,
   padding-inline: 8px;
 }
 
-udio footer nav (R2): the 4-column grid above stays for the layout
+/* Stu
+dio footer nav (R2): the 4-column grid above stays for the layout
    contract, but at real label sizes it garbles — layer a wrapping nav grid
    on top that gives every foot button readable width. */
 .cli-theme .panel-foot {
@@ -8178,12 +8182,12 @@ udio footer nav (R2): the 4-column grid above stays for the layout
 }
 
 @media (min-width: 1281px) {
-i-theme .app {
+.cli-theme .app {
     grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 76px;  }
 }
 
 @media (max-width: 1280px) and (min-width: 1101px) {
-i-theme .app {
+.cli-theme .app {
     grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;    gap: 4px;
     padding: 38px 5px 5px;
   }
@@ -8683,20 +8687,17 @@ i-theme .app {
 
 .feedback-filters { display:flex; flex-direction:column; gap:6px; margin:10px 0; }
 .feedback-filters input[type="search"] {
-  width:100%; padding:6px 9px; font-size:12.5px; border-radius:7px;
-der:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);}
+  width:100%; padding:6px 9px; font-size:12.5px; border-radius:7px; border:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);}
 .feedback-filter-row { display:flex; gap:6px; }
 .feedback-filter-row select {
-  flex:1; min-width:0; padding:5px 6px; font-size:12px; border-radius:7px;
-der:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);
+  flex:1; min-width:0; padding:5px 6px; font-size:12px; border-radius:7px; border:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);
 }
 .feedback-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; max-height:320px; overflow:auto; }
 .feedback-row { border:1px solid var(--border-strong); border-radius:9px; padding:9px 10px; background:var(--surface-2); }.feedback-row-head { display:flex; align-items:center; gap:8px; }
 .feedback-row-stars { color:var(--warning); font-size:13px; letter-spacing:1px; }
 .feedback-row-cat { font-size:11.5px; color:var(--text-muted); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .feedback-row-status {
-  font-size:11.5px; padding:3px 5px; border-radius:6px;
-der:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);}
+  font-size:11.5px; padding:3px 5px; border-radius:6px; border:1px solid var(--border-strong); background:var(--surface-2); color:var(--text);}
 .feedback-row-comments { margin:7px 0 5px; font-size:12.5px; line-height:1.5; color:#c6d4e3; word-break:break-word; }
 .feedback-row-meta { font-size:11px; color:var(--text-muted); word-break:break-all; }
 .feedback-empty { font-size:12.5px; color:var(--text-muted); padding:8px 2px; }
@@ -8759,7 +8760,7 @@ der:1px solid var(--border-strong); background:var(--surface-2); color:var(--tex
   border:1px solid var(--border-strong);
   border-radius: 10px;
   padding: 14px 16px;
-kground:var(--surface-2);}
+background:var(--surface-2);}
 
 .report-feedback-title {
   margin: 0 0 10px;
@@ -9842,3 +9843,188 @@ select:focus {
 
 /* UX U5 fix · modal header actions sit inline next to the title */
 .modal-head .modal-actions { display: flex; gap: 8px; align-items: flex-start; }
+/* Hotfix #14440 · footer nav wraps to readable full-width rows
+   The 2-column grid garbles at 68px columns ("Sign out" → 10px). Two rows
+   of stacked full-width buttons keep every label readable without touching
+   the seam-pinned 4-column contract above. */
+.cli-theme .panel-foot .foot-btn {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+/* Hotfix #14440 · QA launcher: modal must not paint over its own foot.
+   .modal-foot base uses position:relative (line ~6097) which defeats the
+   sticky CTA; and the body needs bottom clearance so the last line of
+   helper text is never half-clipped under the footer. */
+.cli-theme .modal.qa-modal .modal-foot { position: sticky; }
+.cli-theme .modal.qa-modal .modal-body { padding-bottom: 20px; }
+
+/* Hotfix #14440 · dialog head subtitle color (was inheriting faint light-on-white) */
+.cli-theme .modal-head p {
+  color: var(--text-muted, #71717a);
+  font: 400 13px/1.45 var(--font-ui, sans-serif);
+  margin: 2px 0 0;
+}
+
+/* Hotfix #14440 · consistent sidebar nav capitalization (footer duplicates
+   the workspace nav; align labels so the sidebar doesn't read as two
+   different systems). */
+.cli-theme .panel-foot .foot-btn { text-transform: capitalize; }
+
+/* Hotfix #14440 · dark-scheme dialog subtitle (title already handled; the
+   subtitle fell back to the light-theme muted color on dark surfaces) */
+@media (prefers-color-scheme: dark) {
+  .cli-theme .modal-head p { color: var(--text-muted-dark, #8b8b93); }
+}
+
+/* Hotfix #14440 · mobile: footer nav as a compact, scrollable action bar.
+   The merged R2 nav stacks 8 full-width buttons (~270px) inside the fixed
+   300px runs row; content spilled over the bottom-center feature dock.
+   On small screens turn the footer into a single horizontally scrollable
+   row (no wrap, no fixed row height) and let the sidebar size to content. */
+@media (max-width: 720px) {
+  .cli-theme .panel-foot {
+    grid-template-columns: none;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    padding: 6px 4px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    min-height: 0;
+  }
+
+  .cli-theme .panel-foot .foot-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    min-height: 36px;
+    padding-inline: 10px;
+    border: 1px solid var(--border, #e5e5e5);
+    border-radius: 8px;
+  }
+
+  .cli-theme .panel-foot #conn-label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0 4px;
+    clip: auto;
+    overflow: visible;
+    white-space: nowrap;
+    flex: 0 0 auto;
+    align-self: center;
+    opacity: 0.8;
+  }
+
+  /* Four rows matching the pinned placements (runs→1, dock→2, chat→3, viewer→4);
+     row 1 sizes to content so the stacked footer nav never clips. */
+  .cli-theme .app {
+    grid-template-rows: minmax(300px, auto) 62px minmax(680px, 82dvh) minmax(700px, 88dvh);
+  }
+}
+
+/* Hotfix #14440 · a closed <dialog> must never render. The qa-modal rule at
+   the end forces display:flex unconditionally, which made every dismissed
+   dialog (launcher, SQA, Founder) paint as a frozen overlay after close().
+   Native dialogs default to display:none when not [open]; keep that. */
+dialog:not([open]) { display: none !important; }
+
+/* Hotfix #14440 · feature-dock must follow the color scheme. The UX U2 reskin
+   used var(--surface) with a hardcoded #ffffff fallback, but the Studio token
+   set defines no --surface (only --surface-1..3), so the dock rendered white
+   in dark mode. Bind it to the real tokens in both schemes. */
+@media (prefers-color-scheme: dark) {
+  .cli-theme .feature-dock,
+  .feature-dock {
+    background: var(--surface-1, #10151d);
+    border-color: var(--border-strong, #3f3f46);
+    color: var(--text-muted, #71717a);
+  }
+}
+
+/* Hotfix #14440 · mobile feature-dock: the device chip is a compact control
+   (label + env + Set button). At <=720px the dock is a 62px action bar but the
+   chip rendered as a 75px-tall stack that spilled 6px past the dock's bottom
+   edge and visually collided with the sidebar. Constrain the chip to the bar. */
+@media (max-width: 720px) {
+  .feature-dock > .feature-device {
+    align-self: stretch;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    max-width: 128px;
+    min-width: 0;
+    padding: 0 6px 0 2px;
+    border-right: 1px dashed var(--border, #263540);
+    border-bottom: 0;
+  }
+
+  .feature-dock > .feature-device .device-chip {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 4px;
+    padding: 4px;
+  }
+
+  .feature-dock > .feature-device .device-chip-label {
+    font-size: 8px;
+    letter-spacing: 0.06em;
+  }
+
+  .feature-dock > .feature-device .device-chip-env {
+    font-size: 9px;
+    -webkit-line-clamp: 1;
+    max-width: 90px;
+  }
+
+  .feature-dock > .feature-device .device-chip-change {
+    min-height: 24px !important;
+    padding: 2px 6px !important;
+  }
+
+  .feature-dock > .feature-device .feature-device-landscape {
+    display: none;
+  }
+
+  .feature-dock .feature-action {
+    min-height: 48px;
+  }
+}
+
+/* Hotfix #14440 · welcome checklist must live inside the transcript's scroll
+   area. Earlier 720px rules sized .empty-state/.welcome-checklist with
+   content-visibility rules that let the checklist's 327px-tall stack extend
+   ~130px past the .chat panel and collide with the viewer's about:blank
+   urlbar at mobile widths. Cap the empty state to the scroll container. */
+@media (max-width: 720px) {
+  /* No nested scroll: the transcript is the scroll container; the empty state
+     must never grow its own scrollbar. */
+  .cli-theme .transcript > .empty-state,
+  .transcript > .empty-state {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .welcome-checklist {
+    margin-bottom: 8px;
+  }
+}
+
+/* Hotfix #14440 · the welcome checklist is inside .empty-state's scroll area;
+   make sure the empty state is anchored to the top so the headline is visible
+   (proximity snapping to the checklist hid the top rows on load). */
+.empty-state:has(.welcome-checklist) {
+  scroll-snap-type: none;
+}
+.empty-state .welcome-checklist {
+  scroll-snap-align: none;
+}
