@@ -356,9 +356,19 @@ export function createLocalEnvironmentBackend(options = {}) {
 	return {
 		async seed() {
 			loadFromDisk();
-			for (const env of generateEnvironments()) {
+			const generated = generateEnvironments();
+			const generatedIds = new Set(generated.map((env) => env.envId));
+			for (const env of generated) {
 				const existing = byEnvId.get(env.envId);
 				byEnvId.set(env.envId, existing ? { ...env, active: existing.active } : { id: randomUUID(), ...env });
+			}
+			// 2027.01.0 (#14273): retired catalog rows (e.g. the macOS
+			// one-pseudo-device-per-OS entries replaced by hardware models)
+			// are deactivated, never deleted — old references stay resolvable.
+			for (const [envId, record] of byEnvId) {
+				if (!generatedIds.has(envId) && record.active !== false) {
+					byEnvId.set(envId, { ...record, active: false, retiredFromCatalog: ENVIRONMENT_CATALOG_VERSION });
+				}
 			}
 			persistNow();
 			return { inserted: byEnvId.size, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
@@ -367,7 +377,9 @@ export function createLocalEnvironmentBackend(options = {}) {
 			loadFromDisk();
 			const all = filterRecords(filters);
 			const offset = Math.max(Number(filters.offset ?? 0), 0);
-			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 20000);
+			// 2027.01.0 (#14273): matrix grew to ~36.6k rows — clamp raised so
+			// one-shot picker fetches still see the full catalog.
+			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 50000);
 			return all.slice(offset, offset + limit);
 		},
 		async get(tenant, envId) {
@@ -429,6 +441,25 @@ export function createLocalEnvironmentBackend(options = {}) {
 			byEnvId.delete(envId);
 			persistNow();
 			return true;
+		},
+		/**
+		 * #14275 (Phase 2): upsert one provider-scoped row (envId starts with
+		 * `PROV-`). Idempotent: an existing row keeps its `active` state —
+		 * provider refreshes never toggle operator decisions, they only
+		 * add/update provider data. Builtin rows are never passed here.
+		 */
+		async upsertProviderRow(tenant, row) {
+			if (!row || typeof row.envId !== 'string' || !row.envId.startsWith('PROV-')) {
+				throw new EnvironmentValidationError('provider rows must use PROV- namespaced envIds');
+			}
+			loadFromDisk();
+			const existing = byEnvId.get(row.envId);
+			const stored = existing
+				? { ...existing, ...row, active: existing.active, id: existing.id }
+				: { id: randomUUID(), ...row };
+			byEnvId.set(stored.envId, stored);
+			persistNow();
+			return stored;
 		}
 	};
 }
@@ -462,6 +493,8 @@ export function sanitizeFilters(query = {}) {
 export function createEnvironmentService(backend, options = {}) {
 	const tenantContext = options.tenantContext;
 	const withTenant = (tenant) => tenant ?? tenantContext ?? {};
+	/** #14275: rate-limit anchor for refreshCatalog (1/min). */
+	let refreshCatalogLastAt = 0;
 	/** Catalog backend (device/OS/browser reference data) — attached by the factory. */
 	let catalogBackend = null;
 
@@ -489,12 +522,32 @@ export function createEnvironmentService(backend, options = {}) {
 	/** Facet values (with counts) over the filtered set, for the admin UI dropdowns. */
 	async function facets(filters = {}) {
 		const clean = sanitizeFilters(filters);
-		const facetQuery = { ...clean, limit: 20000, offset: 0 };
+		const facetQuery = { ...clean, limit: 50000, offset: 0 };
 		const rows = (await backend.list(withTenant(), facetQuery)).map(rowToEnvironment);
 		const dimension = (key) => {
 			const counts = new Map();
 			for (const row of rows) {
 				const value = row[key];
+				counts.set(value, (counts.get(value) ?? 0) + 1);
+			}
+			return [...counts.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count);
+		};
+		const executionLevelDimension = () => {
+			// #14275: executionLevels facet derived via withExecutionMetadata so
+			// provider rows and legacy rows map to the strict level vocabulary.
+			const counts = new Map();
+			for (const row of rows.map((row) => withExecutionMetadata(row))) {
+				const level = row.executionLevel ?? row.executionLevelRequested ?? 'SIMULATED';
+				counts.set(level, (counts.get(level) ?? 0) + 1);
+			}
+			return [...counts.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count);
+		};
+		const providerDimension = () => {
+			// #14275: providers facet — builtin rows report 'builtin',
+			// provider rows carry their providerSlug.
+			const counts = new Map();
+			for (const row of rows) {
+				const value = row.providerSlug ?? 'builtin';
 				counts.set(value, (counts.get(value) ?? 0) + 1);
 			}
 			return [...counts.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count);
@@ -510,7 +563,9 @@ export function createEnvironmentService(backend, options = {}) {
 			deviceType: dimension('deviceType'),
 			executionProvider: dimension('executionProvider'),
 			isRealDevice: dimension('isRealDevice'),
-			active: dimension('active')
+			active: dimension('active'),
+			executionLevels: executionLevelDimension(),
+			providers: providerDimension()
 		};
 	}
 
@@ -524,6 +579,32 @@ export function createEnvironmentService(backend, options = {}) {
 		facets,
 		availability: () => availabilityReport(),
 		catalogVersion: () => ENVIRONMENT_CATALOG_VERSION,
+		/**
+		 * #14275 (Phase 2): manual/API-triggered catalog refresh. Re-fetches
+		 * provider overlays via the catalog provider registry and upserts
+		 * ONLY provider-scoped rows (envIds starting `PROV-`); builtin rows
+		 * are never touched. Rate-limited to one refresh per minute.
+		 */
+		async refreshCatalog(registryModule) {
+			const registryApi = registryModule ?? (await import('./catalogProviderRegistry.js'));
+			if (refreshCatalogLastAt && Date.now() - refreshCatalogLastAt < 60_000) {
+				return { refreshed: false, reason: 'rate-limited', providers: [] };
+			}
+			refreshCatalogLastAt = Date.now();
+			const merged = await registryApi.mergeCatalog();
+			for (const env of merged.environments) {
+				if (!String(env.envId).startsWith('PROV-')) continue;
+				if (typeof backend.upsertProviderRow === 'function') {
+					await backend.upsertProviderRow(withTenant(), env);
+				}
+			}
+			return {
+				refreshed: true,
+				catalogVersion: merged.builtinVersion,
+				attestations: merged.attestations.length,
+				providers: merged.providers
+			};
+		},
 		/** Optional catalog backend (migration 016) — set by the service factory. */
 		attachCatalog: (catalog) => { catalogBackend = catalog; },
 		catalog: () => catalogBackend,

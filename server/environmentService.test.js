@@ -33,10 +33,11 @@ test('local backend persists across restarts via .qase/environments.json', async
 	const dir = tempDir();
 	const backendOne = createLocalEnvironmentBackend({ stateDir: dir });
 	await backendOne.seed();
-	await backendOne.update(null, 'ENV-MAC-SONOMA-CHR-140', { active: false });
+	// 2027.01.0 (#14273): macOS uses hardware models; envId carries the OS token.
+	await backendOne.update(null, 'ENV-MAC-MACMBP14-M3-SONOMA-CHR-140', { active: false });
 
 	const backendTwo = createLocalEnvironmentBackend({ stateDir: dir }); // fresh instance, same disk
-	const env = await backendTwo.get(null, 'ENV-MAC-SONOMA-CHR-140');
+	const env = await backendTwo.get(null, 'ENV-MAC-MACMBP14-M3-SONOMA-CHR-140');
 	assert.ok(env, 'records survive a process restart');
 	assert.equal(env.active, false, 'deprecation survives restart');
 	fs.rmSync(dir, { recursive: true, force: true });
@@ -122,7 +123,7 @@ test('environment create carries screenResolution and orientation with device-ty
 	assert.equal(explicit.orientation, 'landscape');
 
 	const desktop = await normalizeEnvironmentInput({
-		platform: 'macos', device: 'macOS Sonoma', osVersion: 'Sonoma', browser: 'chrome', browserVersion: '140'
+		platform: 'macos', device: 'MacBook Pro 14 (M3)', osVersion: 'Sonoma', browser: 'chrome', browserVersion: '140'
 	});
 	assert.equal(desktop.orientation, null, 'desktop has no orientation (not applicable)');
 });

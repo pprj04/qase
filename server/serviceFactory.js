@@ -10,6 +10,8 @@ import { createDistributedApiAgent } from './distributedExecution.js';
 import { createDistributedSecrets } from './distributedSecrets.js';
 import { createLocalAuthService, createPostgresAuthService } from './auth.js';
 import { createEnvironmentService, createLocalEnvironmentBackend } from './environmentService.js';
+import { registerCatalogProvider } from './catalogProviderRegistry.js';
+import { createBrowserstackCatalogProvider } from './browserstackCatalogProvider.js';
 import { createPostgresEnvironmentRepository } from './postgres/environmentRepository.js';
 import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
 import { createPostgresDeviceCatalogRepository } from './postgres/deviceCatalogRepository.js';
@@ -136,6 +138,9 @@ export async function createConfiguredApplicationServices(options = {}) {
 		);
 		await services.environments.seed();
 		services.environments.attachCatalog(deviceCatalog);
+		// #14275 (Phase 2): register the BrowserStack catalog provider
+		// (inert without credentials).
+		registerCatalogProvider(createBrowserstackCatalogProvider());
 		services.deviceCatalog = deviceCatalog;
 		services.testCases = createTestCaseService(
 			options.createLocalTestCaseBackend?.() ?? createLocalTestCaseBackend(),
@@ -216,6 +221,10 @@ export async function createConfiguredApplicationServices(options = {}) {
 		services.environments = createEnvironmentService(environmentRepository, { tenantContext });
 		await services.environments.seed();
 		services.environments.attachCatalog(deviceCatalog);
+		// #14275 (Phase 2): register the BrowserStack catalog provider.
+		// Without BROWSERSTACK_* credentials it is connected:false and
+		// contributes nothing — the builtin catalog stands alone.
+		registerCatalogProvider(createBrowserstackCatalogProvider());
 		services.deviceCatalog = deviceCatalog;
 		services.testCases = createTestCaseService(
 			(options.createTestCaseRepository ?? createPostgresTestCaseRepository)(pool, { tenantContext }),

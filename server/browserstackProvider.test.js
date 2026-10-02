@@ -46,7 +46,9 @@ test('connect options refuse environments that cannot execute on BrowserStack', 
 
 test('resolveExecution: browserstack envs with credentials execute remotely', () => {
 	const environments = generateEnvironments();
-	const macChrome = environments.find(env => env.envId.startsWith('ENV-MAC-SONOMA-CHR'));
+	// 2027.01.0 (#14273): macOS devices are hardware models; pick a
+	// MacBook Pro on Sonoma instead of the retired pseudo-device.
+	const macChrome = environments.find(env => env.envId === 'ENV-MAC-MACMBP14-M3-SONOMA-CHR-140');
 	const resolved = resolveExecution(macChrome, CREDENTIALS);
 	assert.equal(resolved.mode, 'environment');
 	assert.match(resolved.label, /environment runtime/);

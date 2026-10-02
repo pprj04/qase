@@ -25,7 +25,7 @@
  *     NEVER generated — Apple does not ship Safari for Windows.
  */
 
-export const ENVIRONMENT_CATALOG_VERSION = '2026.10.2';
+export const ENVIRONMENT_CATALOG_VERSION = '2027.01.0';
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -171,6 +171,20 @@ const IPHONE_SCREEN = (inches) => `${inches} inch`;
 
 /** @type {AppleDevice[]} */
 export const APPLE_DEVICES = [
+	// --- Legacy iPhones (2027.01.0 #14273) — honest support windows ---
+	// iPhone 7 line caps at iOS 15; 8/X lines cap at iOS 16; XR/XS cap at 18.
+	iphone('IP7', 'iPhone 7', '375×667', 2, IPHONE_SCREEN('4.7'), ['13.0', '14.0', '15.0']),
+	iphone('IP7PLUS', 'iPhone 7 Plus', '414×736', 3, IPHONE_SCREEN('5.5'), ['13.0', '14.0', '15.0']),
+	iphone('IP8', 'iPhone 8', '375×667', 2, IPHONE_SCREEN('4.7'), ['13.0', '14.0', '15.0', '16.0']),
+	iphone('IP8PLUS', 'iPhone 8 Plus', '414×736', 3, IPHONE_SCREEN('5.5'), ['13.0', '14.0', '15.0', '16.0']),
+	iphone('IPX', 'iPhone X', '375×812', 3, IPHONE_SCREEN('5.8'), ['13.0', '14.0', '15.0', '16.0']),
+	iphone('IPXR', 'iPhone XR', '414×896', 2, IPHONE_SCREEN('6.1'), ['13.0', '14.0', '15.0', '16.0', '17.0', '18.3']),
+	iphone('IPXS', 'iPhone XS', '375×812', 3, IPHONE_SCREEN('5.8'), ['13.0', '14.0', '15.0', '16.0', '17.0', '18.3']),
+	iphone('IPXSMAX', 'iPhone XS Max', '414×896', 3, IPHONE_SCREEN('6.5'), ['13.0', '14.0', '15.0', '16.0', '17.0', '18.3']),
+	iphone('IPSE1', 'iPhone SE (1st gen)', '375×667', 2, IPHONE_SCREEN('4.0'), ['13.0', '14.0', '15.0']),
+	iphone('IPSE2', 'iPhone SE (2nd gen)', '375×667', 2, IPHONE_SCREEN('4.7'), ['13.0', '14.0', '15.0', '16.0', '17.0', '18.3']),
+	iphone('IPSE3', 'iPhone SE (3rd gen)', '375×667', 2, IPHONE_SCREEN('4.7'), ['15.0', '16.0', '17.0', '18.3', '26.0']),
+
 	// --- iPhone 11 family (A13; supports up to iOS 26) ---
 	iphone('IP11', 'iPhone 11', '414×896', 2, IPHONE_SCREEN('6.1'), ['17.0', '18.3', '26.0']),
 	iphone('IP11PRO', 'iPhone 11 Pro', '375×812', 3, IPHONE_SCREEN('5.8'), ['17.0', '18.3', '26.0']),
@@ -213,24 +227,53 @@ export const APPLE_DEVICES = [
 	iphone('IP17PRO', 'iPhone 17 Pro', '402×874', 3, IPHONE_SCREEN('6.3'), ['26.0']),
 	iphone('IP17PROMAX', 'iPhone 17 Pro Max', '440×956', 3, IPHONE_SCREEN('6.9'), ['26.0']),
 
-	// --- iPad (representative current generation per line) ---
-	ipad('IPAD', 'iPad', 'iPad 10th Gen', '820×1180', 2, '10.9 inch', ['17.0', '18.3', '26.0']),
-	ipad('IPADMINI', 'iPad mini', 'iPad mini (7th Gen)', '744×1133', 2, '8.3 inch', ['18.3', '26.0']),
-	ipad('IPADAIR', 'iPad Air', 'iPad Air (5th Gen)', '820×1180', 2, '10.9 inch', ['17.0', '18.3', '26.0']),
-	ipad('IPADPRO11', 'iPad Pro 11-inch', 'iPad Pro 11 (4th Gen)', '834×1194', 2, '11.0 inch', ['17.0', '18.3', '26.0']),
-	ipad('IPADPRO129', 'iPad Pro 12.9-inch', 'iPad Pro 12.9 (6th Gen)', '1024×1366', 2, '12.9 inch', ['17.0', '18.3', '26.0']),
-	ipad('IPADPRO13', 'iPad Pro 13-inch', 'iPad Pro 13 (M4)', '1032×1376', 2, '13.0 inch', ['18.3', '26.0']),
+	// --- iPad generational coverage (2027.01.0 #14273) ---
+	// One row per hardware generation; runtimeDeviceName disambiguates. Older
+	// generations carry factual OS caps (5th/6th gen: 16; Air 3: 16; mini 5: 17 …).
+	ipad('IPAD5', 'iPad (5th Gen)', 'iPad (5th Gen)', '768×1024', 2, '9.7 inch', ['13.0', '14.0', '15.0', '16.0']),
+	ipad('IPAD6', 'iPad (6th Gen)', 'iPad (6th Gen)', '768×1024', 2, '9.7 inch', ['13.0', '14.0', '15.0', '16.0']),
+	ipad('IPAD7', 'iPad (7th Gen)', 'iPad (7th Gen)', '810×1080', 2, '10.2 inch', ['13.0', '14.0', '15.0', '16.0', '17.0']),
+	ipad('IPAD8', 'iPad (8th Gen)', 'iPad (8th Gen)', '810×1080', 2, '10.2 inch', ['13.0', '14.0', '15.0', '16.0', '17.0', '18.3']),
+	ipad('IPAD9', 'iPad (9th Gen)', 'iPad (9th Gen)', '810×1080', 2, '10.2 inch', ['14.0', '15.0', '16.0', '17.0', '18.3']),
+	ipad('IPAD10', 'iPad (10th Gen)', 'iPad (10th Gen)', '820×1180', 2, '10.9 inch', ['15.0', '16.0', '17.0', '18.3', '26.0']),
+	ipad('IPAD11', 'iPad (11th Gen)', 'iPad (11th Gen)', '820×1180', 2, '11.0 inch', ['17.0', '18.3', '26.0']),
+	ipad('IPADAIR3', 'iPad Air (3rd Gen)', 'iPad Air (3rd Gen)', '810×1080', 2, '10.5 inch', ['13.0', '14.0', '15.0', '16.0']),
+	ipad('IPADAIR4', 'iPad Air (4th Gen)', 'iPad Air (4th Gen)', '820×1180', 2, '10.9 inch', ['13.0', '14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADAIR5', 'iPad Air (5th Gen)', 'iPad Air (5th Gen)', '820×1180', 2, '10.9 inch', ['15.0', '16.0', '17.0', '18.3']),
+	ipad('IPADAIR6', 'iPad Air (6th Gen)', 'iPad Air (6th Gen)', '820×1180', 2, '11.0 inch', ['17.0', '18.3', '26.0']),
+	ipad('IPADAIR7', 'iPad Air (7th Gen)', 'iPad Air (7th Gen)', '820×1180', 2, '11.0 inch', ['17.0', '18.3', '26.0']),
+	ipad('IPADMINI5', 'iPad mini (5th Gen)', 'iPad mini (5th Gen)', '744×1133', 2, '7.9 inch', ['13.0', '14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADMINI6', 'iPad mini (6th Gen)', 'iPad mini (6th Gen)', '744×1133', 2, '8.3 inch', ['15.0', '16.0', '17.0', '18.3']),
+	ipad('IPADMINI', 'iPad mini (7th Gen)', 'iPad mini (7th Gen)', '744×1133', 2, '8.3 inch', ['17.0', '18.3', '26.0']),
+	ipad('IPADPRO11-1', 'iPad Pro 11 (1st Gen)', 'iPad Pro 11 (1st Gen)', '834×1194', 2, '11.0 inch', ['13.0', '14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADPRO11-2', 'iPad Pro 11 (2nd Gen)', 'iPad Pro 11 (2nd Gen)', '834×1194', 2, '11.0 inch', ['14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADPRO11-3', 'iPad Pro 11 (3rd Gen)', 'iPad Pro 11 (3rd Gen)', '834×1194', 2, '11.0 inch', ['15.0', '16.0', '17.0', '18.3']),
+	ipad('IPADPRO11', 'iPad Pro 11 (4th Gen)', 'iPad Pro 11 (4th Gen)', '834×1194', 2, '11.0 inch', ['16.0', '17.0', '18.3', '26.0']),
+	ipad('IPADPRO11-5', 'iPad Pro 11 (5th Gen)', 'iPad Pro 11 (5th Gen)', '834×1194', 2, '11.0 inch', ['17.0', '18.3', '26.0']),
+	ipad('IPADPRO129-1', 'iPad Pro 12.9 (3rd Gen)', 'iPad Pro 12.9 (3rd Gen)', '1024×1366', 2, '12.9 inch', ['13.0', '14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADPRO129-2', 'iPad Pro 12.9 (4th Gen)', 'iPad Pro 12.9 (4th Gen)', '1024×1366', 2, '12.9 inch', ['14.0', '15.0', '16.0', '17.0']),
+	ipad('IPADPRO129-3', 'iPad Pro 12.9 (5th Gen)', 'iPad Pro 12.9 (5th Gen)', '1024×1366', 2, '12.9 inch', ['15.0', '16.0', '17.0', '18.3']),
+	ipad('IPADPRO129', 'iPad Pro 12.9 (6th Gen)', 'iPad Pro 12.9 (6th Gen)', '1024×1366', 2, '12.9 inch', ['16.0', '17.0', '18.3']),
+	ipad('IPADPRO13', 'iPad Pro 13 (M4)', 'iPad Pro 13 (M4)', '1032×1376', 2, '13.0 inch', ['17.0', '18.3', '26.0']),
 
-	// --- macOS (one "device" per OS version; BrowserStack desktop has no deviceName) ---
-	mac('HIGH-SIERRA', 'macOS High Sierra', '10.13'),
-	mac('MOJAVE', 'macOS Mojave', '10.14'),
-	mac('CATALINA', 'macOS Catalina', '10.15'),
-	mac('BIG-SUR', 'macOS Big Sur', '11'),
-	mac('MONTEREY', 'macOS Monterey', '12'),
-	mac('VENTURA', 'macOS Ventura', '13'),
-	mac('SONOMA', 'macOS Sonoma', '14'),
-	mac('SEQUOIA', 'macOS Sequoia', '15'),
-	mac('TAHOE', 'macOS Tahoe', '26')
+	// --- macOS hardware models (2027.01.0 #14273) ---
+	// Replaces one-pseudo-device-per-OS. Honest ranges: Apple Silicon
+	// Monterey→Tahoe (per model launch floor); Intel lines cap at
+	// Monterey/Ventura and keep High Sierra–Catalina reachable.
+	macModel('MACMBA-M2', 'MacBook Air (M2)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
+	macModel('MACMBA-M3', 'MacBook Air (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
+	macModel('MACMBA-M4', 'MacBook Air (M4)', ['Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
+	macModel('MACMBP14-M3', 'MacBook Pro 14 (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 14.2),
+	macModel('MACMBP14-M4', 'MacBook Pro 14 (M4)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 14.2),
+	macModel('MACMBP16-M3', 'MacBook Pro 16 (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 16.2),
+	macModel('MACMBP16-M4', 'MacBook Pro 16 (M4)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 16.2),
+	macModel('MACMBP16-INT19', 'MacBook Pro 16 (Intel 2019)', ['High Sierra', 'Mojave', 'Catalina', 'Big Sur', 'Monterey'], 16.0),
+	macModel('MACIMAC-INT', 'iMac (27-inch Intel 2020)', ['High Sierra', 'Mojave', 'Catalina', 'Big Sur', 'Monterey', 'Ventura'], 27.0),
+	macModel('MACIMAC-M4', 'iMac (24-inch M4)', ['Sonoma', 'Sequoia', 'Tahoe'], 24.0),
+	macModel('MACMINI-M4', 'Mac mini (M4)', ['Sonoma', 'Sequoia', 'Tahoe'], null),
+	macModel('MACSTUDIO-M2MAX', 'Mac Studio (M2 Max)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], null),
+	macModel('MACSTUDIO-M4MAX', 'Mac Studio (M4 Max)', ['Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], null),
+	macModel('MACPRO-M2U', 'Mac Pro (M2 Ultra)', ['Sonoma', 'Sequoia', 'Tahoe'], null)
 ];
 
 // ---------------------------------------------------------------------------
@@ -253,16 +296,16 @@ function androidDevice(slug, name, manufacturer, runtimeDeviceName, osVersions, 
 	};
 }
 
-function windowsDevice(slug, name, deviceType) {
+function windowsDevice(slug, name, deviceType, osVersions = ['10', '11'], width = 1536, height = 864, hasTouch = deviceType === 'tablet') {
 	return {
 		slug, name, manufacturer: 'Microsoft',
 		runtimeDeviceName: null,
 		platformId: 'windows',
 		deviceType,
-		screenSize: '—',
-		osVersions: ['10', '11'],
+		screenSize: `${width}×${height}`,
+		osVersions,
 		isRealDevice: false,
-		emulation: { viewport: { width: 1536, height: 864 }, deviceScaleFactor: 1.25, isMobile: false, hasTouch: deviceType === 'tablet' }
+		emulation: { viewport: { width, height }, deviceScaleFactor: 1.25, isMobile: false, hasTouch }
 	};
 }
 
@@ -312,13 +355,66 @@ export const ANDROID_DEVICES = [
 	androidDevice('REALMEGT', 'Realme GT 6', 'Realme', 'Realme GT 6', ['14', '15']),
 	androidDevice('REALMEC', 'Realme C67', 'Realme', 'Realme C67', ['13', '14']),
 	// Nothing
-	androidDevice('NOTHPHONE', 'Nothing Phone (2a)', 'Nothing', 'Nothing Phone (2a)', ['14', '15'])
+	androidDevice('NOTHPHONE', 'Nothing Phone (2a)', 'Nothing', 'Nothing Phone (2a)', ['14', '15']),
+
+	// --- 2027.01.0 (#14273) additions ---
+	// Samsung fills: S Ultra variants, A/M series, Tab tablets, Z Fold/Flip 6
+	androidDevice('GALS21U', 'Galaxy S21 Ultra', 'Samsung', 'Samsung Galaxy S21 Ultra', ['12', '13'], '384×824'),
+	androidDevice('GALS22U', 'Galaxy S22 Ultra', 'Samsung', 'Samsung Galaxy S22 Ultra', ['12', '13', '14'], '384×824'),
+	androidDevice('GALS23U', 'Galaxy S23 Ultra', 'Samsung', 'Samsung Galaxy S23 Ultra', ['13', '14', '15'], '384×824'),
+	androidDevice('GALS24U', 'Galaxy S24 Ultra', 'Samsung', 'Samsung Galaxy S24 Ultra', ['14', '15'], '384×824'),
+	androidDevice('GALS25U', 'Galaxy S25 Ultra', 'Samsung', 'Samsung Galaxy S25 Ultra', ['15'], '384×824'),
+	androidDevice('GALA15', 'Galaxy A15', 'Samsung', 'Samsung Galaxy A15', ['13', '14'], '360×800'),
+	androidDevice('GALA25', 'Galaxy A25', 'Samsung', 'Samsung Galaxy A25', ['13', '14'], '360×800'),
+	androidDevice('GALA35', 'Galaxy A35', 'Samsung', 'Samsung Galaxy A35', ['14', '15'], '360×800'),
+	androidDevice('GALA55', 'Galaxy A55', 'Samsung', 'Samsung Galaxy A55', ['14', '15'], '360×800'),
+	androidDevice('GALM34', 'Galaxy M34', 'Samsung', 'Samsung Galaxy M34', ['13', '14'], '360×800'),
+	androidDevice('GALM35', 'Galaxy M35', 'Samsung', 'Samsung Galaxy M35', ['14', '15'], '360×800'),
+	androidDevice('GALM55', 'Galaxy M55', 'Samsung', 'Samsung Galaxy M55', ['14', '15'], '360×800'),
+	androidDevice('GALTABS9', 'Galaxy Tab S9', 'Samsung', 'Samsung Galaxy Tab S9', ['13', '14', '15'], '800×1280'),
+	androidDevice('GALTABS10', 'Galaxy Tab S10', 'Samsung', 'Samsung Galaxy Tab S10', ['14', '15'], '800×1280'),
+	androidDevice('GALTABA9P', 'Galaxy Tab A9+', 'Samsung', 'Samsung Galaxy Tab A9+', ['13', '14'], '800×1280'),
+	androidDevice('GALZFOLD6', 'Galaxy Z Fold 6', 'Samsung', 'Samsung Galaxy Z Fold 6', ['14', '15'], '968×896'),
+	androidDevice('GALZFLIP6', 'Galaxy Z Flip 6', 'Samsung', 'Samsung Galaxy Z Flip 6', ['14', '15'], '373×844'),
+	// Google fills: Pixel Pro/A/XL variants, Pixel Tablet
+	androidDevice('PIXEL6PRO', 'Pixel 6 Pro', 'Google', 'Google Pixel 6 Pro', ['12', '13', '14'], '412×915'),
+	androidDevice('PIXEL6A', 'Pixel 6a', 'Google', 'Google Pixel 6a', ['12', '13', '14'], '412×915'),
+	androidDevice('PIXEL7A', 'Pixel 7a', 'Google', 'Google Pixel 7a', ['13', '14', '15'], '412×915'),
+	androidDevice('PIXEL8A', 'Pixel 8a', 'Google', 'Google Pixel 8a', ['14', '15'], '412×915'),
+	androidDevice('PIXEL9A', 'Pixel 9a', 'Google', 'Google Pixel 9a', ['15'], '412×1016'),
+	androidDevice('PIXEL9PROXL', 'Pixel 9 Pro XL', 'Google', 'Google Pixel 9 Pro XL', ['14', '15', '16'], '412×1016'),
+	androidDevice('PIXEL10PRO', 'Pixel 10 Pro', 'Google', 'Google Pixel 10 Pro', ['15', '16'], '412×1016'),
+	androidDevice('PIXELTABLET', 'Pixel Tablet', 'Google', 'Google Pixel Tablet', ['13', '14', '15'], '1280×800'),
+	// New manufacturers (2027.01.0 #14273)
+	androidDevice('POCOX6', 'POCO X6', 'POCO', 'POCO X6', ['13', '14'], '393×873'),
+	androidDevice('POCOF6', 'POCO F6', 'POCO', 'POCO F6', ['14', '15'], '393×873'),
+	androidDevice('XPERIA1VI', 'Xperia 1 VI', 'Sony', 'Sony Xperia 1 VI', ['14', '15'], '412×915'),
+	androidDevice('XPERIA5V', 'Xperia 5 V', 'Sony', 'Sony Xperia 5 V', ['13', '14', '15'], '412×915'),
+	androidDevice('XPERIA10V', 'Xperia 10 V', 'Sony', 'Sony Xperia 10 V', ['13', '14'], '360×800'),
+	androidDevice('ZENFONE10', 'Zenfone 10', 'Asus', 'Asus Zenfone 10', ['13', '14'], '360×800'),
+	androidDevice('ZENFONE11', 'Zenfone 11 Ultra', 'Asus', 'Asus Zenfone 11 Ultra', ['14', '15'], '384×824'),
+	androidDevice('ROGPHONE8', 'ROG Phone 8', 'Asus', 'Asus ROG Phone 8', ['14', '15'], '384×824'),
+	androidDevice('LENOTABP12', 'Tab P12', 'Lenovo', 'Lenovo Tab P12', ['13', '14'], '1200×1840'),
+	androidDevice('HUAWEIP60', 'P60', 'Huawei', 'Huawei P60', ['12'], '360×960'),
+	androidDevice('HUAWEIMATE60', 'Mate 60 Pro', 'Huawei', 'Huawei Mate 60 Pro', ['12'], '460×2208'),
+	androidDevice('HONORMAGIC6', 'Magic 6 Pro', 'Honor', 'Honor Magic 6 Pro', ['14'], '384×824'),
+	androidDevice('HONOR90', 'Honor 90', 'Honor', 'Honor 90', ['13', '14'], '393×873'),
+	// Extensions of existing manufacturers
+	androidDevice('XIAOMI15', 'Xiaomi 15', 'Xiaomi', 'Xiaomi 15', ['15'], '393×873'),
+	androidDevice('XIAOMI15P', 'Xiaomi 15 Pro', 'Xiaomi', 'Xiaomi 15 Pro', ['15'], '1440×3200'),
+	androidDevice('REDMINOTE13P', 'Redmi Note 13 Pro', 'Xiaomi', 'Redmi Note 13 Pro', ['13', '14'], '393×873'),
+	androidDevice('REDMINOTE14', 'Redmi Note 14', 'Xiaomi', 'Redmi Note 14', ['14', '15'], '393×873'),
+	androidDevice('NOTHPHONE3A', 'Nothing Phone (3a)', 'Nothing', 'Nothing Phone (3a)', ['15'], '393×873')
 ];
 
 export const WINDOWS_DEVICES = [
-	windowsDevice('WINLAPTOP', 'Windows Laptop', 'desktop'),
-	windowsDevice('WINDESKTOP', 'Windows Desktop', 'desktop'),
-	windowsDevice('WINTABLET', 'Windows Tablet', 'tablet')
+	windowsDevice('WINLAPTOP', 'Windows Laptop', 'desktop', ['7', '8', '8.1', '10', '11'], 1536, 864, false),
+	windowsDevice('WINLAPTOP-T', 'Windows Touch Laptop', 'desktop', ['10', '11'], 1536, 864, true),
+	windowsDevice('WINDESKTOP', 'Windows Desktop', 'desktop', ['7', '8', '8.1', '10', '11'], 1920, 1080, false),
+	windowsDevice('WINTABLET', 'Windows Tablet', 'tablet', ['10', '11'], 1280, 800, true),
+	// 2027.01.0 (#14273): 2-in-1 form factor + legacy OS reach. Windows Server
+	// is deliberately absent — the execution infrastructure has no Server targets.
+	windowsDevice('WIN2IN1', 'Windows 2-in-1', 'two-in-one', ['10', '11'], 1440, 900, true)
 ];
 
 /** All catalog devices across platforms (Apple unchanged, then Android, then Windows). */
@@ -341,7 +437,7 @@ function iphone(slug, name, viewport, dpr, screenSize, osVersions) {
 		runtimeDeviceName: name,
 		platformId: 'ios',
 		deviceType: 'mobile',
-		screenSize,
+		screenSize: `${screenSize}`,
 		osVersions,
 		isRealDevice: true,
 		emulation: { viewport: { width, height }, deviceScaleFactor: dpr, isMobile: true, hasTouch: true }
@@ -356,7 +452,7 @@ function ipad(slug, name, runtimeDeviceName, viewport, dpr, screenSize, osVersio
 		runtimeDeviceName,
 		platformId: 'ipados',
 		deviceType: 'tablet',
-		screenSize,
+		screenSize: `${screenSize}`,
 		osVersions,
 		isRealDevice: true,
 		emulation: { viewport: { width, height }, deviceScaleFactor: dpr, isMobile: true, hasTouch: true }
@@ -375,6 +471,31 @@ function mac(slug, name, version) {
 		isRealDevice: false,
 		emulation: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, isMobile: false, hasTouch: false },
 		macOsVersion: version
+	};
+}
+
+/**
+ * macOS hardware model (2027.01.0 #14273). osVersions are macOS marketing
+ * names ("Monterey"…); macOsVersion is derived per name so Safari version
+ * resolution keeps working.
+ */
+function macModel(slug, name, osVersions, inches) {
+	const VERSION_BY_NAME = {
+		'High Sierra': '10.13', 'Mojave': '10.14', 'Catalina': '10.15',
+		'Big Sur': '11', 'Monterey': '12', 'Ventura': '13',
+		'Sonoma': '14', 'Sequoia': '15', 'Tahoe': '26'
+	};
+	return {
+		slug,
+		name,
+		runtimeDeviceName: null,
+		platformId: 'macos',
+		deviceType: 'desktop',
+		screenSize: inches ? `${inches} inch` : '—',
+		osVersions,
+		isRealDevice: false,
+		emulation: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, isMobile: false, hasTouch: false },
+		macOsVersions: osVersions.map((osName) => VERSION_BY_NAME[osName])
 	};
 }
 
@@ -469,18 +590,18 @@ function osVersionToken(platformId, osVersion) {
 
 /**
  * Deterministic ENV ID: ENV-{PLAT}-{DEVICE_SLUG}-{OSVER}-{BROWSER3}-{BROWSER_MAJOR}.
- * On macOS the device IS the OS version, so the OS token is omitted to avoid
- * duplicating it: ENV-MAC-SONOMA-CHR-140 (not ENV-MAC-SONOMA-SONOMA-CHR-140).
+ * 2027.01.0 (#14273): macOS devices are hardware models spanning multiple
+ * macOS versions, so the OS token is now REQUIRED for uniqueness:
+ * ENV-MAC-MACMBP16-M4-TAHOE-CHR-140. (Legacy one-device-per-OS pseudo-devices
+ * omitted it because the slug itself encoded the OS — those are retired.)
  */
 export function buildEnvId(platformId, deviceSlug, osVersion, browserEnvCode, browserVersion) {
 	const plat = PLATFORM_BY_ID.get(platformId)?.envCode ?? '??';
-	if (platformId === 'macos' || platformId === 'windows') {
-		// Windows devices are generic form factors (Laptop/Desktop/Tablet) and the
-		// OS version carries the distinguishing information: ENV-WIN-11-CHR-141.
-		if (platformId === 'windows') {
-			return `ENV-${plat}-${osVersionToken(platformId, osVersion)}-${browserEnvCode}-${browserVersion}-${deviceSlug}`;
-		}
-		return `ENV-${plat}-${deviceSlug}-${browserEnvCode}-${browserVersion}`;
+	if (platformId === 'windows') {
+		// Windows devices are generic form factors (Laptop/Desktop/Tablet/2-in-1)
+		// and the OS version carries the distinguishing information:
+		// ENV-WIN-11-CHR-141.
+		return `ENV-${plat}-${osVersionToken(platformId, osVersion)}-${browserEnvCode}-${browserVersion}-${deviceSlug}`;
 	}
 	return `ENV-${plat}-${deviceSlug}-${osVersionToken(platformId, osVersion)}-${browserEnvCode}-${browserVersion}`;
 }

@@ -26,11 +26,15 @@ test('seed contains android manufacturers, models and OS versions', () => {
 test('seed contains windows form factors, OS versions and browser support', () => {
 	const seed = buildCatalogSeed();
 	const windowsCategories = seed.deviceCategories.filter((c) => c.platform === 'windows');
-	assert.deepEqual(windowsCategories.map((c) => c.id), ['windows-laptop', 'windows-desktop', 'windows-tablet']);
+	// 2027.01.0 (#14273): + touchscreen laptop row shares 'laptop', + 2-in-1
+	assert.deepEqual(
+		windowsCategories.map((c) => c.id),
+		['windows-laptop', 'windows-desktop', 'windows-tablet', 'windows-2in1']
+	);
 	const windowsModels = seed.deviceModels.filter((m) => m.category_id.startsWith('windows-'));
-	assert.equal(windowsModels.length, 3);
+	assert.equal(windowsModels.length, 5);
 	const windowsOs = seed.osVersions.filter((v) => v.os_family_id === 'windows').map((v) => v.version);
-	assert.deepEqual(windowsOs, ['10', '11']);
+	assert.deepEqual(windowsOs, ['7', '8', '8.1', '10', '11']);
 	// Windows supports Chrome, Edge, Firefox, Opera, Brave, DuckDuckGo — never Safari.
 	for (const browser of ['chrome', 'edge', 'firefox', 'opera', 'brave', 'duckduckgo']) {
 		assert.ok(seed.browserPlatformSupport.some(
@@ -143,9 +147,9 @@ test('environment service creates Android and Windows environments end-to-end (l
 	);
 
 	// Both environments appear in the picker list alongside Apple ones.
-	// 2026.10 expansion: the catalog has 3650 rows — the raised cap covers it.
-	const listed = await envs.list({ limit: 20000 });
-	assert.ok(listed.length >= 3000, `expected the full expanded catalog, got ${listed.length}`);
+	// 2027.01.0 (#14273): the matrix is 36k+ rows — the raised 50000 cap covers it.
+	const listed = await envs.list({ limit: 50000 });
+	assert.ok(listed.length >= 36000, `expected the full expanded catalog, got ${listed.length}`);
 	assert.ok(listed.some((e) => e.envId === 'ENV-AND-GALS24-15-CHR-141'));
 	assert.ok(listed.some((e) => e.envId === 'ENV-WIN-11-EDG-141-WINLAPTOP'));
 	assert.ok(listed.some((e) => e.platform === 'ios'), 'apple environments still seeded');

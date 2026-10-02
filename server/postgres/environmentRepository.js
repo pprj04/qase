@@ -116,6 +116,18 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 					params
 				);
 			}
+			// 2027.01.0 (#14273): retire rows that dropped out of the catalog
+			// (e.g. macOS pseudo-devices replaced by hardware models).
+			// Never delete — history references them; mark inactive so lists
+			// with active=true stop offering them.
+			await client.query(
+				`UPDATE environments
+				 SET active = FALSE, updated_at = CURRENT_TIMESTAMP
+				 WHERE organization_id = $1 AND project_id = $2
+				 AND active = TRUE
+				 AND env_id <> ALL($3::text[])`,
+				[resolved.organizationId, resolved.projectId, environments.map((env) => env.envId)]
+			);
 			await client.query('COMMIT');
 			return { inserted: environments.length, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
 		} catch (error) {
@@ -305,7 +317,7 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			`SELECT * FROM environments ${where}
 			 ORDER BY platform, device, os_version, browser, browser_version
 			 LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-			[...params, Math.min(Math.max(limit, 1), 20000), Math.max(offset, 0)]
+			[...params, Math.min(Math.max(limit, 1), 50000), Math.max(offset, 0)]
 		);
 		return result.rows;
 	}

@@ -552,7 +552,7 @@ export function createApplication(options = {}) {
 		// Pre-register every environment on the availability board so the UI
 		// can show honest execution type / availability before first use.
 		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
-			void Promise.resolve(services.environments.list({ limit: 20000 }))
+			void Promise.resolve(services.environments.list({ limit: 50000 }))
 				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? []))
 				.catch(() => { /* board fills lazily via sessions */ });
 		}
@@ -641,8 +641,8 @@ export function createApplication(options = {}) {
 		try {
 			const query = request.query;
 			const limit = query.limit === undefined ? undefined : Number(query.limit);
-			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 20000)) {
-				response.status(400).json({ error: 'limit must be an integer from 1 through 20000.' });
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 50000.' });
 				return;
 			}
 			const offset = query.offset === undefined ? undefined : Number(query.offset);
@@ -676,6 +676,35 @@ export function createApplication(options = {}) {
 	app.get('/api/environments/availability', (_request, response) => {
 		response.set('Cache-Control', 'private, max-age=300');
 		response.json(services.environments.availability());
+	});
+
+	// #14275 (Phase 2): read-only catalog metadata — version, registered
+	// providers with connected/rowCount, generatedAt. No secrets, ever.
+	app.get('/api/catalog/meta', async (_request, response) => {
+		try {
+			const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+			response.set('Cache-Control', 'no-store');
+			response.json(await catalogProviderMeta());
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// #14275 (Phase 2): admin-gated manual catalog refresh — re-fetches
+	// provider overlays (provider rows only; builtin rows are untouchable).
+	app.post('/api/catalog/refresh', async (request, response) => {
+		try {
+			const identity = request.auth;
+			const isAdmin = !identity?.role || ['owner', 'admin'].includes(identity.role);
+			if (!isAdmin) {
+				response.status(403).json({ error: 'Catalog refresh requires an admin session.' });
+				return;
+			}
+			const result = await services.environments.refreshCatalog();
+			response.json(result);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
 	});
 
 	// Bulk environment operations (Phase 3 device matrix UI). Mounted BEFORE

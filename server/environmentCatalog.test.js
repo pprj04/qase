@@ -28,28 +28,69 @@ test('all requested iPhone models are present', () => {
 		'iPhone 14', 'iPhone 14 Plus', 'iPhone 14 Pro', 'iPhone 14 Pro Max',
 		'iPhone 15', 'iPhone 15 Plus', 'iPhone 15 Pro', 'iPhone 15 Pro Max',
 		'iPhone 16', 'iPhone 16 Plus', 'iPhone 16 Pro', 'iPhone 16 Pro Max', 'iPhone 16e',
-		'iPhone 17', 'iPhone 17 Air', 'iPhone 17 Pro', 'iPhone 17 Pro Max'
+		'iPhone 17', 'iPhone 17 Air', 'iPhone 17 Pro', 'iPhone 17 Pro Max',
+		// 2027.01.0 (#14273): legacy models
+		'iPhone 7', 'iPhone 7 Plus', 'iPhone 8', 'iPhone 8 Plus',
+		'iPhone X', 'iPhone XR', 'iPhone XS', 'iPhone XS Max',
+		'iPhone SE (1st gen)', 'iPhone SE (2nd gen)', 'iPhone SE (3rd gen)'
 	];
 	for (const name of wanted) {
 		assert.ok(getDevice(name), `missing device: ${name}`);
 	}
 });
 
-test('requested iPad lines are present as representative generations', () => {
-	for (const name of ['iPad', 'iPad mini', 'iPad Air', 'iPad Pro 11-inch', 'iPad Pro 12.9-inch', 'iPad Pro 13-inch']) {
+test('iPad generations are present per line (2027.01.0)', () => {
+	const wanted = [
+		'iPad (5th Gen)', 'iPad (6th Gen)', 'iPad (7th Gen)', 'iPad (8th Gen)', 'iPad (9th Gen)', 'iPad (10th Gen)', 'iPad (11th Gen)',
+		'iPad Air (3rd Gen)', 'iPad Air (4th Gen)', 'iPad Air (5th Gen)', 'iPad Air (6th Gen)', 'iPad Air (7th Gen)',
+		'iPad mini (5th Gen)', 'iPad mini (6th Gen)', 'iPad mini (7th Gen)',
+		'iPad Pro 11 (1st Gen)', 'iPad Pro 11 (2nd Gen)', 'iPad Pro 11 (3rd Gen)', 'iPad Pro 11 (4th Gen)', 'iPad Pro 11 (5th Gen)',
+		'iPad Pro 12.9 (3rd Gen)', 'iPad Pro 12.9 (4th Gen)', 'iPad Pro 12.9 (5th Gen)', 'iPad Pro 12.9 (6th Gen)',
+		'iPad Pro 13 (M4)'
+	];
+	for (const name of wanted) {
 		assert.ok(getDevice(name), `missing device: ${name}`);
 	}
 });
 
-test('all five macOS versions are present', () => {
-	for (const name of ['macOS Monterey', 'macOS Ventura', 'macOS Sonoma', 'macOS Sequoia', 'macOS Tahoe']) {
+test('legacy iPhones keep honest OS ceilings', () => {
+	// iPhone 7 caps at iOS 15; iPhone 8/X at 16; XR/XS at 18.
+	const seven = getDevice('iPhone 7');
+	assert.deepEqual(seven.osVersions, ['13.0', '14.0', '15.0']);
+	const eight = getDevice('iPhone 8');
+	assert.ok(!eight.osVersions.includes('17.0'), 'iPhone 8 never ran iOS 17');
+	const xs = getDevice('iPhone XS');
+	assert.ok(xs.osVersions.includes('18.3'));
+	assert.ok(!xs.osVersions.includes('26.0'), 'iPhone XS never ran iOS 26');
+	const se3 = getDevice('iPhone SE (3rd gen)');
+	assert.ok(se3.osVersions.includes('26.0'));
+});
+
+test('macOS hardware models are present (2027.01.0)', () => {
+	const wanted = [
+		'MacBook Air (M2)', 'MacBook Air (M3)', 'MacBook Air (M4)',
+		'MacBook Pro 14 (M3)', 'MacBook Pro 14 (M4)',
+		'MacBook Pro 16 (M3)', 'MacBook Pro 16 (M4)', 'MacBook Pro 16 (Intel 2019)',
+		'iMac (27-inch Intel 2020)', 'iMac (24-inch M4)',
+		'Mac mini (M4)', 'Mac Studio (M2 Max)', 'Mac Studio (M4 Max)', 'Mac Pro (M2 Ultra)'
+	];
+	for (const name of wanted) {
 		assert.ok(getDevice(name), `missing device: ${name}`);
 	}
 });
 
-test('macOS devices carry a numeric OS version', () => {
-	const sonoma = getDevice('macOS Sonoma');
-	assert.equal(sonoma.macOsVersion, '14');
+test('macOS hardware spans High Sierra through Tahoe with honest ranges', () => {
+	const intel = getDevice('MacBook Pro 16 (Intel 2019)');
+	assert.ok(intel.osVersions.includes('High Sierra'), 'Intel line keeps legacy macOS reachable');
+	assert.ok(!intel.osVersions.includes('Tahoe'), 'Intel 2019 never ran Tahoe');
+	const m4 = getDevice('MacBook Pro 16 (M4)');
+	assert.ok(m4.osVersions.includes('Tahoe'));
+	assert.ok(!m4.osVersions.includes('High Sierra'), 'Apple Silicon never ran High Sierra');
+	// Every macOS in the Safari map is reachable through some hardware model.
+	const reachable = new Set(generateEnvironments().filter((env) => env.platform === 'macos').map((env) => env.osVersion));
+	for (const os of Object.keys(MACOS_SAFARI_VERSIONS)) {
+		assert.ok(reachable.has(os), `macOS ${os} must be reachable via some hardware model`);
+	}
 });
 
 test('no environment exists for a browser unavailable on its platform', () => {
@@ -95,7 +136,8 @@ test('env ids follow the documented scheme', () => {
 	const byId = new Map(environments.map((env) => [env.envId, env]));
 	assert.ok(byId.has('ENV-IOS-IP16PRO-18.3-CHR-140'), 'example from the spec must exist');
 	assert.ok(byId.has('ENV-IOS-IP16PRO-18.3-SAF-18.3'), 'Safari env uses derived version');
-	assert.ok(byId.has('ENV-MAC-SONOMA-CHR-140'), 'macOS env uses OS name in device slot');
+	// 2027.01.0 (#14273): macOS ids carry hardware slug + OS token.
+	assert.ok(byId.has('ENV-MAC-MACMBP16-M4-TAHOE-CHR-140'), 'macOS hardware env ids include the OS token');
 	assert.ok(byId.has('ENV-IPADOS-IPADPRO13-18.3-CHR-140'));
 	const env = byId.get('ENV-IOS-IP16PRO-18.3-CHR-140');
 	assert.equal(env.device, 'iPhone 16 Pro');
@@ -111,8 +153,9 @@ test('env ids follow the documented scheme', () => {
 
 test('buildEnvId is deterministic and normalizes macOS names', () => {
 	assert.equal(buildEnvId('ios', 'IP16PRO', '18.3', 'CHR', '140'), 'ENV-IOS-IP16PRO-18.3-CHR-140');
-	assert.equal(buildEnvId('macos', 'SONOMA', 'Sonoma', 'SAF', '18.6'), 'ENV-MAC-SONOMA-SAF-18.6');
-	assert.equal(buildEnvId('macos', 'SONOMA', 'sonoma', 'CHR', '140'), 'ENV-MAC-SONOMA-CHR-140');
+	// 2027.01.0 (#14273): macOS hardware slug + normalized OS token.
+	assert.equal(buildEnvId('macos', 'MACMBP16-M4', 'Sonoma', 'SAF', '18.6'), 'ENV-MAC-MACMBP16-M4-SONOMA-SAF-18.6');
+	assert.equal(buildEnvId('macos', 'MACMBP16-M4', 'sonoma', 'CHR', '140'), 'ENV-MAC-MACMBP16-M4-SONOMA-CHR-140');
 });
 
 test('Safari version derives from the OS version, never independent', () => {
@@ -154,9 +197,14 @@ test('validator rejects unsupported combinations with readable reasons', () => {
 
 	// Expanded availability: these ARE supported now.
 	assert.equal(isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'firefox', '142').ok, true);
-	assert.equal(isCombinationSupported('macos', 'macOS Sonoma', 'Sonoma', 'brave', '140').ok, true);
+	assert.equal(isCombinationSupported('macos', 'MacBook Pro 16 (M4)', 'Sonoma', 'brave', '140').ok, true);
 	assert.equal(isCombinationSupported('android', 'Galaxy S24', '15', 'brave', '140').ok, true);
-	assert.equal(isCombinationSupported('ipados', 'iPad Pro 13-inch', '26.0', 'duckduckgo', '1').ok, true);
+	assert.equal(isCombinationSupported('ipados', 'iPad Pro 13 (M4)', '26.0', 'duckduckgo', '1').ok, true);
+	// 2027.01.0 (#14273): legacy + new families validate.
+	assert.equal(isCombinationSupported('ios', 'iPhone 7', '15.0', 'chrome', '140').ok, true);
+	assert.equal(isCombinationSupported('ios', 'iPhone 7', '26.0', 'chrome', '140').ok, false, 'iPhone 7 never ran iOS 26');
+	assert.equal(isCombinationSupported('windows', 'Windows 2-in-1', '11', 'edge', '141').ok, true);
+	assert.equal(isCombinationSupported('android', 'Xperia 1 VI', '15', 'chrome', '141').ok, true);
 
 	const safariMismatch = isCombinationSupported('ios', 'iPhone 16 Pro', '18.3', 'safari', '17');
 	assert.equal(safariMismatch.ok, false);
@@ -169,11 +217,11 @@ test('validator rejects unsupported combinations with readable reasons', () => {
 	const unknownDevice = isCombinationSupported('ios', 'Nokia 3310', '18.3', 'chrome', '140');
 	assert.equal(unknownDevice.ok, false);
 
-	const badChromeVersion = isCombinationSupported('macos', 'macOS Sonoma', 'Sonoma', 'chrome', '42');
+	const badChromeVersion = isCombinationSupported('macos', 'MacBook Pro 16 (M4)', 'Sonoma', 'chrome', '42');
 	assert.equal(badChromeVersion.ok, false);
 	assert.match(badChromeVersion.reason, /not available/);
 
-	const crossPlatformDevice = isCombinationSupported('ios', 'iPad Pro 11-inch', '17.0', 'safari');
+	const crossPlatformDevice = isCombinationSupported('ios', 'iPad Pro 11 (4th Gen)', '17.0', 'safari');
 	assert.equal(crossPlatformDevice.ok, false);
 });
 
@@ -190,9 +238,12 @@ test('browser version lists contain only plausible majors', () => {
 	}
 });
 
-test('macOS Safari map covers every macOS device', () => {
+test('macOS Safari map entries are all reachable via hardware models (2027.01.0)', () => {
+	// Covered by 'macOS hardware spans High Sierra through Tahoe' — kept
+	// as a focused assertion here: every Safari-mapped macOS resolves a
+	// derived version on the macos platform.
 	for (const os of Object.keys(MACOS_SAFARI_VERSIONS)) {
-		assert.ok(getDevice(`macOS ${os}`), `Safari map references unknown macOS ${os}`);
+		assert.ok(safariVersionFor('macos', os), `Safari map references unknown macOS ${os}`);
 	}
 });
 
@@ -216,10 +267,11 @@ test('availability report explains gaps for every platform', () => {
 });
 
 test('generated matrix size covers the full expanded availability', () => {
-	// 2026.10.2 (#14166): deep browser-major back-catalog + 4 legacy macOS
-	// versions push the matrix to ~14.6k environments.
+	// 2027.01.0 (#14273): full iPad generations, legacy iPhones, Android
+	// manufacturer expansion, Windows form factors + OS 7/8/8.1, and macOS
+	// hardware models push the matrix to ~36.6k environments.
 	const count = generateEnvironments().length;
-	assert.ok(count >= 14000 && count <= 16000, `unexpected matrix size: ${count}`);
+	assert.ok(count >= 36000 && count <= 42000, `unexpected matrix size: ${count}`);
 });
 
 test('chrome environments carry multiple versions per device/os', () => {

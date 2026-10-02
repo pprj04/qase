@@ -804,7 +804,7 @@ function envOptionGroups(list) {
 async function loadEnvironments() {
 	if (envState.loaded) return envState.list;
 	try {
-		const payload = await api('/environments?active=true&limit=20000');
+		const payload = await api('/environments?active=true&limit=50000');
 		envState.list = Array.isArray(payload?.environments) ? payload.environments : [];
 		envState.loaded = true;
 	} catch {
@@ -6325,7 +6325,7 @@ const devicePicker = $('device-picker') ? createDevicePicker({
 async function refreshDevicePickerData() {
 	if (!devicePicker) return;
 	devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'loading' });
-	const environments = await api('/environments?active=true&limit=20000').then((p) => p.environments ?? []).catch(() => null);
+	const environments = await api('/environments?active=true&limit=50000').then((p) => p.environments ?? []).catch(() => null);
 	if (!Array.isArray(environments)) {
 		// Catalog fetch failed: surface an honest error state, not empty data.
 		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
@@ -6347,7 +6347,7 @@ async function refreshDevicePickerData() {
 // refreshed again every time the picker opens (onClose).
 void (async () => {
 	if (!devicePicker) return;
-	const environments = await api('/environments?active=true&limit=20000').then((p) => p.environments ?? []).catch(() => null);
+	const environments = await api('/environments?active=true&limit=50000').then((p) => p.environments ?? []).catch(() => null);
 	if (!Array.isArray(environments)) {
 		// Boot fetch failed: keep the picker in its honest error state instead
 		// of an empty catalog (which would read as "nothing configured").

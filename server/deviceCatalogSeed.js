@@ -25,6 +25,10 @@ const HARDWARE = [
 	{ id: 'm3', display_name: 'Apple M3' },
 	{ id: 'm4', display_name: 'Apple M4' },
 	{ id: 'm5', display_name: 'Apple M5' },
+	{ id: 'a9', display_name: 'Apple A9' },
+	{ id: 'a10', display_name: 'Apple A10 Fusion' },
+	{ id: 'a11', display_name: 'Apple A11 Bionic' },
+	{ id: 'a12', display_name: 'Apple A12 Bionic' },
 	{ id: 'a13', display_name: 'Apple A13 Bionic' },
 	{ id: 'a14', display_name: 'Apple A14 Bionic' },
 	{ id: 'a15', display_name: 'Apple A15 Bionic' },
@@ -44,8 +48,20 @@ const MODEL_CHIP_RULES = [
 	['IP15PRO', 'a17pro'], ['IP15PROMAX', 'a17pro'], ['IP15PLUS', 'a16'], ['IP15', 'a16'],
 	['IP16PRO', 'a18pro'], ['IP16PROMAX', 'a18pro'], ['IP16E', 'a18'], ['IP16', 'a18'],
 	['IP17PRO', 'a19'], ['IP17PROMAX', 'a19'], ['IP17AIR', 'a19'], ['IP17', 'a19'],
-	['IPADPRO13', 'm4'], ['IPADPRO11', 'm2'], ['IPADPRO129', 'm2'],
-	['IPADAIR', 'm2'], ['IPADMINI', 'a17pro'], ['IPAD', 'a14']
+	// 2027.01.0 (#14273) legacy iPhone chips: A10 (7/8/X), A12 (XR/XS),
+	// SE gens reuse the iPhone-body chips (1st A9→null kept honest as a13 floor? No —
+	// A9 chip id absent from HARDWARE, so SE1 maps null; SE2 A13; SE3 A15).
+	['IPXSMAX', 'a12'], ['IPXS', 'a12'], ['IPXR', 'a12'],
+	['IP8PLUS', 'a11'], ['IP8', 'a11'], ['IPX', 'a11'],
+	['IP7PLUS', 'a10'], ['IP7', 'a10'],
+	['IPSE3', 'a15'], ['IPSE2', 'a13'], ['IPSE1', null],
+	// 2027.01.0 (#14273) iPad generations (longest prefix first)
+	['IPADPRO13', 'm4'], ['IPADPRO129-6', 'm2'], ['IPADPRO129-5', 'm1'], ['IPADPRO129', 'm1'],
+	['IPADPRO11-5', 'm4'], ['IPADPRO11-4', 'm2'], ['IPADPRO11-3', 'm2'], ['IPADPRO11-2', 'm1'], ['IPADPRO11', 'm1'],
+	['IPADAIR7', 'm3'], ['IPADAIR6', 'm2'], ['IPADAIR5', 'm1'], ['IPADAIR4', 'a14'], ['IPADAIR3', 'a12'],
+	['IPADMINI7', 'a17pro'], ['IPADMINI6', 'a15'], ['IPADMINI5', 'a12'],
+	['IPAD11', 'a16'], ['IPAD10', 'a14'], ['IPAD9', 'a13'], ['IPAD8', 'a12'], ['IPAD7', 'a10'], ['IPAD6', 'a10'], ['IPAD5', 'a9'],
+	['IPAD', 'a14']
 ];
 
 function chipForSlug(slug) {
@@ -76,11 +92,19 @@ function deviceCategoryRows() {
 		{ id: 'vivo', display_name: 'Vivo', device_type: 'mobile', platform: 'android', sort_order: 17 },
 		{ id: 'realme', display_name: 'Realme', device_type: 'mobile', platform: 'android', sort_order: 18 },
 		{ id: 'nothing', display_name: 'Nothing', device_type: 'mobile', platform: 'android', sort_order: 19 },
+		// 2027.01.0 (#14273) new manufacturers
+		{ id: 'poco', display_name: 'POCO', device_type: 'mobile', platform: 'android', sort_order: 21 },
+		{ id: 'sony', display_name: 'Sony', device_type: 'mobile', platform: 'android', sort_order: 22 },
+		{ id: 'asus', display_name: 'Asus', device_type: 'mobile', platform: 'android', sort_order: 23 },
+		{ id: 'lenovo', display_name: 'Lenovo', device_type: 'tablet', platform: 'android', sort_order: 24 },
+		{ id: 'huawei', display_name: 'Huawei', device_type: 'mobile', platform: 'android', sort_order: 25 },
+		{ id: 'honor', display_name: 'Honor', device_type: 'mobile', platform: 'android', sort_order: 26 },
 		{ id: 'other-android', display_name: 'Other Android devices', device_type: 'mobile', platform: 'android', sort_order: 20 },
 		// Windows form factors
 		{ id: 'windows-laptop', display_name: 'Windows Laptop', device_type: 'desktop', platform: 'windows', sort_order: 30 },
 		{ id: 'windows-desktop', display_name: 'Windows Desktop', device_type: 'desktop', platform: 'windows', sort_order: 31 },
-		{ id: 'windows-tablet', display_name: 'Windows Tablet', device_type: 'tablet', platform: 'windows', sort_order: 32 }
+		{ id: 'windows-tablet', display_name: 'Windows Tablet', device_type: 'tablet', platform: 'windows', sort_order: 32 },
+		{ id: 'windows-2in1', display_name: 'Windows 2-in-1', device_type: 'tablet', platform: 'windows', sort_order: 33 }
 	];
 }
 
@@ -118,8 +142,8 @@ function osVersionRows() {
 	// Android 11–16 (Phase 9) — every Android OS version is addressable even if
 	// no seeded device uses it yet (future devices can adopt them data-only).
 	for (const version of ['11', '12', '13', '14', '15', '16']) push('android', version);
-	// Windows 10 / 11
-	for (const version of ['10', '11']) push('windows', version);
+	// Windows 7–11 (2027.01.0 #14273): every Windows OS version addressable.
+	for (const version of ['7', '8', '8.1', '10', '11']) push('windows', version);
 	return rows;
 }
 
@@ -147,7 +171,9 @@ function deviceGenerationRows() {
 
 const ANDROID_MANUFACTURER_CATEGORY = {
 	'Samsung': 'samsung', 'Google': 'google-pixel', 'OnePlus': 'oneplus', 'Motorola': 'motorola',
-	'Xiaomi': 'xiaomi', 'Oppo': 'oppo', 'Vivo': 'vivo', 'Realme': 'realme', 'Nothing': 'nothing'
+	'Xiaomi': 'xiaomi', 'Oppo': 'oppo', 'Vivo': 'vivo', 'Realme': 'realme', 'Nothing': 'nothing',
+	// 2027.01.0 (#14273)
+	'POCO': 'poco', 'Sony': 'sony', 'Asus': 'asus', 'Lenovo': 'lenovo', 'Huawei': 'huawei', 'Honor': 'honor'
 };
 
 function deviceModelRows() {
@@ -179,7 +205,10 @@ function deviceModelRows() {
 	}));
 	const windowsRows = WINDOWS_DEVICES.map((device) => ({
 		id: device.slug,
-		category_id: `windows-${device.deviceType === 'tablet' ? 'tablet' : device.name.includes('Laptop') ? 'laptop' : 'desktop'}`,
+		// 2027.01.0 (#14273): form-factor categories incl. 2-in-1
+		category_id: device.deviceType === 'two-in-one'
+			? 'windows-2in1'
+			: `windows-${device.deviceType === 'tablet' ? 'tablet' : device.name.includes('Laptop') ? 'laptop' : 'desktop'}`,
 		display_name: device.name,
 		slug: device.slug,
 		browserstack_device_name: null,

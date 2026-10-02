@@ -31,7 +31,7 @@ test('seed inserts every generated environment and upserts by env_id without tou
 	const pool = scriptedPool();
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	const result = await repo.seed();
-	assert.equal(result.catalogVersion, '2026.10.2');
+	assert.equal(result.catalogVersion, '2027.01.0');
 	const inserts = pool._calls.filter((call) => call.text.startsWith('INSERT INTO environments'));
 	assert.ok(inserts.length >= 250, `expected hundreds of upserts, got ${inserts.length}`);
 	for (const call of inserts) {
@@ -189,8 +189,8 @@ test('list clamps limit and offset', async () => {
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	await repo.list(TENANT, { limit: '99999', offset: '-5' });
 	const select = pool._calls.find((call) => call.text.includes('LIMIT'));
-	// 2026.10.2 (#14166): list cap raised 5000 → 20000 for the deep version catalog.
-	assert.equal(select.params.at(-2), 20000);
+	// 2027.01.0 (#14273): list cap raised 20000 → 50000 for the 36k+ device matrix.
+	assert.equal(select.params.at(-2), 50000);
 	assert.equal(select.params.at(-1), 0);
 });
 
