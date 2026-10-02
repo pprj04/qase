@@ -331,6 +331,9 @@ function buildSqaBody(session) {
 	if (assessment.disclaimer) {
 		parts.push('<section class="boundary"><h2>Assessment boundary</h2>' + paragraphs(assessment.disclaimer) + '</section>');
 	}
+	// User feedback section — same embed as the QA report, only when the
+	// submitter left feedback for this run (session.userFeedback).
+	parts.push(feedbackSectionHtml(session));
 	return parts.join('');
 }
 
