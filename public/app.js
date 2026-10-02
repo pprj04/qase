@@ -4693,8 +4693,13 @@ const qaUi = {
 	selectAll: $('qa-select-all'),
 	deselectAll: $('qa-deselect-all'),
 	scopeAll: $('qa-scope-all'),
+	scopeSelectAll: $('qa-scope-select-all'),
+	scopeDeselectAll: $('qa-scope-deselect-all'),
 	scopeOptions: $('qa-scope-options'),
-	engineOptions: $('qa-engine-options'),	environmentSelect: $('qa-environment-select'),
+	founderMode: $('qa-founder-mode'),
+	compliance: $('qa-compliance'),
+	engineOptions: $('qa-engine-options'),
+	environmentSelect: $('qa-environment-select'),
 	error: $('qa-form-error')
 };
 
@@ -5069,23 +5074,16 @@ if (qaUi.dialog) {
 		}
 	});
 
-	// Select-all drives the individual scope checkboxes; clearing one unchecks it.
-	if (qaUi.scopeAll && qaUi.scopeOptions) {
+	// Select All / Deselect All drive the individual coverage checkboxes.
+	// Individual toggles change only their own option — nothing else resets.
+	if (qaUi.scopeOptions) {
 		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
-		const syncSelectAll = () => {
-			const boxes = scopeBoxes();
-			qaUi.scopeAll.checked = boxes.length > 0 && boxes.every(box => box.checked);
-			qaUi.scopeAll.indeterminate = !qaUi.scopeAll.checked && boxes.some(box => box.checked);
-		};
-		qaUi.scopeAll.addEventListener('change', () => {
-			for (const box of scopeBoxes()) {
-				box.checked = qaUi.scopeAll.checked;
-			}
-			syncSelectAll();
+		qaUi.scopeSelectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = true;
 		});
-		for (const box of scopeBoxes()) {
-			box.addEventListener('change', syncSelectAll);
-		}
+		qaUi.scopeDeselectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = false;
+		});
 	}
 
 	qaUi.selectAll.onclick = () => {
@@ -5133,7 +5131,7 @@ if (qaUi.dialog) {
 		const scopeValues = selectedQaScopeValues();
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
 		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
-			setQaFormError('Check at least one item under “What to test”.');
+			setQaFormError('Select at least one coverage area under “Supported Coverage”.');
 			return;
 		}
 		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;
@@ -5165,6 +5163,16 @@ if (qaUi.dialog) {
 			}
 			await createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId });
 			closeQaStart();
+			// Optional follow-on flows: the QA run is already underway; each
+			// checked option opens the existing dialog prefilled with the same
+			// target for the user to confirm — nothing starts automatically.
+			if (qaUi.founderMode?.checked) {
+				await openFounderStart();
+				founderUi.targetUrl.value = targetUrl;
+			} else if (qaUi.compliance?.checked) {
+				await openSqaStart();
+				sqaUi.targetUrl.value = targetUrl;
+			}
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 		} finally {
