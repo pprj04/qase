@@ -27,6 +27,7 @@ import {
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
+import { buildFeedbackSectionMarkdown } from './report.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { publicQaTestCatalog } from './qaTestCatalog.js';
 import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
@@ -1127,11 +1128,18 @@ export function createApplication(options = {}) {
 			response.status(409).json({ error: 'The Founder review is pending and has not been finalized yet.' });
 			return;
 		}
-		const markdown = session.mode === 'sqa'
-			? buildSqaReportMarkdown(session.sqa.assessment)
-			: session.mode === 'founder'
-				? buildFounderReportMarkdown(session)
-				: services.reports.buildMarkdown(await attachUserFeedback(session, request.auth?.userId));
+		let markdown;
+		if (session.mode === 'sqa') {
+			markdown = buildSqaReportMarkdown(session.sqa.assessment);
+			// Append the submitter's own feedback (same section the QA report
+			// embeds); attachUserFeedback scopes it to this run + user.
+			const feedbackSection = buildFeedbackSectionMarkdown(await attachUserFeedback(session, request.auth?.userId));
+			if (feedbackSection) markdown += `\n${feedbackSection}`;
+		} else if (session.mode === 'founder') {
+			markdown = buildFounderReportMarkdown(session);
+		} else {
+			markdown = services.reports.buildMarkdown(await attachUserFeedback(session, request.auth?.userId));
+		}
 		response.type('text/markdown').send(markdown);
 	});
 

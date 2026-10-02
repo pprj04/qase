@@ -1328,9 +1328,9 @@ const FEEDBACK_STAR_LABELS = {
 };
 
 function feedbackEligible(session) {
-	// The feedback feature is scoped to New QA Run executions — SQA and
-	// Founder reviews each have their own completion flows.
-	return Boolean(session?.id) && session.mode !== 'sqa' && session.mode !== 'founder'
+	// Feedback applies to QA runs and SQA assessments once they finish;
+	// Founder reviews keep their own completion flow without feedback.
+	return Boolean(session?.id) && session.mode !== 'founder'
 		&& FEEDBACK_TERMINAL_STATUSES.has(session.status);
 }
 
@@ -2973,6 +2973,10 @@ function renderSqaReportTab() {
 		renderSqaSources(assessment.frameworkCoverage ?? []),
 		renderSqaReportActions()
 	);
+	// USER FEEDBACK section — the submitter's own feedback for THIS SQA run,
+	// same rendering and run-scoping as the QA report.
+	renderReportFeedbackSection(state.runRatings.get(state.session.id)
+		?? (state.feedback.existingLoadedFor === state.session.id ? state.feedback.existing : undefined));
 }
 
 /* ── Event stream ────────────────────────────────────────────────── */
@@ -3168,7 +3172,19 @@ function renderSqaReportActions() {
 		window.setTimeout(() => URL.revokeObjectURL(url), 0);
 	};
 
-	actions.append(download, copy, copyFixes, downloadFixes, pdf);
+	const rated = state.runRatings.get(state.sessionId)
+		?? (state.feedback.existingLoadedFor === state.sessionId ? state.feedback.existing : undefined);
+	const provideFeedback = document.createElement('button');
+	provideFeedback.className = 'btn btn-ghost btn-sm';
+	provideFeedback.type = 'button';
+	provideFeedback.textContent = rated ? 'View Feedback' : 'Provide Feedback';
+	provideFeedback.title = rated
+		? 'View your submitted feedback for this assessment.'
+		: 'Rate this SQA assessment experience and tell us how it went.';
+	provideFeedback.onclick = () => openFeedbackModal();
+
+	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	el.reportView.append(actions);
 	return actions;
 }
 
@@ -3882,7 +3898,11 @@ const qaUi = {
 	selectAll: $('qa-select-all'),
 	deselectAll: $('qa-deselect-all'),
 	scopeAll: $('qa-scope-all'),
+	scopeSelectAll: $('qa-scope-select-all'),
+	scopeDeselectAll: $('qa-scope-deselect-all'),
 	scopeOptions: $('qa-scope-options'),
+	founderMode: $('qa-founder-mode'),
+	compliance: $('qa-compliance'),
 	engineOptions: $('qa-engine-options'),
 	error: $('qa-form-error')
 };
@@ -4251,23 +4271,16 @@ if (qaUi.dialog) {
 		}
 	});
 
-	// Select-all drives the individual scope checkboxes; clearing one unchecks it.
-	if (qaUi.scopeAll && qaUi.scopeOptions) {
+	// Select All / Deselect All drive the individual coverage checkboxes.
+	// Individual toggles change only their own option — nothing else resets.
+	if (qaUi.scopeOptions) {
 		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
-		const syncSelectAll = () => {
-			const boxes = scopeBoxes();
-			qaUi.scopeAll.checked = boxes.length > 0 && boxes.every(box => box.checked);
-			qaUi.scopeAll.indeterminate = !qaUi.scopeAll.checked && boxes.some(box => box.checked);
-		};
-		qaUi.scopeAll.addEventListener('change', () => {
-			for (const box of scopeBoxes()) {
-				box.checked = qaUi.scopeAll.checked;
-			}
-			syncSelectAll();
+		qaUi.scopeSelectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = true;
 		});
-		for (const box of scopeBoxes()) {
-			box.addEventListener('change', syncSelectAll);
-		}
+		qaUi.scopeDeselectAll?.addEventListener('click', () => {
+			for (const box of scopeBoxes()) box.checked = false;
+		});
 	}
 
 	qaUi.selectAll.onclick = () => {
@@ -4315,7 +4328,7 @@ if (qaUi.dialog) {
 		const scopeValues = selectedQaScopeValues();
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
 		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
-			setQaFormError('Check at least one item under “What to test”.');
+			setQaFormError('Select at least one coverage area under “Supported Coverage”.');
 			return;
 		}
 		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;
@@ -4341,6 +4354,16 @@ if (qaUi.dialog) {
 				});
 			}
 			closeQaStart();
+			// Optional follow-on flows: the QA run is already underway; each
+			// checked option opens the existing dialog prefilled with the same
+			// target for the user to confirm — nothing starts automatically.
+			if (qaUi.founderMode?.checked) {
+				await openFounderStart();
+				founderUi.targetUrl.value = targetUrl;
+			} else if (qaUi.compliance?.checked) {
+				await openSqaStart();
+				sqaUi.targetUrl.value = targetUrl;
+			}
 		} catch (error) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 		} finally {
