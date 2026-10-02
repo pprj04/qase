@@ -674,15 +674,18 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
-	// Merged insert tail: ... createdAt, updatedAt, queuedAt, environmentId,
-	// environmentSnapshot, testCaseId — timestamps then three env/case params.
+	// Merged insert tail: createdAt, updatedAt, queuedAt, pausedAt, selectedTests,
+	// securityAuthorization, environmentId, environmentSnapshot, testCaseId.
 	// Plus DEV's structural-integrity check: distinct placeholders must equal
 	// params length and the highest placeholder must bind the last param.
 	assert.equal(runInsert.params[runInsert.params.length - 1], null, 'testCaseId tail');
 	assert.equal(runInsert.params[runInsert.params.length - 2], null, 'environmentSnapshot tail');
 	assert.equal(runInsert.params[runInsert.params.length - 3], null, 'environmentId tail');
-	assert.equal(runInsert.params[runInsert.params.length - 4], null, 'queuedAt tail (unset)');
-	assert.equal(runInsert.params[runInsert.params.length - 5].getTime(), new Date(NOW).getTime(), 'updatedAt');
+	assert.equal(runInsert.params[runInsert.params.length - 4], null, 'securityAuthorization tail (unset)');
+	assert.equal(runInsert.params[runInsert.params.length - 5], null, 'selectedTests tail (unset)');
+	assert.equal(runInsert.params[runInsert.params.length - 6], null, 'pausedAt tail (unset)');
+	assert.equal(runInsert.params[runInsert.params.length - 7], null, 'queuedAt tail (unset)');
+	assert.equal(runInsert.params[runInsert.params.length - 8].getTime(), new Date(NOW).getTime(), 'updatedAt');
 	const columnList = runInsert.text.match(/INSERT INTO qa_runs \(([\s\S]*?)\)\s*VALUES/)?.[1] ?? '';
 	const columnCount = columnList.split(',').length;
 	const placeholders = [...runInsert.text.matchAll(/\$(\d+)/g)].map(match => Number(match[1]));
