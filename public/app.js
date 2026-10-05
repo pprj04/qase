@@ -707,10 +707,10 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+async function createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine = 'chromium', coreFlowsOnly = false, scopeSelection }) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
-	const session = await api('/sessions', { method: 'POST', body: JSON.stringify({ device, deviceLandscape, engine }) });
+	const session = await api('/sessions', { method: 'POST', body: JSON.stringify({ device, deviceLandscape, engine, scopeSelection }) });
 	await selectSession(session.id);
 	if (targetUrl) {
 		const text = coreFlowsOnly && engine !== 'chromium'
