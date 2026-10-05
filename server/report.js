@@ -1,3 +1,5 @@
+import { QA_SCOPE_OPTIONS } from '../public/qaScopeCatalog.js';
+
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 
 const VERDICT_LABELS = {
@@ -39,6 +41,23 @@ export function buildQaChatReport(session) {
 }
 
 /** Renders the session as a QA report a human can file or paste into a ticket. */
+/** Selected-coverage block for the QA report: what the user asked to test. */
+function coverageSelectionLines(session) {
+	const selected = Array.isArray(session?.scopeSelection) ? session.scopeSelection : null;
+	if (!selected || selected.length === 0) return [];
+	const lines = ['', '## What was tested — selected coverage', ''];
+	for (const group of [{ key: 'uiux', label: 'UI & User Experience' }, { key: 'other', label: 'Other supported coverage' }]) {
+		const options = QA_SCOPE_OPTIONS.filter(option => option.group === group.key);
+		if (options.length === 0 || !options.some(option => selected.includes(option.value))) continue;
+		lines.push(`**${group.label}**`, '');
+		for (const option of options) {
+			lines.push(`- ${selected.includes(option.value) ? '✓' : '✗'} ${option.friendly}`);
+		}
+		lines.push('');
+	}
+	return lines;
+}
+
 export function buildReportMarkdown(session) {
 	const report = session.report;
 	const lines = [];
@@ -73,6 +92,9 @@ export function buildReportMarkdown(session) {
 	}
 	if (report?.notCovered?.length) {
 		lines.push('## Not covered', '', ...report.notCovered.map(item => `- ${item}`), '');
+	}
+	if (coverageSelectionLines(session).length > 0) {
+		lines.push(...coverageSelectionLines(session));
 	}
 
 	if (session.findings.length > 0) {

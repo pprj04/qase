@@ -28,6 +28,7 @@ import {
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { buildFeedbackSectionMarkdown } from './report.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
@@ -729,7 +730,8 @@ export function createApplication(options = {}) {
 		const deviceLandscape = request.body?.deviceLandscape === true;
 		const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
 		const cohort = cohortFor(request.auth?.role).cohort;
-		const session = await services.runs.create(engine === 'chromium' ? undefined : `QA — ${engine}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort });
+		const scopeSelection = normalizeQaScopeSelection(request.body?.scopeSelection);
+		const session = await services.runs.create(engine === 'chromium' ? undefined : `QA — ${engine}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, scopeSelection });
 		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
 		response.status(201).json(session);
 	});

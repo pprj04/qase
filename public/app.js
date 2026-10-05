@@ -2596,6 +2596,47 @@ function renderDrytisBoardRefresh() {
 	host.replaceWith(renderDrytisBoard());
 }
 
+/**
+ * "What was tested" block: selected coverage (✓/✗ per option, from the
+ * persisted scopeSelection) rendered above the agent-executed Covered /
+ * Not covered sections so selected vs executed stay visually distinct.
+ * Legacy runs without scopeSelection render nothing.
+ */
+function renderCoverageSelection(session) {
+	const selected = Array.isArray(session?.scopeSelection) ? session.scopeSelection : null;
+	if (!selected || selected.length === 0) return document.createComment('no scope selection');
+	const wrap = document.createElement('div');
+	wrap.className = 'report-section coverage-selection';
+	const title = document.createElement('h3');
+	title.textContent = 'What was tested — selected coverage';
+	const sub = document.createElement('p');
+	sub.className = 'muted';
+	sub.textContent = 'Coverage selected for this run. “Covered” below lists what the agent executed.';
+	wrap.append(title, sub);
+	for (const group of [{ key: 'uiux', label: 'UI & User Experience' }, { key: 'other', label: 'Other supported coverage' }]) {
+		const options = QA_SCOPE_OPTIONS.filter(option => option.group === group.key);
+		if (options.length === 0) continue;
+		const inGroup = options.some(option => selected.includes(option.value));
+		if (!inGroup) continue;
+		const heading = document.createElement('h4');
+		heading.textContent = group.label;
+		const ul = document.createElement('ul');
+		ul.className = 'coverage-selection-list';
+		for (const option of options) {
+			const li = document.createElement('li');
+			const mark = document.createElement('span');
+			mark.className = `coverage-mark ${selected.includes(option.value) ? 'is-on' : 'is-off'}`;
+			mark.textContent = selected.includes(option.value) ? '✓' : '✗';
+			const name = document.createElement('span');
+			name.textContent = option.friendly;
+			li.append(mark, name);
+			ul.append(li);
+		}
+		wrap.append(heading, ul);
+	}
+	return wrap;
+}
+
 function renderReport() {
 	el.reportView.replaceChildren();
 	if (state.session?.mode === 'sqa') {
@@ -2646,6 +2687,7 @@ function renderReport() {
 	el.reportView.append(stats);
 
 	el.reportView.append(section('Summary', paragraph(report.summary)));
+	el.reportView.append(renderCoverageSelection(state.session));
 	if (report.covered?.length) el.reportView.append(section('Covered', list(report.covered)));
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
 	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
@@ -3884,9 +3926,15 @@ const qaUi = {
 
 function selectedQaScopeValues() {
 	if (!qaUi.scopeOptions) return undefined;
-	return [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
+	const values = [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
 		.filter(box => box.checked)
 		.map(box => box.value);
+	// Browser compatibility is a UI alias for the engine checkboxes: reflect it
+	// in the persisted selection so reports show it as selected coverage.
+	if (selectedQaEngines().length > 0 && !values.includes('browser-compatibility')) {
+		values.push('browser-compatibility');
+	}
+	return values;
 }
 
 /** Engines checked in the launcher; chromium first when chosen. */
@@ -4104,7 +4152,7 @@ if (qaUi.dialog) {
 		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
 		try {
 			for (const engine of engines) {
-				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1 });
+				await createQaRun({ targetUrl, device, deviceLandscape, kickoffText, engine, coreFlowsOnly: engines.length > 1, scopeSelection: scopeValues });
 			}
 			closeQaStart();
 			// Optional follow-on flows: the QA run is already underway; each

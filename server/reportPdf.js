@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { buildFindingFixPrompt } from './fixPromptBuilder.js';
 import { getDeviceProfile } from './deviceProfiles.js';
+import { QA_SCOPE_OPTIONS } from '../public/qaScopeCatalog.js';
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_COLOR = {
@@ -159,6 +160,27 @@ function traceabilityBlock(item = {}) {
 function titledList(title, items, empty = '') {
 	const content = bulletList(items, { empty });
 	return content ? '<h3>' + escapeHtml(title) + '</h3>' + content : '';
+}
+
+/**
+ * "What was tested — selected coverage" section: the persisted scopeSelection
+ * with per-option marks, so selected coverage is distinguishable from the
+ * agent-executed Covered / Not covered lists above it.
+ */
+function coverageSelectionHtml(session) {
+	const selected = Array.isArray(session?.scopeSelection) ? session.scopeSelection : null;
+	if (!selected || selected.length === 0) return '';
+	const blocks = [];
+	for (const group of [{ key: 'uiux', label: 'UI &amp; User Experience' }, { key: 'other', label: 'Other supported coverage' }]) {
+		const options = QA_SCOPE_OPTIONS.filter(option => option.group === group.key);
+		if (options.length === 0 || !options.some(option => selected.includes(option.value))) continue;
+		blocks.push('<h3>' + group.label + '</h3><ul class="coverage">'
+			+ options.map(option => '<li data-on="' + (selected.includes(option.value) ? '1' : '0') + '">'
+				+ '<span class="coverage-mark">' + (selected.includes(option.value) ? '\u2713' : '\u2717') + '</span>'
+				+ escapeHtml(option.friendly) + '</li>').join('') + '</ul>');
+	}
+	if (blocks.length === 0) return '';
+	return '<section><h2>What was tested \u2014 selected coverage</h2>' + blocks.join('') + '</section>';
 }
 
 function buildQaBody(session) {
