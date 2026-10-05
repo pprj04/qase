@@ -709,7 +709,7 @@ function applySessionSnapshot(session) {
 
 async function startRun() { openQaStart(); }
 
-async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false }) {
+async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, securityAuthorization, kickoffText, engine = 'chromium', coreFlowsOnly = false, scopeSelection }) {
 	state.welcomeDismissed = true;
 	void markOnboarded();
 	const session = await api('/sessions', {
@@ -719,7 +719,8 @@ async function createQaRun({ targetUrl, device, deviceLandscape, selectedTests, 
 			deviceLandscape,
 			engine,
 			selectedTests,
-			...(securityAuthorization ? { securityAuthorization } : {})
+			...(securityAuthorization ? { securityAuthorization } : {}),
+			...(scopeSelection ? { scopeSelection } : {})
 		})
 	});
 	await selectSession(session.id);
@@ -2607,6 +2608,47 @@ function renderDrytisBoardRefresh() {
 	host.replaceWith(renderDrytisBoard());
 }
 
+/**
+ * "What was tested" block: selected coverage (✓/✗ per option, from the
+ * persisted scopeSelection) rendered above the agent-executed Covered /
+ * Not covered sections so selected vs executed stay visually distinct.
+ * Legacy runs without scopeSelection render nothing.
+ */
+function renderCoverageSelection(session) {
+	const selected = Array.isArray(session?.scopeSelection) ? session.scopeSelection : null;
+	if (!selected || selected.length === 0) return document.createComment('no scope selection');
+	const wrap = document.createElement('div');
+	wrap.className = 'report-section coverage-selection';
+	const title = document.createElement('h3');
+	title.textContent = 'What was tested — selected coverage';
+	const sub = document.createElement('p');
+	sub.className = 'muted';
+	sub.textContent = 'Coverage selected for this run. “Covered” below lists what the agent executed.';
+	wrap.append(title, sub);
+	for (const group of [{ key: 'uiux', label: 'UI & User Experience' }, { key: 'other', label: 'Other supported coverage' }]) {
+		const options = QA_SCOPE_OPTIONS.filter(option => option.group === group.key);
+		if (options.length === 0) continue;
+		const inGroup = options.some(option => selected.includes(option.value));
+		if (!inGroup) continue;
+		const heading = document.createElement('h4');
+		heading.textContent = group.label;
+		const ul = document.createElement('ul');
+		ul.className = 'coverage-selection-list';
+		for (const option of options) {
+			const li = document.createElement('li');
+			const mark = document.createElement('span');
+			mark.className = `coverage-mark ${selected.includes(option.value) ? 'is-on' : 'is-off'}`;
+			mark.textContent = selected.includes(option.value) ? '✓' : '✗';
+			const name = document.createElement('span');
+			name.textContent = option.friendly;
+			li.append(mark, name);
+			ul.append(li);
+		}
+		wrap.append(heading, ul);
+	}
+	return wrap;
+}
+
 function renderReport() {
 	el.reportView.replaceChildren();
 	if (state.session?.mode === 'sqa') {
@@ -2657,6 +2699,7 @@ function renderReport() {
 	el.reportView.append(stats);
 
 	el.reportView.append(section('Summary', paragraph(report.summary)));
+	el.reportView.append(renderCoverageSelection(state.session));
 	if (report.covered?.length) el.reportView.append(section('Covered', list(report.covered)));
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
 	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
@@ -3909,9 +3952,15 @@ const qaUi = {
 
 function selectedQaScopeValues() {
 	if (!qaUi.scopeOptions) return undefined;
-	return [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
+	const values = [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
 		.filter(box => box.checked)
 		.map(box => box.value);
+	// Browser compatibility is a UI alias for the engine checkboxes: reflect it
+	// in the persisted selection so reports show it as selected coverage.
+	if (selectedQaEngines().length > 0 && !values.includes('browser-compatibility')) {
+		values.push('browser-compatibility');
+	}
+	return values;
 }
 
 /** Engines checked in the launcher; chromium first when chosen. */
@@ -4273,14 +4322,43 @@ if (qaUi.dialog) {
 
 	// Select All / Deselect All drive the individual coverage checkboxes.
 	// Individual toggles change only their own option — nothing else resets.
+	// The UI & User Experience parent reflects (and drives) its child options;
+	// browser compatibility tracks the engine checkboxes instead.
 	if (qaUi.scopeOptions) {
 		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
 		qaUi.scopeSelectAll?.addEventListener('click', () => {
 			for (const box of scopeBoxes()) box.checked = true;
+			syncUiuxParent();
 		});
 		qaUi.scopeDeselectAll?.addEventListener('click', () => {
 			for (const box of scopeBoxes()) box.checked = false;
+			syncUiuxParent();
 		});
+		const uiuxParent = document.getElementById('qa-uiux-parent');
+		const uiuxGroup = document.getElementById('qa-scope-group-uiux');
+		const uiuxChildren = () => [...(uiuxGroup?.querySelectorAll('.qa-scope') ?? [])];
+		const browserInline = document.getElementById('qa-scope-options')?.querySelector('.qa-browser-inline');
+		const syncUiuxParent = () => {
+			if (!uiuxParent || uiuxChildren().length === 0) return;
+			const boxes = uiuxChildren();
+			uiuxParent.checked = boxes.length > 0 && boxes.every(box => box.checked);
+			uiuxParent.indeterminate = !uiuxParent.checked && boxes.some(box => box.checked);
+			// Browser compatibility rides the engines selection (≥1 engine).
+			if (browserInline) {
+				const engines = [...(qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? [])];
+				browserInline.checked = engines.length > 0 && engines.some(box => box.checked);
+			}
+		};
+		uiuxParent?.addEventListener('change', () => {
+			for (const box of uiuxChildren()) box.checked = uiuxParent.checked;
+		});
+		for (const box of uiuxChildren()) {
+			box.addEventListener('change', syncUiuxParent);
+		}
+		for (const engine of qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? []) {
+			engine.addEventListener('change', syncUiuxParent);
+		}
+		syncUiuxParent();
 	}
 
 	qaUi.selectAll.onclick = () => {
@@ -4350,7 +4428,8 @@ if (qaUi.dialog) {
 					securityAuthorization,
 					kickoffText,
 					engine,
-					coreFlowsOnly: engines.length > 1
+					coreFlowsOnly: engines.length > 1,
+					scopeSelection: scopeValues
 				});
 			}
 			closeQaStart();
