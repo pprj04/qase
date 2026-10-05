@@ -415,7 +415,7 @@ export function createDeviceDrawer({ api, toast, fail, onApplied, elements }) {
 		open.type = 'button';
 		open.className = 'btn btn-ghost btn-sm';
 		open.textContent = 'Open full Device Matrix';
-		open.onclick = () => { drawer.close(); document.getElementById('open-device-matrix')?.click(); };
+		open.onclick = () => { drawer.close(); document.getElementById('nav-device-matrix')?.click(); };
 		advancedBody.append(note, open);
 	}
 

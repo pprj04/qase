@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Static contract tests for #13234 quick fixes: engine tag rendered next to
  * run titles (run list + chat header) and the own-origin browser allowlist.
  */
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const appJs = fs.readFileSync(path.join(here, '../public/app.js'), 'utf8');
 const styles = fs.readFileSync(path.join(here, '../public/styles.css'), 'utf8');
 const policyJs = fs.readFileSync(path.join(here, './browserPolicy.js'), 'utf8');

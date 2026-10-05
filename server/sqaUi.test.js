@@ -8,7 +8,7 @@ const styles = readFileSync(new URL('../public/styles.css', import.meta.url), 'u
 
 test('SQA launcher exposes an accessible, authorization-gated scope dialog and result tab', () => {
 	assert.match(html, /id="new-sqa"[^>]+aria-label="Start SQA assessment"[^>]+data-feature="sqa"/);
-	assert.match(html, /class="feature-label">SQA<\/span>/);
+	assert.match(html, /class="feature-label">Quality<\/span>/);
 	assert.match(html, /<dialog[^>]+id="sqa-start"[^>]+aria-labelledby="sqa-start-title"/);
 	assert.match(html, /id="sqa-authorization"[^>]+type="checkbox"[^>]+required/);
 	for (const id of ['sqa-target-name', 'sqa-target-url', 'sqa-target-release', 'sqa-target-environment']) {

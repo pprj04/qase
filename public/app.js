@@ -169,6 +169,10 @@ const state = {
 	session: undefined,
 	config: undefined,
 	stream: undefined,
+	/** Run IDs with a cancellation request in flight. */
+	stopRequests: new Set(),
+	openFindings: new Set(),
+	openFixInstructions: new Set(),
 	bugsViewOpen: false,
 	/** Message id -> the nodes streamed text is appended to. */
 	bubbles: new Map(),
@@ -1025,21 +1029,22 @@ function renderCurrentActivity() {
 }
 
 function setStatus(status) {
+	if (state.session) state.session.status = status;
+	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = status === 'awaiting_input'
+	el.statusChip.textContent = stopping ? 'stopping…' : status === 'awaiting_input'
 		? 'waiting for you'
 		: status === 'done' ? 'done ✓' : status;
 	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
+	el.stopRun.disabled = stopping;
+	el.stopRun.textContent = stopping ? 'Stopping…' : 'Stop';
 	el.resumeRun.hidden = !((status === 'interrupted' || status === 'error') && state.sessionId);
 	el.sendBtn.disabled = running;
 	el.composerHint.hidden = !running;
 	el.livePill.hidden = !running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
-	if (state.session) {
-		state.session.status = status;
-	}
 	syncRunTimer(status);
 	syncStageCollapse(status);
 	// A question raised while the tab is in the background should be noticeable.
@@ -1863,6 +1868,7 @@ function closeFeedbackAdminPanel() {
 
 function restoreFeedbackAdminPanel() {
 	state.feedbackAdmin.closed = false;
+	el.feedbackPanel.closest('details').open = true;
 	renderFeedbackAdmin();
 }
 
@@ -2357,15 +2363,17 @@ function renderFindings() {
 }
 
 function renderFinding(finding) {
+	const findingKey = `${state.sessionId}:${finding.id}`;
 	const node = document.createElement('article');
 	node.className = 'finding';
+	node.classList.toggle('is-open', state.openFindings.has(findingKey));
 	node.dataset.sev = finding.severity;
 	node.setAttribute('role', 'listitem');
 
 	const head = document.createElement('button');
 	head.className = 'finding-head';
 	head.type = 'button';
-	head.setAttribute('aria-expanded', 'false');
+	head.setAttribute('aria-expanded', String(state.openFindings.has(findingKey)));
 	const disclosureId = `finding-body-${++findingDisclosureSerial}`;
 	head.setAttribute('aria-controls', disclosureId);
 	const title = document.createElement('span');
@@ -2381,6 +2389,8 @@ function renderFinding(finding) {
 	head.append(title, sev, chevron);
 	head.onclick = () => {
 		const open = node.classList.toggle('is-open');
+		if (open) state.openFindings.add(findingKey);
+		else state.openFindings.delete(findingKey);
 		head.setAttribute('aria-expanded', String(open));
 	};
 
@@ -2429,15 +2439,21 @@ function renderFinding(finding) {
 		targetUrl: state.session?.targetUrl,
 		mode: state.session?.mode
 	});
-	const fixWrap = document.createElement('section');
+	const fixWrap = document.createElement('details');
 	fixWrap.className = 'finding-fix-prompt';
-	const fixHead = document.createElement('div');
+	fixWrap.open = state.openFixInstructions.has(findingKey);
+	fixWrap.ontoggle = () => {
+		if (!fixWrap.isConnected) return;
+		if (fixWrap.open) state.openFixInstructions.add(findingKey);
+		else state.openFixInstructions.delete(findingKey);
+	};
+	const fixHead = document.createElement('summary');
 	fixHead.className = 'finding-fix-prompt-head';
-	const fixTitle = document.createElement('h4');
-	fixTitle.textContent = 'Fix prompt';
+	const fixTitle = document.createElement('span');
+	fixTitle.textContent = 'View fix instructions';
 	const fixHint = document.createElement('span');
 	fixHint.className = 'finding-fix-prompt-hint';
-	fixHint.textContent = 'Paste into your coding agent (Cursor / Claude Code / Copilot / Codex).';
+	fixHint.textContent = 'For your coding agent';
 	fixHead.append(fixTitle, fixHint);
 	const fixText = document.createElement('pre');
 	fixText.className = 'finding-fix-prompt-body';
@@ -2458,10 +2474,10 @@ function renderFinding(finding) {
 	const copyPrompt = document.createElement('button');
 	copyPrompt.className = 'btn btn-primary btn-sm finding-fix';
 	copyPrompt.type = 'button';
-	copyPrompt.textContent = 'Copy fix prompt';
-	copyPrompt.title = 'Copies the diagnose-and-fix prompt above for one coding agent.';
+	copyPrompt.textContent = 'Copy fix instructions';
+	copyPrompt.title = 'Copy instructions for your coding agent to diagnose and fix this finding.';
 	copyPrompt.onclick = async () => {
-		try { await navigator.clipboard.writeText(fixPrompt); toast('Fix prompt copied.', 'good'); }
+		try { await navigator.clipboard.writeText(fixPrompt); toast('Fix instructions copied.', 'good'); }
 		catch { toast('Clipboard is blocked in this browser.', 'bad'); }
 	};
 	actions.append(copy, copyPrompt);
@@ -4046,6 +4062,7 @@ async function syncEngineAvailability() {
 	} catch {
 		// Registry unreachable: leave the static defaults; run creation still validates.
 	}
+	syncQaSelectionSummary();
 }
 
 function setQaFormError(message = '') {
@@ -4095,6 +4112,21 @@ function syncQaSubmitState() {
 		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
 	}
 	syncQaCategoryToggles();
+	syncQaSelectionSummary();
+}
+
+/** Keep the compact launcher honest when availability or selection changes. */
+function syncQaSelectionSummary() {
+	const summary = $('qa-selection-summary');
+	if (!summary) return;
+	if (!state.qaTestCatalog) {
+		summary.textContent = 'Loading available checks…';
+		return;
+	}
+	const checks = qaUi.selectedTests.size;
+	const browsers = selectedQaEngines().length;
+	const device = qaUi.deviceSelect.selectedOptions[0]?.textContent ?? 'Selected device';
+	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${browsers} browser${browsers === 1 ? '' : 's'} · ${device}`;
 }
 
 function qaTestOption(test) {
@@ -4348,7 +4380,8 @@ function openQaStart() {
 	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
 	qaUi.submit.disabled = false;
-	qaUi.submit.textContent = 'Start QA run';
+	qaUi.submit.textContent = 'Start testing';
+	$('qa-customize').open = false;
 	// form.reset() restores the confirmation checkbox, but a stale custom
 	// validity from a previous open must be cleared explicitly.
 	qaUi.securityAuthorized?.setCustomValidity('');
@@ -4362,13 +4395,15 @@ function openQaStart() {
 		}
 	}
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
-	setTimeout(() => qaUi.targetUrl?.focus(), 0);
+	if (matchMedia('(pointer: fine)').matches) setTimeout(() => qaUi.targetUrl?.focus(), 0);
 	void loadQaTestCatalog()
 		.then(paintQaTestCatalog)
 		.catch(error => {
 			qaUi.testsState.hidden = false;
 			qaUi.testsState.textContent = 'The standard test catalog could not be loaded.';
 			setQaFormError(error instanceof Error ? error.message : String(error));
+			$('qa-customize').open = true;
+			$('qa-selection-summary').textContent = 'Checks could not be loaded. Close this window and try again.';
 		});
 }
 
@@ -4377,6 +4412,12 @@ function closeQaStart() {
 }
 
 if (qaUi.dialog) {
+	for (const control of [qaUi.deviceSelect, qaUi.engineOptions, qaUi.scopeOptions]) {
+		control?.addEventListener('change', syncQaSelectionSummary);
+	}
+	qaUi.form.addEventListener('invalid', event => {
+		if (event.target.closest('#qa-customize')) $('qa-customize').open = true;
+	}, true);
 	qaUi.close.onclick = closeQaStart;
 	qaUi.cancel.onclick = closeQaStart;
 	$('qa-demo-fill')?.addEventListener('click', () => {
@@ -4438,6 +4479,7 @@ if (qaUi.dialog) {
 		const selectedTests = qaCheckedTests();
 		if (selectedTests.length === 0) {
 			setQaFormError('Select at least one test.');
+			$('qa-customize').open = true;
 			return;
 		}
 		const securityAuthorization = qaSecurityAuthorization();
@@ -4452,12 +4494,14 @@ if (qaUi.dialog) {
 		const scopeMessage = buildQaKickoffMessage(scopeValues);
 		if (scopeMessage === null && Array.isArray(scopeValues) && scopeValues.length === 0) {
 			setQaFormError('Check at least one item under “What to test”.');
+			$('qa-customize').open = true;
 			return;
 		}
 		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;
 		const engines = selectedQaEngines();
 		if (engines.length === 0) {
 			setQaFormError('Check at least one browser engine.');
+			$('qa-customize').open = true;
 			return;
 		}
 		const environmentId = (qaUi.environmentSelect?.value) || '';
@@ -4486,7 +4530,7 @@ if (qaUi.dialog) {
 		} finally {
 			qaUi.submit.dataset.busy = 'false';
 			qaUi.submit.disabled = false;
-			qaUi.submit.textContent = 'Start test';
+			qaUi.submit.textContent = 'Start testing';
 			syncQaSubmitState();
 		}
 	};
@@ -5265,15 +5309,11 @@ if (envUi.dialog) {
 		envUi.filters.search._timer = setTimeout(() => void refreshEnvTable(), 250);
 	});
 }
-const openEnvironmentsButton = $('open-environments');
+const openEnvironmentsButton = $('nav-environments');
 if (openEnvironmentsButton) openEnvironmentsButton.onclick = openEnvironments;
 
 /* ── Sidebar workspace nav (UX U2) ─────────────────────────────── */
 const sidebarNav = [
-	['nav-environments', openEnvironments],
-	['nav-device-matrix', () => deviceMatrix?.open()],
-	['nav-test-cases', () => testCaseView?.open?.()],
-	['nav-bulk-runs', () => bulkRunView?.open?.()],
 	['nav-analytics', () => analyticsView?.open()]
 ];
 for (const [id, opener] of sidebarNav) {
@@ -5288,7 +5328,7 @@ const deviceMatrix = $('device-matrix') ? createDeviceMatrixView({
 	fail,
 	elements: {
 		dialog: $('device-matrix'),
-		navButton: $('open-device-matrix'),
+		navButton: $('nav-device-matrix'),
 		tabs: [...document.querySelectorAll('#device-matrix [data-dm-tab]')],
 		browseList: $('dm-browse-list'),
 		browseSearch: $('dm-browse-search'),
@@ -5373,7 +5413,7 @@ const testCaseView = $('test-cases') ? createTestCaseView({
 	workflow,
 	elements: {
 		dialog: $('test-cases'),
-		navButton: $('open-test-cases'),
+		navButton: $('nav-test-cases'),
 		list: $('tc-tbody'),
 		search: $('tc-search'),
 		form: $('tc-form'),
@@ -5394,7 +5434,7 @@ const bulkRunView = $('bulk-run') ? createBulkRunView({
 	api, toast, fail,
 	elements: {
 		dialog: $('bulk-run'),
-		navButton: $('open-bulk-run'),
+		navButton: $('nav-bulk-runs'),
 		close: $('bulk-close'),
 		what: $('bulk-what'),
 		casesField: $('bulk-cases-field'),
@@ -5605,7 +5645,7 @@ if (quickActions) {
 	quickActions.runFailed?.addEventListener('click', () => void runFailedTests());
 	quickActions.createCase?.addEventListener('click', () => testCaseView?.open?.());
 	quickActions.chooseDevices?.addEventListener('click', () => deviceDrawer?.open?.());
-	quickActions.viewResults?.addEventListener('click', () => document.querySelector('.panel-foot .foot-btn')?.click?.() ?? window.qaseShowTab?.('runs'));
+	quickActions.viewResults?.addEventListener('click', () => { activateDetailTab($('tab-report'), true); el.viewer.scrollIntoView({ block: 'nearest' }); });
 	quickActions.createBug?.addEventListener('click', () => void createBugReport());
 	quickActions.preset?.addEventListener('change', async () => {
 		const presetId = quickActions.preset.value;
@@ -5801,9 +5841,26 @@ $('empty-start')?.addEventListener('click', () => { void startRun(); });
 $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
 
 el.newRun.onclick = openQaStart;
+$('sidebar-new-run').onclick = openQaStart;
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
-el.stopRun.onclick = () => api(`/sessions/${state.sessionId}/stop`, { method: 'POST' }).catch(fail);
+el.stopRun.onclick = async () => {
+	const runId = state.sessionId;
+	if (!runId || state.stopRequests.has(runId)) return;
+	state.stopRequests.add(runId);
+	setStatus(state.session.status);
+	try {
+		await api(`/sessions/${runId}/stop`, { method: 'POST' });
+		// Reconcile with the saved state; acknowledgement alone does not mean stopped.
+		const snapshot = await api(`/sessions/${runId}`);
+		if (state.sessionId === runId) applySessionSnapshot(snapshot);
+	} catch (error) {
+		toast(`Could not stop this run. Try Stop again. ${error.message ?? ''}`, 'bad');
+	} finally {
+		state.stopRequests.delete(runId);
+		if (state.sessionId === runId) setStatus(state.session.status);
+	}
+};
 el.resumeRun.onclick = async () => {
 	el.resumeRun.disabled = true;
 	try {

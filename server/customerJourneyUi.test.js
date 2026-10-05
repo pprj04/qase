@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Static contract tests for the Phase-5 customer-journey affordances: config
@@ -10,7 +11,7 @@ import * as path from 'node:path';
  * markup or wiring fail the suite without a browser.
  */
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const html = fs.readFileSync(path.join(here, '../public/index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(here, '../public/app.js'), 'utf8');
 
