@@ -1843,6 +1843,57 @@ a {
   font-weight: 600;
 }
 
+/* Grouped coverage: UI & User Experience parent + children */
+.scope-group {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.scope-parent span {
+  color: var(--text);
+}
+
+.scope-children {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.scope-children .check:hover,
+.scope-parent:hover {
+  border-radius: 6px;
+  background: rgba(47, 91, 234, 0.06);
+}
+
+.scope-group-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.scope-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.85;
+}
+
+.scope-browser-row small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 520px) {
+  .scope-children {
+    padding-left: 12px;
+  }
+}
+
 .scope-controls {
   display: flex;
   align-items: center;

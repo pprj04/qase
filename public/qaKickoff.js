@@ -7,6 +7,8 @@
 export const QA_SCOPE_OPTIONS = [
 	{ value: 'desktop-layout', label: 'desktop layout and responsive behaviour across viewport widths' },
 	{ value: 'mobile-layout', label: 'mobile layout using an emulated phone viewport' },
+	{ value: 'ui-consistency', label: 'UI consistency: buttons, fonts, colors, spacing, forms, cards and navigation rendered consistently across pages' },
+	{ value: 'content-validation', label: 'content and text validation: displayed text, labels, headings, messages and placeholders correct, readable and properly presented' },
 	{ value: 'forms', label: 'forms and input validation (required fields, invalid input handling, submission feedback)' },
 	{ value: 'console-errors', label: 'console errors and failed network requests while browsing' },
 	{ value: 'navigation', label: 'navigation and internal links (broken links, dead ends, back-navigation)' },

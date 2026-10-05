@@ -4031,14 +4031,43 @@ if (qaUi.dialog) {
 
 	// Select All / Deselect All drive the individual coverage checkboxes.
 	// Individual toggles change only their own option — nothing else resets.
+	// The UI & User Experience parent reflects (and drives) its child options;
+	// browser compatibility tracks the engine checkboxes instead.
 	if (qaUi.scopeOptions) {
 		const scopeBoxes = () => [...qaUi.scopeOptions.querySelectorAll('.qa-scope')];
 		qaUi.scopeSelectAll?.addEventListener('click', () => {
 			for (const box of scopeBoxes()) box.checked = true;
+			syncUiuxParent();
 		});
 		qaUi.scopeDeselectAll?.addEventListener('click', () => {
 			for (const box of scopeBoxes()) box.checked = false;
+			syncUiuxParent();
 		});
+		const uiuxParent = document.getElementById('qa-uiux-parent');
+		const uiuxGroup = document.getElementById('qa-scope-group-uiux');
+		const uiuxChildren = () => [...(uiuxGroup?.querySelectorAll('.qa-scope') ?? [])];
+		const browserInline = document.getElementById('qa-scope-options')?.querySelector('.qa-browser-inline');
+		const syncUiuxParent = () => {
+			if (!uiuxParent || uiuxChildren().length === 0) return;
+			const boxes = uiuxChildren();
+			uiuxParent.checked = boxes.length > 0 && boxes.every(box => box.checked);
+			uiuxParent.indeterminate = !uiuxParent.checked && boxes.some(box => box.checked);
+			// Browser compatibility rides the engines selection (≥1 engine).
+			if (browserInline) {
+				const engines = [...(qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? [])];
+				browserInline.checked = engines.length > 0 && engines.some(box => box.checked);
+			}
+		};
+		uiuxParent?.addEventListener('change', () => {
+			for (const box of uiuxChildren()) box.checked = uiuxParent.checked;
+		});
+		for (const box of uiuxChildren()) {
+			box.addEventListener('change', syncUiuxParent);
+		}
+		for (const engine of qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? []) {
+			engine.addEventListener('change', syncUiuxParent);
+		}
+		syncUiuxParent();
 	}
 
 	qaUi.form.onsubmit = async event => {
