@@ -27,6 +27,12 @@ UI/module tests pass (104 passed, five skipped). Three existing UI test readers 
 
 Remaining planned work: finding bulk selection/action bars, promoting follow-up tests, simplifying the Quality/Ideas journeys, user trials, and Studio-side repair handoff. Exact visual parity still requires an accessible current Studio reference.
 
+### Follow-up: manual theme selection
+
+Added a labelled Theme selector in the sidebar and sign-in header with Light, Dark, and System choices. Preferences are stored in the browser, applied before styles load, synchronized between tabs, and kept when returning to the app. System follows live device theme changes; manual choices override the device preference throughout the workspace and dialogs. The device preview badge now sizes to its text instead of covering the empty preview.
+
+Dashboard qualification passes 15 checks, including manual themes against opposite device preferences, reload persistence, browser chrome color, dialog surfaces, and live System updates. Authentication qualification covers the pre-login selector and mobile visibility. UI/module tests remain passing; full verification has the same four Windows/network failures recorded above.
+
 ## What the discussion means for design
 
 | Discussion reference | Design requirement | Current position |

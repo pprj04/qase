@@ -104,6 +104,34 @@ try {
 	await page.waitForFunction(()=>document.querySelector('#chat-title')?.textContent?.includes('127.0.0.1'));
 	assert.equal([...sessions.values()][0].device,'iphone-15-pro');assert.equal([...sessions.values()][0].deviceLandscape,true);
 	checks.push('QA launcher validates URL and preserves selected mobile landscape profile');
+	const expectTheme = async theme => {
+		await page.waitForFunction(expected => {
+			const color = expected === 'dark' ? 'rgb(16, 16, 18)' : 'rgb(255, 255, 255)';
+			return getComputedStyle(document.body).backgroundColor === color && getComputedStyle(document.documentElement).colorScheme === expected;
+		}, theme);
+		assert.equal(await page.locator('meta[name="theme-color"]').getAttribute('content'), theme === 'dark' ? '#101012' : '#ffffff');
+	};
+	await page.locator('#theme-select').selectOption('dark');
+	await expectTheme('dark');
+	await screenshot(page, 'theme-manual-dark.png');
+	await page.reload();
+	await page.locator('#chat-title').filter({hasText:'127.0.0.1'}).waitFor();
+	await expectTheme('dark');
+	assert.equal(await page.locator('#theme-select').inputValue(), 'dark');
+	await page.emulateMedia({colorScheme:'dark'});
+	await page.locator('#theme-select').selectOption('light');
+	await expectTheme('light');
+	await page.locator('#nav-environments').evaluate(node => { node.closest('details').open = true; });
+	await page.locator('#nav-environments').click();
+	assert.equal(await page.locator('#environments').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(255, 255, 255)');
+	await page.locator('#env-close').click();
+	await page.locator('.sidebar-tools > summary').click();
+	await screenshot(page, 'theme-manual-light.png');
+	await page.locator('#theme-select').selectOption('system');
+	await expectTheme('dark');
+	await page.emulateMedia({colorScheme:'light'});
+	await expectTheme('light');
+	checks.push('Manual themes override the device, persist on reload, and System follows live device changes');
 	const qaSession = [...sessions.values()][0];
 	streams.get(qaSession.id).end();
 	qaSession.status = 'awaiting_input';

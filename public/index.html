@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#101012" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
+<script src="theme.js"></script>
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="bugsView.css">
 <link rel="stylesheet" href="entry-terminal.css">
@@ -20,7 +20,10 @@
   <div class="terminal-atmosphere" aria-hidden="true"><canvas id="entry-motion"></canvas><div class="terminal-grid"></div><div class="terminal-scanlines"></div></div>
   <header class="terminal-masthead">
     <a class="terminal-brand" href="/" aria-label="Qase home"><span class="terminal-brand-icon" aria-hidden="true">❯_</span><span>QASE<span class="terminal-brand-detail"> / AUTONOMOUS QA</span></span></a>
-    <button class="terminal-motion-toggle" id="entry-motion-toggle" type="button" aria-pressed="false"><span aria-hidden="true">Ⅱ</span> Pause motion</button>
+    <div class="entry-display-controls">
+      <label class="theme-control" for="auth-theme-select"><span>Theme</span><select id="auth-theme-select" name="theme" data-theme-control><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <button class="terminal-motion-toggle" id="entry-motion-toggle" type="button" aria-pressed="false"><span aria-hidden="true">Ⅱ</span> Pause motion</button>
+    </div>
   </header>
   <div class="auth-story">
     <div class="terminal-windowbar" aria-hidden="true"><span class="terminal-lights"><i></i><i></i><i></i></span><span>qase@drytis:~/workspace</span><span class="terminal-windowtype">zsh</span></div>
@@ -176,6 +179,7 @@
     <footer class="panel-foot">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
       <span id="conn-label" role="status" aria-live="polite">connecting…</span>
+      <label class="theme-control" for="theme-select"><span>Theme</span><select id="theme-select" name="theme" data-theme-control><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
