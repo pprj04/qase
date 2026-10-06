@@ -1022,7 +1022,13 @@ function renderCurrentActivity() {
 	const session = state.session;
 	if (session?.status === 'running') {
 		const { text, action } = state.thinking;
-		const label = action || (text ? tailOf(text) : '');
+		const runningActivity = [...(session.activities ?? [])].reverse()
+			.find(activity => activity.status === 'running');
+		const activePlanItem = (session.todos ?? [])
+			.find(todo => todo.status === 'in_progress');
+		const savedAction = runningActivity?.label || runningActivity?.title
+			|| activePlanItem?.text || activePlanItem?.title || '';
+		const label = action || (text ? tailOf(text) : '') || savedAction;
 		el.currentActivityState.textContent = label ? `◌ ${label}` : '◌ Working…';
 		el.currentActivity.hidden = false;
 	} else if (session?.status === 'done') {

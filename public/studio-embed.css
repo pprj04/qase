@@ -306,6 +306,10 @@ html[data-qase-layout="studio-mock"] .panel-foot #sign-out {
 	display: none;
 }
 
+html[data-qase-layout="studio-mock"] .feature-dock > .feature-device {
+	display: none;
+}
+
 html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
 	grid-template-columns: 64px 0 minmax(0, 1fr);
 }

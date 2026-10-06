@@ -23,6 +23,7 @@ test('Studio shell communicates host, context, and center tool ownership', () =>
 	assert.match(html, /id="studio-project-target"/);
 	assert.match(html, /class="studio-demo-badge">Studio demo/);
 	assert.match(styles, /grid-template-columns: 64px minmax\(196px, 232px\) minmax\(0, 1fr\)/);
+	assert.match(styles, /\.feature-dock > \.feature-device \{\s*display: none/);
 });
 
 test('Studio context values are bounded and written without HTML injection', () => {
