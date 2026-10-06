@@ -50,6 +50,8 @@ const RETRY_DELAY_MS = 2_000;
 const MAX_RECIPIENTS = 20;
 const MAX_MESSAGE_CHARS = 4_096; // Cloud API text message cap
 export const NOTIFICATION_STATUSES = ['PENDING', 'RETRYING', 'SENT', 'FAILED'];
+/** Provider-reported delivery states (ours adds 'accepted' for 2xx send). */
+export const DELIVERY_STATUSES = new Set(['accepted', 'sent', 'delivered', 'read', 'failed', 'deleted']);
 
 /** notification id for a feedback record — stable, derived, idempotent. */
 export function notificationIdFor(feedbackId) {
@@ -140,20 +142,38 @@ export function formatSubmittedOn(timestampMs) {
 }
 
 const MODE_LABELS = { qa: 'New QA Run', sqa: 'SQA', founder: 'Founder Review' };
+const CATEGORY_LABELS = {
+	functionality: 'Functionality',
+	usability: 'Usability',
+	performance: 'Performance',
+	design: 'Design',
+	coverage: 'Test Coverage',
+	accuracy: 'Accuracy',
+	other: 'Other'
+};
 
 function feedbackValues(feedback, context = {}) {
 	const rating = Math.max(1, Math.min(5, Number(feedback.rating) || 0));
 	const comments = typeof feedback.comments === 'string' && feedback.comments.trim() !== ''
 		? feedback.comments.trim()
 		: '(no description provided)';
+	const category = typeof feedback.category === 'string' && feedback.category.trim() !== ''
+		? (CATEGORY_LABELS[feedback.category.trim()] ?? feedback.category.trim())
+		: 'General';
 	const modeLabel = MODE_LABELS[context.mode] ?? 'QASE';
 	const runTitle = typeof context.title === 'string' && context.title.trim() !== '' ? context.title.trim() : 'QASE test run';
-	const shortId = typeof feedback.runId === 'string' && feedback.runId.length >= 8 ? feedback.runId.slice(0, 8) : '—';
 	const target = typeof context.targetUrl === 'string' && context.targetUrl !== '' ? context.targetUrl : '—';
 	const submittedBy = typeof context.submittedByName === 'string' && context.submittedByName.trim() !== ''
 		? context.submittedByName.trim() : 'QASE user';
 	const submittedOn = Number.isFinite(context.submittedAt) ? formatSubmittedOn(context.submittedAt) : formatSubmittedOn(Date.now());
-	return { rating, comments, modeLabel, runTitle, shortId, target, submittedBy, submittedOn };
+	// Deep link to the run report. Requires the FULL run id (frontend only
+	// shows a short id) and a configured public QASE base URL.
+	const feedbackId = typeof feedback.id === 'string' && feedback.id !== '' ? feedback.id : '—';
+	const qaseUrl = typeof feedback.runId === 'string' && feedback.runId !== ''
+		&& typeof context.qaseUrl === 'string' && context.qaseUrl !== ''
+		? `${context.qaseUrl.replace(/\/+$/, '')}/run/${feedback.runId}`
+		: undefined;
+	return { rating, comments, category, modeLabel, runTitle, target, submittedBy, submittedOn, feedbackId, qaseUrl };
 }
 
 /**
@@ -164,27 +184,21 @@ function feedbackValues(feedback, context = {}) {
 export function buildFeedbackMessage(feedback, context = {}) {
 	const v = feedbackValues(feedback, context);
 	const lines = [
-		'📢 QASE User Feedback Received',
-		'',
-		'A new user feedback has been submitted after completion of a QASE test run.',
+		'🔔 New QASE User Feedback',
 		'',
 		`⭐ Rating: ${v.rating}/5`,
-		'',
-		'📝 User Feedback:',
+		`📂 Category: ${v.category}`,
+		'💬 Feedback:',
 		v.comments,
-		'',
-		'📊 QA Run:',
-		`${v.runTitle} · ${v.modeLabel} · #${v.shortId}`,
-		'',
-		'🌐 Target:',
-		v.target,
-		'',
-		'👤 Submitted By:',
-		v.submittedBy,
-		'',
-		'🕒 Submitted On:',
-		v.submittedOn
+		`👤 User: ${v.submittedBy}`,
+		`🕒 Submitted: ${v.submittedOn}`,
+		`🔗 QASE: ${v.qaseUrl ?? '(link unavailable)'}`
 	];
+	if (v.modeLabel !== 'QASE' || v.runTitle !== 'QASE test run') {
+		lines.push(`📊 Run: ${v.runTitle} · ${v.modeLabel}`);
+	}
+	if (v.target !== '—') lines.push(`🌐 Target: ${v.target}`);
+	lines.push(`Feedback ID: ${v.feedbackId}`);
 	const message = lines.join('\n');
 	return message.length > MAX_MESSAGE_CHARS ? `${message.slice(0, MAX_MESSAGE_CHARS - 1)}…` : message;
 }
@@ -195,8 +209,7 @@ function buildTemplateComponents(v) {
 		{ type: 'body', parameters: [
 			{ type: 'text', text: `⭐ Rating: ${v.rating}/5` },
 			{ type: 'text', text: v.comments },
-			{ type: 'text', text: `${v.runTitle} · ${v.modeLabel} · #${v.shortId}` },
-			{ type: 'text', text: v.target },
+			{ type: 'text', text: v.qaseUrl ?? '(link unavailable)' },
 			{ type: 'text', text: v.submittedBy },
 			{ type: 'text', text: v.submittedOn }
 		] }
@@ -276,6 +289,17 @@ async function readBoundedText(response, maximum) {
 	return text.length > maximum ? text.slice(0, maximum) : text;
 }
 
+/** Extract the provider message id from a Cloud API success body. */
+function extractMessageId(body) {
+	try {
+		const parsed = JSON.parse(body);
+		const id = parsed?.messages?.[0]?.id;
+		return typeof id === 'string' && id !== '' ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function sendToRecipient(config, recipient, payloadBody, { fetchImpl, createTimeoutSignal }) {
 	const url = `${config.apiOrigin}/${config.apiVersion}/${config.phoneNumberId}/messages`;
 	let response;
@@ -293,7 +317,9 @@ async function sendToRecipient(config, recipient, payloadBody, { fetchImpl, crea
 	} catch (error) {
 		throw toNotificationError(error, 'WhatsApp message delivery');
 	}
-	if (response.ok) return;
+	if (response.ok) {
+		return { messageId: extractMessageId(await readBoundedText(response, 2_048)) };
+	}
 	const detail = sanitizeErrorDetail(await readBoundedText(response, 512));
 	const status = response.status;
 	if (status === 401 || status === 403) {
@@ -319,6 +345,10 @@ function publicEntry(entry) {
 			to: recipient.to,
 			state: recipient.state,
 			attempts: recipient.attempts,
+				...(recipient.whatsappMessageId ? { whatsappMessageId: recipient.whatsappMessageId } : {}),
+				...(recipient.deliveryStatus ? { deliveryStatus: recipient.deliveryStatus } : {}),
+				...(recipient.deliveryUpdatedAt ? { deliveryUpdatedAt: recipient.deliveryUpdatedAt } : {}),
+				...(recipient.deliveryError ? { deliveryError: recipient.deliveryError } : {}),
 			...(Number.isInteger(recipient.upstreamStatus) ? { upstreamStatus: recipient.upstreamStatus } : {}),
 			...(recipient.lastError ? { lastError: recipient.lastError } : {})
 		})),
@@ -380,6 +410,23 @@ export function createWhatsAppNotifier(options = {}) {
 		logger.warn?.(event, fields);
 	}
 
+	/** Per-attempt outcome: everything the brief asks for, never the token. */
+	function logAttempt(recipient, notificationId, feedbackId, attempt, result) {
+		logger.info?.('whatsapp.delivery.attempt', {
+			notificationId,
+			feedbackId,
+			recipient: recipient.to,
+			attempt,
+			provider: 'meta-cloud-api',
+			endpoint: `${config.apiVersion}/${config.phoneNumberId}/messages`,
+			status: result.ok ? 200 : result.status,
+			messageId: result.messageId,
+			deliveryStatus: result.ok ? 'accepted' : undefined,
+			errorCode: result.errorCode,
+			reason: result.reason
+		});
+	}
+
 	/**
 	 * Send to every recipient that has not already been accepted, tracking
 	 * per-recipient state. Idempotent per (notification, recipient) pair.
@@ -400,13 +447,29 @@ export function createWhatsAppNotifier(options = {}) {
 				recipient.attempts += 1;
 				persistLedgerImpl(ledger, ledgerFile);
 				try {
-					await sendToRecipient(config, recipient.to, payload, { fetchImpl, createTimeoutSignal });
+					const { messageId } = await sendToRecipient(config, recipient.to, payload, { fetchImpl, createTimeoutSignal });
 					sent = true;
+					// Provider ACCEPTED the message (HTTP 2xx + message id).
+					// This is NOT device delivery — only webhook statuses move
+					// deliveryStatus past 'accepted'.
+					recipient.whatsappMessageId = messageId;
+					recipient.deliveryStatus = 'accepted';
+					recipient.deliveryUpdatedAt = Date.now();
+					delete recipient.upstreamStatus;
+					delete recipient.lastError;
+					logAttempt(recipient, notificationId, feedback.id, attempt,
+						{ ok: true, messageId });
 					break;
 				} catch (error) {
 					const typed = toNotificationError(error, 'WhatsApp message delivery');
 					if (Number.isInteger(typed.upstreamStatus)) recipient.upstreamStatus = typed.upstreamStatus;
 					recipient.lastError = typed.message;
+					logAttempt(recipient, notificationId, feedback.id, attempt, {
+						ok: false,
+						status: typed.upstreamStatus,
+						errorCode: typed.code,
+						reason: typed.message
+					});
 					// A dead credential helps no recipient: stop the whole
 					// dispatch instead of hammering the API three times each.
 					if (typed.code === 'whatsapp_auth_failed') {
@@ -459,11 +522,12 @@ export function createWhatsAppNotifier(options = {}) {
 			recipients: config.recipients.map(to => ({ to, state: 'retrying', attempts: 0 })),
 			// Retain exactly what a retry needs to rebuild the payload.
 			replay: {
-				feedback: { id: feedback.id, runId: feedback.runId, rating: feedback.rating, comments: feedback.comments },
+				feedback: { id: feedback.id, runId: feedback.runId, rating: feedback.rating, category: feedback.category, comments: feedback.comments },
 				context: {
 					mode: context.mode,
 					title: context.title,
 					targetUrl: context.targetUrl,
+					qaseUrl: context.qaseUrl,
 					submittedByName: context.submittedByName,
 					submittedAt: Number.isFinite(context.submittedAt) ? context.submittedAt : Date.now()
 				}
@@ -553,11 +617,56 @@ export function createWhatsAppNotifier(options = {}) {
 		return entry ? publicEntry(entry) : undefined;
 	}
 
+	/**
+	 * Ingest a provider delivery-status webhook update, keyed by the provider
+	 * message id. Meta's statuses: sent | delivered | read | failed (we also
+	 * accept 'deleted'). 'accepted' is OUR state for HTTP 2xx acceptance and is
+	 * only ever advanced past by these callbacks — an HTTP 200 alone never
+	 * marks a message delivered. Unknown/corrupt payloads are logged and
+	 * ignored, never thrown (webhooks must never crash the process).
+	 */
+	function recordDeliveryStatus({ messageId, status, timestamp, errorCode, errorMessage }) {
+		const normalized = String(status ?? '').trim().toLowerCase();
+		if (!messageId || !DELIVERY_STATUSES.has(normalized)) return false;
+		for (const entry of Object.values(ledger)) {
+			for (const recipient of entry.recipients) {
+				if (recipient.whatsappMessageId !== messageId) continue;
+				recipient.deliveryStatus = normalized;
+				recipient.deliveryUpdatedAt = Number.isFinite(timestamp) ? timestamp : Date.now();
+				if (normalized === 'failed') {
+					recipient.deliveryError = [
+						errorCode ? `code ${errorCode}` : null,
+						errorMessage ? sanitizeErrorDetail(String(errorMessage)) : null
+					].filter(Boolean).join(' ') || 'provider reported delivery failure';
+				} else {
+					delete recipient.deliveryError;
+				}
+				entry.updatedAt = Date.now();
+				persistLedgerImpl(ledger, ledgerFile);
+				logger.info?.('whatsapp.delivery.status', {
+					notificationId: entry.notificationId,
+					feedbackId: entry.feedbackId,
+					messageId,
+					state: normalized,
+					reason: normalized === 'failed' ? recipient.deliveryError : undefined
+				});
+				return true;
+			}
+		}
+		logger.warn?.('whatsapp.webhook.unknown_message', {
+			messageId,
+			state: normalized,
+			reason: 'message id not found in ledger'
+		});
+		return false;
+	}
+
 	return Object.freeze({
 		dispatchFeedbackNotification,
 		retryNotification,
 		listNotifications,
 		getNotification,
+		recordDeliveryStatus,
 		buildMessage: buildFeedbackMessage
 	});
 }

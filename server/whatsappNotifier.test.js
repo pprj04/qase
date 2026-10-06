@@ -81,6 +81,7 @@ const FEEDBACK = {
 	id: '11111111-2222-4333-8444-555555555555',
 	runId: 'cf5b7e5f-a4fa-4189-85a3-7d07473ad7c0',
 	rating: 5,
+	category: 'usability',
 	comments: 'Great coverage of the checkout flow.'
 };
 
@@ -88,6 +89,7 @@ const CONTEXT = {
 	mode: 'qa',
 	title: 'Homepage regression sweep',
 	targetUrl: 'https://qase.dev/',
+	qaseUrl: 'https://qase.example.com',
 	submittedByName: 'Priya Sharma',
 	submittedAt: Date.UTC(2026, 9, 6, 17, 0, 0)
 };
@@ -154,27 +156,32 @@ test('formatSubmittedOn renders 06-Oct-2026 style timestamps', () => {
 test('buildFeedbackMessage emits the agreed notification format', () => {
 	const message = buildFeedbackMessage(FEEDBACK, CONTEXT);
 	assert.equal(message, [
-		'📢 QASE User Feedback Received',
-		'',
-		'A new user feedback has been submitted after completion of a QASE test run.',
+		'🔔 New QASE User Feedback',
 		'',
 		'⭐ Rating: 5/5',
-		'',
-		'📝 User Feedback:',
+		'📂 Category: Usability',
+		'💬 Feedback:',
 		'Great coverage of the checkout flow.',
-		'',
-		'📊 QA Run:',
-		'Homepage regression sweep · New QA Run · #cf5b7e5f',
-		'',
-		'🌐 Target:',
-		'https://qase.dev/',
-		'',
-		'👤 Submitted By:',
-		'Priya Sharma',
-		'',
-		'🕒 Submitted On:',
-		'06-Oct-2026 5:00 PM'
+		'👤 User: Priya Sharma',
+		'🕒 Submitted: 06-Oct-2026 5:00 PM',
+		'🔗 QASE: https://qase.example.com/run/cf5b7e5f-a4fa-4189-85a3-7d07473ad7c0',
+		'📊 Run: Homepage regression sweep · New QA Run',
+		'🌐 Target: https://qase.dev/',
+		'Feedback ID: 11111111-2222-4333-8444-555555555555'
 	].join('\n'));
+});
+
+test('buildFeedbackMessage defaults category to General and omits an unavailable link', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 9, comments: '   ' },
+		{ mode: 'sqa', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.match(message, /⭐ Rating: 5\/5/);
+	assert.match(message, /📂 Category: General/);
+	assert.match(message, /\(no description provided\)/);
+	assert.match(message, /🔗 QASE: \(link unavailable\)/);
+	assert.match(message, /👤 User: QASE user/);
+	assert.match(message, /Feedback ID: x/);
 });
 
 test('buildFeedbackMessage clamps ratings and fills safe defaults', () => {
@@ -184,9 +191,7 @@ test('buildFeedbackMessage clamps ratings and fills safe defaults', () => {
 	);
 	assert.match(message, /⭐ Rating: 5\/5/);
 	assert.match(message, /\(no description provided\)/);
-	assert.match(message, /SQA · #abcd1234/);
-	assert.match(message, /🌐 Target:\n—/);
-	assert.match(message, /👤 Submitted By:\nQASE user/);
+	assert.match(message, /👤 User: QASE user/);
 });
 
 test('buildFeedbackMessage truncates far beyond the Cloud API text cap', () => {
@@ -200,7 +205,7 @@ test('buildMessagePayload defaults to free-form text and names the notification 
 	const payload = buildMessagePayload(config, FEEDBACK, CONTEXT);
 	assert.equal(payload.type, 'text');
 	assert.equal(payload.messaging_product, 'whatsapp');
-	assert.match(payload.text.body, /📢 QASE User Feedback Received/);
+	assert.match(payload.text.body, /🔔 New QASE User Feedback/);
 	assert.equal(notificationIdFor(FEEDBACK.id), 'WHATSAPP-11111111-2222-4333-8444-555555555555');
 });
 
@@ -218,8 +223,7 @@ test('buildMessagePayload switches to an approved template when configured', () 
 	assert.deepEqual(params, [
 		'⭐ Rating: 5/5',
 		'Great coverage of the checkout flow.',
-		'Homepage regression sweep · New QA Run · #cf5b7e5f',
-		'https://qase.dev/',
+		'https://qase.example.com/run/cf5b7e5f-a4fa-4189-85a3-7d07473ad7c0',
 		'Priya Sharma',
 		'06-Oct-2026 5:00 PM'
 	]);
@@ -268,7 +272,10 @@ test('createWhatsAppNotifier logs the enabled state with recipient count and mod
 
 test('dispatch delivers to every recipient and ends SENT with per-recipient states', async () => {
 	const sandbox = makeLedgerSandbox();
-	const fetchImpl = perRecipientFetch(new Map());
+	let seq = 0;
+	const fetchImpl = perRecipientFetch(new Map(), () => jsonResponse(200, JSON.stringify({
+		messages: [{ id: `wamid.HBgL${++seq}TEST` }]
+	})));
 	const logger = collectingLogger();
 	const notifier = createWhatsAppNotifier({
 		environment: VALID_ENV, fetchImpl, logger, ledgerFile: sandbox.ledgerFile, sleep: async () => {}
@@ -283,14 +290,78 @@ test('dispatch delivers to every recipient and ends SENT with per-recipient stat
 		assert.equal(call.init.headers.Authorization, 'Bearer EAAG-secret-token-value');
 		assert.equal(call.body.messaging_product, 'whatsapp');
 		assert.equal(call.body.type, 'text');
-		assert.equal(call.body.text.body.startsWith('📢 QASE User Feedback Received'), true);
+		assert.equal(call.body.text.body.startsWith('🔔 New QASE User Feedback'), true);
 	}
 
 	const entry = readLedger(sandbox)[FEEDBACK.id];
 	assert.equal(entry.status, 'SENT');
 	assert.equal(entry.notificationId, `WHATSAPP-${FEEDBACK.id}`);
 	assert.ok(entry.recipients.every(r => r.state === 'sent' && r.attempts === 1));
+	assert.ok(entry.recipients.every(r => r.deliveryStatus === 'accepted')); // 2xx = accepted, NOT delivered
+	assert.deepEqual(entry.recipients.map(r => r.whatsappMessageId),
+		['wamid.HBgL1TEST', 'wamid.HBgL2TEST', 'wamid.HBgL3TEST', 'wamid.HBgL4TEST']);
 	assert.equal(logger.entries.info.filter(e => e.event === 'whatsapp.feedback.notified').length, 1);
+});
+
+test('per-attempt logs carry provider, endpoint, status, messageId — never the token', async () => {
+	const sandbox = makeLedgerSandbox();
+	const scripts = new Map([
+		// r1: first attempt fails with 429, second accepted
+		['+15550000001', [jsonResponse(429, '{"error":{"message":"rate limited"}}'), jsonResponse(200, '{"messages":[{"id":"wamid.R1OK"}]}')]],
+		// r2: template rejection (400) — non-retryable
+		['+15550000002', [jsonResponse(400, '{"error":{"code":132000,"message":"template was rejected"}}')]]
+	]);
+	const fetchImpl = perRecipientFetch(scripts, jsonResponse(200, '{"messages":[{"id":"wamid.OK"}]}'));
+	const logger = collectingLogger();
+	const notifier = createWhatsAppNotifier({
+		environment: VALID_ENV, fetchImpl, logger, ledgerFile: sandbox.ledgerFile, sleep: async () => {}
+	});
+	await notifier.dispatchFeedbackNotification(FEEDBACK, CONTEXT);
+
+	const attempts = logger.entries.info.filter(e => e.event === 'whatsapp.delivery.attempt');
+	const loggedText = JSON.stringify(attempts);
+	assert.ok(!loggedText.includes('EAAG-secret-token-value'), 'token leaked into attempt logs');
+	const r1first = attempts.find(e => e.fields.recipient === '+15550000001' && e.fields.attempt === 1);
+	assert.equal(r1first.fields.provider, 'meta-cloud-api');
+	assert.equal(r1first.fields.endpoint, 'v20.0/123456789012345/messages');
+	assert.equal(r1first.fields.status, 429);
+	assert.equal(r1first.fields.errorCode, 'whatsapp_rate_limited');
+	const r1second = attempts.find(e => e.fields.recipient === '+15550000001' && e.fields.attempt === 2);
+	assert.equal(r1second.fields.status, 200);
+	assert.equal(r1second.fields.messageId, 'wamid.R1OK');
+	assert.equal(r1second.fields.deliveryStatus, 'accepted');
+	const r2 = attempts.find(e => e.fields.recipient === '+15550000002');
+	assert.equal(r2.fields.status, 400);
+	assert.equal(r2.fields.errorCode, 'whatsapp_rejected');
+});
+
+test('delivery statuses: webhook updates advance past accepted; unknown/corrupt ignored', async () => {
+	const sandbox = makeLedgerSandbox();
+	const fetchImpl = perRecipientFetch(new Map(), jsonResponse(200, '{"messages":[{"id":"wamid.DELIVER-1"}]}'));
+	const logger = collectingLogger();
+	const notifier = createWhatsAppNotifier({
+		environment: VALID_ENV, fetchImpl, logger, ledgerFile: sandbox.ledgerFile, sleep: async () => {}
+	});
+	await notifier.dispatchFeedbackNotification(FEEDBACK, CONTEXT);
+
+	// Before any webhook: accepted only — HTTP 200 never means delivered.
+	assert.equal(notifier.getNotification(`WHATSAPP-${FEEDBACK.id}`).recipients[0].deliveryStatus, 'accepted');
+
+	assert.equal(notifier.recordDeliveryStatus({ messageId: 'wamid.DELIVER-1', status: 'delivered', timestamp: 1_759_000_000_000 }), true);
+	assert.equal(notifier.getNotification(`WHATSAPP-${FEEDBACK.id}`).recipients[0].deliveryStatus, 'delivered');
+	assert.equal(readLedger(sandbox)[FEEDBACK.id].recipients[0].deliveryUpdatedAt, 1_759_000_000_000);
+	assert.ok(logger.entries.info.some(e => e.event === 'whatsapp.delivery.status' && e.fields.state === 'delivered'));
+
+	// Failed update overwrites with sanitized error detail.
+	assert.equal(notifier.recordDeliveryStatus({ messageId: 'wamid.DELIVER-1', status: 'failed', errorCode: 131026, errorMessage: 'recipient unreachable' }), true);
+	const failed = notifier.getNotification(`WHATSAPP-${FEEDBACK.id}`).recipients[0];
+	assert.equal(failed.deliveryStatus, 'failed');
+	assert.match(failed.deliveryError, /131026/);
+
+	// Unknown message id and junk status are ignored, never thrown.
+	assert.equal(notifier.recordDeliveryStatus({ messageId: 'wamid.unknown', status: 'delivered' }), false);
+	assert.doesNotThrow(() => notifier.recordDeliveryStatus({ messageId: 'wamid.DELIVER-1', status: 'not-a-status' }));
+	assert.ok(logger.entries.warn.some(e => e.event === 'whatsapp.webhook.unknown_message'));
 });
 
 test('dispatch is idempotent: a SENT or in-flight notification never resends', async () => {
