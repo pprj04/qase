@@ -1,5 +1,7 @@
 # Qase Studio UI master plan
 
+> Implementation status: demo-critical UI phases are complete through commit `a82f452`. See [QASE_STUDIO_UI_IMPLEMENTATION_REPORT.md](QASE_STUDIO_UI_IMPLEMENTATION_REPORT.md) for phase results, test evidence, and remaining deployment boundaries.
+
 ## Baseline
 
 | Item | Value |
@@ -37,13 +39,11 @@ The standalone application remains supported. Embedded presentation reuses the s
 - The integration contract already supports a Studio-owned container URL, project context, signed lifecycle operations, board delivery when configured, and a fixed external handoff target.
 - Feedback has a user submission flow and an owner-facing review panel, though the live completed-run route was not reached in the audit.
 
-### Missing or incomplete
+### Implementation update and remaining gaps
 
-- No explicit mock Studio shell demonstrates Qase inside host navigation and a reduced AI context column.
-- The local fixture qualification proves running and completed layouts, but there is no focused presentation route that walks a reviewer through the demo states without an agent run.
-- Live Stop can remain represented as `idle` rather than an explicit stopped terminal state. The frontend must not relabel that unknown server state.
-- Founder launcher exposes release, environment, device, and BrowserStack terminology before the primary action.
-- Founder output is comprehensive but not yet optimized around the four founder questions: improve, build next, why, and priority.
+- The mock Studio shell and controlled launcher/running/completed walkthrough now exist behind the opt-in `?studio=mock` presentation mode.
+- User Stop now persists a resumable `interrupted` state with the authoritative detail `Stopped by user.`; the UI labels only that exact state as stopped.
+- Founder defaults to URL and authorization, keeps technical settings under Advanced Options, and leads completed results with what to improve, what to build next, why it matters, and what to do first.
 - Real Studio repair handoff is deployment-dependent. Unavailable delivery must remain hidden or clearly unavailable.
 - Exact visual parity remains dependent on an accessible current Studio reference. Existing Studio-labelled tokens are provisional.
 
@@ -111,7 +111,7 @@ This direction was checked against generic dashboard patterns. The revision remo
 ## Dependencies and boundaries
 
 - The mock shell can demonstrate layout but cannot claim exact Studio parity until a current host component/token reference is available.
-- Explicit `stopped` requires the server or integration lifecycle to persist and return an authoritative terminal state. The UI will expose failure/retry but will not infer stopped from `idle`.
+- The implemented user-stop contract uses the existing resumable `interrupted` state plus an authoritative `Stopped by user.` detail. A separate new terminal enum is unnecessary for the current UI contract.
 - Send to Studio requires a configured, verified delivery capability. This repository must not fake it.
 - Real Android/iOS and BrowserStack execution is outside this UI implementation unless credentials and an environment are supplied.
 - The controlled demo fixture must intercept only its test page requests, perform no production mutation, and be clearly labelled in source and output.
