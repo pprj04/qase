@@ -17,7 +17,7 @@ const VALID_ENV = {
 	QASE_WHATSAPP_ENABLED: 'true',
 	QASE_WHATSAPP_ACCESS_TOKEN: 'EAAG-secret-token-value',
 	QASE_WHATSAPP_PHONE_NUMBER_ID: '123456789012345',
-	QASE_WHATSAPP_RECIPIENTS: '+918500040108, +918985485377,+917387296764,+919995082647'
+	QASE_WHATSAPP_RECIPIENTS: '+15550000001, +15550000002,+15550000003,+15550000004'
 };
 
 function makeLedgerSandbox() {
@@ -88,7 +88,7 @@ test('parseWhatsAppConfig rejects non-boolean enable flags', () => {
 
 test('parseWhatsAppConfig parses recipients, applies defaults, and freezes', () => {
 	const config = parseWhatsAppConfig(VALID_ENV);
-	assert.deepEqual(config.recipients, ['+918500040108', '+918985485377', '+917387296764', '+919995082647']);
+	assert.deepEqual(config.recipients, ['+15550000001', '+15550000002', '+15550000003', '+15550000004']);
 	assert.equal(config.apiVersion, 'v20.0');
 	assert.equal(config.apiOrigin, 'https://graph.facebook.com');
 	assert.equal(config.timeoutMs, 15_000);
@@ -98,8 +98,8 @@ test('parseWhatsAppConfig parses recipients, applies defaults, and freezes', () 
 });
 
 test('parseWhatsAppConfig dedupes recipients and accepts bare numbers', () => {
-	const config = parseWhatsAppConfig({ ...VALID_ENV, QASE_WHATSAPP_RECIPIENTS: '+918500040108,918500040108' });
-	assert.deepEqual(config.recipients, ['+918500040108']);
+	const config = parseWhatsAppConfig({ ...VALID_ENV, QASE_WHATSAPP_RECIPIENTS: '+15550000001,15550000001' });
+	assert.deepEqual(config.recipients, ['+15550000001']);
 });
 
 test('parseWhatsAppConfig requires token, phone id, and at least one recipient', () => {
