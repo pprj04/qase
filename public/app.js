@@ -194,7 +194,7 @@ const state = {
 	 * current run (null = not submitted yet); `rating` mirrors the star row;
 	 * `submitting` guards duplicate submissions while a request is in flight.
 	 */
-	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false, editing: false },
+	feedback: { runId: undefined, existing: undefined, existingLoadedFor: undefined, rating: 0, submitting: false, editing: false, notified: '' },
 	/**
 	 * Admin feedback review panel. Visibility-only UI state plus the loaded
 	 * list/stats; `feedbackAdmin.allowed` flips true only for owner/admin.
@@ -1401,6 +1401,7 @@ async function openFeedbackModal() {
 	bits.push(failed ? 'Status: Failed' : 'Status: Completed');
 	if (duration) bits.push(`Duration: ${duration}`);
 	el.feedbackRunMeta.textContent = bits.join(' · ');
+	state.feedback.notified = '';
 	el.feedbackModal.showModal();
 	applyFeedbackSubmittedState();
 	renderFeedbackStars();
@@ -1482,7 +1483,9 @@ function applyFeedbackSubmittedState() {
 		} else {
 			el.feedbackSubmit.textContent = 'Feedback submitted ✓';
 			el.feedbackCancel.textContent = 'Done';
-			el.feedbackSuccess.textContent = 'Thank you! Your feedback has been submitted successfully.';
+			el.feedbackSuccess.textContent = state.feedback.notified
+				? `Thank you! Your feedback has been submitted successfully. ${state.feedback.notified}`
+				: 'Thank you! Your feedback has been submitted successfully.';
 			el.feedbackEdit.hidden = false;
 		}
 	} else {
@@ -1520,7 +1523,12 @@ function clearFeedbackRating() {
 }
 
 function closeFeedbackModal() {
+	// While a submission is in flight the modal stays open — closing it
+	// mid-request would lose the result line (and could double-submit on
+	// reopen). The request completes in the background regardless.
+	if (state.feedback.submitting) return;
 	state.feedback.editing = false;
+	state.feedback.notified = '';
 	el.feedbackModal.close();
 }
 
@@ -1558,8 +1566,28 @@ async function submitFeedback(event) {
 				body: JSON.stringify({ runId: state.session.id, rating, category, comments, improvement })
 			});
 			state.feedback.existing = record;
+			state.feedback.editing = false;
+			// Truthful outcome line: the server now reports whether the
+			// WhatsApp notification was actually dispatched. Feedback is
+			// ALWAYS saved first — a notification failure is never presented
+			// as a submission failure (record exists → 201, never 5xx).
+			const sent = record?.whatsappSent === true;
+			const pending = record?.whatsapp?.status === 'PENDING' || record?.whatsapp?.status === 'RETRYING';
+			const failed = record?.whatsapp?.status === 'FAILED';
+			if (sent) {
+				toast('Thank you! Your feedback has been submitted successfully.', 'good');
+				state.feedback.notified = 'WhatsApp notification sent ✓';
+			} else if (pending) {
+				toast('Feedback saved. WhatsApp notification is still being delivered.', 'info');
+				state.feedback.notified = 'WhatsApp notification pending — feedback saved.';
+			} else if (failed) {
+				toast('Feedback saved. WhatsApp notification could not be delivered.', 'info');
+				state.feedback.notified = 'WhatsApp notification failed — feedback saved.';
+			} else {
+				toast('Thank you! Your feedback has been submitted successfully.', 'good');
+				state.feedback.notified = '';
+			}
 			applyFeedbackSubmittedState();
-			toast('Thank you! Your feedback has been submitted successfully.', 'good');
 			void refreshRuns();
 			renderReport();
 		}
@@ -5028,6 +5056,10 @@ async function bootWorkspace() {
 	el.feedbackForm?.addEventListener('submit', submitFeedback);
 	el.feedbackClose?.addEventListener('click', closeFeedbackModal);
 	el.feedbackCancel?.addEventListener('click', cancelEditFeedback);
+	// Esc on a <dialog> fires `cancel` — keep the in-flight guard there too.
+	el.feedbackModal?.addEventListener('cancel', event => {
+		if (state.feedback.submitting) event.preventDefault();
+	});
 	el.feedbackEdit?.addEventListener('click', startEditFeedback);
 	el.feedbackComments?.addEventListener('input', updateFeedbackSubmitEnabled);
 	el.feedbackCategory?.addEventListener('change', updateFeedbackSubmitEnabled);
