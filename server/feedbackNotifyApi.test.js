@@ -35,7 +35,13 @@ function makeNotifierHarness() {
 			buildMessage: () => 'unused',
 			async dispatchFeedbackNotification(feedback, context) {
 				dispatches.push({ feedback: { ...feedback }, context: { ...context } });
-			}
+			},
+			getNotification: feedbackId => ({
+				status: 'SENT',
+				recipients: [
+					{ to: '+15550000001', state: 'sent', whatsappMessageId: 'wamid.1', deliveryStatus: 'accepted' }
+				]
+			})
 		}
 	};
 }
@@ -49,8 +55,28 @@ function makeSyncNotifier() {
 			dispatchFeedbackNotification(feedback, context) {
 				// Deliberately NOT awaited inside dispatch.
 				dispatches.push({ feedback: { ...feedback }, context: { ...context } });
-				return new Promise(() => {}); // never resolves — proves non-blocking
-			}
+				return new Promise(() => {}); // never resolves — proves the bounded wait
+			},
+			getNotification: () => ({ status: 'RETRYING' })
+		}
+	};
+}
+
+function makeFailingNotifier() {
+	const dispatches = [];
+	return {
+		dispatches,
+		notifier: {
+			buildMessage: () => 'unused',
+			async dispatchFeedbackNotification(feedback, context) {
+				dispatches.push({ feedback: { ...feedback }, context: { ...context } });
+			},
+			getNotification: () => ({
+				status: 'FAILED',
+				recipients: [
+					{ to: '+15550000001', state: 'failed', lastError: 'WhatsApp API is unreachable.' }
+				]
+			})
 		}
 	};
 }
@@ -64,7 +90,7 @@ function crashNotifier() {
 	};
 }
 
-async function buildApp(notifier) {
+async function buildApp(notifier, extraEnvironment = {}) {
 	const auth = createFakeAuthService();
 	const services = createLocalApplicationServices({ tenantContext: TENANT, auth });
 	await services.runs.load();
@@ -72,7 +98,8 @@ async function buildApp(notifier) {
 		services,
 		access: createInstanceAccess({ tenantContext: TENANT }),
 		authRequired: true,
-		whatsappNotifier: notifier
+		whatsappNotifier: notifier,
+		environment: { ...process.env, ...extraEnvironment }
 	});
 	const server = await new Promise(resolve => {
 		const candidate = application.app.listen(0, '127.0.0.1', () => resolve(candidate));
@@ -132,8 +159,8 @@ test('POST /api/feedback dispatches after save with run context (id, mode, title
 	}
 });
 
-test('the HTTP response never waits for the notifier (detached dispatch)', async () => {
-	const harness = makeSyncNotifier(); // dispatch promise never resolves
+test('the HTTP response reports feedbackSaved + whatsappSent truthfully (awaited result)', async () => {
+	const harness = makeNotifierHarness();
 	const app = await buildApp(harness.notifier);
 	try {
 		const session = await finishedRun(app.services);
@@ -143,7 +170,60 @@ test('the HTTP response never waits for the notifier (detached dispatch)', async
 			body: JSON.stringify({ runId: session.id, rating: 5, comments: 'Fast.' })
 		});
 		assert.equal(response.status, 201);
+		const body = await response.json();
+		assert.equal(body.feedbackSaved, true);
+		assert.equal(body.whatsappSent, true);
+		assert.equal(body.whatsapp.status, 'SENT');
+		assert.equal(body.whatsapp.recipients[0].whatsappMessageId, 'wamid.1');
+		assert.equal(body.whatsapp.recipients[0].deliveryStatus, 'accepted');
+		// Backward compat: original record fields still present.
+		assert.ok(body.id);
+		assert.equal(body.rating, 5);
+	} finally {
+		await app.close();
+	}
+});
+
+test('a stuck dispatch reports PENDING after the bounded wait — feedback saved', async () => {
+	const harness = makeSyncNotifier(); // dispatch promise never resolves
+	const app = await buildApp(harness.notifier, { QASE_WHATSAPP_RESULT_TIMEOUT_MS: '50' });
+	try {
+		const session = await finishedRun(app.services);
+		const response = await fetch(`${app.origin}/api/feedback`, {
+			method: 'POST',
+			headers: app.headers,
+			body: JSON.stringify({ runId: session.id, rating: 5, comments: 'Slow provider.' })
+		});
+		assert.equal(response.status, 201);
+		const body = await response.json();
+		assert.equal(body.feedbackSaved, true);
+		assert.equal(body.whatsappSent, false);
+		assert.equal(body.whatsapp.status, 'PENDING');
+		assert.match(body.whatsapp.message, /pending/);
 		assert.equal(harness.dispatches.length, 1);
+		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
+	} finally {
+		await app.close();
+	}
+});
+
+test('provider failure is reported, never swallowed — feedback still saved', async () => {
+	const harness = makeFailingNotifier();
+	const app = await buildApp(harness.notifier);
+	try {
+		const session = await finishedRun(app.services);
+		const response = await fetch(`${app.origin}/api/feedback`, {
+			method: 'POST',
+			headers: app.headers,
+			body: JSON.stringify({ runId: session.id, rating: 2, comments: 'Rough edges.' })
+		});
+		assert.equal(response.status, 201);
+		const body = await response.json();
+		assert.equal(body.feedbackSaved, true);
+		assert.equal(body.whatsappSent, false);
+		assert.equal(body.whatsapp.status, 'FAILED');
+		assert.match(body.whatsapp.message, /failed/);
+		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
 	} finally {
 		await app.close();
 	}
@@ -159,9 +239,11 @@ test('feedback survives when the notifier rejects outright', async () => {
 			body: JSON.stringify({ runId: session.id, rating: 2, comments: 'Rough edges.' })
 		});
 		assert.equal(response.status, 201);
+		const body = await response.json();
+		assert.equal(body.feedbackSaved, true);
+		assert.equal(body.whatsappSent, false); // rejection never reads as success
+		assert.equal(body.whatsapp.status, 'PENDING');
 		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
-		// Give the unhandled-looking rejection a tick; response was already sent.
-		await new Promise(resolve => setImmediate(resolve));
 	} finally {
 		await app.close();
 	}

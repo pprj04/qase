@@ -215,6 +215,74 @@ export function createApplication(options = {}) {
 		response.set('Cache-Control', 'no-store');
 		next();
 	});
+	// ── WhatsApp delivery-status webhook (mounted BEFORE /api auth + CSRF) ──
+	// Meta calls back on message lifecycle (sent/delivered/read/failed).
+	// GET = subscription verification; POST = status payloads. Both must be
+	// reachable without QASE session auth; Meta never holds our session
+	// cookies, so /api gating would reject it.
+	const whatsappWebhookVerifyToken = String(environment.QASE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '').trim();
+	app.get('/webhooks/whatsapp', (request, response) => {
+		response.set('Cache-Control', 'no-store');
+		const q = request.query;
+		if (q['hub.mode'] !== 'subscribe' || !whatsappWebhookVerifyToken) {
+			// Unconfigured: 403, no detail — never confirm a token guess.
+			response.status(403).send('Forbidden');
+			return;
+		}
+		if (q['hub.verify_token'] !== whatsappWebhookVerifyToken) {
+			response.status(403).send('Forbidden');
+			return;
+		}
+		response.status(200).send(String(q['hub.challenge'] ?? ''));
+	});
+	app.post('/webhooks/whatsapp', async (request, response) => {
+		// Always answer 200 quickly: Meta retries anything else aggressively
+		// and we must never leak internals into the response body.
+		response.status(200).send('OK');
+		if (!whatsappWebhookVerifyToken || typeof whatsappNotifier?.recordDeliveryStatus !== 'function') {
+			return;
+		}
+		try {
+			// Read the raw body manually (capped): malformed JSON from a
+			// webhook source must not 400 — Meta retries hard on non-200.
+			// The global express.json already consumed the stream, but kept
+			// the parsed object for us; fall back to raw reading if absent.
+			let parsed = request.body;
+			if (parsed === undefined || parsed === null) {
+				const chunks = [];
+				let total = 0;
+				for await (const chunk of request) {
+					total += chunk.length;
+					if (total > 262_144) return; // 256 KiB cap; drop oversized
+					chunks.push(chunk);
+				}
+				try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return; }
+			}
+			// Let the microtask queue run so assertions in tests see the
+			// updates before the HTTP response is consumed.
+			const updates = [];
+			// Meta Cloud API webhook shape: entry[].changes[].value.statuses[]
+			const entries = Array.isArray(parsed?.entry) ? parsed.entry : [];
+			for (const entry of entries) {
+				for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+					for (const status of Array.isArray(change?.value?.statuses) ? change.value.statuses : []) {
+						if (typeof status?.id !== 'string') continue;
+						updates.push(whatsappNotifier.recordDeliveryStatus({
+							messageId: status.id,
+							status: status.status,
+							timestamp: Number(status.timestamp) * 1000,
+							errorCode: status.errors?.[0]?.code,
+							errorMessage: status.errors?.[0]?.message
+						}));
+					}
+				}
+			}
+			await Promise.allSettled(updates);
+		} catch (error) {
+			console.error(`[Qase server] whatsapp webhook ingestion error: ${sanitizeErrorDetail(error)}`);
+		}
+	});
+
 	app.use('/api', (request, response, next) => {
 		const publicAuthRoute = request.path === '/auth/register' || request.path === '/auth/login' || request.path === '/pilot-status';
 		if (!authService || !authRequired || publicAuthRoute) {
@@ -536,6 +604,37 @@ export function createApplication(options = {}) {
 
 	/* ── User feedback on test runs ───────────────────────────── */
 
+	/** Public base URL used in WhatsApp deep links back to the run report. */
+	const whatsappQaseUrl = (() => {
+		const raw = String(environment.QASE_PUBLIC_URL ?? '').trim();
+		return raw === '' ? undefined : raw;
+	})();
+	/** How long POST /api/feedback may WAIT for the WhatsApp dispatch result. */
+	const whatsappResultTimeoutMs = (() => {
+		const parsed = Number(environment.QASE_WHATSAPP_RESULT_TIMEOUT_MS);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10_000;
+	})();
+
+	/** Response projection of a notification record — sanitized, no replay data. */
+	function whatsappProjection(notification) {
+		const status = notification?.status;
+		const message = status === 'FAILED'
+			? 'Feedback saved, but the WhatsApp notification failed.'
+			: status === 'PENDING' || status === 'RETRYING'
+				? 'Feedback saved, but the WhatsApp notification result is pending.'
+				: undefined;
+		return {
+			status,
+			...(message ? { message } : {}),
+			recipients: (notification?.recipients ?? []).map(recipient => ({
+				to: recipient.to,
+				state: recipient.state,
+				...(recipient.whatsappMessageId ? { whatsappMessageId: recipient.whatsappMessageId } : {}),
+				...(recipient.deliveryStatus ? { deliveryStatus: recipient.deliveryStatus } : {})
+			}))
+		};
+	}
+
 	const feedbackService = () => {
 		if (!services.feedback) {
 			response.status(501).json({ error: 'Feedback is not available on this instance.' });
@@ -593,17 +692,40 @@ export function createApplication(options = {}) {
 				comments: request.body?.comments,
 				improvement: request.body?.improvement
 			});
-			// Notify AFTER the record is durably stored. Best-effort: a dispatch
-			// failure is logged by the notifier and never affects this response.
+			// Notify AFTER the record is durably stored. The dispatch is
+			// bounded by an await-with-timeout so the response truthfully
+			// reports {feedbackSaved, whatsappSent} from real provider
+			// results — but a stuck/slow provider can never hang feedback:
+			// the dispatch itself keeps running detached, only the await
+			// gives up. A dispatch failure is logged by the notifier and
+			// never fails this request.
+			let whatsapp;
 			if (whatsappNotifier && record?.id) {
-				Promise.resolve(whatsappNotifier.dispatchFeedbackNotification(record, {
+				const dispatched = Promise.resolve(whatsappNotifier.dispatchFeedbackNotification(record, {
 					mode: session.mode,
 					title: session.title,
 					targetUrl: session.targetUrl,
+					qaseUrl: whatsappQaseUrl,
+					submittedByName: request.auth?.userName ?? request.auth?.name,
 					submittedAt: record.submittedAt ?? Date.now()
-				})).catch(() => { /* notifier guarantees non-rejection; belt and braces */ });
+				}));
+				// Await with a strict timeout (default 10s): PENDING result on
+				// expiry, feedback still saved, dispatch continues detached.
+				whatsapp = await new Promise(resolve => {
+					const timer = setTimeout(() => resolve(undefined), whatsappResultTimeoutMs);
+					if (typeof timer?.unref === 'function') timer.unref();
+					dispatched.then(
+						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); },
+						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); }
+					);
+				}).then(notification => notification ?? { status: 'PENDING' });
 			}
-			response.status(201).json(record);
+			response.status(201).json({
+				...record,
+				feedbackSaved: true,
+				whatsappSent: Boolean(whatsapp?.status === 'SENT'),
+				...(whatsapp ? { whatsapp: whatsappProjection(whatsapp) } : {})
+			});
 		} catch (error) {
 			if (error?.code === 'duplicate_feedback') {
 				response.status(409).json({ error: 'Feedback already exists for this test run.', existingId: error.existingId });
@@ -1515,6 +1637,12 @@ export function createApplication(options = {}) {
 	app.use((error, request, response, next) => {
 		if (response.headersSent) {
 			next(error);
+			return;
+		}
+		// The WhatsApp webhook always answers 200 (Meta retries non-200
+		// aggressively); a JSON parse error there must not surface as 400.
+		if (request.path === '/webhooks/whatsapp') {
+			response.status(200).send('OK');
 			return;
 		}
 		if (error?.type === 'entity.too.large') {
