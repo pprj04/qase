@@ -510,8 +510,8 @@ function renderRun(run) {
 	if (run.mode === 'sqa') {
 		const mode = document.createElement('span');
 		mode.className = 'run-mode-badge';
-		mode.textContent = 'SQA';
-		mode.title = 'Software quality assurance assessment';
+		mode.textContent = 'Quality';
+		mode.title = 'Product quality review';
 		meta.append(mode);
 	}
 	if (run.mode === 'founder') {
@@ -963,9 +963,9 @@ function renderHeader() {
 	}
 	if (session.mode === 'sqa') {
 		const target = session.sqa?.scope?.target ?? session.sqa?.assessment?.target ?? {};
-		el.chatTitle.textContent = target.name ?? session.title ?? 'SQA assessment';
+		el.chatTitle.textContent = target.name ?? session.title ?? 'Quality review';
 		el.chatTarget.textContent = [target.release, target.environment].filter(Boolean).join(' · ')
-			|| 'Standards-informed software quality assessment';
+			|| 'Standards-informed product quality review';
 		setStatus(session.status);
 		return;
 	}
@@ -3209,7 +3209,7 @@ function renderSqaReportTab() {
 	if (!lifecycle.finalized || !assessment) {
 		const pending = document.createElement('div');
 		pending.className = 'feed-empty';
-		pending.textContent = lifecycle.detail || 'The SQA report is available after the assessment is finalized.';
+		pending.textContent = lifecycle.detail || 'The quality report is available after the review is finalized.';
 		el.reportView.append(pending);
 		return;
 	}
@@ -3217,20 +3217,22 @@ function renderSqaReportTab() {
 	const notice = document.createElement('aside');
 	notice.className = 'sqa-notice';
 	const noticeTitle = document.createElement('strong');
-	noticeTitle.textContent = 'SQA assessment report';
+	noticeTitle.textContent = 'Quality review report';
 	const noticeText = document.createElement('p');
 	noticeText.textContent = assessment.disclaimer
 		?? 'This scoped engineering assessment is not legal advice, regulatory approval, accreditation, an audit opinion, or certification.';
 	notice.append(noticeTitle, noticeText);
 
-	el.reportView.append(notice, renderSqaVerdict(assessment, lifecycle), renderSqaScope(sqa.scope ?? {}, assessment));
+	el.reportView.append(notice, renderSqaVerdict(assessment, lifecycle), renderSqaReportActions());
+	el.reportView.append(
+		renderSqaUnresolved(assessment),
+		renderSqaCoverage(assessment)
+	);
 	if (assessment.technicalSummary) el.reportView.append(renderSqaTechnicalSummary(assessment.technicalSummary));
 	el.reportView.append(
-		renderSqaCoverage(assessment),
-		renderSqaUnresolved(assessment),
 		renderSqaControls(assessment.results ?? []),
 		renderSqaSources(assessment.frameworkCoverage ?? []),
-		renderSqaReportActions()
+		renderSqaScope(sqa.scope ?? {}, assessment)
 	);
 }
 
@@ -3313,7 +3315,7 @@ function renderSqa() {
 	const notice = document.createElement('aside');
 	notice.className = 'sqa-notice';
 	const noticeTitle = document.createElement('strong');
-	noticeTitle.textContent = 'Assessment boundary';
+	noticeTitle.textContent = 'Review boundary';
 	const noticeText = document.createElement('p');
 	noticeText.textContent = assessment?.disclaimer ?? scope.disclaimer
 		?? 'This scoped engineering assessment is not legal advice, regulatory approval, accreditation, an audit opinion, or certification.';
@@ -3321,33 +3323,33 @@ function renderSqa() {
 	el.sqaView.append(notice);
 
 	el.sqaView.append(renderSqaVerdict(assessment, lifecycle));
-	el.sqaView.append(renderSqaScope(scope, assessment));
-	if (lifecycle.finalized && assessment) el.sqaView.append(renderSqaReportActions());
 
 	if (!lifecycle.finalized && lifecycle.phase === 'ready') {
 		const pending = document.createElement('div');
 		pending.className = 'sqa-pending';
 		const label = document.createElement('strong');
-		label.textContent = 'Ready to begin';
+		label.textContent = 'Preparing the review';
 		const text = document.createElement('p');
-		text.textContent = 'Paste the target URL in the command line below and press Send. A final pass, fail, or blocked verdict appears only after the agent completes the assessment.';
+		text.textContent = 'Qase will open the target and begin collecting evidence. The final result appears after every applicable check finishes.';
 		pending.append(label, text);
 		el.sqaView.append(pending);
 		return;
 	}
 	if (!assessment) return;
 
-	if (assessment.technicalSummary) el.sqaView.append(renderSqaTechnicalSummary(assessment.technicalSummary));
-	el.sqaView.append(renderSqaCoverage(assessment));
+	if (lifecycle.finalized) el.sqaView.append(renderSqaReportActions());
 	el.sqaView.append(renderSqaUnresolved(assessment));
+	el.sqaView.append(renderSqaCoverage(assessment));
+	if (assessment.technicalSummary) el.sqaView.append(renderSqaTechnicalSummary(assessment.technicalSummary));
 	el.sqaView.append(renderSqaControls(assessment.results ?? []));
 	el.sqaView.append(renderSqaSources(assessment.frameworkCoverage ?? []));
+	el.sqaView.append(renderSqaScope(scope, assessment));
 }
 
 function renderSqaReportActions() {
 	const actions = document.createElement('div');
 	actions.className = 'report-actions sqa-report-actions';
-	actions.setAttribute('aria-label', 'SQA assessment report actions');
+	actions.setAttribute('aria-label', 'Quality review report actions');
 
 	const download = document.createElement('button');
 	download.className = 'btn btn-ghost btn-sm';
@@ -3377,7 +3379,7 @@ function renderSqaReportActions() {
 		try {
 			const markdownText = await apiText(`/sessions/${state.sessionId}/report.md`);
 			await navigator.clipboard.writeText(markdownText);
-			toast('SQA assessment copied to the clipboard.', 'good');
+			toast('Quality review copied to the clipboard.', 'good');
 		} catch (error) {
 			exportError(error, 'The SQA report copy failed.');
 		}
@@ -3986,7 +3988,7 @@ function handleEvent(event) {
 			renderSqa();
 			renderReport();
 			void refreshRuns();
-			if (event.final) toast('SQA assessment published.', 'good');
+			if (event.final) toast('Quality review published.', 'good');
 			break;
 
 		case 'founder.created':
@@ -4664,6 +4666,8 @@ const sqaUi = {
 	submit: $('sqa-submit'),
 	catalogState: $('sqa-catalog-state'),
 	catalogVersion: $('sqa-catalog-version'),
+	selectionSummary: $('sqa-selection-summary'),
+	customize: $('sqa-customize'),
 	disclaimer: $('sqa-catalog-disclaimer'),
 	deviceSelect: $('sqa-device-select'),
 	deviceLandscape: $('sqa-device-landscape'),
@@ -4734,7 +4738,25 @@ function paintSqaCatalog(catalog) {
 	sqaUi.profilesFieldset.disabled = false;
 	sqaUi.attributesFieldset.disabled = false;
 	sqaUi.catalogState.hidden = true;
+	syncSqaSelectionSummary();
 	syncSqaSubmitState();
+}
+
+function syncSqaSelectionSummary() {
+	if (!sqaUi.selectionSummary) return;
+	if (!state.sqaCatalog) {
+		sqaUi.selectionSummary.textContent = 'Loading the recommended scope…';
+		return;
+	}
+	const profiles = [...sqaUi.profileOptions.querySelectorAll('input:checked')]
+		.filter(input => input.value !== 'core').length;
+	const attributes = [...sqaUi.attributeOptions.querySelectorAll('input:checked')].length;
+	const additions = [];
+	if (profiles) additions.push(`${profiles} additional profile${profiles === 1 ? '' : 's'}`);
+	if (attributes) additions.push(`${attributes} product characteristic${attributes === 1 ? '' : 's'}`);
+	sqaUi.selectionSummary.textContent = additions.length
+		? `Universal quality baseline · ${additions.join(' · ')}`
+		: 'Universal quality baseline · Recommended browser evidence';
 }
 
 function sqaCatalogOption({ name, value, title, description = '', meta = '', checked = false, disabled = false }) {
@@ -4773,6 +4795,7 @@ function syncSqaSubmitState() {
 async function openSqaStart() {
 	setSqaFormError();
 	sqaUi.form.reset();
+	if (sqaUi.customize) sqaUi.customize.open = false;
 	populateDeviceSelect(sqaUi.deviceSelect, pendingDeviceId());
 	sqaUi.environmentSelect && populateEnvironmentSelect(sqaUi.environmentSelect);
 	if (sqaUi.deviceLandscape) sqaUi.deviceLandscape.checked = pendingLandscape();
@@ -4780,9 +4803,11 @@ async function openSqaStart() {
 	sqaUi.attributesFieldset.disabled = true;
 	sqaUi.catalogState.hidden = false;
 	sqaUi.catalogState.textContent = 'Loading assessment catalog…';
+	syncSqaSelectionSummary();
 	sqaUi.submit.dataset.busy = 'false';
 	syncSqaSubmitState();
 	if (!sqaUi.dialog.open) sqaUi.dialog.showModal();
+	if (matchMedia('(pointer: fine)').matches) setTimeout(() => sqaUi.targetUrl?.focus(), 0);
 
 	try {
 		paintSqaCatalog(await loadSqaCatalog());
@@ -4800,33 +4825,30 @@ function closeSqaStart() {
 sqaUi.close.onclick = closeSqaStart;
 sqaUi.cancel.onclick = closeSqaStart;
 sqaUi.authorization.onchange = syncSqaSubmitState;
+sqaUi.profileOptions.onchange = syncSqaSelectionSummary;
+sqaUi.attributeOptions.onchange = syncSqaSelectionSummary;
 
 sqaUi.form.onsubmit = async event => {
 	event.preventDefault();
 	setSqaFormError();
 	if (!sqaUi.form.reportValidity()) return;
 	if (!ensureModelConfigured('SQA launcher')) return;
-	const target = {
-		name: sqaUi.targetName.value.trim(),
-		release: sqaUi.targetRelease.value.trim(),
-		environment: sqaUi.targetEnvironment.value.trim()
-	};
 	let targetUrl;
+	let parsedTargetUrl;
 	try {
-		targetUrl = new URL(sqaUi.targetUrl.value.trim());
-		if (!['http:', 'https:'].includes(targetUrl.protocol)) throw new TypeError();
-		targetUrl = targetUrl.href;
+		parsedTargetUrl = new URL(sqaUi.targetUrl.value.trim());
+		if (!['http:', 'https:'].includes(parsedTargetUrl.protocol)) throw new TypeError();
+		targetUrl = parsedTargetUrl.href;
 	} catch {
 		setSqaFormError('Enter a complete HTTP or HTTPS target URL.');
 		sqaUi.targetUrl.focus();
 		return;
 	}
-	const emptyTarget = Object.entries(target).find(([, value]) => !value);
-	if (emptyTarget) {
-		setSqaFormError('Product, release, and environment must contain visible text.');
-		sqaUi.targetName.focus();
-		return;
-	}
+	const target = {
+		name: sqaUi.targetName.value.trim() || parsedTargetUrl.hostname,
+		release: sqaUi.targetRelease.value.trim() || 'Current',
+		environment: sqaUi.targetEnvironment.value.trim() || 'Preview'
+	};
 	if (!sqaUi.authorization.checked) {
 		setSqaFormError('Confirm testing authorization and the non-destructive boundary first.');
 		sqaUi.authorization.focus();
@@ -4837,7 +4859,7 @@ sqaUi.form.onsubmit = async event => {
 	if (!profiles.includes('core')) profiles.unshift('core');
 	const attributes = [...sqaUi.attributeOptions.querySelectorAll('input:checked')].map(input => input.value);
 	sqaUi.submit.dataset.busy = 'true';
-	sqaUi.submit.textContent = 'Creating assessment…';
+	sqaUi.submit.textContent = 'Starting review…';
 	syncSqaSubmitState();
 	try {
 		const result = await api('/sqa/sessions', {
@@ -4870,7 +4892,7 @@ sqaUi.form.onsubmit = async event => {
 		setSqaFormError(error instanceof Error ? error.message : String(error));
 	} finally {
 		sqaUi.submit.dataset.busy = 'false';
-		sqaUi.submit.textContent = 'Start assessment';
+		sqaUi.submit.textContent = 'Start quality review';
 		syncSqaSubmitState();
 	}
 };

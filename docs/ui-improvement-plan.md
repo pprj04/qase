@@ -39,6 +39,14 @@ Completed QA runs now give the findings and report workspace substantially more 
 
 Dashboard qualification covers the results hierarchy, automatic tab choice, accessible preview restoration, thumbnail visibility, and the 1101 px desktop breakpoint without horizontal overflow. Light and dark rendered screenshots were reviewed. Authentication qualification and the focused 23-test UI/module suite remain passing.
 
+### Follow-up: simplified Quality review — 6 October 2026
+
+Quality now starts with one required URL, a recommended universal baseline, and a short authorization confirmation. Product name, release, and environment are inferred from the URL and current context when omitted. Additional standards profiles, product characteristics, optional scope details, and browser/device controls remain available under Advanced options. The review boundary is disclosed separately so the main action stays easy to scan at narrow widths.
+
+The user-facing interface consistently calls this a Quality review instead of SQA. Finalized results prioritize report actions, unresolved issues, and evidence gaps before coverage and technical detail; the full scope remains available last for audit context. No assessment engine or compliance behavior changed.
+
+Dashboard qualification passes all 15 journeys, including recommended defaults, authorization, optional advanced scope, and 360/390/768/1280 px layouts. The 360 px and desktop launchers were visually reviewed after the disclosure change. Authentication qualification passes, and the focused Quality/launcher presentation suite passes all 19 tests.
+
 ## What the discussion means for design
 
 | Discussion reference | Design requirement | Current position |

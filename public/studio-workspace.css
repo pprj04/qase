@@ -397,6 +397,71 @@ body.studio-workspace .check { color: var(--text-secondary); background: transpa
 body.studio-workspace .qa-recommended { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
 body.studio-workspace .qa-recommended h3 { margin: 0 0 8px; font-size: 14px; color: var(--text); }
 body.studio-workspace .qa-recommended p { margin: 0; font-size: 13px; color: var(--text-muted); }
+body.studio-workspace .sqa-recommended {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+body.studio-workspace .sqa-recommended h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  text-wrap: balance;
+}
+body.studio-workspace .sqa-recommended p,
+body.studio-workspace .sqa-recommended small {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+body.studio-workspace .sqa-recommended .sqa-selection-summary {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 550;
+}
+body.studio-workspace .sqa-boundary { color: var(--text-muted); }
+body.studio-workspace .sqa-boundary > summary {
+  width: max-content;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+body.studio-workspace .sqa-boundary p { margin-top: 6px; max-width: 80ch; }
+body.studio-workspace .sqa-catalog-meta {
+  margin: 0;
+  color: var(--text-faint);
+  font-family: var(--font-ui);
+  font-size: 11px;
+}
+body.studio-workspace .sqa-target-primary { background: var(--surface-1); }
+body.studio-workspace .sqa-customize { border-bottom: 1px solid var(--border); }
+body.studio-workspace .sqa-customize > summary {
+  padding: 14px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+body.studio-workspace .sqa-customize-body {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 20px;
+}
+body.studio-workspace .sqa-customize-body .sqa-fieldset,
+body.studio-workspace .sqa-customize-body .qa-device-fieldset { margin: 0; }
+body.studio-workspace .sqa-authorization {
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+body.studio-workspace .sqa-authorization span { font-size: 13px; line-height: 1.45; }
+body.studio-workspace .sqa-authorization small { display: block; margin-top: 3px; color: var(--text-muted); }
 body.studio-workspace #qa-selection-summary { margin-top: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 body.studio-workspace .qa-customize { border-bottom: 1px solid var(--border); }
 body.studio-workspace .qa-customize > summary { padding: 14px 0; cursor: pointer; color: var(--text-secondary); font-size: 13px; }

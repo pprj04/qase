@@ -344,7 +344,7 @@
       <button class="tab" id="tab-plan" data-tab="plan" role="tab" aria-selected="false" aria-controls="pane-plan" tabindex="-1">Plan <span class="count" id="count-plan"></span></button>
       <button class="tab" id="tab-findings" data-tab="findings" role="tab" aria-selected="false" aria-controls="pane-findings" tabindex="-1">Findings <span class="count" id="count-findings"></span></button>
       <button class="tab" id="tab-report" data-tab="report" role="tab" aria-selected="false" aria-controls="pane-report" tabindex="-1">Report</button>
-      <button class="tab tab-sqa" id="tab-sqa" data-tab="sqa" role="tab" aria-selected="false" aria-controls="pane-sqa" tabindex="-1" hidden>SQA <span class="count" id="count-sqa"></span></button>
+      <button class="tab tab-sqa" id="tab-sqa" data-tab="sqa" role="tab" aria-selected="false" aria-controls="pane-sqa" tabindex="-1" hidden>Quality <span class="count" id="count-sqa"></span></button>
       <button class="tab tab-founder" id="tab-founder" data-tab="founder" role="tab" aria-selected="false" aria-controls="pane-founder" tabindex="-1" hidden>Founder <span class="count" id="count-founder"></span></button>
     </nav>
 
@@ -379,10 +379,10 @@
       <span class="feature-label">Test</span>
       <span class="feature-tooltip" id="feature-tip-qa" role="tooltip">New QA run <kbd>⌘N</kbd></span>
     </button>
-    <button id="new-sqa" class="feature-action" type="button" aria-label="Start SQA assessment" aria-describedby="feature-tip-sqa" data-feature="sqa">
+    <button id="new-sqa" class="feature-action" type="button" aria-label="Start quality review" aria-describedby="feature-tip-sqa" data-feature="sqa">
       <span class="feature-icon" aria-hidden="true">◇</span>
       <span class="feature-label">Quality</span>
-      <span class="feature-tooltip" id="feature-tip-sqa" role="tooltip">Standards-informed SQA assessment</span>
+      <span class="feature-tooltip" id="feature-tip-sqa" role="tooltip">Review quality and readiness</span>
     </button>
     <button id="new-founder" class="feature-action feature-action--founder" type="button" aria-label="Start Founder Mode review" aria-describedby="feature-tip-founder" data-feature="founder">
       <span class="feature-icon" aria-hidden="true">◆</span>
@@ -838,97 +838,108 @@
   <form class="modal-inner sqa-modal-inner" id="sqa-form">
     <header class="modal-head" data-path="~/qase/sqa/new">
       <div>
-        <h2 id="sqa-start-title">Start SQA assessment</h2>
-        <p id="sqa-start-description">Define the assessment boundary and target URL. Starting the assessment opens the target and begins evidence collection.</p>
+        <h2 id="sqa-start-title">Review product quality</h2>
+        <p id="sqa-start-description">Check the product against a recommended quality baseline and collect evidence for anything that needs attention.</p>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" id="sqa-close">Close</button>
     </header>
 
     <div class="modal-body sqa-modal-body">
-      <div class="sqa-intro">
-        <span class="sqa-kicker">Standards-informed engineering assurance</span>
-        <strong>Evidence-backed, scoped, and conservative by design.</strong>
-        <p id="sqa-catalog-disclaimer">Loading the current catalog and assessment notice…</p>
+      <div class="sqa-recommended">
+        <h3>Recommended quality review</h3>
+        <p>Qase includes the universal product-quality baseline and uses evidence it can observe directly.</p>
+        <p class="sqa-selection-summary" id="sqa-selection-summary" role="status" aria-live="polite">Loading the recommended scope…</p>
+        <details class="sqa-boundary">
+          <summary>About this review</summary>
+          <p id="sqa-catalog-disclaimer">This is readiness guidance, not certification or regulatory approval.</p>
+        </details>
         <span class="sqa-catalog-meta" id="sqa-catalog-version" aria-live="polite"></span>
       </div>
 
       <div class="sqa-catalog-state" id="sqa-catalog-state" role="status" aria-live="polite">Loading assessment catalog…</div>
 
-      <fieldset class="sqa-fieldset" id="sqa-profiles-fieldset" disabled>
-        <legend>Assurance profiles</legend>
-        <p>Select only profiles that apply to this product and release. The universal core is always included.</p>
-        <div class="sqa-option-grid" id="sqa-profile-options"></div>
-      </fieldset>
-
-      <fieldset class="sqa-fieldset" id="sqa-attributes-fieldset" disabled>
-        <legend>Product attributes</legend>
-        <p>Attributes determine which conditional controls enter the assessment scope.</p>
-        <div class="sqa-option-grid sqa-option-grid--compact" id="sqa-attribute-options"></div>
-      </fieldset>
-
-      <aside class="sqa-scope-guidance" id="sqa-scope-guidance" role="note">
-        <strong>Choose the narrowest truthful scope</strong>
-        <p>Core with applicable website attributes enables controlled-browser checks. Sector profiles and broad or all-attribute selections also require external artifacts such as risk records, approvals, traceability, security reports, or an SBOM. Authenticated workflows may require test credentials after the run starts. Missing reviewer evidence is reported as <em>Evidence incomplete</em>, not as a failed automated test.</p>
-      </aside>
-
-      <fieldset class="sqa-fieldset sqa-target-fields">
-        <legend>Assessment target</legend>
-        <div class="field-row sqa-field-row">
-          <label class="field">
-            <span>Product or service</span>
-            <input id="sqa-target-name" name="targetName" required maxlength="200" autocomplete="off" placeholder="Customer portal" autofocus>
-          </label>
-          <label class="field">
-            <span>Release</span>
-            <input id="sqa-target-release" name="targetRelease" required maxlength="200" autocomplete="off" placeholder="2026.08.15">
-          </label>
-          <label class="field">
-            <span>Environment</span>
-            <input id="sqa-target-environment" name="targetEnvironment" required maxlength="100" autocomplete="off" placeholder="staging">
-          </label>
-        </div>
+      <fieldset class="sqa-fieldset sqa-target-primary">
+        <legend>Product to review</legend>
         <label class="field">
           <span>Target URL</span>
-          <input id="sqa-target-url" name="targetUrl" type="url" required maxlength="2048" inputmode="url" autocomplete="url" placeholder="https://staging.example.com">
-          <small>Qase opens this URL immediately after the assessment scope is created.</small>
-        </label>
-        <label class="field">
-          <span>Scope notes</span>
-          <textarea id="sqa-scope-notes" name="scopeNotes" rows="3" maxlength="4000" placeholder="In-scope workflows, exclusions, assumptions, and evidence locations…"></textarea>
-          <small>Record boundaries precisely. Unavailable evidence is reported as blocked or not assessed.</small>
+          <input id="sqa-target-url" name="targetUrl" type="url" required maxlength="2048" inputmode="url" autocomplete="url" placeholder="https://staging.example.com…">
+          <small>Qase opens this URL and starts the recommended review.</small>
         </label>
       </fieldset>
 
       <label class="check sqa-authorization">
         <input id="sqa-authorization" type="checkbox" required>
-        <span>I confirm that I own this target or am authorized to test it, and I accept non-destructive testing only.<small>This confirmation is required before Qase can create the assessment session.</small></span>
+        <span>I have permission to test this product.<small>Qase will use non-destructive checks only.</small></span>
       </label>
 
-      <fieldset class="qa-device-fieldset sqa-device-fieldset">
-        <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="sqa-device-select"></select>
-          </label>
-          <label class="check qa-landscape">
-            <input id="sqa-device-landscape" type="checkbox">
-            <span>Landscape orientation</span>
-          </label>
+      <details class="qa-customize sqa-customize" id="sqa-customize">
+        <summary>Advanced options</summary>
+        <div class="qa-customize-body sqa-customize-body">
+          <fieldset class="sqa-fieldset" id="sqa-profiles-fieldset" disabled>
+            <legend>Additional standards profiles</legend>
+            <p>Add only profiles that apply to this product. The universal quality baseline is always included.</p>
+            <div class="sqa-option-grid" id="sqa-profile-options"></div>
+          </fieldset>
+
+          <fieldset class="sqa-fieldset" id="sqa-attributes-fieldset" disabled>
+            <legend>Product characteristics</legend>
+            <p>Use these details when they materially change the quality controls that apply.</p>
+            <div class="sqa-option-grid sqa-option-grid--compact" id="sqa-attribute-options"></div>
+          </fieldset>
+
+          <fieldset class="sqa-fieldset sqa-target-fields">
+            <legend>Review details</legend>
+            <div class="field-row sqa-field-row">
+              <label class="field">
+                <span>Product name <small>(optional)</small></span>
+                <input id="sqa-target-name" name="targetName" maxlength="200" autocomplete="off" placeholder="Customer portal…">
+              </label>
+              <label class="field">
+                <span>Release <small>(optional)</small></span>
+                <input id="sqa-target-release" name="targetRelease" maxlength="200" autocomplete="off" placeholder="Current…">
+              </label>
+              <label class="field">
+                <span>Environment <small>(optional)</small></span>
+                <input id="sqa-target-environment" name="targetEnvironment" maxlength="100" autocomplete="off" placeholder="Preview…">
+              </label>
+            </div>
+            <label class="field">
+              <span>Scope notes <small>(optional)</small></span>
+              <textarea id="sqa-scope-notes" name="scopeNotes" rows="3" maxlength="4000" placeholder="In-scope workflows, exclusions, assumptions, and evidence locations…"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="qa-device-fieldset sqa-device-fieldset">
+            <legend>Browser and device</legend>
+            <div class="field-row">
+              <label class="field">
+                <span>Device</span>
+                <select id="sqa-device-select"></select>
+              </label>
+              <label class="check qa-landscape">
+                <input id="sqa-device-landscape" type="checkbox">
+                <span>Landscape orientation</span>
+              </label>
+            </div>
+            <label class="field">
+              <span>Apple environment <small>(overrides the device when selected)</small></span>
+              <select id="sqa-environment-select"><option value="">Use the selected browser profile</option></select>
+            </label>
+          </fieldset>
+
+          <aside class="sqa-scope-guidance" id="sqa-scope-guidance" role="note">
+            <strong>Evidence boundary</strong>
+            <p>Some standards require documents, approvals, security reports, or independent review that a browser test cannot provide. Qase labels those requirements <em>Evidence incomplete</em> instead of reporting a false failure.</p>
+          </aside>
         </div>
-        <label class="field">
-          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
-          <select id="sqa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
-        </label>
-        <small>Emulates a real mobile or tablet browser (User-Agent, viewport, touch) for the assessment.</small>
-      </fieldset>
+      </details>
 
       <div class="test-result" id="sqa-form-error" role="alert" aria-live="assertive"></div>
     </div>
 
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="sqa-cancel">Cancel</button>
-      <button class="btn btn-primary" type="submit" id="sqa-submit" disabled>Start assessment</button>
+      <button class="btn btn-primary" type="submit" id="sqa-submit" disabled>Start quality review</button>
     </footer>
   </form>
 </dialog>

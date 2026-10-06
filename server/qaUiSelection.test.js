@@ -17,7 +17,7 @@ test('the QA launcher exposes a test-selection fieldset with bulk controls', () 
 	assert.match(html, /id="qa-submit"[^>]*>Start testing<\/button>/);
 	// Founder Mode and SQA (compliance) remain separate, untouched launchers.
 	assert.match(html, /id="new-founder"[^>]+aria-label="Start Founder Mode review"/);
-	assert.match(html, /id="new-sqa"[^>]+aria-label="Start SQA assessment"/);
+	assert.match(html, /id="new-sqa"[^>]+aria-label="Start quality review"/);
 });
 
 test('QA frontend defaults to all tests selected and reuses Studio components', () => {
