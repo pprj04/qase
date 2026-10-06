@@ -173,6 +173,7 @@ try {
 	assert.equal(await desktop.locator('#studio-context').isVisible(), true);
 	assert.equal(await desktop.locator('#studio-project-name').textContent(), 'Checkout redesign');
 	assert.equal(await desktop.locator('#studio-project-target').textContent(), 'preview.example.test');
+	assert.equal(await desktop.locator('#qa-target-url').inputValue(), 'https://preview.example.test/');
 	const [contextWidth, toolWidth] = await desktop.locator('#studio-context, .studio-tool-workspace')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(toolWidth > contextWidth * 3, 'Qase receives most of the Studio workspace');

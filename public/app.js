@@ -4420,6 +4420,27 @@ function demoSiteUrl() {
 	return `${window.location.origin}/demo`;
 }
 
+function studioProjectContext() {
+	const context = window.qaseStudioContext;
+	if (context?.mode !== 'mock-studio') return undefined;
+	try {
+		const target = new URL(context.targetUrl);
+		if (!['http:', 'https:'].includes(target.protocol)) return undefined;
+		return {
+			project: String(context.project ?? '').trim().slice(0, 120),
+			targetUrl: target.href
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+function applyStudioTarget(input) {
+	const context = studioProjectContext();
+	if (input && context) input.value = context.targetUrl;
+	return context;
+}
+
 function openQaStartWithDemo() {
 	if (!qaUi.dialog) return;
 	openQaStart();
@@ -4497,6 +4518,7 @@ function openQaStart() {
 	if (!qaUi.dialog) return;
 	setQaFormError();
 	qaUi.form.reset();
+	applyStudioTarget(qaUi.targetUrl);
 	populateDeviceSelect(qaUi.deviceSelect, pendingDeviceId());
 	qaUi.environmentSelect && populateEnvironmentSelect(qaUi.environmentSelect);
 	if (qaUi.deviceLandscape) qaUi.deviceLandscape.checked = pendingLandscape();
@@ -4801,6 +4823,7 @@ function syncSqaSubmitState() {
 async function openSqaStart() {
 	setSqaFormError();
 	sqaUi.form.reset();
+	applyStudioTarget(sqaUi.targetUrl);
 	if (sqaUi.customize) sqaUi.customize.open = false;
 	populateDeviceSelect(sqaUi.deviceSelect, pendingDeviceId());
 	sqaUi.environmentSelect && populateEnvironmentSelect(sqaUi.environmentSelect);
@@ -4961,6 +4984,8 @@ function syncFounderSubmitState() {
 async function openFounderStart() {
 	setFounderFormError();
 	founderUi.form.reset();
+	const studioContext = applyStudioTarget(founderUi.targetUrl);
+	if (studioContext && founderUi.targetName) founderUi.targetName.value = studioContext.project;
 	populateDeviceSelect(founderUi.deviceSelect, pendingDeviceId());
 	founderUi.environmentSelect && populateEnvironmentSelect(founderUi.environmentSelect);
 	if (founderUi.deviceLandscape) founderUi.deviceLandscape.checked = pendingLandscape();

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const script = readFileSync(new URL('../public/studioMode.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../public/studio-embed.css', import.meta.url), 'utf8');
 
@@ -39,4 +40,13 @@ test('context collapse is a labelled keyboard button and mobile keeps the Qase w
 	assert.match(script, /toggle\.setAttribute\('aria-expanded'/);
 	assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.studio-tool-workspace[\s\S]*?min-height: 100dvh/);
 	assert.doesNotMatch(styles, /transition:\s*all/);
+});
+
+test('embedded project target is reused by every launcher without changing standalone defaults', () => {
+	assert.match(app, /function studioProjectContext\(\)/);
+	assert.match(app, /if \(context\?\.mode !== 'mock-studio'\) return undefined/);
+	assert.match(app, /applyStudioTarget\(qaUi\.targetUrl\)/);
+	assert.match(app, /applyStudioTarget\(sqaUi\.targetUrl\)/);
+	assert.match(app, /applyStudioTarget\(founderUi\.targetUrl\)/);
+	assert.match(app, /founderUi\.targetName\.value = studioContext\.project/);
 });
