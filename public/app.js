@@ -173,6 +173,8 @@ const state = {
 	stopRequests: new Set(),
 	openFindings: new Set(),
 	openFixInstructions: new Set(),
+	/** Run id -> selected and previously seen finding ids. */
+	findingSelections: new Map(),
 	bugsViewOpen: false,
 	/** Message id -> the nodes streamed text is appended to. */
 	bubbles: new Map(),
@@ -189,6 +191,8 @@ const state = {
 	runTimer: { interval: undefined, startedAt: undefined, endedAt: undefined },
 	/** Per-session expand preference after the post-run auto-collapse. */
 	stageExpanded: new Set(),
+	/** Run whose completed QA results were automatically revealed. */
+	shownQaResults: undefined,
 	/** True once the welcome checklist was replaced by real content. */
 	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
@@ -772,6 +776,7 @@ function applyStageDevice(session) {
 
 async function selectSession(id) {
 	state.shownFounderReport = undefined;
+	state.shownQaResults = undefined;
 	state.sessionId = id;
 	state.bubbles.clear();
 	// Feedback submitted-state is per run: drop any cached record when the
@@ -817,6 +822,7 @@ function applySessionSnapshot(session) {
 	renderSqa();
 	renderFounder();
 	showCompletedFounderReport();
+	showCompletedQaResults();
 	renderStageCollapse();
 	updateRunTimer();
 	if (_runEnvHook) _runEnvHook(session);
@@ -1030,6 +1036,7 @@ function renderCurrentActivity() {
 
 function setStatus(status) {
 	if (state.session) state.session.status = status;
+	document.body.dataset.runStatus = status;
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	el.statusChip.dataset.status = status;
 	el.statusChip.textContent = stopping ? 'stopping…' : status === 'awaiting_input'
@@ -1156,10 +1163,35 @@ function renderStageCollapse() {
 		&& !state.stageExpanded.has(state.sessionId);
 	el.viewer.classList.toggle('stage-collapsed', collapsed);
 	el.stageToggle.hidden = !stageHasContent();
-	el.stageToggle.textContent = collapsed ? 'Expand' : 'Collapse';
+	const toggleLabel = collapsed ? 'Show live preview' : 'Minimize live preview';
+	el.stageToggle.textContent = collapsed ? '⤢' : '⤡';
+	el.stageToggle.title = toggleLabel;
+	el.stageToggle.setAttribute('aria-label', toggleLabel);
 	el.stageToggle.setAttribute('aria-expanded', String(!collapsed));
 	el.stageNote.hidden = !collapsed;
+	if (collapsed) {
+		const count = state.session?.findings?.length ?? 0;
+		const result = count === 1 ? '1 finding' : `${count} findings`;
+		el.stageNote.textContent = state.session?.status === 'done'
+			? `Run complete · ${result} · Open preview`
+			: 'Run ended · Open saved preview';
+		el.stage.setAttribute('role', 'button');
+		el.stage.setAttribute('tabindex', '0');
+		el.stage.setAttribute('aria-label', 'Show saved live preview');
+	} else {
+		el.stage.removeAttribute('role');
+		el.stage.removeAttribute('tabindex');
+		el.stage.removeAttribute('aria-label');
+	}
 	fitStageFrame();
+}
+
+function showCompletedQaResults() {
+	const session = state.session;
+	if (!session || session.mode === 'sqa' || session.mode === 'founder' || session.status !== 'done') return;
+	if (state.shownQaResults === session.id) return;
+	state.shownQaResults = session.id;
+	activateDetailTab((session.findings?.length ?? 0) > 0 ? $('tab-findings') : el.reportTab);
 }
 
 function syncStageCollapse(status) {
@@ -2357,18 +2389,103 @@ function renderFindings() {
 	const sorted = [...findings].sort(
 		(a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
 	);
+	const selection = findingSelectionFor(sorted);
+	const selectionBar = document.createElement('div');
+	selectionBar.className = 'findings-selection';
+
+	const selectAll = document.createElement('label');
+	selectAll.className = 'check findings-selection-all';
+	const selectAllBox = document.createElement('input');
+	selectAllBox.type = 'checkbox';
+	const selectAllLabel = document.createElement('span');
+	selectAllLabel.textContent = 'Select all';
+	selectAll.append(selectAllBox, selectAllLabel);
+
+	const count = document.createElement('span');
+	count.className = 'findings-selection-count';
+	count.setAttribute('role', 'status');
+	count.setAttribute('aria-live', 'polite');
+
+	const copySelected = document.createElement('button');
+	copySelected.className = 'btn btn-primary btn-sm';
+	copySelected.type = 'button';
+	copySelected.textContent = 'Copy selected fixes';
+	copySelected.onclick = async () => {
+		const selected = sorted.filter(finding => selection.selected.has(finding.id));
+		const markdown = buildAllFixPromptsMarkdown({ ...state.session, findings: selected });
+		if (!markdown) { toast('Select at least one finding to copy.', 'bad'); return; }
+		try { await navigator.clipboard.writeText(markdown); toast(`${selected.length} selected fix${selected.length === 1 ? '' : 'es'} copied.`, 'good'); }
+		catch { toast('Clipboard is blocked in this browser.', 'bad'); }
+	};
+	selectionBar.append(selectAll, count, copySelected);
+	el.findingsList.append(selectionBar);
+
+	const boxes = [];
+	const syncSelection = () => {
+		const selectedCount = boxes.filter(({ box }) => box.checked).length;
+		selectAllBox.checked = selectedCount === boxes.length;
+		selectAllBox.indeterminate = selectedCount > 0 && selectedCount < boxes.length;
+		count.textContent = `${selectedCount} of ${boxes.length} selected`;
+		copySelected.disabled = selectedCount === 0;
+		for (const { box, node } of boxes) node.classList.toggle('is-selected', box.checked);
+	};
 	for (const finding of sorted) {
-		el.findingsList.append(renderFinding(finding));
+		const node = renderFinding(finding, selection, syncSelection);
+		boxes.push({ box: node.querySelector('.finding-select-input'), node });
+		el.findingsList.append(node);
 	}
+	selectAllBox.onchange = () => {
+		for (const { box } of boxes) {
+			box.checked = selectAllBox.checked;
+			if (box.checked) selection.selected.add(box.value);
+			else selection.selected.delete(box.value);
+		}
+		syncSelection();
+	};
+	syncSelection();
 }
 
-function renderFinding(finding) {
+function findingSelectionFor(findings) {
+	let selection = state.findingSelections.get(state.sessionId);
+	if (!selection) {
+		selection = { selected: new Set(), known: new Set() };
+		state.findingSelections.set(state.sessionId, selection);
+	}
+	const current = new Set(findings.map(finding => finding.id));
+	for (const finding of findings) {
+		if (!selection.known.has(finding.id)) selection.selected.add(finding.id);
+		selection.known.add(finding.id);
+	}
+	for (const id of selection.known) {
+		if (current.has(id)) continue;
+		selection.known.delete(id);
+		selection.selected.delete(id);
+	}
+	return selection;
+}
+
+function renderFinding(finding, selection, syncSelection) {
 	const findingKey = `${state.sessionId}:${finding.id}`;
 	const node = document.createElement('article');
 	node.className = 'finding';
 	node.classList.toggle('is-open', state.openFindings.has(findingKey));
 	node.dataset.sev = finding.severity;
 	node.setAttribute('role', 'listitem');
+
+	const selector = document.createElement('label');
+	selector.className = 'finding-select';
+	const selectBox = document.createElement('input');
+	selectBox.className = 'finding-select-input';
+	selectBox.type = 'checkbox';
+	selectBox.value = finding.id;
+	selectBox.checked = selection.selected.has(finding.id);
+	selectBox.setAttribute('aria-label', `Select finding: ${finding.title}`);
+	selectBox.onchange = () => {
+		if (selectBox.checked) selection.selected.add(finding.id);
+		else selection.selected.delete(finding.id);
+		syncSelection();
+	};
+	selector.append(selectBox);
 
 	const head = document.createElement('button');
 	head.className = 'finding-head';
@@ -2483,7 +2600,7 @@ function renderFinding(finding) {
 	actions.append(copy, copyPrompt);
 	body.append(actions);
 
-	node.append(head, body);
+	node.append(selector, head, body);
 	return node;
 }
 
@@ -3967,6 +4084,7 @@ function handleEvent(event) {
 			void refreshPerformance();
 			if (FEEDBACK_TERMINAL_STATUSES.has(event.status)) {
 				renderReport();
+				showCompletedQaResults();
 				void syncFeedbackForSession(session);
 			}
 		}
@@ -5835,6 +5953,11 @@ el.stage.addEventListener('click', event => {
 		event.preventDefault();
 		toggleStageCollapse();
 	}
+});
+el.stage.addEventListener('keydown', event => {
+	if (!el.viewer.classList.contains('stage-collapsed') || (event.key !== 'Enter' && event.key !== ' ')) return;
+	event.preventDefault();
+	toggleStageCollapse();
 });
 
 $('empty-start')?.addEventListener('click', () => { void startRun(); });

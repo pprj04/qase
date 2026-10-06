@@ -33,6 +33,12 @@ Added a labelled Theme selector in the sidebar and sign-in header with Light, Da
 
 Dashboard qualification passes 15 checks, including manual themes against opposite device preferences, reload persistence, browser chrome color, dialog surfaces, and live System updates. Authentication qualification covers the pre-login selector and mobile visibility. UI/module tests remain passing; full verification has the same four Windows/network failures recorded above.
 
+### Follow-up: results-first completed state — 6 October 2026
+
+Completed QA runs now give the findings and report workspace substantially more width while retaining the conversation as supporting context. Runs with findings open the Findings tab automatically; clean runs open the Report tab. The live capture becomes a saved screenshot thumbnail with clear show/minimize controls instead of a text “Collapse” action. Both the thumbnail and icon control have keyboard and screen-reader behavior. Findings are selected by default, support individual or Select all changes, show an exact selected count, and can copy only the chosen fix instructions.
+
+Dashboard qualification covers the results hierarchy, automatic tab choice, accessible preview restoration, thumbnail visibility, and the 1101 px desktop breakpoint without horizontal overflow. Light and dark rendered screenshots were reviewed. Authentication qualification and the focused 23-test UI/module suite remain passing.
+
 ## What the discussion means for design
 
 | Discussion reference | Design requirement | Current position |

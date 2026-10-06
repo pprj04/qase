@@ -305,7 +305,8 @@
         <span class="url" id="browser-url">about:blank</span>
       </div>
       <span class="subtle" id="browser-title"></span>
-      <button id="stage-toggle" class="btn btn-sm" hidden aria-expanded="true" title="Expand or collapse the live browser view">Collapse</button>
+      <button id="stage-toggle" class="btn btn-sm preview-toggle" type="button" hidden
+              aria-expanded="true" aria-label="Minimize live preview" title="Minimize live preview">⤡</button>
     </header>
 
     <div class="stage" id="stage">
@@ -335,7 +336,7 @@
         <span>No browser yet</span>
         <small>The live view appears when the agent opens the site</small>
       </div>
-      <div class="stage-note" id="stage-note" hidden>Run complete — live view collapsed</div>
+      <div class="stage-note" id="stage-note" hidden>Run complete · Preview minimized</div>
     </div>
 
     <nav class="tabs" id="tabs" role="tablist" aria-label="Run details">
