@@ -8,10 +8,12 @@
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
 <script src="theme.js"></script>
+<script src="studioMode.js"></script>
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="bugsView.css">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="stylesheet" href="studio-workspace.css">
+<link rel="stylesheet" href="studio-embed.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body class="cli-theme studio-workspace">
@@ -62,6 +64,48 @@
 </section>
 
 <a class="skip-link" href="#composer-input" inert aria-hidden="true">Skip to agent input</a>
+
+<div class="studio-demo-shell" id="studio-demo-shell">
+  <aside class="studio-host-rail" aria-label="Drytis navigation">
+    <div class="studio-host-mark" aria-label="Drytis">D</div>
+    <nav class="studio-host-nav" aria-label="Studio tools">
+      <span class="studio-host-item" aria-label="Home"><span aria-hidden="true">⌂</span></span>
+      <span class="studio-host-item" aria-label="Projects"><span aria-hidden="true">▱</span></span>
+      <span class="studio-host-item is-active" aria-current="page" aria-label="Qase"><span aria-hidden="true">Q</span></span>
+      <span class="studio-host-item" aria-label="Files"><span aria-hidden="true">≡</span></span>
+    </nav>
+    <span class="studio-host-avatar" aria-label="Demo workspace">PP</span>
+  </aside>
+
+  <aside class="studio-context" id="studio-context" aria-labelledby="studio-context-title">
+    <header class="studio-context-head">
+      <span class="studio-context-mark" aria-hidden="true">✦</span>
+      <div>
+        <strong id="studio-context-title">Project context</strong>
+        <span>AI workspace</span>
+      </div>
+    </header>
+    <section class="studio-project-card" aria-label="Current Studio project">
+      <span class="studio-context-label">Current project</span>
+      <strong id="studio-project-name">Drytis Studio</strong>
+      <a id="studio-project-target" href="https://studio.drytis.ai/" target="_blank" rel="noopener noreferrer">studio.drytis.ai</a>
+    </section>
+    <div class="studio-context-thread" aria-label="Project conversation">
+      <p class="studio-context-user">Check this project before the next release.</p>
+      <p class="studio-context-agent">Qase has the current preview and project context. Recommended coverage is ready.</p>
+    </div>
+    <p class="studio-context-note">Context stays available while Qase uses the center workspace.</p>
+  </aside>
+
+  <section class="studio-tool-workspace" aria-label="Qase in Drytis Studio">
+    <header class="studio-tool-header">
+      <div class="studio-tool-identity">
+        <span class="studio-tool-glyph" aria-hidden="true">Q</span>
+        <span><strong>Qase</strong><small>Quality workspace</small></span>
+      </div>
+      <span class="studio-demo-badge">Studio demo</span>
+      <button class="studio-context-toggle" id="studio-context-toggle" type="button" aria-controls="studio-context" aria-expanded="true">Hide context</button>
+    </header>
 
 <div class="app" inert aria-hidden="true">
 
@@ -465,6 +509,9 @@
     <small>New findings appear here as the QA agent files them</small>
   </div>
 </section>
+
+  </section>
+</div>
 
 <!-- ── Settings ─────────────────────────────────────────────────── -->
 <!-- ── Environments (Apple compatibility matrix) ────────────────── -->

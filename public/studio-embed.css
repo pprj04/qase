@@ -1,0 +1,403 @@
+/* Optional Drytis Studio presentation shell. Standalone layout remains the default. */
+
+.studio-demo-shell,
+.studio-tool-workspace {
+	display: contents;
+}
+
+.studio-host-rail,
+.studio-context,
+.studio-tool-header {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] {
+	--studio-host-canvas: #f5f6f8;
+	--studio-host-surface: #f8f9fb;
+	--studio-host-workspace: #fff;
+	--studio-host-text: #171717;
+	--studio-host-muted: #60646c;
+	--studio-host-border: #e3e5e8;
+	--studio-host-action: #315ee8;
+	color-scheme: light;
+}
+
+html[data-theme="dark"][data-qase-layout="studio-mock"] {
+	--studio-host-canvas: #0d0f12;
+	--studio-host-surface: #1b1f25;
+	--studio-host-workspace: #15181d;
+	--studio-host-text: #f5f5f5;
+	--studio-host-muted: #a8adb7;
+	--studio-host-border: #2b3038;
+	--studio-host-action: #7c9cff;
+	color-scheme: dark;
+}
+
+html[data-qase-layout="studio-mock"] body {
+	min-width: 0;
+	overflow: hidden;
+	background: var(--studio-host-canvas);
+	color: var(--studio-host-text);
+}
+
+html[data-qase-layout="studio-mock"] .studio-demo-shell {
+	display: grid;
+	grid-template-columns: 64px minmax(196px, 232px) minmax(0, 1fr);
+	width: 100%;
+	height: 100dvh;
+	min-width: 0;
+	background: var(--studio-host-canvas);
+}
+
+html[data-qase-layout="studio-mock"] .studio-host-rail {
+	display: flex;
+	min-height: 0;
+	flex-direction: column;
+	align-items: center;
+	gap: 18px;
+	padding: 14px 10px;
+	border-right: 1px solid var(--studio-host-border);
+	background: var(--studio-host-workspace);
+}
+
+.studio-host-mark,
+.studio-host-avatar,
+.studio-tool-glyph {
+	display: grid;
+	place-items: center;
+	font-weight: 700;
+}
+
+.studio-host-mark {
+	width: 34px;
+	height: 34px;
+	border-radius: 9px;
+	background: var(--studio-host-text);
+	color: var(--studio-host-workspace);
+	font-size: 16px;
+}
+
+.studio-host-nav {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.studio-host-item {
+	display: grid;
+	width: 38px;
+	height: 38px;
+	place-items: center;
+	border: 1px solid transparent;
+	border-radius: 8px;
+	color: var(--studio-host-muted);
+	font: 600 15px/1 Geist, sans-serif;
+}
+
+.studio-host-item.is-active {
+	border-color: color-mix(in srgb, var(--studio-host-action) 28%, transparent);
+	background: color-mix(in srgb, var(--studio-host-action) 10%, transparent);
+	color: var(--studio-host-action);
+}
+
+.studio-host-avatar {
+	width: 32px;
+	height: 32px;
+	border: 1px solid var(--studio-host-border);
+	border-radius: 50%;
+	background: var(--studio-host-surface);
+	color: var(--studio-host-muted);
+	font-size: 10px;
+}
+
+html[data-qase-layout="studio-mock"] .studio-context {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	flex-direction: column;
+	gap: 16px;
+	padding: 16px 14px;
+	overflow-y: auto;
+	border-right: 1px solid var(--studio-host-border);
+	background: var(--studio-host-surface);
+	color: var(--studio-host-text);
+}
+
+.studio-context-head,
+.studio-tool-identity {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.studio-context-head > div,
+.studio-tool-identity > span:last-child {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+
+.studio-context-head strong,
+.studio-tool-identity strong {
+	font-size: 13px;
+	line-height: 1.2;
+}
+
+.studio-context-head span,
+.studio-tool-identity small,
+.studio-context-note {
+	color: var(--studio-host-muted);
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.studio-context-mark {
+	color: var(--studio-host-action);
+}
+
+.studio-project-card {
+	display: grid;
+	gap: 6px;
+	padding: 12px;
+	border: 1px solid var(--studio-host-border);
+	border-radius: 9px;
+	background: var(--studio-host-workspace);
+}
+
+.studio-context-label {
+	color: var(--studio-host-muted);
+	font-size: 11px;
+}
+
+.studio-project-card strong {
+	min-width: 0;
+	overflow: hidden;
+	font-size: 13px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.studio-project-card a {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--studio-host-action);
+	font-size: 12px;
+	text-decoration: none;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.studio-project-card a:hover {
+	text-decoration: underline;
+}
+
+.studio-project-card a:focus-visible,
+.studio-context-toggle:focus-visible {
+	outline: 2px solid var(--studio-host-action);
+	outline-offset: 2px;
+}
+
+.studio-context-thread {
+	display: grid;
+	gap: 10px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.studio-context-thread p {
+	margin: 0;
+	padding: 10px 11px;
+	border-radius: 9px;
+	overflow-wrap: anywhere;
+}
+
+.studio-context-user {
+	margin-left: 18px !important;
+	background: color-mix(in srgb, var(--studio-host-action) 10%, transparent);
+}
+
+.studio-context-agent {
+	margin-right: 12px !important;
+	border: 1px solid var(--studio-host-border);
+	background: var(--studio-host-workspace);
+}
+
+.studio-context-note {
+	margin: auto 2px 0;
+}
+
+html[data-qase-layout="studio-mock"] .studio-tool-workspace {
+	display: grid;
+	grid-template-rows: 48px minmax(0, 1fr);
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+	background: var(--studio-host-workspace);
+}
+
+html[data-qase-layout="studio-mock"] .studio-tool-header {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 12px;
+	padding: 0 14px;
+	border-bottom: 1px solid var(--studio-host-border);
+	background: var(--studio-host-workspace);
+	color: var(--studio-host-text);
+}
+
+.studio-tool-glyph {
+	width: 28px;
+	height: 28px;
+	border-radius: 7px;
+	background: var(--studio-host-action);
+	color: #fff;
+	font-size: 13px;
+}
+
+.studio-demo-badge {
+	margin-left: auto;
+	padding: 4px 7px;
+	border: 1px solid var(--studio-host-border);
+	border-radius: 999px;
+	color: var(--studio-host-muted);
+	font-size: 11px;
+}
+
+.studio-context-toggle {
+	min-height: 32px;
+	padding: 5px 9px;
+	border: 1px solid var(--studio-host-border);
+	border-radius: 7px;
+	background: var(--studio-host-surface);
+	color: var(--studio-host-text);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	touch-action: manipulation;
+}
+
+.studio-context-toggle:hover {
+	border-color: color-mix(in srgb, var(--studio-host-action) 55%, var(--studio-host-border));
+}
+
+html[data-qase-layout="studio-mock"] .app,
+html[data-qase-layout="studio-mock"] .bugs-view {
+	grid-row: 2;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	margin: 0;
+}
+
+html[data-qase-layout="studio-mock"] .app {
+	grid-template-columns: minmax(184px, 0.55fr) minmax(280px, 0.82fr) minmax(420px, 1.4fr) 66px;
+	padding-top: 5px;
+}
+
+html[data-qase-layout="studio-mock"] .workspace-chrome {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .panel-foot #open-profile,
+html[data-qase-layout="studio-mock"] .panel-foot #sign-out {
+	display: none;
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
+	grid-template-columns: 64px 0 minmax(0, 1fr);
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context {
+	display: none;
+}
+
+@media (max-width: 1280px) {
+	html[data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 56px 190px minmax(0, 1fr);
+	}
+
+	html[data-qase-layout="studio-mock"] .app {
+		grid-template-columns: minmax(168px, 0.5fr) minmax(250px, 0.8fr) minmax(360px, 1.35fr) 62px;
+		gap: 4px;
+		padding: 5px;
+	}
+}
+
+@media (max-width: 1100px) {
+	html[data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 52px minmax(0, 1fr);
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-context {
+		display: none;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-tool-workspace {
+		grid-column: 2;
+		overflow-y: auto;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-context-toggle {
+		display: none;
+	}
+
+	html[data-qase-layout="studio-mock"] .app {
+		grid-template-columns: 184px minmax(0, 1fr);
+		height: auto;
+		min-height: calc(100dvh - 48px);
+		padding-top: 5px;
+	}
+}
+
+@media (max-width: 720px) {
+	html[data-qase-layout="studio-mock"] body {
+		overflow: auto;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-demo-shell {
+		display: block;
+		height: auto;
+		min-height: 100dvh;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-host-rail,
+	html[data-qase-layout="studio-mock"] .studio-context {
+		display: none;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-tool-workspace {
+		display: grid;
+		min-height: 100dvh;
+		grid-template-rows: 48px auto;
+		overflow: visible;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-tool-header {
+		position: sticky;
+		top: 0;
+		z-index: 50;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-demo-badge {
+		display: none;
+	}
+
+	html[data-qase-layout="studio-mock"] .app {
+		grid-template-columns: minmax(0, 1fr);
+		height: auto;
+		min-height: calc(100dvh - 48px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.studio-demo-shell *,
+	.studio-demo-shell *::before,
+	.studio-demo-shell *::after {
+		scroll-behavior: auto !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+	}
+}
