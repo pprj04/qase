@@ -211,6 +211,11 @@ export function createSession(title = 'New test run', options = {}) {
 		&& (!options.environmentSnapshot || typeof options.environmentSnapshot !== 'object' || Array.isArray(options.environmentSnapshot))) {
 		throw new TypeError('Run creation received an invalid environment snapshot.');
 	}
+	// #14633 (NI02 Phase 1): matrix-run linkage — set when this session was
+	// spawned by the matrix orchestrator so the run can be traced back.
+	if (options.matrixRunId !== undefined && typeof options.matrixRunId !== 'string') {
+		throw new TypeError('Run creation received an invalid matrix run id.');
+	}
 	if (options.testCaseId !== undefined && typeof options.testCaseId !== 'string') {
 		throw new TypeError('Run creation received an invalid test case id.');
 	}
@@ -268,6 +273,8 @@ export function createSession(title = 'New test run', options = {}) {
 		/** Apple compatibility environment this run executes in (frozen snapshot). */
 		environmentId: options.environmentId,
 		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
+		/** #14633 (NI02 Phase 1): matrix run that spawned this session, if any. */
+		matrixRunId: options.matrixRunId,
 		/** Test case this run executes (Phase 4; frozen snapshot). */
 		testCaseId: options.testCaseId,
 		testCaseSnapshot: options.testCaseSnapshot ? structuredClone(options.testCaseSnapshot) : undefined,
@@ -311,7 +318,12 @@ export function getSession(id, ownerUserId) {
 	return !ownerUserId || session?.ownerUserId === ownerUserId ? session : undefined;
 }
 
-export function listSessions({ limit = 100, ownerUserId } = {}) {
+export function listSessions({ limit = 100, ownerUserId, unbounded = false } = {}) {
+	// Unbounded mode for coverage aggregation (listAll) — every full record,
+	// no cap and no owner filter; the capped list() stays request-scoped.
+	if (unbounded) {
+		return [...sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+	}
 	const bounded = Number.isSafeInteger(limit) ? Math.min(100, Math.max(1, limit)) : 100;
 	return [...sessions.values()]
 		.filter(session => !ownerUserId || session.ownerUserId === ownerUserId)

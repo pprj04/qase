@@ -1,15 +1,31 @@
 import { hasUnresolvedPlaceholder, resolveSecrets } from './secrets.js';
+import nodeFs from 'node:fs';
+import nodePath from 'node:path';
+import nodeOs from 'node:os';
 import { createBrowserPolicy, classifyDestructiveAction } from './browserPolicy.js';
 import { contextOptionsFor, getDeviceProfile, DEFAULT_DEVICE_ID } from './deviceProfiles.js';
 import { runMobileAudit } from './mobileAudit.js';
 import { inspectFormValidation } from './browserFormAudit.js';
-import { resolveEngine, ENGINE_IDS } from './browserEngines.js';
-import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, probeMicrophone } from './browserMedia.js';
+import { resolveEngine, ensureXvfb, ENGINE_IDS } from './browserEngines.js';
+
+/** RT4: the Xvfb display id ensureXvfb manages (":77"). */
+function xvfbDisplay() {
+	return ':77';
+}
+
+/** RT4: extra Chromium launch flags — synthetic media + real virtual-desktop capture. */
+const RT4_MEDIA_LAUNCH_ARGS = Object.freeze([
+	'--enable-usermedia-screen-capturing',
+	'--allow-http-screen-capture',
+	'--auto-select-desktop-capture-source=Entire screen'
+]);
+import { SYNTHETIC_MEDIA_ARGS, installMediaObserver, inspectMedia, setMicrophonePermission, setMediaPermission, probeMicrophone, probeCamera, probeScreenShare, inspectCallControls, mediaProbeVerdict, syntheticMediaCapability, exerciseMeetingControls, verifyPermissionRecovery } from './browserMedia.js';
 import {
 	SECURITY_CHECK_IDS, XSS_CANARY,
 	checkResponseHeaders, checkCookies, checkXssReflection, checkSqlErrorSignature, checkMixedContent
 } from './securityChecks.js';
 import { browserstackCredentials, connectBrowserstack, environmentEmulationOptions, resolveExecution } from './browserstackProvider.js';
+import { createInteractionApi } from './interactionApi.js';
 import {
 	userAgentFor,
 	resolveExecutionLevel,
@@ -143,7 +159,7 @@ const POINTER_ACTIONS = {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-export function attachBrowserBridge(session, service, runStore, options = {}) {
+export async function attachBrowserBridge(session, service, runStore, options = {}) {
 	const policy = options.policy ?? createBrowserPolicy({ getTargetUrl: () => session.targetUrl });
 	const deviceId = options.device ?? session.device ?? DEFAULT_DEVICE_ID;
 	const deviceLandscape = options.deviceLandscape ?? session.deviceLandscape === true;
@@ -152,13 +168,18 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	// An environment snapshot overrides the legacy device-profile emulation:
 	// BrowserStack envs execute remotely via CDP; every other env (or no env)
 	// runs local Chromium with the environment's emulation hints.
-	const execution = options.execution
-		?? resolveExecution(environment, options.browserstackCredentials ?? browserstackCredentials());
+	let execution = options.execution ?? null;
+	if (!execution) {
+		execution = await resolveExecution(environment, options.browserstackCredentials ?? browserstackCredentials());
+	}
 	// Phase 20: structured runtime profile + honest execution level + the
 	// emulation's UA (real mobile UA for the selected OS/browser — not desktop
 	// Chromium's). Only the SIMULATED path uses userAgentFor; a remote runtime
 	// records the page's genuine UA instead.
 	const runtimeProfile = platformRuntimeProfile(environment?.platform);
+	// R3 #14492: an execution plan may be explicitly BLOCKED (real-device
+	// request with no configured runtime). Surface it honestly — the bridge
+	// never launches a fallback browser for it.
 	const executionLevel = resolveExecutionLevel({ mode: execution.mode });
 	const emulatedUserAgent = execution.mode === 'emulated' && environment
 		? userAgentFor(environment.platform, environment.osVersion, environment.browserCode)
@@ -176,7 +197,14 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			levelLabel: executionLevel,
 			provider: execution.mode === 'environment' ? 'environment' : 'local',
 			runtimeProfile,
-			emulatedUserAgent
+			emulatedUserAgent,
+			// R3 #14492: the ACTUAL engine that will run the selected browser
+			// (chromium/firefox/webkit) — null for remote/environment runs.
+			executionEngine: execution.executionEngine ?? null,
+			// RT4 (#14756): the engine ACTUALLY launched (lazily recorded at
+			// launch; media capability gates read it — a branded-binary
+			// fallback to bundled Chromium keeps the capability honest).
+			launchedEngineId: null
 		},
 		frameTimer: undefined,
 		runtimeFacts: undefined,
@@ -189,7 +217,59 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		disposed: false
 	};
 	let syntheticMedia = false;
-	// Abort race for in-flight interactions: stop() must unwind a browser
+	// RT5 (#14757): session video evidence. The context records (Chromium
+	// only); collectSessionVideo harvests the finalized webm at close and
+	// hands it to saveVideoArtifact (wired by the session layer to the
+	// artifact store). Absent recording → no artifact, honestly noted.
+	let sessionVideoMeta = null;
+	let saveVideoArtifact = async (bytes, meta) => {
+		sessionVideoMeta = { ...meta, savedAt: new Date().toISOString() };
+	};
+	const collectSessionVideo = async () => {
+		if (bridge.execution?.videoRecording === 'UNSUPPORTED' || !bridge.execution?.videoRecording) return null;
+		try {
+			const dir = videoDir();
+			const context = service.context;
+			if (!context) return null;
+			// Closing the context finalizes every video file.
+			await context.close().catch(() => {});
+			const entries = await nodeFs.promises.readdir(dir).catch(() => []);
+			const videos = [];
+			for (const name of entries) {
+				if (!name.endsWith('.webm')) continue;
+				const full = nodePath.join(dir, name);
+				const bytes = await nodeFs.promises.readFile(full).catch(() => null);
+				if (bytes && bytes.length > 0) {
+					videos.push({ name, bytes });
+					await nodeFs.promises.rm(full, { force: true }).catch(() => {});
+				}
+			}
+			if (!videos.length) return null;
+			// Single-context session model: keep the largest (most complete)
+			// recording — Playwright writes one file per closed video page.
+			const latest = videos.sort((a, b) => b.bytes.length - a.bytes.length)[0];
+			await saveVideoArtifact(latest.bytes, {
+				fileName: `session-video-${session.id.slice(0, 8)}.webm`,
+				size: latest.bytes.length
+			});
+			bridge.execution = { ...bridge.execution, videoRecording: 'SAVED', videoArtifact: sessionVideoMeta };
+			return sessionVideoMeta;
+		} catch {
+			bridge.execution = { ...bridge.execution, videoRecording: 'FAILED' };
+			return null;
+		}
+	};
+	// Session layer override: app.js wires this to the artifact store.
+	bridge.setVideoSink = (sink) => { saveVideoArtifact = sink; };
+	bridge.getVideoRecordingState = () => bridge.execution?.videoRecording ?? null;
+	const videoDir = () => videoDirForSession(session.id);
+
+	// RT5 (#14757): per-session temp dir for Playwright video output.
+	function videoDirForSession(sessionId) {
+		const dir = nodePath.join(nodeOs.tmpdir(), `qase-video-${sessionId}`);
+		nodeFs.mkdirSync(dir, { recursive: true });
+		return dir;
+	}	// Abort race for in-flight interactions: stop() must unwind a browser
 	// action within the abort window instead of waiting out Playwright's
 	// default 30s action timeout.
 	let activeAbortSignal = null;
@@ -465,6 +545,13 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 			// A browser that died on its own takes its state with it.
 		}
 		stopFrames();
+		// RT5 (#14757): collect the recorded video when the context closes.
+		// Playwright finalizes the webm only after context/browser close —
+		// page.video().path() throws until then, so close first, then harvest
+		// every video file from the recording dir. Saved as a callback the
+		// session layer wires to the artifact store (kept honest: absent when
+		// recording was unsupported or the browser died mid-run).
+		await collectSessionVideo();
 		try {
 			await service.dispose();
 		} catch {
@@ -526,18 +613,47 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 	 * the selected device profile. Apply options on every relaunch so restoring
 	 * an idle mobile run cannot silently turn it into desktop emulation.
 	 */
-	if (typeof service.ensureContext === 'function') {
-		let creatingContext;
+		if (typeof service.ensureContext === 'function') {
+			let creatingContext;
+			const launchEnv = {}; // RT4: DISPLAY when a virtual screen is used
 		service.ensureContext = async () => {
 			if (service.context) return service.context;
 			if (creatingContext) return creatingContext;
 			creatingContext = (async () => {
 				const headless = process.env.CLEANSLATE_BROWSER_HEADLESS === undefined
 					? service.options?.headless ?? true : process.env.CLEANSLATE_BROWSER_HEADLESS !== 'false';
+				// RT4 (#14756): screen-share (getDisplayMedia) is unsupported in
+				// headless Chromium regardless of flags. When a virtual display is
+				// available (ensureXvfb), launch headful on it so the virtual
+				// desktop capture pipeline is REAL (still a virtual screen —
+				// labeled honestly, never claimed as physical).
+				if (headless && (await ensureXvfb())?.ready) {
+					launchEnv.DISPLAY = xvfbDisplay();
+				}
+				// R3 #14492: a blocked execution plan never launches a browser —
+				// the run fails honestly with the unavailable reason instead of
+				// silently emulating.
+				if (execution.mode === 'blocked') {
+					// #14632: the prefix must describe the actual block reason —
+					// a NOT SUPPORTED browser (DuckDuckGo) is not a device problem.
+					const prefix = execution.browserSupport?.status === 'not_supported'
+						? 'NOT SUPPORTED'
+						: 'REAL DEVICE UNAVAILABLE';
+					const error = new Error(`${prefix}: ${execution.reason ?? 'No runtime is configured for this environment.'}`);
+					error.code = 'RUNTIME_UNAVAILABLE';
+					throw error;
+				}
 				// Multi-engine: the session's engine decides the browser type.
+				// R3 #14492: with an environment selected, the ENGINE follows the
+				// selected BROWSER (Chrome/Edge/Opera/Brave/DDG → Chromium,
+				// Firefox → Gecko, Safari → WebKit) — the selected browser is the
+				// browser actually executing, never a Chromium relabeled.
 				// Chromium keeps synthetic-media args; secondary engines launch
 				// plainly (synthetic media is a Chromium-only capability).
-				const engineId = ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
+				const envEngine = execution.executionEngine;
+				const engineId = execution.mode === 'emulated' && envEngine
+					? envEngine
+					: ENGINE_IDS.includes(session.engine) ? session.engine : 'chromium';
 				const engine = await resolveEngine(engineId);
 				if (!engine.available) {
 					const error = new Error(`ENGINE_UNAVAILABLE: ${engine.reason}`);
@@ -579,18 +695,41 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 				}
 				const launch = { headless };
 				if (engine.id === 'chromium') {
-					launch.args = [...SYNTHETIC_MEDIA_ARGS];
-					// Full Chromium supports native media on Windows; the separate
-					// headless-shell build can expose getUserMedia but reject every call.
+					// RT4 (#14756): synthetic media args are supplemented with the
+					// auto-select capture source so getDisplayMedia presents the
+					// local virtual desktop without an unanswerable picker dialog.
+					launch.args = [...SYNTHETIC_MEDIA_ARGS, ...RT4_MEDIA_LAUNCH_ARGS];
+					if (launchEnv.DISPLAY) {
+						launch.headless = false;
+						launch.env = { ...launch.env, DISPLAY: launchEnv.DISPLAY, PATH: process.env.PATH, HOME: process.env.HOME };
+					}
+					// RT1 (#14680): REAL branded binary first. When the registry
+					// verified a genuine Chrome/Brave/Opera binary for this
+					// environment's browser, launch THAT — the device profile is
+					// emulated around it, but the browser itself is real. An
+					// explicit CLEANSLATE_BROWSER_EXECUTABLE override still wins,
+					// then the bundled Playwright Chromium.
 					const bundledExecutable = engine.type.executablePath();
-					const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim() || bundledExecutable;
+					const brandedExecutable = execution.brandedExecutablePath ?? null;
+					const executablePath = process.env.CLEANSLATE_BROWSER_EXECUTABLE?.trim()
+						|| brandedExecutable
+						|| bundledExecutable;
 					// Launch ourselves because the SDK exposes no argument hook.
 					// Native getUserMedia can only receive synthetic devices in this process.
 					try {
 						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath });
 					} catch (error) {
 						if (executablePath === bundledExecutable) throw error;
-						service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath: bundledExecutable });
+						// A branded binary that fails at launch falls back ONLY to
+						// the bundled engine when it was the branded pick, and the
+						// failure is recorded in runtime facts — the run never
+						// claims the branded browser it did not get.
+						if (brandedExecutable && executablePath === brandedExecutable) {
+							service.browser = await engine.type.launch({ ...launch, ...engine.launch, executablePath: bundledExecutable });
+							bridge.execution = { ...bridge.execution, brandedBinaryLaunchError: String(error?.message ?? error).split('\n')[0] };
+						} else {
+							throw error;
+						}
 					}
 				} else {
 					service.browser = await engine.type.launch({ ...launch, ...engine.launch });
@@ -612,7 +751,26 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 							height: Math.min(contextOptions.viewport.width, contextOptions.viewport.height)
 						};
 					}
-					service.context = await service.browser.newContext(contextOptions);
+					// RT5 (#14757): context-level video recording. Playwright only
+					// accepts recordVideo at context creation — the file lands in a
+					// temp dir and is collected at context close (suspend/dispose).
+					// Engines without recordVideo support throw at newContext; the
+					// try/catch below falls back to a video-less context — never a
+					// fabricated video.
+					if (!contextOptions.recordVideo && service.browser.browserType().name() === 'chromium') {
+						contextOptions.recordVideo = { dir: videoDir(), size: contextOptions.viewport ?? undefined };
+					}
+					try {
+						service.context = await service.browser.newContext(contextOptions);
+					} catch (videoError) {
+						// recordVideo unsupported → honest video-less context.
+						bridge.execution = { ...bridge.execution, videoRecording: 'UNSUPPORTED', videoUnsupportedReason: String(videoError?.message ?? videoError).split('\n')[0] };
+						delete contextOptions.recordVideo;
+						service.context = await service.browser.newContext(contextOptions);
+					}
+					if (contextOptions.recordVideo) {
+						bridge.execution = { ...(bridge.execution ?? {}), videoRecording: 'ACTIVE' };
+					}
 					// Permission scenario: allow → grant; deny/ask left to CDP or
 					// the natural prompt. Never silently coerced.
 					if (permissionScenario && service.context.grantPermissions) {
@@ -625,6 +783,7 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						}
 					}
 					syntheticMedia = engine.id === 'chromium';
+					bridge.execution.launchedEngineId = engine.id;
 					await installNetworkPolicy(service.context);
 					// Runtime facts: read back what the browser ACTUALLY got —
 					// the UA the page sees and the viewport in use — so the run
@@ -641,6 +800,23 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 						await probe.close().catch(() => {});
 					} catch {
 						bridge.runtimeFacts = null;
+					}
+					// RT1 (#14680): record which REAL binary executed. When a
+					// branded binary was launch-verified, name it and its
+					// detected version — the emulated UA alone does not prove
+					// the browser identity, and a launch fallback (bundled
+					// engine after a branded-binary failure) is recorded
+					// honestly rather than passed off as the brand.
+					if (bridge.runtimeFacts) {
+						const branded = execution.brandedExecutablePath ?? null;
+						bridge.runtimeFacts.brandedBinary = branded ? {
+							path: branded,
+							brand: environment?.browserCode ?? null,
+							detectedVersion: execution.browserSupport?.detectedVersion ?? null,
+							fallbackUsed: Boolean(bridge.execution?.brandedBinaryLaunchError)
+						} : null;
+						bridge.runtimeFacts.executionLevel = bridge.execution?.level ?? null;
+						bridge.runtimeFacts.provider = 'local';
 					}
 					return service.context;
 				} catch (error) {
@@ -672,13 +848,18 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		try {
 			const page = service.activePage ?? service.context?.pages?.()[0];
 			if (page) {
-				return await page.evaluate(() => ({
+				const facts = await page.evaluate(() => ({
 					userAgent: navigator.userAgent,
 					viewport: { width: window.innerWidth, height: window.innerHeight },
 					devicePixelRatio: window.devicePixelRatio,
 					maxTouchPoints: navigator.maxTouchPoints,
-					platform: navigator.platform
+					platform: navigator.platform,
+					orientation: matchMedia('(orientation: landscape)').matches ? 'landscape' : 'portrait'
 				}));
+				// RT3 (#14705): orientation changes made through the interaction
+				// API are reflected here (the live viewport IS the rotated one).
+				if (facts) bridge.runtimeFacts = { ...(bridge.runtimeFacts ?? {}), ...facts };
+				return facts;
 			}
 		} catch {
 			// Fall through to the cached context-creation facts.
@@ -686,24 +867,152 @@ export function attachBrowserBridge(session, service, runStore, options = {}) {
 		return bridge.runtimeFacts ?? null;
 	};
 
+	/*
+	 * RT3 (#14705): real device-interaction API. Lazy — the interaction api
+	 * needs the live context, which exists only after the first browser tool.
+	 * Every gesture goes through the driver's real input injection (see
+	 * interactionApi.js) and its result carries the inputMethod actually used.
+	 */
+	bridge.interact = async (action, input = {}) => {
+		await service.ensurePage();
+		const context = service.context;
+		const page = currentPage();
+		if (!context || !page) {
+			return { success: false, code: 'INTERACTION_UNAVAILABLE', action, error: 'No live browser context yet — open the target page first.' };
+		}
+		const { createInteractionApi: createApi } = { createInteractionApi };
+		bridge.interactionApi ??= createApi({
+			context,
+			page,
+			beforeAction: (verb) => {
+				publishCursor(verb, null, input);
+			}
+		});
+		const api = bridge.interactionApi;
+		if (action === 'capabilities') return { success: true, action, report: await api.reportCapabilities() };
+		const method = {
+			tap: input => api.tap(input.target),
+			double_tap: input => api.doubleTap(input.target),
+			long_press: input => api.longPress(input.target, { durationMs: input.durationMs }),
+			swipe: input => api.swipe(input),
+			drag_to: input => api.dragTo(input.from, input.to),
+			mouse_move: input => api.mouseMove(input.target),
+			click: input => api.click(input.target, { button: input.button }),
+			double_click: input => api.doubleClick(input.target),
+			right_click: input => api.rightClick(input.target),
+			type: input => api.type(input.text),
+			press_key: input => api.pressKey(input.key),
+			scroll: input => api.scroll(input),
+			upload: input => api.uploadFiles(input.target, input.files),
+			refresh: () => api.refresh(),
+			back: () => api.back(),
+			rotate: input => api.setOrientation(input.orientation)
+		}[action];
+		if (!method) {
+			return { success: false, code: 'INTERACTION_UNKNOWN_ACTION', action, error: 'Unknown interaction action.' };
+		}
+		let result;
+		try {
+			result = await raceAbort(() => method(input));
+		} catch (error) {
+			const honest = {
+				GestureTimeout: 'The gesture did not complete in the interaction budget. Retry once with a fresh snapshot; then report the affected check as not tested with a reason.',
+				GestureTargetNotFound: error.message,
+				GestureInputError: error.message
+			}[error?.name];
+			if (honest) return { success: false, code: 'INTERACTION_FAILED', action, error: honest };
+			throw error;
+		}
+		if (action === 'rotate' && result?.status !== 'SKIPPED') {
+			// Record the rotation in runtime facts immediately.
+			await runStore.commit(session, 'browser_interaction', {
+				browserInteraction: { action: 'rotate', requested: input.orientation, applied: result.applied, viewport: result.viewport }
+			}).catch(() => {});
+		} else if (result?.success) {
+			await runStore.commit(session, 'browser_interaction', {
+				browserInteraction: { action, inputMethod: result.inputMethod, point: result.point ?? null }
+			}).catch(() => {});
+		}
+		return result;
+	};
+
 	bridge.media = async (input = {}) => {
-		if (!['inspect', 'set_permission', 'probe'].includes(input.action)) return { success: false, error: 'Choose inspect, set_permission or probe.' };
+		const actions = ['inspect', 'set_permission', 'probe', 'probe_camera', 'probe_screen_share', 'call_controls', 'meeting_controls', 'meeting_recovery'];
+		if (!actions.includes(input.action)) return { success: false, error: `Choose one of: ${actions.join(', ')}.` };
 		if (input.action === 'set_permission' && !['granted', 'denied', 'prompt'].includes(input.permission)) return { success: false, error: 'Choose granted, denied or prompt permission.' };
+		if (input.action === 'set_permission' && input.target && !['microphone', 'camera', 'screen_capture'].includes(input.target)) return { success: false, error: 'target must be microphone, camera or screen_capture.' };
 		await service.ensurePage();
 		const page = currentPage();
 		const decision = await policy.evaluateNavigation(page.url());
 		if (!decision.allowed) return policy.asBlockedResult(decision);
-		if (!syntheticMedia) return { success: false, code: 'BROWSER_SYNTHETIC_MEDIA_UNAVAILABLE', error: 'This browser was not launched with synthetic devices. Restart the run browser before media testing.' };
 		try {
-			if (input.action === 'set_permission') await setMicrophonePermission(service.context, page, input.permission);
+			// RT4 (#14756): capability is per-ENGINE truth, not a launch flag.
+			// Non-Chromium engines report UNAVAILABLE with a verbatim reason —
+			// never a simulated pass, never a silent skip.
+			const engineId = bridge.execution?.launchedEngineId ?? bridge.execution?.executionEngine ?? 'chromium';
+			const capability = syntheticMediaCapability(engineId);
+			const mediaActions = ['probe', 'probe_camera', 'probe_screen_share', 'set_permission'];
+			if (!capability.available && mediaActions.includes(input.action)) {
+				const result = {
+					success: true,
+					action: input.action,
+					synthetic: false,
+					origin: new URL(page.url()).origin,
+					capability: 'UNAVAILABLE',
+					reason: capability.reason,
+					limitations: 'Synthetic browser capture is Chromium-only in this runtime; this engine cannot execute the media workflow. Recorded as a coverage gap — never as a pass.'
+				};
+				await runStore.commit(session, 'browser_media', { browserMedia: result });
+				return result;
+			}
+			if (input.action === 'set_permission') {
+				await setMediaPermission(service.context, page, input.permission, input.target ?? 'microphone');
+			}
 			const before = await inspectMedia(page);
 			const result = { success: true, synthetic: true, action: input.action, origin: new URL(page.url()).origin, permission: before.permission };
 			if (input.action === 'probe') {
 				if (before.permission === 'prompt') return { ...result, success: false, code: 'BROWSER_MICROPHONE_PERMISSION_REQUIRED', error: 'Set microphone permission to granted or denied before probing; browser permission prompts are not DOM dialogs.' };
 				result.probe = await probeMicrophone(page, input.durationMs);
+				result.verdict = mediaProbeVerdict(result.probe, capability);
+			}
+			if (input.action === 'probe_camera') {
+				if (before.cameraPermission === 'prompt') return { ...result, success: false, code: 'BROWSER_CAMERA_PERMISSION_REQUIRED', error: 'Set camera permission (target camera) to granted or denied before probing; browser permission prompts are not DOM dialogs.' };
+				result.probe = await probeCamera(page, { durationMs: input.durationMs });
+				result.verdict = mediaProbeVerdict(result.probe, capability);
+				result.limitations = 'Synthetic Chromium camera device only — a real frame pipeline is verified, but this is not physical camera hardware.';
+			}
+			if (input.action === 'probe_screen_share') {
+				result.probe = await probeScreenShare(page, { durationMs: input.durationMs });
+				result.verdict = mediaProbeVerdict(result.probe, capability);
+				result.limitations = 'Virtual desktop capture (Chromium auto-select over the local Xvfb screen) — a real frame pipeline is verified, but this is never a physical monitor capture.';
+			}
+			if (input.action === 'call_controls') {
+				result.callControls = await inspectCallControls(page);
+				result.limitations = 'Reads the application-owned stream state on the page — mute/unmute/camera toggles must be exercised through the app UI to change it.';
+			}
+			if (input.action === 'meeting_controls') {
+				result.meeting = await exerciseMeetingControls(page, { joinSelector: input.joinSelector, controls: input.controls });
+				result.limitations = result.meeting.limitations;
+			}
+			if (input.action === 'meeting_recovery') {
+				// Real permission transition: the same CDP path the production
+				// set_permission action uses, driven through deny → request →
+				// grant → retry against the page's own media request control.
+				const permissionSetter = async (setting) => {
+					for (const target of (Array.isArray(input.targets) && input.targets.length ? input.targets : ['camera', 'microphone'])) {
+						await setMediaPermission(service.context, page, setting, target);
+					}
+				};
+				result.recovery = await verifyPermissionRecovery(page, permissionSetter, {
+					requestSelector: input.requestSelector,
+					targets: Array.isArray(input.targets) && input.targets.length ? input.targets : ['camera', 'microphone']
+				});
+				result.limitations = 'Denial and re-grant were applied through the browser permission layer (CDP); the page\'s own controls decided whether the call actually recovers — NOT_RECOVERED is a genuine page defect.';
 			}
 			result.observed = await inspectMedia(page);
-			result.limitations = 'Synthetic browser capture only. A successful probe does not prove the application used its microphone, transmitted audio, or reached another participant. Inspect application requests and UI mute/stop behavior separately.';
+			if (!result.limitations) {
+				result.limitations = 'Synthetic browser capture only. A successful probe does not prove the application used its microphone, transmitted audio, or reached another participant. Inspect application requests and UI mute/stop behavior separately.';
+			}
 			await runStore.commit(session, 'browser_media', { browserMedia: result });
 			return result;
 		} catch (error) {

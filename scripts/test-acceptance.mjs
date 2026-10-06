@@ -68,37 +68,45 @@ try {
 	});
 	record('T6', 'long activity scrolls only its pane', !t6.pageGrew && t6.paneScrolls, JSON.stringify(t6));
 
-	// T7/T8 — one picker entry point: [Change Device] on the CURRENT TEST
-	// DEVICE card (#14102: quick actions + inline Choose Device removed).
+	// T7/T8 — one picker entry point: [Change Device] on the LIVE DEVICE VIEW
+	// header (#14102/#14132: quick actions + inline Choose Device removed;
+	// #14474 M7: the legacy card list is gone — the matrix sidebar + browser
+	// columns are the device browser).
 	const openPicker = async () => {
 		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
-		// #14166: catalog is ~16k envs — wait for actual cards, not a fixed
-		// sleep (fixed waits race the picker's render on the bigger payload).
-		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 });
+		// Catalog is ~38k envs — wait for the sidebar to actually render
+		// devices (the loading state has no rows).
+		await page.waitForSelector('#mx-sidebar .mx-device', { timeout: 20000 });
 		return Boolean(await page.locator('#device-picker[open]').count());
 	};
 	if (await openPicker()) {
-		// T7 — device select auto-resolves environment (card shows OS/browser).
-		const specific = page.locator('#dp-cards .dp-card', { hasText: 'iPhone 17 Pro Max' });
-		const card = (await specific.count()) ? specific.first() : page.locator('#dp-cards .dp-card').first();
-		const cardText = await card.innerText().catch(() => '');
-		await card.locator('.dp-select-btn').click().catch(() => {});
+		// T7 — sidebar device select auto-resolves an environment (the
+		// summary line shows device · OS · browser after the first pick).
+		const device = page.locator('#mx-sidebar .mx-device', { hasText: 'iPhone 17 Pro Max' });
+		const target = (await device.count()) ? device.first() : page.locator('#mx-sidebar .mx-device').first();
+		const deviceText = await target.innerText().catch(() => '');
+		await target.click();
+		await page.waitForSelector('#mx-columns .mx-version:not([aria-disabled])', { timeout: 10000 });
+		await page.locator('#mx-columns .mx-version:not([aria-disabled])').first().click();
 		await page.waitForTimeout(400);
 		const summary = await page.evaluate(() => document.querySelector('#dp-summary')?.innerText ?? '');
-		record('T7', 'device select auto-resolves environment', /iOS|Android|Windows|macOS|OS/i.test(cardText + summary), summary.slice(0, 80));
+		record('T7', 'device select auto-resolves environment', /iOS|Android|Windows|macOS|OS/i.test(deviceText + summary), summary.slice(0, 80));
 		await page.keyboard.press('Escape');
 	} else {
 		record('T7', 'device select auto-resolves environment', false, 'picker did not open');
 	}
 
 	if (await openPicker()) {
-		// T8 — browser change propagates (picker exposes per-OS browser select).
+		// T8 — browser change propagates: each browser-brand column's version
+		// rows ARE the per-OS browser choices (clicking one re-resolves the
+		// environment to that browser+version).
 		const t8 = await page.evaluate(() => {
-			const browsers = [...document.querySelectorAll('#device-picker .dp-select')].filter((s) => /browser/i.test(s.getAttribute('aria-label') ?? s.previousElementSibling?.textContent ?? ''));
-			return { hasBrowserSelect: browsers.length > 0 };
+			const columns = [...document.querySelectorAll('#mx-columns .mx-col')];
+			const brands = columns.map((col) => col.getAttribute('aria-label') ?? '').filter(Boolean);
+			return { hasBrowserColumns: columns.length > 0, brands: brands.slice(0, 7) };
 		});
 		await page.keyboard.press('Escape');
-		record('T8', 'browser change propagates to environment', t8.hasBrowserSelect, '');
+		record('T8', 'browser change propagates to environment', t8.hasBrowserColumns, JSON.stringify(t8.brands));
 	} else {
 		record('T8', 'browser change propagates to environment', false, 'picker did not open');
 	}
@@ -190,19 +198,28 @@ try {
 	record('T16', 'choose strip/quick actions/device card removed; header [Change] → preview → tabs in right panel', t16.stripGone && t16.quickGone && t16.cardGone && t16.changeBtn && t16.order, JSON.stringify(t16));
 
 	// T16b: header [Change] opens THE picker; picking a device updates
-	// header + stage frame immediately (one source of truth).
-	const pickDeviceCard = async (label) => {
+	// header + stage frame immediately (one source of truth). Matrix path
+	// (#14474 M7): sidebar device → browser version row.
+	const pickDevice = async (label) => {
 		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
-		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 }); // #14166: selector wait, not fixed sleep
-		const card = page.locator('#dp-cards .dp-card', { hasText: label });
-		const target = (await card.count()) ? card.first() : page.locator('#dp-cards .dp-card').first();
-		const cardBadgeTxt = await target.locator('.dp-card-badge').innerText().catch(() => '');
-		await target.locator('.dp-select-btn').click();
+		await page.waitForSelector('#mx-sidebar .mx-device', { timeout: 20000 });
+		// #14151: clear any search left over from earlier picks so the target
+		// device is actually visible before we look for it.
+		await page.fill('#dp-search', '');
+		await page.waitForTimeout(300);
+		const device = page.locator('#mx-sidebar .mx-device', { hasText: label });
+		const matches = await device.count();
+		if (!matches) return null;
+		await device.first().click();
+		await page.waitForSelector('#mx-columns .mx-version:not([aria-disabled])', { timeout: 10000 });
+		const version = page.locator('#mx-columns .mx-version:not([aria-disabled])').first();
+		const versionText = await version.innerText().catch(() => '');
+		await version.click();
 		await page.waitForTimeout(400);
 		await page.keyboard.press('Escape');
-		return cardBadgeTxt;
+		return versionText;
 	};
-	await pickDeviceCard('iPhone 17 Pro Max');
+	await pickDevice('iPhone 17 Pro Max');
 	const t16b = await page.evaluate(() => ({
 		header: document.querySelector('#ldv-device')?.textContent ?? '',
 		stage: document.querySelector('#stage')?.getAttribute('data-device-label') ?? '',
@@ -210,22 +227,22 @@ try {
 	}));
 	record('T16b', 'picker selection updates header + stage immediately', t16b.header.includes('iPhone') && t16b.stage.includes('iPhone') && t16b.kind === 'phone', JSON.stringify(t16b));
 
-	// T17 (#14077, retargeted #14102): preview reflects device category via the
-	// picker; header shows device/OS/browser/execution; selection survives reload.
+	// T17 (#14077, retargeted #14102, matrix path #14474): preview reflects
+	// device category via the picker; header shows device/OS/browser/execution;
+	// selection survives reload.
 	const pickFor = async (label) => {
 		await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
-		// Wait until the catalog actually rendered (3650 envs can take a
-		// moment after the 2026.10 expansion — the loading state has no cards).
-		await page.waitForSelector('#dp-cards .dp-card', { timeout: 10000 });
+		await page.waitForSelector('#mx-sidebar .mx-device', { timeout: 20000 });
 		// #14151: clear any search left over from earlier picks so the target
-		// card is actually visible before we look for it.
+		// device is actually visible before we look for it.
 		await page.fill('#dp-search', '');
 		await page.waitForTimeout(300);
-		const card = page.locator('#dp-cards .dp-card', { hasText: label });
-		const matches = await card.count();
+		const device = page.locator('#mx-sidebar .mx-device', { hasText: label });
+		const matches = await device.count();
 		if (!matches) return null;
-		const target = card.first();
-		await target.locator('.dp-select-btn').click();
+		await device.first().click();
+		await page.waitForSelector('#mx-columns .mx-version:not([aria-disabled])', { timeout: 10000 });
+		await page.locator('#mx-columns .mx-version:not([aria-disabled])').first().click();
 		await page.waitForTimeout(400);
 		await page.keyboard.press('Escape');
 		return label;
@@ -290,6 +307,57 @@ try {
 		headerDevice: document.querySelector('#ldv-device')?.textContent ?? ''
 	}));
 	record('T18', 'device card fully removed; header Change + identity remain', t18.cardGone && t18.toggleGone && t18.changeBtn && t18.headerDevice.length > 0, JSON.stringify(t18));
+
+	// T19 (R1–R4 #14490–93, validated #14494): the execution-honesty chain.
+	// Every board entry must report an honest status; with no real device
+	// runtime configured, EVERY environment is OFFLINE with a named reason and
+	// the picker/matrix labels say REAL DEVICE UNAVAILABLE — never AVAILABLE.
+	const t19 = await page.evaluate(async () => {
+		const board = await fetch('/api/device-runtime/devices', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+		const devices = board?.devices ?? [];
+		const offline = devices.filter(d => d.status === 'OFFLINE');
+		const withReason = offline.filter(d => typeof d.unavailableReason === 'string' && d.unavailableReason.length > 10);
+		const avail = await fetch('/api/environments?active=true&limit=80000', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+		const envs = avail?.environments ?? [];
+		const notAvailable = envs.filter(e => e.availability !== 'AVAILABLE');
+		return {
+			boardRows: devices.length,
+			allOfflineOrBusy: offline.length === devices.length,
+			reasonsPresent: offline.length === 0 || withReason.length === offline.length,
+			envTotal: envs.length,
+			noneClaimAvailable: envs.length === notAvailable.length
+		};
+	});
+	record('T19', 'honest availability: no env claims AVAILABLE without a real runtime; every OFFLINE row names its reason',
+		t19.boardRows > 0 && t19.allOfflineOrBusy && t19.reasonsPresent && t19.envTotal > 0 && t19.noneClaimAvailable, JSON.stringify(t19));
+
+	// T20 (#14494): the matrix renders REAL DEVICE UNAVAILABLE for offline
+	// versions — open the picker and inspect a browser column's row meta.
+	await page.evaluate(() => document.querySelector('#ldv-change-device, #ldv-choose-device')?.click());
+	await page.waitForTimeout(600);
+	// After the T17d reload no sidebar device is re-selected yet — pick one
+	// so the browser columns (and their rows) actually render. Click at the
+	// DOM level: actionability checks are flaky here (huge tree), and the JS
+	// click is what a user's selection does anyway.
+	await page.waitForSelector('#mx-sidebar .mx-device', { timeout: 20000, state: 'attached' });
+	await page.evaluate(() => {
+		const dialog = document.querySelector('#device-picker');
+		if (!dialog || dialog.hidden) document.querySelector('#ldv-change-device, #ldv-choose-device')?.click();
+	});
+	await page.waitForTimeout(400);
+	await page.evaluate(() => document.querySelector('#mx-sidebar .mx-device')?.click());
+	await page.waitForSelector('#mx-columns .mx-version-meta', { timeout: 10000 });
+	const t20 = await page.evaluate(() => {
+		const dialog = document.querySelector('#device-picker');
+		if (!dialog || dialog.hidden) return { open: false };
+		const meta = [...document.querySelectorAll('#mx-columns .mx-version-meta')].map(el => el.textContent.trim());
+		const unavailable = meta.filter(t => /UNAVAILABLE/i.test(t));
+		const fakeAvailable = meta.filter(t => /^AVAILABLE$/i.test(t.trim()));
+		return { open: true, metaRows: meta.length, unavailableRows: unavailable.length, noFakeAvailable: fakeAvailable.length === 0 };
+	});
+	record('T20', 'matrix rows show REAL DEVICE UNAVAILABLE (never bare AVAILABLE) with no runtime connected',
+		t20.open && t20.metaRows > 0 && t20.unavailableRows === t20.metaRows, JSON.stringify(t20));
+	await page.keyboard.press('Escape').catch(() => {});
 } finally {
 	await browser.close();
 }

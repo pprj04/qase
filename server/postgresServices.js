@@ -45,6 +45,13 @@ function createSession(title, now, options = {}) {
 		securityAuthorization: options.securityAuthorization
 			? structuredClone(options.securityAuthorization)
 			: undefined,
+		/** Compatibility environment this run executes in (frozen snapshot). */
+		environmentId: options.environmentId,
+		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
+		/** Test case this run executes (frozen snapshot). */
+		testCaseId: options.testCaseId,
+		/** #14633 (NI02 Phase 1): matrix run that spawned this session, if any. */
+		matrixRunId: options.matrixRunId,
 		ownerUserId: options.ownerUserId ?? currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId
 	};
 	if (options.drytisIntegration !== undefined) {
@@ -230,6 +237,10 @@ export function createPostgresApplicationServices({
 	}
 
 	const runStore = {
+		// #14649: raw event-bus emitter for non-session event sources (matrix
+		// orchestrator progress keyed by matrix-run id); SSE subscribes via
+		// subscribe() which prefers the transport when configured.
+		bus,
 		async load() {
 			await eventTransport?.load();
 			await repository.bootstrapTenant();

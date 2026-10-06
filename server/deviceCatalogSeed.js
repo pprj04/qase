@@ -55,6 +55,8 @@ const MODEL_CHIP_RULES = [
 	['IP8PLUS', 'a11'], ['IP8', 'a11'], ['IPX', 'a11'],
 	['IP7PLUS', 'a10'], ['IP7', 'a10'],
 	['IPSE3', 'a15'], ['IPSE2', 'a13'], ['IPSE1', null],
+	// 2027.02.0 (#14420) MacBook 13-inch Apple Silicon + iMac 24 M1
+	['MACMBA-M1', 'm1'], ['MACMBP13-M1', 'm1'], ['MACMBP13-M2', 'm2'], ['MACIMAC24-M1', 'm1'],
 	// 2027.01.0 (#14273) iPad generations (longest prefix first)
 	['IPADPRO13', 'm4'], ['IPADPRO129-6', 'm2'], ['IPADPRO129-5', 'm1'], ['IPADPRO129', 'm1'],
 	['IPADPRO11-5', 'm4'], ['IPADPRO11-4', 'm2'], ['IPADPRO11-3', 'm2'], ['IPADPRO11-2', 'm1'], ['IPADPRO11', 'm1'],

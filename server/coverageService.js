@@ -10,6 +10,8 @@
  *   case number, not the uuid) and environments on environmentId ?? snapshot.envId.
  */
 
+import { computeMatrixCoverage } from './matrixCoverage.js';
+
 const EXECUTED_STATUSES = new Set(['done', 'error']);
 const PASS_VERDICTS = new Set(['pass', 'pass_with_issues']);
 
@@ -123,11 +125,20 @@ export function computeCoverage({ testCases = [], environments = [], runs = [] }
 }
 
 /**
+ * #14652 (NI04): matrix-run gap report computed from stored matrix items.
+ * Additive — the legacy payload shape is untouched; `matrix` is added only
+ * when matrix runs exist (or is the honest zero-run aggregate otherwise).
+ */
+export function computeMatrixGapReport(matrixRuns = []) {
+	return computeMatrixCoverage(matrixRuns);
+}
+
+/**
  * Service facade wired in serviceFactory: pulls test cases, environments and
  * full runs from sibling services and returns the coverage payload.
  * `loadRuns` must supply FULL session records (verdict lives on session.report).
  */
-export function createCoverageService({ testCases, environments, runs, listRuns, tenantContext } = {}) {
+export function createCoverageService({ testCases, environments, runs, listRuns, listMatrixRuns, tenantContext } = {}) {
 	if (!testCases || !environments || !runs && !listRuns) {
 		throw new TypeError('Coverage requires the testCases, environments and runs services.');
 	}
@@ -166,7 +177,7 @@ export function createCoverageService({ testCases, environments, runs, listRuns,
 	return {
 		async snapshot() {
 			const [caseRows, environmentRows, runRows] = await Promise.all([caseList(), environmentList(), runList()]);
-			return computeCoverage({
+			const payload = computeCoverage({
 				testCases: caseRows.filter(row => !row.deleted),
 				environments: environmentRows.map(environment => ({
 					envId: environment.envId,
@@ -179,6 +190,12 @@ export function createCoverageService({ testCases, environments, runs, listRuns,
 				})),
 				runs: runRows.filter(Boolean)
 			});
+			// #14652 (NI04): additive matrix gap report — every number from
+			// actual stored matrix items, never hardcoded.
+			if (typeof listMatrixRuns === 'function') {
+				payload.matrix = computeMatrixGapReport(await listMatrixRuns());
+			}
+			return payload;
 		}
 	};
 }

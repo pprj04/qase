@@ -152,7 +152,13 @@ export function viewForSelection(selection) {
 		executionType: selection.executionType ? String(selection.executionType).toLowerCase() : 'none',
 		executionTypeAttested: false,
 		runtimeSessionId: selection.runtimeSessionId ?? null,
-		runtimeStatus: 'queued', // selection view: no run — treated as idle by consumers
+		// R5 #14494: an OFFLINE/UNAVAILABLE/NOT_EXECUTABLE selection renders as
+		// honestly unavailable in the live view (panel + reason), not as queued.
+		runtimeStatus: ['OFFLINE', 'UNAVAILABLE', 'NOT_EXECUTABLE']
+			.includes(String(selection.availability ?? '').toUpperCase())
+			? 'device_unavailable'
+			: 'queued',
+		unavailableReason: selection.unavailableReason ?? null,
 		label: selection.device ?? null,
 		targetUrl: null,
 		source: 'selection'
@@ -212,6 +218,10 @@ export function resolveActiveRuntimeEnvironment({ session, environments = null, 
 	return Object.freeze({
 		device: device ?? 'Unknown device',
 		deviceId: env?.envId ?? session.environmentId ?? null,
+		// R3 #14492: the board's honest unavailability reason (e.g. "No
+		// real-device runtime connected — register a device-farm provider…")
+		// travels to the unavailable panel instead of a generic message.
+		unavailableReason: boardEntry?.unavailableReason ?? null,
 		manufacturer: env?.platformLabel ?? null,
 		model: env?.device ?? null,
 		deviceType: kind,

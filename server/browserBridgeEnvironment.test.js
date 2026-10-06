@@ -62,11 +62,11 @@ test('a browserstack environment resolves remote execution and never launches lo
 	const session = minimalSession({ environmentSnapshot: snapshot });
 	const fake = fakeService();
 
-	const execution = resolveExecution(snapshot, { username: 'u', accessKey: 'k' });
+	const execution = await resolveExecution(snapshot, { username: 'u', accessKey: 'k' });
 	assert.equal(execution.mode, 'environment');
 
 	// The bridge surfaces the execution plan for the UI/reports.
-	const bridge = attachBrowserBridge(session, fake.service, stubStore(), {
+	const bridge = await attachBrowserBridge(session, fake.service, stubStore(), {
 		execution,
 		environment: snapshot
 	});
@@ -81,12 +81,19 @@ test('without credentials the same environment downgrades to emulated with the d
 	const session = minimalSession({ environmentSnapshot: snapshot });
 	const fake = fakeService();
 
-	const bridge = attachBrowserBridge(session, fake.service, stubStore(), {
+	const bridge = await attachBrowserBridge(session, fake.service, stubStore(), {
 		environment: snapshot,
 		browserstackCredentials: null
 	});
 	assert.equal(bridge.execution.mode, 'emulated');
-	assert.match(bridge.execution.label, /local \(emulated; remote runtime not configured\)/);
+	// RT1 (#14680): with a branded Chrome binary on this host the honest
+	// local path is the REAL binary (engine-equivalent fallback otherwise —
+	// never a fabricated remote claim without credentials).
+	assert.match(bridge.execution.label, /local/i);
+	assert.ok(/REAL .* binary|chromium/i.test(bridge.execution.label),
+		`label must name the real binary or engine: ${bridge.execution.label}`);
+	// R3 #14492: the engine follows the selected browser — Chrome → Chromium.
+	assert.equal(bridge.execution.executionEngine, 'chromium');
 	t.after(() => bridge.dispose());
 });
 

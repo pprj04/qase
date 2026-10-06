@@ -7,6 +7,41 @@ import { readFile } from 'node:fs/promises';
  * entry; Device Management lives under Settings; the dock chip reads the
  * store; Results targets run history. */
 
+test('#13778 contract: one-click Run reuses an existing idle run instead of duplicating', async () => {
+	// Phase D2 residual gap (was a WARN in the Phase 23 review): repeated Run
+	// clicks piled up duplicate IDLE runs. The guard must stay in
+	// startEnvironmentRun: check /sessions for an idle run on the env and
+	// route to it rather than calling createQaRun again.
+	const app = await readFile('public/app.js', 'utf8');
+	const start = app.indexOf('async function startEnvironmentRun');
+	const body = app.slice(start, app.indexOf('function openExecFallback', start));
+	assert.ok(start >= 0, 'startEnvironmentRun must exist in app.js');
+	assert.match(body, /sessions\?limit=20/, 'guard must query recent sessions');
+	assert.match(body, /status === 'idle'/, 'guard must match idle runs');
+	assert.match(body, /selectSession\(recent\.id\)/, 'guard must select the existing run');
+	assert.match(body, /already waiting/, 'guard must explain via toast');
+	// The reuse branch returns BEFORE createQaRun — createQaRun must appear
+	// only after the guard block in the available branch.
+	assert.ok(body.indexOf('return;') < body.indexOf('createQaRun'), 'guard must return before createQaRun');
+});
+
+test('#13778 contract: queued session auto-launches the run on promotion', async () => {
+	// Phase D2 residual gap (was a WARN in the Phase 23 review): queue
+	// reserved a session but no run was ever created. The wiring must stay:
+	// pollQueuePanel detects queued→running and launches createQaRun.
+	const app = await readFile('public/app.js', 'utf8');
+	const start = app.indexOf('async function pollQueuePanel');
+	const body = app.slice(start, app.indexOf('function hideQueuePanel', start));
+	assert.ok(start >= 0, 'pollQueuePanel must exist in app.js');
+	assert.match(body, /status === 'running' && !queuePanelState\.launched/, 'must detect queued→running promotion exactly once');
+	assert.match(body, /createQaRun/, 'promotion must launch the QA run');
+	// The queue fallback action must hand the session to the tracker so the
+	// auto-launch wiring above actually runs.
+	const fbStart = app.indexOf('async function applyFallback');
+	const fbBody = app.slice(fbStart, app.indexOf('/* Queue panel', fbStart));
+	assert.match(fbBody, /trackQueuePanel\(result\.session/, 'queue fallback must track the session for auto-launch');
+});
+
 test('settings dialog hosts Device Management; sidebar foot has no admin entries', async () => {
 	const html = await readFile('public/index.html', 'utf8');
 	const settingsBlock = html.slice(html.indexOf('id="settings"'), html.indexOf('</dialog>', html.indexOf('id="settings"')));

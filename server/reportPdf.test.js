@@ -210,7 +210,7 @@ test('PDF labels REAL DEVICE only from recorded runtime facts', () => {
 		environmentSnapshot: { envId: 'ENV-R', device: 'Pixel 9', osVersion: '15', browser: 'Chrome', browserVersion: '140' },
 		runtimeFacts: { executionLevel: 'REAL_DEVICE', provider: 'browserstack' }
 	}));
-	assert.match(html, /REAL DEVICE \(browserstack\)/);
+	assert.match(html, /REAL DEVICE \(remote environment runtime\)/);
 
 	const simHtml = buildReportHtml(makeSession({
 		environmentSnapshot: { envId: 'ENV-S', device: 'Pixel 9', osVersion: '15', browser: 'Chrome', browserVersion: '140' },

@@ -133,6 +133,37 @@ test('GET unknown catalog entity → 400', async () => {
 	}
 });
 
+// #14648 (NI01 Phase 2): meta MUST be registered before the :entity wildcard —
+// otherwise 'meta' resolves as an unknown entity and the endpoint 400s.
+test('GET /api/catalog/meta is reachable and carries the browser support report (#14648)', async () => {
+	const fixture = await startFixture();
+	try {
+		const result = await fixture.json('/api/catalog/meta');
+		assert.equal(result.status, 200);
+		assert.ok(result.body.catalogVersion, 'catalogVersion missing');
+		assert.ok(Array.isArray(result.body.providers), 'providers missing');
+		const support = result.body.browserSupport;
+		assert.ok(Array.isArray(support), 'browserSupport report must be an array');
+		assert.equal(support.length, 7);
+		const duck = support.find((entry) => entry.browser === 'duckduckgo');
+		assert.ok(duck, 'duckduckgo entry missing');
+		assert.equal(duck.status, 'not_supported', 'duckduckgo must resolve not_supported');
+		assert.ok(duck.reason, 'duckduckgo reason missing');
+		const opera = support.find((entry) => entry.browser === 'opera');
+		// RT1 (#14680): opera is 'supported' when a launch-verified branded
+		// binary exists on this host, 'engine_equivalent' otherwise — never a
+		// fabricated branded pass. Accept both truthful outcomes.
+		assert.ok(['supported', 'engine_equivalent'].includes(opera.status),
+			`opera resolved unexpected status ${opera.status}`);
+		if (opera.status === 'supported') {
+			assert.ok(opera.branded === true && opera.executablePath,
+				'a supported opera must cite the real binary');
+		}
+	} finally {
+		await fixture.close();
+	}
+});
+
 test('POST /api/catalog/browserVersions adds Chrome 160, then env validation accepts it', async () => {
 	const fixture = await startFixture();
 	try {

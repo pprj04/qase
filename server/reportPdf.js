@@ -56,12 +56,13 @@ function environmentLine(session) {
 	// Phase 22: the execution label comes from RECORDED facts, never from the
 	// catalog capability hint — a simulated run must never read "real device".
 	const level = session.runtimeFacts?.executionLevel ?? session.executionLevel;
-	const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	const rawProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	// D7: user-facing PDF text uses QASE-neutral provider labels.
+	const provider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawProvider] ?? rawProvider;
 	if (level === 'REAL_DEVICE') return `${label} \u2014 REAL DEVICE${provider ? ` (${provider})` : ''}`;
 	if (level === 'VIRTUAL_DEVICE') return `${label} \u2014 VIRTUAL DEVICE${provider ? ` (${provider})` : ''}`;
 	if (level === 'SIMULATED') return `${label} \u2014 SIMULATED${provider ? ` (${provider})` : ''}`;
-	const legacy = provider === 'browserstack' ? 'remote environment runtime' : provider;
-	return legacy ? `${label} \u2014 ${legacy}` : label;
+	return provider ? `${label} \u2014 ${provider}` : label;
 }
 
 function headerBlock(session, title, verdictText) {
@@ -80,7 +81,8 @@ function headerBlock(session, title, verdictText) {
 	// Phase 22: an explicit Execution row so every PDF states the level.
 	const pdfLevel = session.runtimeFacts?.executionLevel ?? session.executionLevel;
 	if (pdfLevel) {
-		const pdfProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		const rawPdfProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		const pdfProvider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawPdfProvider] ?? rawPdfProvider;
 		rows.push(['Execution', `${pdfLevel === 'REAL_DEVICE' ? 'REAL DEVICE' : pdfLevel}${pdfProvider ? ` (${pdfProvider})` : ''}`]);
 	} else if (session.environmentSnapshot) {
 		rows.push(['Execution', 'NOT AVAILABLE FOR REAL EXECUTION']);

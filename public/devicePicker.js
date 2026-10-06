@@ -109,14 +109,18 @@ export function buildDeviceCards(environments, boardByEnvId = null) {
  * osVersion overrides. Only combinations that exist as active environments
  * are resolvable — never an invented one.
  */
-export function resolveDeviceEnvironment(environments, { device, browser, osVersion, executionLevel } = {}) {
+export function resolveDeviceEnvironment(environments, { device, browser, browserVersion, osVersion, executionLevel } = {}) {
 	const candidates = (environments ?? []).filter((e) => e?.active !== false && String(e.device ?? '').trim() === String(device ?? '').trim());
 	if (!candidates.length) return null;
 	let filtered = candidates;
 	if (osVersion) filtered = filtered.filter((e) => String(e.osVersion ?? '') === String(osVersion));
 	if (browser) filtered = filtered.filter((e) => String(e.browser ?? '').toLowerCase() === String(browser).toLowerCase());
+	// M7 fix (#14474 review): browser VERSION must pin the resolution — the
+	// matrix column rows select an exact env (Chrome 153 STABLE); dropping
+	// the version made the resolver fall back to its ranked default.
+	if (browserVersion) filtered = filtered.filter((e) => String(e.browserVersion ?? '') === String(browserVersion));
 	if (executionLevel) filtered = filtered.filter((e) => (e?.runtimeAttestedLevel ?? e?.executionLevelRequested ?? null) === executionLevel);
-	if (!filtered.length && (browser || executionLevel)) {
+	if (!filtered.length && (browser || browserVersion || executionLevel)) {
 		// Browser/os/level combination doesn't exist for this device — fall back to
 		// the device's best environment rather than inventing one.
 		filtered = candidates;
@@ -150,8 +154,8 @@ export function cardBadge(card) {
 			: card?.maximumLevel === 'SIMULATED' ? 'SIMULATED' : 'SIMULATED';
 	const availability = card?.availability === 'AVAILABLE' ? 'AVAILABLE'
 		: card?.availability === 'BUSY' ? 'BUSY'
-			: card?.availability === 'OFFLINE' ? 'OFFLINE'
-				: card?.availability === 'NOT_EXECUTABLE' ? 'NOT EXECUTABLE' : 'AVAILABLE';
+			: card?.availability === 'OFFLINE' ? 'REAL DEVICE UNAVAILABLE'
+				: card?.availability === 'NOT_EXECUTABLE' ? 'NOT EXECUTABLE' : 'REAL DEVICE UNAVAILABLE';
 	return { level, availability };
 }
 
@@ -180,8 +184,6 @@ export function executionTypeText(selection) {
 }
 
 /** Type chips map deviceType (phone/mobile) → chip value. */
-const TYPE_BY_CHIP = { phone: 'mobile', tablet: 'tablet', desktop: 'desktop' };
-
 export function chipForDeviceType(deviceType) {
 	if (deviceType === 'mobile' || deviceType === 'phone') return 'phone';
 	return deviceType ?? 'phone';
@@ -285,7 +287,7 @@ export function selectionSummary(selection, runtimeProfiles) {
  * re-resolve it). Selection is written through the caller's store.
  */
 export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSelect, onClose, onOpen }) {
-	const { dialog, search, tabs, types, cards, summary, closeBtn } = elements;
+	const { dialog, search, cards, summary, closeBtn } = elements;
 	const state = { environments: [], boardByEnvId: new Map(), filters: { search: '', platform: 'all', deviceType: 'all' }, selectedDevice: null, dataState: 'loading' };
 
 	function boardFor(envs) {
@@ -295,10 +297,6 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 			if (entry) map.set(env.envId ?? env.id, entry);
 		}
 		return map;
-	}
-
-	function cardsModel() {
-		return buildDeviceCards(state.environments, boardFor(state.environments));
 	}
 
 	function renderSummary() {
@@ -315,60 +313,16 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 			return;
 		}
 		delete summary.dataset.empty;
+		// M4 (#14423): the spec six-part format — Device · OS Version ·
+		// Browser Name · Browser Version · Execution Type · Availability —
+		// with the resolution/capability detail kept from the card path.
 		const s = selectionSummary(selection, runtimeProfiles);
-		summary.textContent = `SELECTED: ${s.device} · ${s.line} · ${s.executionType} · ${s.resolution ?? ''} ${s.orientation ?? ''} · ${s.capabilities.join(' / ')}`.replace(/\s+/g, ' ').trim();
-	}
-
-	function renderCardOptions(card, el) {
-		// Secondary options only for the selected device: OS (if >1 actually
-		// available) + executable browsers for the selected OS only.
-		const opts = document.createElement('div');
-		opts.className = 'dp-card-options';
-		const currentOS = store.get()?.osVersion ?? null;
-		if (card.osVersions.length > 1) {
-			const sel = document.createElement('select');
-			sel.className = 'dp-select';
-			sel.setAttribute('aria-label', `OS version for ${card.device}`);
-			for (const v of [...card.osVersions].reverse()) {
-				const opt = document.createElement('option');
-				opt.value = v;
-				opt.textContent = `${card.best.os ?? 'OS'} ${v}`;
-				sel.appendChild(opt);
-			}
-			if (currentOS && card.osVersions.includes(currentOS)) sel.value = currentOS;
-			sel.onchange = () => { reselect({ osVersion: sel.value }); renderCardOptionsSync(); };
-			opts.appendChild(sel);
-			opts.dataset.osSelect = '';
-		}
-		const bsel = document.createElement('select');
-		bsel.className = 'dp-select';
-		bsel.setAttribute('aria-label', `Browser for ${card.device}`);
-		const fillBrowsers = (osVersion) => {
-			bsel.textContent = '';
-			for (const b of browsersForOS(card, osVersion)) {
-				const opt = document.createElement('option');
-				opt.value = b.browser;
-				opt.textContent = [b.browser, b.browserVersion].filter(Boolean).join(' ');
-				bsel.appendChild(opt);
-			}
-			const current = store.get()?.browser ?? card.best.browser;
-			bsel.value = current;
-		};
-		fillBrowsers(currentOS);
-		bsel.onchange = () => reselect({ browser: bsel.value });
-		opts.appendChild(bsel);
-		el.appendChild(opts);
-		// OS change re-fills the browser list for the new OS (in place, no full
-		// re-render needed for the dropdown itself — reselect handles the rest).
-		const osSelect = opts.querySelector('.dp-select[aria-label^="OS version"]');
-		if (osSelect) {
-			const original = osSelect.onchange;
-			osSelect.onchange = () => {
-				fillBrowsers(osSelect.value);
-				original?.();
-			};
-		}
-		function renderCardOptionsSync() { fillBrowsers(store.get()?.osVersion ?? null); }
+		const availability = selection.availability
+			? String(selection.availability).toUpperCase() === 'AVAILABLE' ? 'AVAILABLE'
+				: String(selection.availability).toUpperCase() === 'BUSY' ? 'BUSY'
+					: 'REAL DEVICE UNAVAILABLE'
+			: 'REAL DEVICE UNAVAILABLE';
+		summary.textContent = `SELECTED: ${s.device} · ${s.line} · ${s.executionType} · ${String(availability).toUpperCase()} · ${s.resolution ?? ''} ${s.orientation ?? ''} · ${s.capabilities.join(' / ')}`.replace(/\s+/g, ' ').trim();
 	}
 
 	function reselect(overrides = {}) {
@@ -414,63 +368,20 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 			cards.appendChild(empty);
 			return;
 		}
-		const visible = filterDeviceCards(cardsModel(), state.filters);
-		if (!visible.length) {
-			const empty = document.createElement('p');
-			empty.className = 'dp-empty';
-			empty.textContent = 'No devices match — clear the search or filters.';
-			cards.appendChild(empty);
-			return;
-		}
-		let currentGroup = null;
-		for (const card of visible) {
-			if (card.groupLabel !== currentGroup) {
-				currentGroup = card.groupLabel;
-				const head = document.createElement('div');
-				head.className = 'dp-group';
-				head.textContent = currentGroup;
-				cards.appendChild(head);
-			}
-			const el = document.createElement('div');
-			const selected = state.selectedDevice === card.device;
-			el.className = `dp-card${selected ? ' is-selected' : ''}`;
-			const badge = cardBadge(card);
-			const info = document.createElement('div');
-			info.className = 'dp-card-info';
-			const name = document.createElement('span');
-			name.className = 'dp-card-name';
-			name.textContent = card.device;
-			const sub = document.createElement('span');
-			sub.className = 'dp-card-sub';
-			sub.textContent = `${card.best.os ?? ''} ${card.best.osVersion ?? ''} · ${card.best.browser ?? ''} ${card.best.browserVersion ?? ''}`.trim();
-			const badgeEl = document.createElement('span');
-			badgeEl.className = 'dp-card-badge';
-			badgeEl.textContent = `● ${badge.level} · ${badge.availability}`;
-			info.append(name, sub, badgeEl);
-			const btn = document.createElement('button');
-			btn.type = 'button';
-			btn.className = 'btn btn-primary btn-sm dp-select-btn';
-			btn.textContent = state.addPick ? 'Add' : (selected ? 'Selected ✓' : 'Select');
-			btn.onclick = () => { state.selectedDevice = card.device; reselect(); };
-			el.append(info, btn);
-			if (selected) renderCardOptions(card, el);
-			cards.appendChild(el);
-		}
+		// M7 (#14474): the legacy chip rows and device-card list are retired —
+		// the matrix sidebar + browser columns are the device browser now.
+		// This container only carries the shared catalog-load states so a
+		// failed fetch is never read as an empty catalog.
+		if (state.dataState === 'ready' && state.environments.length) return;
 	}
 
 	function setFilter(patch) {
+		// Filters are inert post-M7 (no card list to filter); the state is
+		// kept so reselect()/hydrate() logic is untouched.
 		Object.assign(state.filters, patch);
-		for (const t of tabs ?? []) t.classList.toggle('is-active', t.dataset.dpTab === state.filters.platform);
-		for (const t of types ?? []) t.classList.toggle('is-active', t.dataset.dpType === state.filters.deviceType);
 		renderCards();
 	}
 
-	for (const t of tabs ?? []) {
-		t.onclick = () => setFilter({ platform: t.dataset.dpTab });
-	}
-	for (const t of types ?? []) {
-		t.onclick = () => setFilter({ deviceType: TYPE_BY_CHIP[t.dataset.dpType] ?? t.dataset.dpType });
-	}
 	if (search) search.oninput = () => setFilter({ search: search.value });
 	if (closeBtn) closeBtn.onclick = () => { state.addPick = null; dialog?.close?.(); onClose?.(store?.get?.()); };
 	dialog?.addEventListener?.('close', () => { state.addPick = null; onClose?.(store?.get?.()); });
@@ -506,13 +417,24 @@ export function createDevicePicker({ elements, store, runtimeProfiles = {}, onSe
 		hydrate(env) {
 			// Restore the persisted selection once environments are known.
 			if (!env || !state.environments.length) return;
-			const resolved = resolveDeviceEnvironment(state.environments, { device: env.device, browser: env.browser, osVersion: env.osVersion })
+			const resolved = resolveDeviceEnvironment(state.environments, { device: env.device, browser: env.browser, browserVersion: env.browserVersion, osVersion: env.osVersion })
 				?? resolveDeviceEnvironment(state.environments, { device: env.device });
 			if (!resolved) { store.clear(); state.selectedDevice = null; }
 			else { store.setSelection(resolved); state.selectedDevice = resolved.device; }
 			renderSummary();
 			renderCards();
 		},
-		renderSummary
+		renderSummary,
+		// M3 (#14422): the matrix sidebar routes selections through this same
+		// path as the card list — add-mode (state.addPick) stays honored and
+		// every onSelect side effect runs identically.
+		renderCards,
+		selectEnvironment(env) {
+			if (!env) return;
+			if (!state.selectedDevice) state.selectedDevice = env.device;
+			// Pass the FULL triple — os + browser + browserVersion — so the
+			// resolver pins the exact matrix row the user clicked (#14474).
+			reselect({ osVersion: env.osVersion, browser: env.browser, browserVersion: env.browserVersion });
+		}
 	};
 }

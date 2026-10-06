@@ -25,7 +25,9 @@
  *     NEVER generated — Apple does not ship Safari for Windows.
  */
 
-export const ENVIRONMENT_CATALOG_VERSION = '2027.01.0';
+export const ENVIRONMENT_CATALOG_VERSION = '2027.03.0';
+
+import { resolveBrowserSupport } from './browserSupportResolution.js';
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -53,35 +55,42 @@ export const BROWSERS = [
 	{
 		code: 'safari', name: 'Safari', envCode: 'SAF', independentlyVersioned: false,
 		platforms: ['ios', 'ipados', 'macos'],
+		channels: ['stable'],
 		note: 'Safari version is derived from the OS version (it ships with the OS), never chosen independently.'
 	},
 	{
 		code: 'chrome', name: 'Chrome', envCode: 'CHR', independentlyVersioned: true,
-		platforms: ['ios', 'ipados', 'macos', 'android', 'windows']
+		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['canary', 'dev', 'beta', 'stable']
 	},
 	{
 		code: 'firefox', name: 'Firefox', envCode: 'FF', independentlyVersioned: true,
 		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['nightly', 'beta', 'stable'],
 		note: 'On iOS/iPadOS Firefox runs on the required WebKit engine; Android Firefox is scriptable via Gecko remote debugging.'
 	},
 	{
 		code: 'edge', name: 'Edge', envCode: 'EDG', independentlyVersioned: true,
 		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['canary', 'dev', 'beta', 'stable'],
 		note: 'On iOS/iPadOS Edge runs on the required WebKit engine.'
 	},
 	{
 		code: 'opera', name: 'Opera', envCode: 'OPR', independentlyVersioned: true,
 		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['beta', 'stable'],
 		note: 'On iOS/iPadOS Opera runs on the required WebKit engine.'
 	},
 	{
 		code: 'brave', name: 'Brave', envCode: 'BRV', independentlyVersioned: true,
 		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['nightly', 'beta', 'stable'],
 		note: 'Chromium-based; on iOS/iPadOS it runs on the required WebKit engine.'
 	},
 	{
 		code: 'duckduckgo', name: 'DuckDuckGo', envCode: 'DDG', independentlyVersioned: true,
 		platforms: ['ios', 'ipados', 'macos', 'android', 'windows'],
+		channels: ['stable'],
 		note: 'Privacy browser on all five platforms; on iOS/iPadOS it runs on the required WebKit engine.'
 	}
 ];
@@ -101,6 +110,39 @@ export const BROWSER_VERSIONS = {
 	brave: ['136', '137', '138', '139', '140'],
 	duckduckgo: ['1', '2', '3']
 };
+
+/**
+ * Release channel for a browser major version (2027.02.0 #14420).
+ *
+ * Channels are DISPLAY METADATA derived from the version's POSITION in the
+ * browser's BROWSER_VERSIONS array — they never change envIds, never create
+ * extra environment rows, and never claim a specific calendar current version.
+ * Bumping the arrays re-labels automatically; no version number is hardcoded
+ * as permanently current.
+ *
+ * Mapping (newest first): newest major = first pre-release channel, each
+ * following major the next channel, until a 'stable' is reached; every older
+ * major is also 'stable' (the back-catalog of previous stable releases).
+ * Example with chrome [.. 153, 154, 155, 156] and channels
+ * [canary, dev, beta, stable]: 156→canary, 155→dev, 154→beta, 153→stable,
+ * 152 and older →stable.
+ *
+ * Unknown browser / version → 'stable' (safe default for catalog edits).
+ */
+export function channelForVersion(browserCode, version) {
+	const browser = getBrowser(browserCode);
+	if (!browser || !Array.isArray(browser.channels) || browser.channels.length === 0) return 'stable';
+	const versions = BROWSER_VERSIONS[browser.code];
+	if (!versions) return 'stable';
+	const index = versions.indexOf(String(version));
+	if (index < 0) return 'stable';
+	// channels[] is newest-first; distanceFromNewest 0 = newest major.
+	const distanceFromNewest = versions.length - 1 - index;
+	if (distanceFromNewest < browser.channels.length - 1) {
+		return browser.channels[distanceFromNewest];
+	}
+	return 'stable';
+}
 
 /**
  * Safari versions shipped per macOS release (major.minor of the newest Safari
@@ -260,15 +302,19 @@ export const APPLE_DEVICES = [
 	// Replaces one-pseudo-device-per-OS. Honest ranges: Apple Silicon
 	// Monterey→Tahoe (per model launch floor); Intel lines cap at
 	// Monterey/Ventura and keep High Sierra–Catalina reachable.
+	macModel('MACMBA-M1', 'MacBook Air (M1)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia'], 13.3),
 	macModel('MACMBA-M2', 'MacBook Air (M2)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
 	macModel('MACMBA-M3', 'MacBook Air (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
 	macModel('MACMBA-M4', 'MacBook Air (M4)', ['Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 13.6),
+	macModel('MACMBP13-M1', 'MacBook Pro 13 (M1)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia'], 13.3),
+	macModel('MACMBP13-M2', 'MacBook Pro 13 (M2)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia'], 13.3),
 	macModel('MACMBP14-M3', 'MacBook Pro 14 (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 14.2),
 	macModel('MACMBP14-M4', 'MacBook Pro 14 (M4)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 14.2),
 	macModel('MACMBP16-M3', 'MacBook Pro 16 (M3)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 16.2),
 	macModel('MACMBP16-M4', 'MacBook Pro 16 (M4)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], 16.2),
 	macModel('MACMBP16-INT19', 'MacBook Pro 16 (Intel 2019)', ['High Sierra', 'Mojave', 'Catalina', 'Big Sur', 'Monterey'], 16.0),
 	macModel('MACIMAC-INT', 'iMac (27-inch Intel 2020)', ['High Sierra', 'Mojave', 'Catalina', 'Big Sur', 'Monterey', 'Ventura'], 27.0),
+	macModel('MACIMAC24-M1', 'iMac (24-inch M1)', ['Monterey', 'Ventura', 'Sonoma'], 24.0),
 	macModel('MACIMAC-M4', 'iMac (24-inch M4)', ['Sonoma', 'Sequoia', 'Tahoe'], 24.0),
 	macModel('MACMINI-M4', 'Mac mini (M4)', ['Sonoma', 'Sequoia', 'Tahoe'], null),
 	macModel('MACSTUDIO-M2MAX', 'Mac Studio (M2 Max)', ['Monterey', 'Ventura', 'Sonoma', 'Sequoia', 'Tahoe'], null),
@@ -282,17 +328,25 @@ export const APPLE_DEVICES = [
 
 /** @typedef {Object} GenericDevice — same shape as AppleDevice, plus manufacturer. */
 
-function androidDevice(slug, name, manufacturer, runtimeDeviceName, osVersions, viewport = '390×844') {
+function androidDevice(slug, name, manufacturer, runtimeDeviceName, osVersions, viewport = '390×844', deviceType = 'mobile') {
 	const [width, height] = viewport.split('×').map(Number);
 	return {
 		slug, name, manufacturer,
 		runtimeDeviceName,
 		platformId: 'android',
-		deviceType: 'mobile',
+		deviceType,
 		screenSize: '—',
 		osVersions,
 		isRealDevice: true,
-		emulation: { viewport: { width, height }, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true }
+		// #14650 (NI02 Phase 2): tablets emulate with their own viewport, but
+		// isMobile must stay false — a tablet context is not a phone context
+		// (breakpoint, UA class, and layout assertions differ).
+		emulation: {
+			viewport: { width, height },
+			deviceScaleFactor: 2.625,
+			isMobile: deviceType !== 'tablet',
+			hasTouch: true
+		}
 	};
 }
 
@@ -371,9 +425,9 @@ export const ANDROID_DEVICES = [
 	androidDevice('GALM34', 'Galaxy M34', 'Samsung', 'Samsung Galaxy M34', ['13', '14'], '360×800'),
 	androidDevice('GALM35', 'Galaxy M35', 'Samsung', 'Samsung Galaxy M35', ['14', '15'], '360×800'),
 	androidDevice('GALM55', 'Galaxy M55', 'Samsung', 'Samsung Galaxy M55', ['14', '15'], '360×800'),
-	androidDevice('GALTABS9', 'Galaxy Tab S9', 'Samsung', 'Samsung Galaxy Tab S9', ['13', '14', '15'], '800×1280'),
-	androidDevice('GALTABS10', 'Galaxy Tab S10', 'Samsung', 'Samsung Galaxy Tab S10', ['14', '15'], '800×1280'),
-	androidDevice('GALTABA9P', 'Galaxy Tab A9+', 'Samsung', 'Samsung Galaxy Tab A9+', ['13', '14'], '800×1280'),
+	androidDevice('GALTABS9', 'Galaxy Tab S9', 'Samsung', 'Samsung Galaxy Tab S9', ['13', '14', '15'], '800×1280', 'tablet'),
+	androidDevice('GALTABS10', 'Galaxy Tab S10', 'Samsung', 'Samsung Galaxy Tab S10', ['14', '15'], '800×1280', 'tablet'),
+	androidDevice('GALTABA9P', 'Galaxy Tab A9+', 'Samsung', 'Samsung Galaxy Tab A9+', ['13', '14'], '800×1280', 'tablet'),
 	androidDevice('GALZFOLD6', 'Galaxy Z Fold 6', 'Samsung', 'Samsung Galaxy Z Fold 6', ['14', '15'], '968×896'),
 	androidDevice('GALZFLIP6', 'Galaxy Z Flip 6', 'Samsung', 'Samsung Galaxy Z Flip 6', ['14', '15'], '373×844'),
 	// Google fills: Pixel Pro/A/XL variants, Pixel Tablet
@@ -384,7 +438,7 @@ export const ANDROID_DEVICES = [
 	androidDevice('PIXEL9A', 'Pixel 9a', 'Google', 'Google Pixel 9a', ['15'], '412×1016'),
 	androidDevice('PIXEL9PROXL', 'Pixel 9 Pro XL', 'Google', 'Google Pixel 9 Pro XL', ['14', '15', '16'], '412×1016'),
 	androidDevice('PIXEL10PRO', 'Pixel 10 Pro', 'Google', 'Google Pixel 10 Pro', ['15', '16'], '412×1016'),
-	androidDevice('PIXELTABLET', 'Pixel Tablet', 'Google', 'Google Pixel Tablet', ['13', '14', '15'], '1280×800'),
+	androidDevice('PIXELTABLET', 'Pixel Tablet', 'Google', 'Google Pixel Tablet', ['13', '14', '15'], '1280×800', 'tablet'),
 	// New manufacturers (2027.01.0 #14273)
 	androidDevice('POCOX6', 'POCO X6', 'POCO', 'POCO X6', ['13', '14'], '393×873'),
 	androidDevice('POCOF6', 'POCO F6', 'POCO', 'POCO F6', ['14', '15'], '393×873'),
@@ -394,7 +448,7 @@ export const ANDROID_DEVICES = [
 	androidDevice('ZENFONE10', 'Zenfone 10', 'Asus', 'Asus Zenfone 10', ['13', '14'], '360×800'),
 	androidDevice('ZENFONE11', 'Zenfone 11 Ultra', 'Asus', 'Asus Zenfone 11 Ultra', ['14', '15'], '384×824'),
 	androidDevice('ROGPHONE8', 'ROG Phone 8', 'Asus', 'Asus ROG Phone 8', ['14', '15'], '384×824'),
-	androidDevice('LENOTABP12', 'Tab P12', 'Lenovo', 'Lenovo Tab P12', ['13', '14'], '1200×1840'),
+	androidDevice('LENOTABP12', 'Tab P12', 'Lenovo', 'Lenovo Tab P12', ['13', '14'], '1200×1840', 'tablet'),
 	androidDevice('HUAWEIP60', 'P60', 'Huawei', 'Huawei P60', ['12'], '360×960'),
 	androidDevice('HUAWEIMATE60', 'Mate 60 Pro', 'Huawei', 'Huawei Mate 60 Pro', ['12'], '460×2208'),
 	androidDevice('HONORMAGIC6', 'Magic 6 Pro', 'Honor', 'Honor Magic 6 Pro', ['14'], '384×824'),
@@ -411,10 +465,24 @@ export const WINDOWS_DEVICES = [
 	windowsDevice('WINLAPTOP', 'Windows Laptop', 'desktop', ['7', '8', '8.1', '10', '11'], 1536, 864, false),
 	windowsDevice('WINLAPTOP-T', 'Windows Touch Laptop', 'desktop', ['10', '11'], 1536, 864, true),
 	windowsDevice('WINDESKTOP', 'Windows Desktop', 'desktop', ['7', '8', '8.1', '10', '11'], 1920, 1080, false),
+	// 2027.03.0 (#14631) NI01: distinct resolution profiles for the same form
+	// factor — laptop FHD and desktop QHD alongside the existing HD defaults.
+	windowsDevice('WINLAPTOP-FHD', 'Windows Laptop (FHD)', 'desktop', ['10', '11'], 1920, 1080, false),
+	windowsDevice('WINDESKTOP-QHD', 'Windows Desktop (QHD)', 'desktop', ['10', '11'], 2560, 1440, false),
 	windowsDevice('WINTABLET', 'Windows Tablet', 'tablet', ['10', '11'], 1280, 800, true),
 	// 2027.01.0 (#14273): 2-in-1 form factor + legacy OS reach. Windows Server
 	// is deliberately absent — the execution infrastructure has no Server targets.
-	windowsDevice('WIN2IN1', 'Windows 2-in-1', 'two-in-one', ['10', '11'], 1440, 900, true)
+	windowsDevice('WIN2IN1', 'Windows 2-in-1', 'two-in-one', ['10', '11'], 1440, 900, true),
+	// 2027.02.0 (#14420): Microsoft Surface hardware models — Win 10/11 only
+	// where the hardware supports it (Pro 9/10 ship Win 11; Laptop 7 (Snapdragon)
+	// and Laptop 6 caps at Win 11/10; Go 3 spans 10→11 with S-mode lineage).
+	windowsDevice('SURFPRO9', 'Surface Pro 9', 'tablet', ['11'], 2880, 1920, true),
+	windowsDevice('SURFPRO10', 'Surface Pro 10', 'tablet', ['11'], 2880, 1920, true),
+	windowsDevice('SURFPRO11', 'Surface Pro 11', 'tablet', ['11'], 2880, 1920, true),
+	windowsDevice('SURFLAP5', 'Surface Laptop 5', 'desktop', ['10', '11'], 2256, 1504, false),
+	windowsDevice('SURFLAP6', 'Surface Laptop 6', 'desktop', ['11'], 2304, 1536, false),
+	windowsDevice('SURFLAP7', 'Surface Laptop 7', 'desktop', ['11'], 2304, 1536, false),
+	windowsDevice('SURFGO3', 'Surface Go 3', 'tablet', ['10', '11'], 1920, 1280, true)
 ];
 
 /** All catalog devices across platforms (Apple unchanged, then Android, then Windows). */
@@ -437,6 +505,7 @@ function iphone(slug, name, viewport, dpr, screenSize, osVersions) {
 		runtimeDeviceName: name,
 		platformId: 'ios',
 		deviceType: 'mobile',
+		manufacturer: 'Apple',
 		screenSize: `${screenSize}`,
 		osVersions,
 		isRealDevice: true,
@@ -452,6 +521,7 @@ function ipad(slug, name, runtimeDeviceName, viewport, dpr, screenSize, osVersio
 		runtimeDeviceName,
 		platformId: 'ipados',
 		deviceType: 'tablet',
+		manufacturer: 'Apple',
 		screenSize: `${screenSize}`,
 		osVersions,
 		isRealDevice: true,
@@ -466,6 +536,7 @@ function mac(slug, name, version) {
 		runtimeDeviceName: null,
 		platformId: 'macos',
 		deviceType: 'desktop',
+		manufacturer: 'Apple',
 		screenSize: '—',
 		osVersions: [name.replace('macOS ', '')],
 		isRealDevice: false,
@@ -491,6 +562,7 @@ function macModel(slug, name, osVersions, inches) {
 		runtimeDeviceName: null,
 		platformId: 'macos',
 		deviceType: 'desktop',
+		manufacturer: 'Apple',
 		screenSize: inches ? `${inches} inch` : '—',
 		osVersions,
 		isRealDevice: false,
@@ -589,6 +661,48 @@ function osVersionToken(platformId, osVersion) {
 }
 
 /**
+ * Stable, lowercase, human-readable profile identifier (NI01 2027.03.0 #14631).
+ * Deterministic from the same inputs as the ENV ID, so it is unique wherever
+ * the ENV ID is unique: {device-slug-lower}-{os-token}-{browser}{version}.
+ * Examples: iphone17promax-ios26-safari26, pixel9-android16-chrome140,
+ * ipadpro13-ipados26-safari26, windows11-chrome140, macos-tahoe-safari26.
+ * The ENV ID stays the source of truth for run linking; profileId is an
+ * additive alias for reporting and matrix-run bookkeeping.
+ */
+const PROFILE_OS_TOKEN = {
+	// "18.0" → ios18, "18.3" → ios183, "26.0" → ios26 — minor versions are
+	// kept so sibling OS versions within a major stay distinct.
+	ios: (osVersion) => `ios${profileOsDigits(osVersion)}`,
+	ipados: (osVersion) => `ipados${profileOsDigits(osVersion)}`,
+	android: (osVersion) => `android${profileOsDigits(osVersion)}`,
+	windows: (osVersion) => {
+		const match = /(\d+(?:\.\d+)*)\s*$/.exec(String(osVersion).trim());
+		const token = profileOsDigits(match ? match[1] : osVersion);
+		return `windows${token}`;
+	},
+	macos: (osVersion) => `macos-${String(osVersion).replace(/\s+/g, '-').toLowerCase()}`
+};
+
+function profileOsDigits(osVersion) {
+	const parts = String(osVersion).trim().split('.');
+	const major = parts[0];
+	const minor = parts.slice(1).join('');
+	return minor && minor !== '0' ? `${major}${minor}` : major;
+}
+
+export function buildProfileId(platformId, deviceSlug, osVersion, browserCode, browserVersion) {
+	// Prefer the human device name (matches the agreed examples, e.g.
+	// "iPhone 17 Pro Max" → iphone17promax); fall back to the raw slug for
+	// devices outside the frozen catalog (custom environments).
+	const knownDevice = DEVICE_BY_SLUG.get(deviceSlug);
+	const deviceToken = String(knownDevice?.name ?? deviceSlug).toLowerCase().replace(/[^a-z0-9]+/g, '');
+	const browserToken = `${String(browserCode).toLowerCase()}${String(browserVersion).split('.')[0]}`;
+	const osToken = PROFILE_OS_TOKEN[platformId]?.(osVersion)
+		?? `${String(osVersion).replace(/[^a-z0-9]+/g, '').toLowerCase()}`;
+	return `${deviceToken}-${osToken}-${browserToken}`;
+}
+
+/**
  * Deterministic ENV ID: ENV-{PLAT}-{DEVICE_SLUG}-{OSVER}-{BROWSER3}-{BROWSER_MAJOR}.
  * 2027.01.0 (#14273): macOS devices are hardware models spanning multiple
  * macOS versions, so the OS token is now REQUIRED for uniqueness:
@@ -634,6 +748,7 @@ export function generateEnvironments() {
 
 function buildEnvironment(device, platform, osVersion, browser, browserVersion, capabilityBrowserVersion) {
 	const envId = buildEnvId(device.platformId, device.slug, osVersion, browser.envCode, browserVersion);
+	const profileId = buildProfileId(device.platformId, device.slug, osVersion, browser.code, browserVersion);
 	const capabilities = device.platformId === 'macos'
 		? {
 			browserName: browser.code,
@@ -676,6 +791,7 @@ function buildEnvironment(device, platform, osVersion, browser, browserVersion, 
 					};
 	return {
 		envId,
+		profileId,
 		platform: device.platformId,
 		platformLabel: platform.label,
 		device: device.name,
@@ -700,14 +816,32 @@ function buildEnvironment(device, platform, osVersion, browser, browserVersion, 
 
 /**
  * Documentation surface for the UI: why browsers are (un)available per platform.
+ * RT1 (#14680): async — resolutions are registry-fed (real branded binaries).
  */
-export function availabilityReport() {
+export async function availabilityReport(providers = {}) {
+	// #14632 (NI01 Phase 2): platform membership stays the inventory view, and
+	// each browser now carries its provider-derived EXECUTABILITY resolution
+	// (supported / engine_equivalent / not_supported + reason). One source of
+	// truth served by GET /api/environments/availability and joined by the UI.
+	const supportByCode = Object.fromEntries(
+		await Promise.all(
+			['chrome', 'edge', 'firefox', 'safari', 'opera', 'brave', 'duckduckgo']
+				.map(async (code) => [code, await resolveBrowserSupport('any', code, providers)])
+		)
+	);
 	return PLATFORMS.map((platform) => ({
 		platform: platform.id,
 		platformLabel: platform.label,
 		available: BROWSERS.filter((browser) => browser.platforms.includes(platform.id)).map((browser) => browser.name),
 		unavailable: BROWSERS
 			.filter((browser) => !browser.platforms.includes(platform.id))
-			.map((browser) => ({ browser: browser.name, reason: browser.note ?? 'Not supported on this platform.' }))
+			.map((browser) => ({ browser: browser.name, reason: browser.note ?? 'Not supported on this platform.' })),
+		browserSupport: BROWSERS
+			.filter((browser) => browser.platforms.includes(platform.id))
+			.map((browser) => ({
+				browser: browser.name,
+				browserCode: browser.code,
+				...supportByCode[browser.code]
+			}))
 	}));
 }

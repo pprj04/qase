@@ -23,6 +23,7 @@
  */
 
 import { generateEnvironments, ENVIRONMENT_CATALOG_VERSION } from './environmentCatalog.js';
+import { browserSupportReport } from './browserSupportResolution.js';
 
 /** Providers registered at module scope; tests register in-memory fakes. */
 const registry = new Map();
@@ -110,9 +111,9 @@ export async function mergeCatalog(providerSlugs) {
 			connected: provider.connected !== false, stale: Boolean(provider.stale), rowCount: 0
 		};
 		if (!entry.connected) { providers.push(entry); continue; }
+		let counted = 0;
 		try {
 			const fetched = await provider.fetchCatalog();
-			let counted = 0;
 			for (const row of fetched.environments ?? []) {
 				if (slug === 'builtin') {
 					// builtin rows are pushed verbatim above — just count.
@@ -135,6 +136,7 @@ export async function mergeCatalog(providerSlugs) {
 		} catch {
 			entry.stale = true; // unreachable → keep builtin authoritative, flag stale
 		}
+		entry.rowCount = counted;
 		providers.push(entry);
 	}
 
@@ -160,6 +162,10 @@ export async function catalogProviderMeta() {
 	return {
 		catalogVersion: ENVIRONMENT_CATALOG_VERSION,
 		generatedAt: new Date().toISOString(),
-		providers
+		providers,
+		// #14632 (NI01 Phase 2): browser-level executability surfaced here too —
+		// one source of truth alongside /api/environments/availability.
+		// RT1 (#14680): async, registry-fed (no external providers).
+		browserSupport: await browserSupportReport('any', {})
 	};
 }

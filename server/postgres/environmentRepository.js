@@ -28,10 +28,46 @@ const ENV_COLUMNS = [
 	'browser_code', 'browser_version', 'device_type', 'screen_size',
 	'screen_resolution', 'orientation', 'description',
 	'execution_provider', 'is_real_device', 'active', 'browserstack_capabilities',
-	'permission_scenario', 'orientation_scenario', 'execution_level_requested'
+	'permission_scenario', 'orientation_scenario', 'execution_level_requested',
+	'profile_id'
 ];
 
 export { EnvironmentConflictError };
+
+// camelCase environment record -> snake_case DB columns. #14631: the seed and
+// create paths previously indexed camelCase records by snake_case column names,
+// silently writing NULLs for every mapped column (masked on read by the frozen
+// catalog fallback). One authoritative mapping for all write paths.
+const COLUMN_TO_FIELD = {
+	platform: 'platform',
+	platform_label: 'platformLabel',
+	device: 'device',
+	os: 'os',
+	os_version: 'osVersion',
+	browser: 'browser',
+	browser_code: 'browserCode',
+	browser_version: 'browserVersion',
+	device_type: 'deviceType',
+	screen_size: 'screenSize',
+	screen_resolution: 'screenResolution',
+	orientation: 'orientation',
+	description: 'description',
+	execution_provider: 'executionProvider',
+	is_real_device: 'isRealDevice',
+	active: 'active',
+	browserstack_capabilities: 'runtimeCapabilities',
+	permission_scenario: 'permissionScenario',
+	orientation_scenario: 'orientationScenario',
+	execution_level_requested: 'executionLevelRequested',
+	profile_id: 'profileId'
+};
+
+/** Column value for an environment record (camelCase source of truth). */
+function columnValue(column, record) {
+	if (!record) return null;
+	const value = record[COLUMN_TO_FIELD[column] ?? column];
+	return value === undefined ? null : value;
+}
 
 function requireTenant(tenant) {
 	if (!tenant || typeof tenant !== 'object') {
@@ -82,6 +118,20 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 	async function seed(tenant) {
 		const resolved = requireTenant(tenant ?? tenantContext);
 		const environments = generateEnvironments();
+		// #14275 (Phase 2): registry-sourced seed — builtin rows first, then
+		// connected provider overlays (additive, PROV- namespaced envIds).
+		// Registry failure never blocks seeding: builtin stays authoritative.
+		let providerRows = [];
+		try {
+			const { mergeCatalog, registeredCatalogProviders } = await import('../catalogProviderRegistry.js');
+			const slugs = registeredCatalogProviders()
+				.filter((provider) => provider.connected !== false)
+				.map((provider) => provider.slug);
+			const merged = await mergeCatalog(['builtin', ...slugs]);
+			providerRows = merged.environments.filter((env) => String(env.envId).startsWith('PROV-'));
+		} catch {
+			providerRows = [];
+		}
 		const refreshed = ENV_COLUMNS.filter((column) => column !== 'active');
 		const client = await pool.connect();
 		try {
@@ -89,23 +139,12 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			await withTenant(client, resolved);
 			for (const env of environments) {
 				const params = [randomUUID(), resolved.organizationId, resolved.projectId, env.envId];
-				// Deterministic seed rows predate the resolution/orientation columns —
-				// default them from the device so seeded rows carry the new fields too.
-				const seeded = {
-					screenResolution: null,
-					orientation: null,
-					description: null,
-					...env,
-					screenResolution: env.screenResolution ?? null,
-					orientation: env.orientation ?? null,
-					description: env.description ?? null
-				};
 				for (const column of ENV_COLUMNS) {
-				const value = seeded[column];
-				params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
-					? (value === undefined || value === null ? null : JSON.stringify(value))
-					: (value === undefined ? null : value));
-			}
+					const value = columnValue(column, env);
+					params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
+						? (value === null ? null : JSON.stringify(value))
+						: value);
+				}
 				const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
 				const updates = refreshed.map((column) => `${column} = EXCLUDED.${column}`).join(', ');
 				await client.query(
@@ -116,20 +155,50 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 					params
 				);
 			}
+			// Provider overlay rows: idempotent upsert preserving active/id —
+			// same honesty contract as refreshCatalog's upsertProviderRow.
+			for (const env of providerRows) {
+				const existing = await client.query(
+					'SELECT id, active FROM environments WHERE env_id = $1 LIMIT 1',
+					[env.envId]
+				);
+				const preservedId = existing.rows[0]?.id ?? randomUUID();
+				const preservedActive = existing.rows.length > 0 ? existing.rows[0].active : true;
+				const params = [preservedId, resolved.organizationId, resolved.projectId, env.envId, preservedActive];
+				for (const column of ENV_COLUMNS) {
+					if (column === 'active') continue;
+					const value = columnValue(column, env);
+					params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
+						? (value === null ? null : JSON.stringify(value))
+						: value);
+				}
+				const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
+				const updates = refreshed.map((column) => `${column} = EXCLUDED.${column}`).join(', ');
+				await client.query(
+					`INSERT INTO environments (id, organization_id, project_id, env_id, active, ${refreshed.join(', ')})
+					 VALUES (${placeholders})
+					 ON CONFLICT (organization_id, project_id, env_id) DO UPDATE SET
+						${updates}, updated_at = CURRENT_TIMESTAMP`,
+					params
+				);
+			}
 			// 2027.01.0 (#14273): retire rows that dropped out of the catalog
 			// (e.g. macOS pseudo-devices replaced by hardware models).
 			// Never delete — history references them; mark inactive so lists
-			// with active=true stop offering them.
+			// with active=true stop offering them. #14275: provider rows
+			// (PROV-) are NEVER retired by a builtin-only refresh — they keep
+			// last-known state until their own provider updates or drops them.
 			await client.query(
 				`UPDATE environments
 				 SET active = FALSE, updated_at = CURRENT_TIMESTAMP
 				 WHERE organization_id = $1 AND project_id = $2
 				 AND active = TRUE
+				 AND env_id NOT LIKE 'PROV-%'
 				 AND env_id <> ALL($3::text[])`,
 				[resolved.organizationId, resolved.projectId, environments.map((env) => env.envId)]
 			);
 			await client.query('COMMIT');
-			return { inserted: environments.length, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
+			return { inserted: environments.length + providerRows.length, providerRows: providerRows.length, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
 		} catch (error) {
 			await client.query('ROLLBACK').catch(() => {});
 			throw error;
@@ -192,10 +261,10 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			}
 			const params = [randomUUID(), resolved.organizationId, resolved.projectId, record.envId];
 			for (const column of ENV_COLUMNS) {
-				const value = record[column];
+				const value = columnValue(column, record);
 				params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
-					? (value === undefined || value === null ? null : JSON.stringify(value))
-					: (value === undefined ? null : value));
+					? (value === null ? null : JSON.stringify(value))
+					: value);
 			}
 			const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
 			const result = await client.query(
@@ -274,6 +343,56 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 		}
 	}
 
+	/**
+	 * #14275 (Phase 2): upsert one provider-scoped row (envId must start with
+	 * `PROV-`). Idempotent: descriptive fields refresh, but `active` and the
+	 * surrogate `id` are preserved — provider refreshes never toggle operator
+	 * decisions. Builtin rows are never passed here (guarded).
+	 */
+	async function upsertProviderRow(tenant, row) {
+		if (!row || typeof row.envId !== 'string' || !row.envId.startsWith('PROV-')) {
+			throw new EnvironmentValidationError('provider rows must use PROV- namespaced envIds');
+		}
+		const resolved = requireTenant(tenant ?? tenantContext);
+		const client = await pool.connect();
+		try {
+			await client.query('BEGIN');
+			await withTenant(client, resolved);
+			const existing = await client.query(
+				'SELECT id, active FROM environments WHERE env_id = $1 LIMIT 1',
+				[row.envId]
+			);
+			const preservedId = existing.rows[0]?.id ?? randomUUID();
+			const preservedActive = existing.rows.length > 0 ? existing.rows[0].active : true;
+			const params = [preservedId, resolved.organizationId, resolved.projectId, row.envId, preservedActive];
+			for (const column of ENV_COLUMNS) {
+				if (column === 'active') continue; // preserved above, never provider-set
+				const value = columnValue(column, row);
+				params.push(column === 'browserstack_capabilities' || column === 'permission_scenario'
+					? (value === null ? null : JSON.stringify(value))
+					: value);
+			}
+			const placeholders = params.map((_, index) => `$${index + 1}`).join(', ');
+			const refreshed = ENV_COLUMNS.filter((column) => column !== 'active');
+			const updates = refreshed.map((column) => `${column} = EXCLUDED.${column}`).join(', ');
+			const result = await client.query(
+				`INSERT INTO environments (id, organization_id, project_id, env_id, active, ${ENV_COLUMNS.filter((c) => c !== 'active').join(', ')})
+				 VALUES (${placeholders})
+				 ON CONFLICT (organization_id, project_id, env_id) DO UPDATE SET
+					${updates}, updated_at = CURRENT_TIMESTAMP
+				 RETURNING *`,
+				params
+			);
+			await client.query('COMMIT');
+			return result.rows[0];
+		} catch (error) {
+			await client.query('ROLLBACK').catch(() => {});
+			throw error;
+		} finally {
+			client.release();
+		}
+	}
+
 	async function queryFiltered(client, filters, countOnly) {
 		const conditions = [];
 		const params = [];
@@ -317,10 +436,10 @@ export function createPostgresEnvironmentRepository(pool, options = {}) {
 			`SELECT * FROM environments ${where}
 			 ORDER BY platform, device, os_version, browser, browser_version
 			 LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-			[...params, Math.min(Math.max(limit, 1), 50000), Math.max(offset, 0)]
+			[...params, Math.min(Math.max(limit, 1), 80000), Math.max(offset, 0)]
 		);
 		return result.rows;
 	}
 
-	return { seed, list, count, get, create, update, remove };
+	return { seed, list, count, get, create, update, remove, upsertProviderRow };
 }

@@ -40,6 +40,9 @@ export function resolveForEnvironment(env) {
 			?? env.runtimeAttestedLevel
 			?? (env.executionType ? String(env.executionType).toLowerCase() : null),
 		availability: env.runtimeStatus ?? env.availability ?? null,
+		// R5 #14494: the board's honest unavailability reason travels with the
+		// selection so the live view can show REAL DEVICE UNAVAILABLE + reason.
+		unavailableReason: env.unavailableReason ?? null,
 		runtimeSessionId: env.runtimeSessionId ?? null,
 		selectedAt: env.selectedAt ?? null
 	});

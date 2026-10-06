@@ -367,7 +367,7 @@ async function closeOtherBrowsers(keepSession, runStore) {
 	);
 }
 
-export function ensureRuntime(session, runStore) {
+export async function ensureRuntime(session, runStore) {
 	const record = runStore.liveFor(session.id);
 	if (record.runtime) {
 		return record;
@@ -524,7 +524,7 @@ export function ensureRuntime(session, runStore) {
 	};
 
 	const service = headless.getToolContext().browserAutomationService;
-	const bridge = attachBrowserBridge(session, service, runStore, {
+	const bridge = await attachBrowserBridge(session, service, runStore, {
 		device: session.device,
 		deviceLandscape: session.deviceLandscape === true,
 		environment: session.environmentSnapshot
@@ -565,7 +565,7 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 	// Rehydrate only placeholder names before rebuilding prompt context. Values
 	// remain inside the encrypted host vault and browser substitution boundary.
 	session.secretNames = secretNames(session.id);
-	const record = ensureRuntime(session, runStore);
+	const record = await ensureRuntime(session, runStore);
 	const { runtime, bridge } = record;
 	// Consult the Device Runtime Manager (if attached) for the session's
 	// environment before executing — it decides the execution level honestly
@@ -1098,6 +1098,10 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 					executionLevel: bridge.execution?.level ?? null,
 					provider: bridge.execution?.provider ?? null,
 					emulatedUserAgent: bridge.execution?.emulatedUserAgent ?? null,
+					// RT5 (#14757): the engine actually launched + branded
+					// binary truth — findings context proves the identity.
+					launchedEngineId: bridge.execution?.launchedEngineId ?? null,
+					brandedBinary: bridge.runtimeFacts?.brandedBinary ?? facts.brandedBinary ?? null,
 					// Phase D3: runtime session + attestation travel with the
 					// recorded facts — evidence must belong to a verifiable
 					// runtime session for PASS/FAIL to be reported.
@@ -1120,6 +1124,19 @@ export async function runTurn(session, { task, resumeAnswer, retryAttempt = 0, i
 				await runStore.saveEvidenceArtifact(session, { bridge });
 			} catch (artifactError) {
 				console.warn('[agent] evidence artifact capture failed:', sanitizeErrorDetail(artifactError));
+			}
+		}
+		// R4 #14493: persist the runtime evidence bundle (observed identity,
+		// console, network, security blocks) alongside the final frame so every
+		// PASS verdict is traceable to the exact runtime that executed it.
+		if (typeof runStore.saveEvidenceBundle === 'function') {
+			try {
+				const diagnostics = typeof record.bridge?.service?.getDiagnostics === 'function'
+					? await record.bridge.service.getDiagnostics('ide', {}).catch(() => null)
+					: null;
+				await runStore.saveEvidenceBundle(session, { bridge }, { diagnostics });
+			} catch (bundleError) {
+				console.warn('[agent] evidence bundle capture failed:', sanitizeErrorDetail(bundleError));
 			}
 		}
 
@@ -1208,7 +1225,7 @@ export function summariseResult(toolName, result) {
 	}
 	if (toolName === 'browser_media') {
 		const application = result.observed?.requests?.filter(request => request.source === 'application').at(-1);
-		return `Synthetic microphone: ${JSON.stringify({ permission: result.permission, probe: result.probe, application, requestCount: result.observed?.requests?.length }).slice(0, 950)}`;
+		return `Media check: ${JSON.stringify({ capability: result.capability, reason: result.reason, permission: result.permission, cameraPermission: result.observed?.cameraPermission, verdict: result.verdict, probe: result.probe, callControls: result.callControls, application, requestCount: result.observed?.requests?.length }).slice(0, 950)}`;
 	}
 	if (toolName === 'browser_test_meeting_link') {
 		return `Meeting prejoin check: ${JSON.stringify({ url: result.url, title: result.title, joined: result.joined, code: result.code }).slice(0, 950)}`;

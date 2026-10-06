@@ -13,7 +13,11 @@ import {
 test('availabilityMeta maps known statuses and degrades gracefully', () => {
 	assert.equal(availabilityMeta('AVAILABLE').label, 'Available');
 	assert.equal(availabilityMeta('BUSY').label, 'Busy');
-	assert.equal(availabilityMeta('OFFLINE').label, 'Offline');
+	assert.equal(availabilityMeta('PREPARING').label, 'Preparing');
+	assert.equal(availabilityMeta('RUNNING').label, 'Running');
+	assert.equal(availabilityMeta('OFFLINE').label, 'Real device offline');
+	assert.equal(availabilityMeta('ERROR').label, 'Error');
+	assert.equal(availabilityMeta('UNAVAILABLE').label, 'Unavailable');
 	assert.equal(availabilityMeta('NOT_EXECUTABLE').label, 'Not executable');
 	// Unknown status renders as offline, never crashes.
 	assert.equal(availabilityMeta('garbage').dot, 'offline');

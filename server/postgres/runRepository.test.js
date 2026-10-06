@@ -699,18 +699,16 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 		literalCount === 2,
 		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
 	);
-	// Trailing params (merged engine/device/cohort/security + environment/testCase/runtime columns):
-	// runtime_facts, execution_provider_actual, execution_level_actual, test_case_id(nullable),
-	// environment_snapshot(json), environment_id(nullable), security_authorization, selected_tests.
-	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // runtime_facts
-	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // execution_provider_actual
-	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_level_actual
-	// Param tail after cohort: createdAt(-11), updatedAt(-12), queued_at(-10,
-	// null without queuedAt), paused_at(-9), selected_tests, security_authorization,
-	// then the environment block.
-	assert.equal(runInsert.params[runInsert.params.length - 10], null);         // queued_at
-	assert.equal(runInsert.params[runInsert.params.length - 9], null);          // paused_at
-	assert.equal(runInsert.params[runInsert.params.length - 11].getTime(), new Date(NOW).getTime()); // updated_at
+	// Param tail after cohort: createdAt(-12), updatedAt(-13), queued_at(-11,
+	// null without queuedAt), paused_at(-10), selected_tests, security_authorization,
+	// then the environment block, then matrix_run_id (trailing, null).
+	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // matrix_run_id
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // runtime_facts
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_provider_actual
+	assert.equal(runInsert.params[runInsert.params.length - 4], null);          // execution_level_actual
+	assert.equal(runInsert.params[runInsert.params.length - 11], null);         // queued_at
+	assert.equal(runInsert.params[runInsert.params.length - 10], null);         // paused_at
+	assert.equal(runInsert.params[runInsert.params.length - 12].getTime(), new Date(NOW).getTime()); // updated_at
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;

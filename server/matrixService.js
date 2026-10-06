@@ -1,0 +1,386 @@
+/**
+ * Matrix run service (2027.03.0, #14633 NI02 Phase 1).
+ *
+ * One shared workflow (test case) executed across many device/browser
+ * profiles, server-orchestrated, with per-profile result records — replacing
+ * the client-side loop (bulkRunView launchPairs → N × POST /api/sessions).
+ *
+ * Honesty contract (NI02 "Actual gaps" / NI03 "CRITICAL RESULT RULE"):
+ * an item's status may only become PASSED or FAILED through an actual
+ * execution outcome. Profiles that cannot or do not execute carry explicit
+ * states — NOT_RUN (deselected), UNAVAILABLE / BLOCKED (runtime missing),
+ * NOT_SUPPORTED (browser gate, e.g. DuckDuckGo), ERROR — never a derived pass.
+ *
+ * Follows the bugService pattern: local JSON backend + store-agnostic facade
+ * in one module; the postgres repository lives in
+ * postgres/matrixRunRepository.js and implements the same backend interface.
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { resolveBrowserSupport, BROWSER_SUPPORT_STATUS } from './browserSupportResolution.js';
+
+/** Per-item status vocabulary — the honest set, persisted per item. */
+export const MATRIX_ITEM_STATUSES = Object.freeze([
+	'PENDING', 'RUNNING', 'PASSED', 'FAILED',
+	'NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'BLOCKED', 'ERROR'
+]);
+
+export class MatrixValidationError extends Error {
+	constructor(message) {
+		super(message);
+		this.name = 'MatrixValidationError';
+		this.code = 'QASE_MATRIX_INVALID';
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Default profile matrix (NI02 default execution)
+// ---------------------------------------------------------------------------
+
+/**
+ * One representative environment per device category, per browser. The default
+ * matrix covers: iPhone, Android phone, iPad, Android tablet, Windows, macOS —
+ * the agreed NI01 categories — resolved against the LIVE catalog at request
+ * time (never hardcoded envIds, so catalog updates flow through).
+ */
+export const DEFAULT_PROFILE_RULES = Object.freeze([
+	{ id: 'iphone', platform: 'ios', device: 'iPhone 17 Pro', osVersion: '26.0' },
+	{ id: 'android-phone', platform: 'android', device: 'Pixel 9', osVersion: '16' },
+	{ id: 'ipad', platform: 'ipados', device: 'iPad Pro 13 (M4)', osVersion: '26.0' },
+	{ id: 'android-tablet', platform: 'android', device: 'Galaxy Tab S9', osVersion: '15' },
+	{ id: 'windows', platform: 'windows', device: 'Windows Laptop', osVersion: '11' },
+	{ id: 'macos', platform: 'macos', device: 'MacBook Air (M3)', osVersion: 'Tahoe' }
+]);
+
+/**
+ * Resolve the default matrix items from the live environment list.
+ * @returns {Array<{ruleId, envId}>} one envId per category rule (rules whose
+ * device/os no longer exist are skipped — never invented).
+ */
+export function resolveDefaultProfiles(listEnvironments) {
+	const items = [];
+	for (const rule of DEFAULT_PROFILE_RULES) {
+		const match = listEnvironments.find((env) => env.platform === rule.platform
+			&& env.device === rule.device
+			&& String(env.osVersion) === String(rule.osVersion));
+		if (match) items.push({ ruleId: rule.id, envId: match.envId });
+	}
+	return items;
+}
+
+// ---------------------------------------------------------------------------
+// Item expansion: profile × selected browsers
+// ---------------------------------------------------------------------------
+
+/**
+ * Expand requested profiles × selected browsers into item specs.
+ *
+ * Browsers absent from `selectedBrowsers` are recorded as NOT_RUN candidates
+ * (reason "deselected by user") so they can never render as PASSED; browsers
+ * resolving not_supported (DuckDuckGo) are recorded NOT_SUPPORTED with the
+ * provider's reason. Only executable combinations launch.
+ *
+ * @param {Array} environments resolved environment records (with browserSupport)
+ * @param {Array<{envId, browsers?: string[]}>} profileRequests per-profile request
+ * @param {string[]} selectedBrowsers browser codes selected for this run
+ */
+export async function expandMatrixItems(environments, profileRequests, selectedBrowsers, { deselectedBrowsers = [] } = {}) {
+	if (!Array.isArray(profileRequests) || profileRequests.length === 0) {
+		throw new MatrixValidationError('At least one profile is required.');
+	}
+	if (!Array.isArray(selectedBrowsers) || selectedBrowsers.length === 0) {
+		throw new MatrixValidationError('At least one browser must be selected.');
+	}
+	const selected = new Set(selectedBrowsers.map(String));
+	// #14649: run-level deselections (submitted via `browsers` while the full
+	// supported set travelled in `selectedBrowsers`) materialize as NOT_RUN
+	// items so a deselection is recorded per matrix run, never invisible.
+	const deselected = new Set(deselectedBrowsers.map(String));
+	const byEnvId = new Map(environments.map((env) => [env.envId, env]));
+	// All env records for the same (platform, device, osVersion) — the list is
+	// one record per browser+version, so a profile's browser target must be
+	// found among its siblings.
+	const siblingsKey = (env) => `${env.platform}|${env.device}|${env.osVersion}`;
+	const siblings = new Map();
+	for (const env of environments) {
+		const key = siblingsKey(env);
+		if (!siblings.has(key)) siblings.set(key, []);
+		siblings.get(key).push(env);
+	}
+	const items = [];
+	const seen = new Set();
+	for (const request of profileRequests) {
+		const env = byEnvId.get(String(request.envId ?? ''));
+		if (!env) {
+			throw new MatrixValidationError(`Unknown environment "${request.envId}".`);
+		}
+		const family = siblings.get(siblingsKey(env)) ?? [env];
+		// Per-profile browser override, else the run-wide selection ∪ explicit
+		// run-level deselections (kept as NOT_RUN items).
+		const overrideBrowsers = Array.isArray(request.browsers) && request.browsers.length > 0
+			? request.browsers.map(String)
+			: null;
+		const browsers = overrideBrowsers
+			?? [...new Set([...selected, ...deselected])];
+		for (const code of browsers) {
+			const support = await resolveBrowserSupport(env.platform, code, {});
+			// Newest version first (env list may be unsorted).
+			const targets = family
+				.filter((candidate) => candidate.browserCode === code)
+				.sort((a, b) => Number(b.browserVersion) - Number(a.browserVersion));
+			if (!targets.length) {
+				// Browser not offered on this platform (inventory-level gap, e.g.
+				// Safari on Windows): NOT_SUPPORTED with an inventory reason.
+				items.push({ env, browserCode: code, status: 'NOT_SUPPORTED', reason: `${code} is not available on ${env.platform}.` });
+				continue;
+			}
+			const target = targets[0];
+			const key = `${env.envId}|${code}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			if (support.status === BROWSER_SUPPORT_STATUS.NOT_SUPPORTED) {
+				items.push({ env: target, browserCode: code, browserVersion: target.browserVersion, status: 'NOT_SUPPORTED', reason: support.reason, browserSupport: support });
+				continue;
+			}
+			if (!selected.has(code) || deselected.has(code)) {
+				items.push({ env: target, browserCode: code, browserVersion: target.browserVersion, status: 'NOT_RUN', reason: 'Deselected by user.', browserSupport: support });
+				continue;
+			}
+			items.push({ env: target, browserCode: code, browserVersion: target.browserVersion, status: 'PENDING', reason: null, browserSupport: support, envTarget: target });
+		}
+	}
+	return items;
+}
+
+// RT1 (#14680): envBrowserstackFlag removed — no external provider
+// participates in browser executability; the registry-driven resolver owns
+// the truth. Kept as a no-op for any internal callers during transition.
+function envBrowserstackFlag() {
+	return {};
+}
+
+// ---------------------------------------------------------------------------
+// Local JSON backend (mirrors bugService's createLocalBugBackend)
+// ---------------------------------------------------------------------------
+
+export function createLocalMatrixBackend(options = {}) {
+	const stateDir = options.stateDir ?? path.join(process.cwd(), '.qase');
+	const stateFile = options.stateFile ?? path.join(stateDir, 'matrix-runs.json');
+	/** @type {Map<string, object>} */
+	const byId = new Map();
+	let loaded = false;
+
+	function loadFromDisk() {
+		if (loaded) return;
+		loaded = true;
+		try {
+			const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+			for (const run of Array.isArray(parsed) ? parsed : []) {
+				if (run?.id) byId.set(run.id, run);
+			}
+		} catch {
+			/* first boot */
+		}
+	}
+
+	function persistNow() {
+		try {
+			fs.mkdirSync(stateDir, { recursive: true });
+			const tmp = `${stateFile}.tmp-${process.pid}-${randomUUID()}`;
+			fs.writeFileSync(tmp, JSON.stringify([...byId.values()], undefined, '\t'), { mode: 0o600 });
+			fs.renameSync(tmp, stateFile);
+		} catch {
+			/* a dashboard that cannot write its state file is still usable */
+		}
+	}
+
+	return {
+		async list(tenant) {
+			loadFromDisk();
+			return [...byId.values()]
+				.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+		},
+		async get(tenant, id) {
+			loadFromDisk();
+			return byId.get(id) ?? null;
+		},
+		async create(tenant, record) {
+			loadFromDisk();
+			byId.set(record.id, structuredClone(record));
+			persistNow();
+			return structuredClone(record);
+		},
+		async update(tenant, id, patch) {
+			loadFromDisk();
+			const existing = byId.get(id);
+			if (!existing) return null;
+			const next = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+			byId.set(id, next);
+			persistNow();
+			return structuredClone(next);
+		},
+		async updateItem(tenant, matrixRunId, itemId, patch) {
+			loadFromDisk();
+			const run = byId.get(matrixRunId);
+			if (!run) return null;
+			const index = run.items.findIndex((item) => item.id === itemId);
+			if (index === -1) return null;
+			run.items[index] = { ...run.items[index], ...patch, updatedAt: new Date().toISOString() };
+			persistNow();
+			return structuredClone(run.items[index]);
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Store-agnostic facade
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} backend list/get/create/update/updateItem (local JSON or postgres)
+ * @param {object} services { environments, runs, testCases }
+ */
+export function createMatrixService(backend, { environments, runs, testCases } = {}) {
+	function requireServices() {
+		if (!environments || !runs || !testCases) {
+			throw new MatrixValidationError('Matrix runs require environment, run, and test-case services.');
+		}
+	}
+
+	/**
+	 * Create a matrix run and its items. Validates the workflow + every profile
+	 * against the live services exactly as POST /api/sessions does, then stores
+	 * honest per-item states. Execution is started separately (start).
+	 */
+	async function create(input, { defaultsUsed = false, ownerUserId = null } = {}) {
+		requireServices();
+		const testCaseId = String(input?.testCaseId ?? '').trim();
+		if (!testCaseId) throw new MatrixValidationError('testCaseId is required.');
+		const targetUrl = String(input?.targetUrl ?? '').trim();
+		if (!/^https?:\/\//i.test(targetUrl)) throw new MatrixValidationError('targetUrl must be an http(s) URL.');
+		// #14651 (NI03): default = the FULL agreed matrix including DuckDuckGo —
+		// unsupported browsers are part of the default run so their honest
+		// NOT_SUPPORTED status + reason appear in results and coverage; they
+		// never execute (capability gate) and can never become PASSED.
+		const selectedBrowsers = (input?.selectedBrowsers ?? ['chrome', 'edge', 'firefox', 'safari', 'opera', 'brave', 'duckduckgo'])
+			.map(String);
+		// #14649: run-level deselection — `browsers` names the subset the user
+		// kept; browsers present in selectedBrowsers but absent from it are
+		// recorded per item as NOT_RUN ("Deselected by user."), never dropped.
+		const deselectedBrowsers = Array.isArray(input?.browsers)
+			? selectedBrowsers.filter((code) => !input.browsers.map(String).includes(code))
+			: [];
+		const list = await environments.list({ limit: 80000 });
+		let profileRequests = Array.isArray(input?.profiles) ? input.profiles : null;
+		let defaultsSnapshot = null;
+		if (!profileRequests) {
+			profileRequests = resolveDefaultProfiles(list).map((entry) => ({ envId: entry.envId }));
+			defaultsSnapshot = { rules: DEFAULT_PROFILE_RULES, resolved: profileRequests };
+			defaultsUsed = true;
+		}
+		// Workflow is shared, not duplicated: ONE test case reference frozen per run.
+		// Note: environment membership is NOT enforced per item here — the matrix
+		// intentionally crosses profiles beyond a case's assigned environments
+		// (the assignment UI remains for single runs).
+		const testCase = await testCases.resolveForRun(testCaseId, null);
+		const items = (await expandMatrixItems(list, profileRequests, selectedBrowsers, { deselectedBrowsers }))
+			.map((spec, ordinal) => ({
+				id: randomUUID(),
+				ordinal,
+				testCaseId,
+				environmentId: spec.env.envId,
+				profileId: spec.env.profileId,
+				platform: spec.env.platform,
+				device: spec.env.device,
+				os: spec.env.os,
+				osVersion: spec.env.osVersion,
+				browser: spec.browserCode,
+				browserCode: spec.browserCode,
+				browserVersion: spec.browserVersion ?? spec.env.browserVersion,
+				deviceType: spec.env.deviceType ?? null,
+			status: spec.status,
+			reason: spec.reason ?? null,
+			// #14633: browser capability snapshot travels with the item so the
+			// orchestrator can re-gate at execution time (credentials may have
+			// changed since creation — re-resolved there; this is the frozen
+			// creation-time verdict for auditability).
+			browserSupport: spec.browserSupport ?? null,
+			sessionId: null,
+				verdict: null,
+				error: null,
+				findings: [],
+				startedAt: null,
+				finishedAt: null,
+				durationMs: null,
+				// #14650 (NI02 Phase 2): per-profile evidence — filled at
+				// execution; stays null/[] until a real session produced them.
+				executionLevel: null,
+				executionProvider: null,
+				artifactRefs: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString()
+			}));
+		const record = {
+			id: `matrix-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+			title: String(input?.title ?? `Matrix — ${testCase.title ?? testCaseId}`),
+			targetUrl,
+			status: 'pending',
+			defaultsUsed,
+			defaultsSnapshot,
+			requestedProfiles: profileRequests,
+			requestedBrowsers: selectedBrowsers,
+			itemCount: items.length,
+			items,
+			ownerUserId: input?.ownerUserId ?? ownerUserId ?? null,
+			createdAt: new Date().toISOString(),
+			startedAt: null,
+			finishedAt: null,
+			updatedAt: new Date().toISOString()
+		};
+		return backend.create(null, record);
+	}
+
+	/**
+	 * Honest-state guard: PASSED/FAILED may only be written when the item has
+	 * a completed execution outcome (a linked session with a verdict). Every
+	 * other transition is checked against the frozen vocabulary.
+	 */
+	async function updateItem(matrixRunId, itemId, patch) {
+		loadStatusVocabulary();
+		const run = await backend.get(null, matrixRunId);
+		if (!run) throw new MatrixValidationError(`Unknown matrix run "${matrixRunId}".`);
+		const item = run.items.find((candidate) => candidate.id === itemId);
+		if (!item) throw new MatrixValidationError(`Unknown matrix item "${itemId}".`);
+		if (patch?.status !== undefined) {
+			const status = String(patch.status);
+			if (!MATRIX_ITEM_STATUSES.includes(status)) {
+				throw new MatrixValidationError(`Invalid item status "${status}".`);
+			}
+			if ((status === 'PASSED' || status === 'FAILED')) {
+				if (!patch.sessionId && !item.sessionId) {
+					throw new MatrixValidationError('PASSED/FAILED requires a completed execution (sessionId) — never fabricate outcomes.');
+				}
+			}
+		}
+		return backend.updateItem(null, matrixRunId, itemId, patch);
+	}
+
+	function loadStatusVocabulary() { /* vocabulary frozen at module scope */ }
+
+	return {
+		create,
+		updateItem,
+		get: (id) => backend.get(null, id),
+		list: () => backend.list(null),
+		/** Orchestrator-internal: set run status + timing fields. */
+		async _setStatus(id, status, timing = {}) {
+			if (!['pending', 'running', 'done', 'error', 'interrupted'].includes(status)) {
+				throw new MatrixValidationError(`Invalid matrix run status "${status}".`);
+			}
+			return backend.update(null, id, { status, ...timing });
+		},
+		backend
+	};
+}

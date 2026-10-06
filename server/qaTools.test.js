@@ -202,7 +202,7 @@ test('report markdown states the execution level from recorded facts, never the 
 		environmentSnapshot: { envId: 'ENV-Y', device: 'Pixel 9', osVersion: '15', browser: 'Chrome' },
 		runtimeFacts: { executionLevel: 'REAL_DEVICE', provider: 'browserstack' }
 	});
-	assert.match(buildReportMarkdown(real.session), /\*\*Execution:\*\* REAL DEVICE \(browserstack\)/);
+	assert.match(buildReportMarkdown(real.session), /\*\*Execution:\*\* REAL DEVICE \(remote environment runtime\)/);
 });
 
 test('report markdown marks environment runs without a level NOT AVAILABLE FOR REAL EXECUTION; old runs unaffected', () => {
@@ -217,4 +217,66 @@ test('report markdown marks environment runs without a level NOT AVAILABLE FOR R
 	const legacy = fixture();
 	delete legacy.session.runtimeFacts;
 	assert.doesNotMatch(buildReportMarkdown(legacy.session), /Execution/);
+});
+
+// ---------------------------------------------------------------------------
+// R2 #14491 · Runtime identity verification in the integrity gate
+// ---------------------------------------------------------------------------
+
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.65 Safari/537.36';
+const FIREFOX_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0';
+
+test('R2: runtime identity matching the selection does not block a passing run', async () => {
+	const target = fixture({
+		environmentSnapshot: { envId: 'ENV-WIN-CHROME-141', platform: 'windows', browser: 'Chrome', browserCode: 'chrome', browserVersion: '141', os: 'Windows', osVersion: '11' },
+		runtimeFacts: { executionLevel: 'SIMULATED', userAgent: CHROME_UA, capturedAt: new Date().toISOString() }
+	});
+	const published = await target.finish.run({ ...report, verdict: 'pass' });
+	assert.equal(published.success, true);
+	assert.equal(target.session.report.runtimeIdentity?.browserCode, 'chrome');
+	assert.equal(target.session.report.runtimeIdentity?.browserVersionAuthoritative, true);
+});
+
+test('R2: Chrome executing when Firefox was selected downgrades the verdict to BLOCKED', async () => {
+	const target = fixture({
+		environmentSnapshot: { envId: 'ENV-WIN-FIREFOX-141', platform: 'windows', browser: 'Firefox', browserCode: 'firefox', browserVersion: '141', os: 'Windows', osVersion: '11' },
+		runtimeFacts: { executionLevel: 'SIMULATED', userAgent: CHROME_UA, capturedAt: new Date().toISOString() }
+	});
+	const published = await target.finish.run({ ...report, verdict: 'pass' });
+	assert.equal(published.success, true);
+	assert.equal(published.verdict, 'blocked');
+	assert.ok(
+		(target.session.report.notCovered ?? []).some((line) => /Runtime identity mismatch/.test(String(line))),
+		'block reason names the mismatch'
+	);
+});
+
+test('R2: browser version drift (selected 140, runtime reports 141) blocks', async () => {
+	const target = fixture({
+		environmentSnapshot: { envId: 'ENV-WIN-CHROME-140', platform: 'windows', browser: 'Chrome', browserCode: 'chrome', browserVersion: '140', os: 'Windows', osVersion: '11' },
+		runtimeFacts: { executionLevel: 'SIMULATED', userAgent: CHROME_UA, capturedAt: new Date().toISOString() }
+	});
+	const published = await target.finish.run({ ...report, verdict: 'pass' });
+	assert.equal(published.verdict, 'blocked');
+	assert.ok((target.session.report.notCovered ?? []).some((line) => /version mismatch/.test(String(line))));
+});
+
+test('R2: runs without an environment or observable facts keep the legacy behavior', async () => {
+	const noEnv = fixture({ runtimeFacts: { executionLevel: 'SIMULATED', userAgent: CHROME_UA } });
+	assert.equal((await noEnv.finish.run({ ...report, verdict: 'pass' })).success, true);
+	const noFacts = fixture({ environmentSnapshot: { envId: 'ENV-X', platform: 'windows', browserCode: 'chrome', browserVersion: '141' }, runtimeFacts: undefined });
+	delete noFacts.session.runtimeFacts;
+	const published = await noFacts.finish.run({ ...report, verdict: 'pass' });
+	// No observable identity → runtimeConnected check fails → blocked (pre-R2 behavior).
+	assert.equal(published.verdict, 'blocked');
+});
+
+test('R2: report markdown carries the runtime-observed browser identity', () => {
+	const observed = fixture({
+		environmentSnapshot: { envId: 'ENV-MAC-FIREFOX-141', platform: 'macos', browser: 'Firefox', browserCode: 'firefox', browserVersion: '141', os: 'macOS', osVersion: '15' },
+		runtimeFacts: { executionLevel: 'SIMULATED', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.7; rv:141.0) Gecko/20100101 Firefox/141.0', capturedAt: new Date().toISOString() }
+	});
+	void observed.finish.run({ ...report, verdict: 'pass' });
+	const markdown = buildReportMarkdown(observed.session);
+	assert.match(markdown, /Runtime browser \(observed\):\*\* firefox 141\.0, Gecko engine/);
 });

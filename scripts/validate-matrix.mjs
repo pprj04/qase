@@ -9,7 +9,7 @@
  *
  * Exits non-zero when ANY check fails. Prints one PASS/FAIL line per point.
  */
-import { generateEnvironments, availabilityReport, safariVersionFor } from '../server/environmentCatalog.js';
+import { generateEnvironments, availabilityReport, safariVersionFor, channelForVersion, BROWSERS, BROWSER_VERSIONS, WINDOWS_DEVICES, APPLE_DEVICES } from '../server/environmentCatalog.js';
 
 const base = process.argv[2] ?? process.env.QASE_PUBLIC_URL;
 
@@ -75,6 +75,61 @@ check(7, 'Regeneration is deterministic (same IDs in same order)', (() => {
 	const again = generateEnvironments();
 	return again.every((e, i) => e.envId === environments[i].envId);
 })(), 'ordering or ids drifted');
+
+// 7b. (2027.02.0 #14420) Release channels are declared per browser and label
+// versions by POSITION in the version list (no hardcoded "current" number).
+const channelIssues = [];
+for (const browser of BROWSERS) {
+	if (!Array.isArray(browser.channels) || browser.channels.length === 0 || browser.channels.at(-1) !== 'stable') {
+		channelIssues.push(`${browser.code}: bad channels declaration`);
+		continue;
+	}
+	const versions = BROWSER_VERSIONS[browser.code] ?? [];
+	for (const version of versions) {
+		const label = channelForVersion(browser.code, version);
+		const distance = versions.length - 1 - versions.indexOf(version);
+		const expected = distance < browser.channels.length - 1 ? browser.channels[distance] : 'stable';
+		if (label !== expected) channelIssues.push(`${browser.code} ${version}: ${label} != ${expected}`);
+	}
+}
+check('7b', 'Release channels declared per browser, labeled by list position (not hardcoded versions)', channelIssues.length === 0,
+	channelIssues.slice(0, 5).join('; '));
+
+// 7b-client. (M6 #14425) The client channel mirror (public/browserChannels.js)
+// must stay in lockstep with the server ladders — a catalog bump that misses
+// the mirror silently degrades labels to 'stable' in the matrix UI.
+const clientMirror = await import('../public/browserChannels.js');
+const mirrorDrift = [];
+for (const browser of BROWSERS) {
+	const serverLadder = JSON.stringify(browser.channels ?? []);
+	const clientLadder = JSON.stringify(clientMirror.BROWSER_CHANNELS[browser.code] ?? null);
+	if (serverLadder !== clientLadder) mirrorDrift.push(`${browser.code}: channels ${clientLadder} != server ${serverLadder}`);
+	const serverVersions = JSON.stringify(BROWSER_VERSIONS[browser.code] ?? null);
+	const clientVersions = JSON.stringify(clientMirror.BROWSER_VERSIONS[browser.code] ?? null);
+	if (serverVersions !== clientVersions) mirrorDrift.push(`${browser.code}: versions drift`);
+}
+for (const code of Object.keys(clientMirror.BROWSER_CHANNELS)) {
+	if (!BROWSERS.some((b) => b.code === code)) mirrorDrift.push(`${code}: client-only ladder`);
+}
+check('7b-client', 'Client channel mirror (public/browserChannels.js) matches server ladders exactly', mirrorDrift.length === 0,
+	mirrorDrift.slice(0, 5).join('; '));
+
+// 7c. (2027.02.0 #14420) Surface hardware models + missing Apple Silicon
+// entry models exist with only hardware-supported OS versions.
+const requiredWindows = ['SURFPRO9', 'SURFPRO10', 'SURFPRO11', 'SURFLAP5', 'SURFLAP6', 'SURFLAP7', 'SURFGO3'];
+const requiredMac = ['MACMBA-M1', 'MACMBP13-M1', 'MACMBP13-M2', 'MACIMAC24-M1'];
+const missingDevices = [
+	...requiredWindows.filter((slug) => !WINDOWS_DEVICES.some((d) => d.slug === slug)),
+	...requiredMac.filter((slug) => !APPLE_DEVICES.some((d) => d.slug === slug))
+];
+const illegalDeviceOs = [...WINDOWS_DEVICES, ...APPLE_DEVICES].filter((d) => {
+	const ceiling = d.platformId === 'windows' ? (d.slug.startsWith('SURFPRO') || ['SURFLAP6', 'SURFLAP7'].includes(d.slug) ? ['11'] : null)
+		: d.slug === 'MACMBA-M1' || d.slug === 'MACMBP13-M1' || d.slug === 'MACMBP13-M2' ? ['Monterey', 'Ventura', 'Sonoma', 'Sequoia']
+			: d.slug === 'MACIMAC24-M1' ? ['Monterey', 'Ventura', 'Sonoma'] : null;
+	return ceiling && !d.osVersions.every((v) => ceiling.includes(v));
+});
+check('7c', 'Surface + Apple Silicon entry models present, hardware-gated OS ranges only', missingDevices.length === 0 && illegalDeviceOs.length === 0,
+	`missing: ${missingDevices.join(', ') || 'none'}; bad ranges: ${illegalDeviceOs.map((d) => d.slug).join(', ') || 'none'}`);
 
 // 8-13: live API checks (need the instance)
 let apiOk = true;

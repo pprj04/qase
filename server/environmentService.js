@@ -9,9 +9,11 @@ import {
 	BROWSERS,
 	safariVersionFor,
 	buildEnvId,
+	buildProfileId,
 	availabilityReport,
 	ENVIRONMENT_CATALOG_VERSION
 } from './environmentCatalog.js';
+import { resolveBrowserSupportSync } from './browserSupportResolution.js';
 
 /** Index of the frozen catalog by envId for metadata lookups. */
 const CATALOG_BY_ENV_ID = new Map(generateEnvironments().map((env) => [env.envId, env]));
@@ -120,8 +122,18 @@ export async function normalizeEnvironmentInput(input, options = {}) {
 		? input.executionLevelRequested
 		: null;
 
+	const envId = options.envId ?? buildEnvId(platformId, device.slug, osVersion, browser.envCode, resolvedVersion);
+	// Custom environments (explicit envId) build on a catalog combination but
+	// are distinct rows — suffix the alias so it can never collide with the
+	// builtin environment's profile_id (index is non-unique anyway, but stable
+	// aliases must stay unambiguous in reporting).
+	const profileId = options.envId
+		? `${buildProfileId(platformId, device.slug, osVersion, browser.code, resolvedVersion)}-${options.envId.toLowerCase().replace(/[^a-z0-9]+/g, '')}`
+		: buildProfileId(platformId, device.slug, osVersion, browser.code, resolvedVersion);
+
 	return {
-		envId: options.envId ?? buildEnvId(platformId, device.slug, osVersion, browser.envCode, resolvedVersion),
+		envId,
+		profileId,
 		platform: platformId,
 		platformLabel: platform.label,
 		device: device.name,
@@ -191,6 +203,14 @@ export function rowToEnvironment(row) {
 	return {
 		id: row.id,
 		envId: row.env_id ?? row.envId,
+		profileId: row.profile_id ?? row.profileId
+			// Rows persisted before 2027.03.0 carry no profile_id column — derive
+			// it deterministically (frozen catalog lookup, else from row fields)
+			// so the alias is always present on read.
+			?? findCatalogEnvironment(row.env_id ?? row.envId)?.profileId
+			?? (row.device_model_slug && row.platform
+				? buildProfileId(row.platform, row.device_model_slug, row.os_version ?? row.osVersion, row.browser_code ?? row.browserCode, row.browser_version ?? row.browserVersion)
+				: undefined),
 		platform: row.platform,
 		platformLabel: row.platform_label ?? row.platformLabel,
 		device: row.device,
@@ -227,10 +247,13 @@ export function rowToEnvironment(row) {
  */
 
 /** Runtime metadata attached per environment. `runtimeSessionId`/`runtimeStatus`
- * are null until a runtime session exists for this environment. */
+ * are null/unavailable until a runtime session exists for this environment.
+ * R1 #14490: honest baseline — a catalog row never claims AVAILABLE by
+ * default; the device runtime board (seeded per environment at boot) is the
+ * only source that upgrades it. */
 const RUNTIME_PLACEHOLDER = Object.freeze({
 	runtimeSessionId: null,
-	runtimeStatus: 'AVAILABLE',
+	runtimeStatus: 'UNAVAILABLE',
 	lastTested: null,
 	lastResult: null
 });
@@ -257,9 +280,17 @@ export function withExecutionMetadata(env) {
 			? 'SIMULATED'
 			: 'VIRTUAL_DEVICE';
 	const { devicePixelRatio, resolution } = emulationMetadata(env);
+	// #14632 (NI01 Phase 2): browser-level executability travels with every
+	// environment read so the picker, run start, and findings all see the same
+	// provider-derived truth (duckduckgo=NOT SUPPORTED, opera/brave/safari
+	// engine-equivalent locally, …). Recomputed on read — never cached.
+	// RT1 (#14680): sync resolution against the last registry probe — no
+	// external provider participates; branded binaries upgrade honestly.
+	const browserSupport = resolveBrowserSupportSync(env.platform, env.browserCode);
 	return {
 		...env,
 		executionType: level,
+		browserSupport,
 		deviceId: env.deviceModelSlug ?? env.envId,
 		deviceManufacturer: env.platform === 'ios' || env.platform === 'macos'
 			? 'Apple'
@@ -296,6 +327,22 @@ export function createLocalEnvironmentBackend(options = {}) {
 	/** @type {Map<string, any>} */
 	const byEnvId = new Map();
 	let loaded = false;
+	/**
+	 * #14275: seed provider-overlay sources. The factory registers external
+	 * providers in the module registry; a lazily-imported helper avoids a
+	 * circular import (catalogProviderRegistry imports environmentCatalog
+	 * only, but environmentService → registry → catalog is kept one-way).
+	 */
+	async function providerRegistrySlugs() {
+		try {
+			const { registeredCatalogProviders } = await import('./catalogProviderRegistry.js');
+			return registeredCatalogProviders()
+				.filter((provider) => provider.connected !== false)
+				.map((provider) => provider.slug);
+		} catch {
+			return [];
+		}
+	}
 
 	function loadFromDisk() {
 		if (loaded) return;
@@ -354,6 +401,14 @@ export function createLocalEnvironmentBackend(options = {}) {
 	}
 
 	return {
+		/**
+		 * Seed is idempotent and never resets `active` — operator deprecations
+		 * survive catalog refreshes. #14275 (Phase 2): builtin rows come from
+		 * the frozen catalog generator; registered connected providers
+		 * contribute their overlay rows (namespaced PROV- envIds) on top so a
+		 * fresh seed sees provider data too. Registry failure never blocks
+		 * seeding — builtin remains authoritative.
+		 */
 		async seed() {
 			loadFromDisk();
 			const generated = generateEnvironments();
@@ -362,16 +417,33 @@ export function createLocalEnvironmentBackend(options = {}) {
 				const existing = byEnvId.get(env.envId);
 				byEnvId.set(env.envId, existing ? { ...env, active: existing.active } : { id: randomUUID(), ...env });
 			}
+			// #14275: provider overlay rows (additive, PROV- namespaced).
+			let providerRows = 0;
+			try {
+				const { mergeCatalog } = await import('./catalogProviderRegistry.js');
+				const merged = await mergeCatalog(['builtin', ...(await providerRegistrySlugs())]);
+				for (const env of merged.environments) {
+					if (!String(env.envId).startsWith('PROV-')) continue;
+					const existing = byEnvId.get(env.envId);
+					byEnvId.set(env.envId, existing ? { ...env, active: existing.active, id: existing.id } : { id: randomUUID(), ...env });
+					providerRows += 1;
+				}
+			} catch {
+				/* registry unavailable → builtin-only seed, builtin stays authoritative */
+			}
 			// 2027.01.0 (#14273): retired catalog rows (e.g. the macOS
 			// one-pseudo-device-per-OS entries replaced by hardware models)
 			// are deactivated, never deleted — old references stay resolvable.
+			// Provider rows are never retired by a builtin-only refresh.
+			const providerPrefix = 'PROV-';
 			for (const [envId, record] of byEnvId) {
+				if (envId.startsWith(providerPrefix)) continue;
 				if (!generatedIds.has(envId) && record.active !== false) {
 					byEnvId.set(envId, { ...record, active: false, retiredFromCatalog: ENVIRONMENT_CATALOG_VERSION });
 				}
 			}
 			persistNow();
-			return { inserted: byEnvId.size, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
+			return { inserted: byEnvId.size, providerRows, catalogVersion: ENVIRONMENT_CATALOG_VERSION };
 		},
 		async list(tenant, filters = {}) {
 			loadFromDisk();
@@ -379,7 +451,7 @@ export function createLocalEnvironmentBackend(options = {}) {
 			const offset = Math.max(Number(filters.offset ?? 0), 0);
 			// 2027.01.0 (#14273): matrix grew to ~36.6k rows — clamp raised so
 			// one-shot picker fetches still see the full catalog.
-			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 50000);
+			const limit = Math.min(Math.max(Number(filters.limit ?? 500), 1), 80000);
 			return all.slice(offset, offset + limit);
 		},
 		async get(tenant, envId) {
@@ -522,7 +594,7 @@ export function createEnvironmentService(backend, options = {}) {
 	/** Facet values (with counts) over the filtered set, for the admin UI dropdowns. */
 	async function facets(filters = {}) {
 		const clean = sanitizeFilters(filters);
-		const facetQuery = { ...clean, limit: 50000, offset: 0 };
+		const facetQuery = { ...clean, limit: 80000, offset: 0 };
 		const rows = (await backend.list(withTenant(), facetQuery)).map(rowToEnvironment);
 		const dimension = (key) => {
 			const counts = new Map();
@@ -577,7 +649,11 @@ export function createEnvironmentService(backend, options = {}) {
 		update,
 		remove,
 		facets,
-		availability: () => availabilityReport(),
+		// #14632: availability resolution re-computed per call. RT1 (#14680):
+		// the local browser registry is the only provider — real branded
+		// binaries, launch-verified; a stale 'supported' verdict must never
+		// survive a registry change.
+		availability: () => availabilityReport({}),
 		catalogVersion: () => ENVIRONMENT_CATALOG_VERSION,
 		/**
 		 * #14275 (Phase 2): manual/API-triggered catalog refresh. Re-fetches

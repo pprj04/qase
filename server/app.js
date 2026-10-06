@@ -8,6 +8,8 @@ import { engineRegistryResolved, isEngineId } from './browserEngines.js';
 import { probeTargetReachability } from './targetReachability.js';
 import { assertApplicationServices } from './contracts.js';
 import { mountDemoSite } from './demoSite.js';
+import { mountDefectFixtures, listDefectFixtures, getDefectFixture, fixtureExpectation } from './defectFixtures.js';
+import { verifyFixtureAgainstProfile } from './defectFixtureRunner.js';
 import { createOperationalControls } from './operations.js';
 import { runWithRequestActor } from './requestActor.js';
 import { authThrottleKey, createAuthThrottle } from './authThrottle.js';
@@ -27,9 +29,14 @@ import {
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
+import { computeMatrixCoverage } from './matrixCoverage.js';
 import { createCatalogRoutes } from './catalogApi.js';
 import { createTestCaseRoutes } from './testCaseApi.js';
 import { createBugRoutes } from './bugApi.js';
+import { createMatrixRoutes } from './matrixApi.js';
+import { createMatrixOrchestrator } from './matrixOrchestrator.js';
+import { checkEnvironmentHealth } from './environmentHealth.js';
+import { resolveBrowserSupport } from './browserSupportResolution.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { publicQaTestCatalog } from './qaTestCatalog.js';
 import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
@@ -227,7 +234,12 @@ export function createApplication(options = {}) {
 		response.sendFile(path.join(publicDirectory, 'index.html'));
 	});
 	app.use(express.static(publicDirectory));
+	// #14650 (NI02 Phase 2): known-defect fixture pages — mounted BEFORE
+	// mountDemoSite because its router has a catch-all 404 under /demo that
+	// would otherwise swallow /demo/defects/*. Reproduction depends on the
+	// emulated form factor (viewport/touch), never fabricated.
 	if (demoEnabled) {
+		mountDefectFixtures(app);
 		mountDemoSite(app);
 	}
 
@@ -452,6 +464,24 @@ export function createApplication(options = {}) {
 		return session;
 	}
 
+	/**
+	 * #14652 (NI04): inject the matrix coverage snapshot for sessions spawned
+	 * by a matrix run, so the downloaded report renders the per-run gap
+	 * section from ACTUAL item data (userFeedback-style injection — the
+	 * session record itself is never mutated in the store).
+	 */
+	async function attachMatrixCoverage(session) {
+		if (!session?.matrixRunId || !services.matrix?.get || !services.matrix?.list) return session;
+		try {
+			const run = await services.matrix.get(session.matrixRunId);
+			if (!run) return session;
+			session.matrixCoverage = computeMatrixCoverage([run]);
+		} catch {
+			session.matrixCoverage = undefined;
+		}
+		return session;
+	}
+
 	/** Runs a turn detached: HTTP returns immediately and progress arrives by SSE. */
 	function startTurn(session, turnOptions) {
 		let turn;
@@ -537,12 +567,70 @@ export function createApplication(options = {}) {
 	// browserVersion, deviceType, executionProvider, active, isRealDevice, search,
 	// limit, offset).
 	// DB-backed catalog routes (Phase 2 of the device matrix): /api/catalog/*.
+	// #14648: mount the read-only /api/catalog/meta route BEFORE the
+	// /api/catalog/:entity wildcard these routes register, otherwise 'meta'
+	// resolves as an unknown catalog entity and the metadata endpoint 400s.
 	if (services.deviceCatalog) {
+		app.get('/api/catalog/meta', async (_request, response) => {
+			try {
+				const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+				response.set('Cache-Control', 'no-store');
+				response.json(await catalogProviderMeta());
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 		const { route: catalogRoutes } = createCatalogRoutes({
 			catalogBackend: services.deviceCatalog,
 			onError: safeErrorResponse
 		});
 		catalogRoutes(app);
+	}
+
+	// Launcher configuration catalog (QA matrix Phase 1, #14935): the complete
+	// honestly-annotated device–OS–browser–version set for the Start QA
+	// dialog. Derived from the environment catalog + browser support
+	// resolution + runtime board — no new data source, no invented versions.
+	if (services.environments) {
+		app.get('/api/qa-configurations', async (request, response) => {
+			try {
+				const query = request.query ?? {};
+				const limit = query.limit === undefined ? undefined : Number(query.limit);
+				if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 80000)) {
+					response.status(400).json({ error: 'limit must be an integer from 1 through 80000.' });
+					return;
+				}
+				const offset = query.offset === undefined ? undefined : Number(query.offset);
+				if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
+					response.status(400).json({ error: 'offset must be a non-negative integer.' });
+					return;
+				}
+				const { buildQaConfigurations } = await import('./qaConfigurations.js');
+				const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+				const [providersMeta] = await Promise.all([
+					catalogProviderMeta().catch(() => ({ providers: [] })),
+					Promise.resolve()
+				]);
+				const providers = (providersMeta?.providers ?? []).map((provider) => ({
+					slug: provider.slug,
+					name: provider.name ?? provider.slug,
+					kind: provider.kind ?? 'catalog',
+					connected: Boolean(provider.connected),
+					stale: Boolean(provider.stale)
+				}));
+				const board = services.deviceRuntime && typeof services.deviceRuntime.deviceBoard === 'function'
+					? services.deviceRuntime.deviceBoard()
+					: [];
+				const result = await buildQaConfigurations(
+					{ environmentsService: services.environments, providers, board },
+					query
+				);
+				response.set('Cache-Control', 'no-store');
+				response.json(result);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 	}
 
 	// Device runtime control plane (Phase 21): availability board, sessions,
@@ -552,9 +640,18 @@ export function createApplication(options = {}) {
 		// Pre-register every environment on the availability board so the UI
 		// can show honest execution type / availability before first use.
 		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
-			void Promise.resolve(services.environments.list({ limit: 50000 }))
-				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? []))
+			// RT2 (#14704): pass the real browser-support resolver so the board
+			// reflects which browsers the local runtime can genuinely execute.
+			const reseedBoard = () => Promise.resolve(services.environments.list({ limit: 80000 }))
+				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? [], { resolveBrowserSupport }))
 				.catch(() => { /* board fills lazily via sessions */ });
+			void reseedBoard();
+			// RT2 (#14753): the board is LIVE, not boot-only. Re-run the
+			// resolver on an interval so a capability change (binary removed /
+			// installed, registry TTL re-probe) flips statuses within one
+			// refresh interval. seedBoard preserves live sessions (BUSY/
+			// RUNNING wins — never rewritten) so this is safe mid-flight.
+			setInterval(() => { void reseedBoard(); }, 60_000).unref?.();
 		}
 		app.get('/api/device-runtime/devices', (request, response) => {
 			response.json({
@@ -622,6 +719,124 @@ export function createApplication(options = {}) {
 		})(app);
 	}
 
+	// Matrix runs — one shared workflow across device/browser profiles
+	// (#14633 NI02 Phase 1). The orchestrator binds to the session machinery
+	// that lives in this closure (startTurn, resolveEnvironmentForRun).
+	if (services.matrix) {
+		// Engine follows the browser: firefox → Firefox engine, safari → WebKit,
+		// everything else Chromium (the same mapping resolveExecution applies at
+		// launch — this is just the session-level default tag).
+		const engineForMatrixItem = (item) => {
+			if (item.browserCode === 'firefox') return 'firefox';
+			if (item.browserCode === 'safari') return 'webkit';
+			return 'chromium';
+		};
+		const orchestrator = createMatrixOrchestrator(
+			{ runs: services.runs, agent: services.agent, matrix: services.matrix, environments: services.environments },
+			{
+				// RT2 (#14704): pre-execution health gate — real engine/network/
+				// emulation probes; a FAIL blocks the item with the exact reason.
+				checkEnvironmentHealth,
+				// Start a real session for the item — the same path
+				// POST /api/sessions + message uses, so emulation, runtime gates,
+				// findings, and reports behave identically for matrix items.
+				startSession: async (matrixRun, item) => {
+					const environment = await resolveEnvironmentForRun(services, item.environmentId);
+					const session = await services.runs.create(
+						`${matrixRun.title} — ${item.device} · ${item.browser} ${item.browserVersion}`,
+						{
+							device: DEFAULT_DEVICE_ID,
+							engine: engineForMatrixItem(item),
+							ownerUserId: matrixRun.ownerUserId ?? undefined,
+							environmentId: environment.envId,
+							environmentSnapshot: environment,
+							testCaseId: matrixRun.items?.[0]?.testCaseId ?? item.testCaseId,
+							matrixRunId: matrixRun.id
+						}
+					);
+					return session;
+				},
+				sendTask: async (session, matrixRun) => {
+					await services.runs.addMessage(session, { role: 'user', text: matrixRun.targetUrl });
+					session.targetUrl = matrixRun.targetUrl;
+					await services.agent.ensureRuntime(session);
+					startTurn(session, { task: matrixRun.targetUrl });
+				},
+				// #14650 (NI02 Phase 2): per-profile evidence — list the
+				// artifacts the session ACTUALLY produced (screenshots/video
+				// from the existing Phase-22 store). Empty list = none
+				// captured; never fabricated.
+				collectArtifacts: async (session) => {
+					const list = services.artifacts?.list?.(session.id) ?? [];
+					return list.map((meta) => ({
+						artifactId: meta.artifactId,
+						type: meta.type,
+						contentType: meta.contentType,
+						bytes: meta.bytes,
+						capturedAt: meta.capturedAt,
+						label: meta.label ?? null
+					}));
+				},
+				// #14650 (NI02 Phase 2): known-defect fixtures verified per
+				// profile — the ENGINE probes the fixture page under the
+				// item's emulated context; verdicts record reproduced
+				// TRUE/FALSE/NOT_VERIFIED with evidence, never a guess.
+				// Note: listDefectFixtures() entries are summary-only (no
+				// verify/affects functions) — resolve the FULL fixture by id
+				// at verification time, never execute the stripped form.
+				resolveEnvironment: (item) => resolveEnvironmentForRun(services, item.environmentId),
+				verifyFixtures: listDefectFixtures(),
+				runFixtureVerification: ({ fixture, environment }) => {
+					const fullFixture = getDefectFixture(fixture?.id);
+					if (!fullFixture) {
+						return Promise.resolve({
+							reproduced: 'NOT_VERIFIED',
+							evidence: null,
+							error: `Unknown fixture "${fixture?.id}".`,
+							expected: 'NOT_VERIFIED'
+						});
+					}
+					const baseUrl = process.env.QASE_PUBLIC_URL?.trim()
+						|| `http://127.0.0.1:${Number(process.env.PORT ?? 5173)}`;
+					// The full fixture (with its affects predicate) is resolved
+					// HERE — the caller only ever sees the serializable summary,
+					// so the expectation must be computed on the full object.
+					return verifyFixtureAgainstProfile({ fixture: fullFixture, environment, baseUrl })
+						.then((verdict) => ({
+							...verdict,
+							expected: fixtureExpectation(fullFixture, environment)
+						}));
+				},
+			emit: (matrixRunId, payload) => {
+				// #14649: matrix events ride the existing SSE run bus keyed by
+				// matrix-run id. services.events.publish() re-targets a SESSION
+				// aggregate (it stamps updatedAt on its first argument), so we
+				// go through the raw run-store bus instead. Fan-out failures
+				// must never stall execution — swallow + log.
+				try {
+					services.runs?.bus?.emit?.(matrixRunId, {
+						type: payload.type,
+						sessionId: matrixRunId,
+						ts: Date.now(),
+						...payload
+					});
+				} catch (error) {
+					console.error('[matrix] event emit failed', matrixRunId, error);
+				}
+			}
+		}
+		);
+		services.matrixOrchestrator = orchestrator;
+		// #14633 (NI02 Phase 1): clean up any matrix run a previous container
+		// died mid-flight — dangling RUNNING items become ERROR "interrupted".
+		orchestrator.resumeRecovery();
+		createMatrixRoutes({
+			matrix: services.matrix,
+			orchestrator,
+			onError: safeErrorResponse
+		})(app);
+	}
+
 	// Coverage dashboard aggregation (Phase 7): cases × environments × runs.
 	if (services.coverage) {
 		app.get('/api/coverage', async (request, response) => {
@@ -641,8 +856,8 @@ export function createApplication(options = {}) {
 		try {
 			const query = request.query;
 			const limit = query.limit === undefined ? undefined : Number(query.limit);
-			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50000)) {
-				response.status(400).json({ error: 'limit must be an integer from 1 through 50000.' });
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 80000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 80000.' });
 				return;
 			}
 			const offset = query.offset === undefined ? undefined : Number(query.offset);
@@ -673,13 +888,17 @@ export function createApplication(options = {}) {
 
 	// Browser availability per platform, including why unavailable browsers
 	// (Brave, DuckDuckGo, Firefox-on-iOS) are excluded from the matrix.
+	// #14632: short cache — verdicts recompute per call server-side and must
+	// not survive a provider-credential change on the client for long.
 	app.get('/api/environments/availability', (_request, response) => {
-		response.set('Cache-Control', 'private, max-age=300');
+		response.set('Cache-Control', 'private, max-age=30');
 		response.json(services.environments.availability());
 	});
 
-	// #14275 (Phase 2): read-only catalog metadata — version, registered
-	// providers with connected/rowCount, generatedAt. No secrets, ever.
+	// #14648: read-only catalog metadata — version, registered
+	// providers with connected/rowCount, generatedAt (incl. live browser
+	// support report). No secrets, ever. Registered earlier (before the
+	// /api/catalog/:entity wildcard) when the device catalog is attached.
 	app.get('/api/catalog/meta', async (_request, response) => {
 		try {
 			const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
@@ -1407,7 +1626,7 @@ export function createApplication(options = {}) {
 		}
 
 		try {
-			services.agent.ensureRuntime(session);
+			await services.agent.ensureRuntime(session);
 		} catch (error) {
 			const message = sanitizeErrorDetail(error);
 			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
@@ -1532,7 +1751,7 @@ export function createApplication(options = {}) {
 			? buildSqaReportMarkdown(session.sqa.assessment)
 			: session.mode === 'founder'
 				? buildFounderReportMarkdown(session)
-				: services.reports.buildMarkdown(await attachUserFeedback(session, request.auth?.userId));
+				: services.reports.buildMarkdown(await attachMatrixCoverage(await attachUserFeedback(session, request.auth?.userId)));
 		response.type('text/markdown').send(markdown);
 	});
 

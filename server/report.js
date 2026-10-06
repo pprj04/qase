@@ -29,12 +29,14 @@ function environmentLine(session) {
 	// Phase 22: the execution label comes from RECORDED facts, never from the
 	// catalog capability hint — a simulated run must never read "real device".
 	const level = session.runtimeFacts?.executionLevel ?? session.executionLevel;
-	const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	const rawProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	// D7: user-facing report text uses QASE-neutral provider labels; the raw
+	// provider key stays internal (API contract unchanged).
+	const provider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawProvider] ?? rawProvider;
 	if (level === 'REAL_DEVICE') return `${label} — REAL DEVICE${provider ? ` (${provider})` : ''}`;
 	if (level === 'VIRTUAL_DEVICE') return `${label} — VIRTUAL DEVICE${provider ? ` (${provider})` : ''}`;
 	if (level === 'SIMULATED') return `${label} — SIMULATED${provider ? ` (${provider})` : ''}`;
-	const legacy = provider === 'browserstack' ? 'remote environment runtime' : provider;
-	return legacy ? `${label} — ${legacy}` : label;
+	return provider ? `${label} — ${provider}` : label;
 }
 
 /** A deterministic completion reply, grounded in the saved QA results. */
@@ -87,8 +89,17 @@ export function buildReportMarkdown(session) {
 	// the requested level — so no simulated run can pass as real-device evidence.
 	const execution = session.runtimeFacts?.executionLevel ?? session.executionLevel;
 	if (execution) {
-		const provider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		const rawProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		const provider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawProvider] ?? rawProvider;
 		lines.push(`- **Execution:** ${execution === 'REAL_DEVICE' ? 'REAL DEVICE' : execution}${provider ? ` (${provider})` : ''}`);
+		// R2 #14491: the runtime-authoritative browser identity — what the
+		// runtime OBSERVED, never the catalog's claim.
+		const identity = session.report?.runtimeIdentity;
+		if (identity?.browserCode) {
+			const observed = [identity.browserCode, identity.browserVersion].filter(Boolean).join(' ');
+			const enginePart = identity.engine ? `, ${identity.engine} engine` : '';
+			lines.push(`- **Runtime browser (observed):** ${observed}${enginePart}`);
+		}
 	} else if (session.environmentSnapshot) {
 		lines.push('- **Execution:** NOT AVAILABLE FOR REAL EXECUTION');
 	}
@@ -150,9 +161,50 @@ export function buildReportMarkdown(session) {
 		lines.push('## Recommendations', '', ...report.recommendations.map(item => `- ${item}`), '');
 	}
 
+	const matrixSection = buildMatrixSectionMarkdown(session);
+	if (matrixSection) lines.push(matrixSection);
+
 	const feedback = buildFeedbackSectionMarkdown(session);
 	if (feedback) lines.push(feedback);
 
+	return lines.join('\n');
+}
+
+/**
+ * Matrix coverage gap section (#14652 NI04 spec item 3). Rendered only for
+ * sessions spawned by a matrix run — the caller injects session.matrixCoverage
+ * (the computeMatrixCoverage output for that run) before report generation,
+ * mirroring the userFeedback injection pattern above. Every figure comes from
+ * the recorded item statuses; nothing is hardcoded.
+ */
+export function buildMatrixSectionMarkdown(session) {
+	const matrix = session.matrixCoverage;
+	if (!matrix || !matrix.execution) return '';
+	const exec = matrix.execution;
+	const lines = [];
+	lines.push('## Matrix coverage', '');
+	lines.push(`Profiles requested ${exec.profilesRequested} · executed ${exec.profilesExecuted} · passed ${exec.passed} · failed ${exec.failed} · not run ${exec.notRun} · unavailable ${exec.unavailable} · not supported ${exec.notSupported} · blocked ${exec.blocked} · error ${exec.error}`, '');
+	// RT5 (#14757): distinct coverage-state breakdown — every state listed
+	// separately; unexecuted environments never appear as Passed.
+	if (Array.isArray(exec.stateCounts) && exec.stateCounts.length) {
+		lines.push('**Coverage states**', '');
+		for (const state of exec.stateCounts) {
+			lines.push(`- ${state.label}: ${state.count}`);
+		}
+		lines.push('');
+	}
+	lines.push('**Devices**', '');
+	for (const category of matrix.deviceCategories ?? []) {
+		const mark = category.covered ? '✓' : '⚠';
+		lines.push(`- ${mark} ${category.label} — ${category.executed}/${category.requested} executed`);
+	}
+	lines.push('', '**Browsers**', '');
+	for (const browser of matrix.browsers ?? []) {
+		const mark = browser.covered ? '✓' : '⚠';
+		const reason = !browser.covered && browser.gapReason ? ` — ${browser.gapReason}` : '';
+		lines.push(`- ${mark} ${browser.browser} — ${browser.executed}/${browser.requested} executed${reason}`);
+	}
+	lines.push('');
 	return lines.join('\n');
 }
 

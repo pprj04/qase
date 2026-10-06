@@ -83,9 +83,12 @@ feedback: {
 		feedback: { create: async () => undefined, get: async () => undefined, list: async () => [], update: async () => undefined, remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		...(overrides.services ?? {})
 	};
+	if (overrides.refreshCatalog) {
+		services.environments.refreshCatalog = overrides.refreshCatalog;
+	}
 	const application = createApplication({
 		services,
-		access: createInstanceAccess({ tenantContext: TENANT }),
+		access: overrides.access ?? createInstanceAccess({ tenantContext: TENANT }),
 		sseHeartbeatMs: 1_000
 	});
 	const server = await new Promise(resolve => {
@@ -134,9 +137,9 @@ test('GET /api/environments validates limit/offset bounds', async () => {
 	const fx = await startFixture();
 	try {
 		assert.equal((await fx.json('/api/environments?limit=0')).status, 400);
-		assert.equal((await fx.json('/api/environments?limit=50001')).status, 400);
+		assert.equal((await fx.json('/api/environments?limit=80001')).status, 400);
 		assert.equal((await fx.json('/api/environments?offset=-1')).status, 400);
-		assert.equal((await fx.json('/api/environments?limit=50000&offset=0')).status, 200);
+		assert.equal((await fx.json('/api/environments?limit=80000&offset=0')).status, 200);
 	} finally {
 		await fx.close();
 	}
@@ -350,6 +353,72 @@ test('POST /api/environments/bulk-toggle requires envIds array and toggles throu
 		assert.equal(ok.status, 200);
 		assert.equal(ok.body.active, false);
 		assert.deepEqual(updated, [{ envIds: ['ENV-A', 'ENV-B'], active: false }]);
+	} finally {
+		await fx.close();
+	}
+});
+
+// ---------------------------------------------------------------------------
+// #14275 (Phase 2): catalog meta + refresh endpoints
+// ---------------------------------------------------------------------------
+
+test('GET /api/catalog/meta returns version and providers without secrets', async () => {
+	const fx = await startFixture();
+	try {
+		const res = await fx.json('/api/catalog/meta');
+		assert.equal(res.status, 200);
+		assert.equal(typeof res.body.catalogVersion, 'string');
+		assert.ok(Array.isArray(res.body.providers));
+		assert.ok(res.body.providers.some((p) => p.slug === 'builtin' && p.rowCount > 36000), 'builtin provider with real row count');
+		assert.equal(typeof res.body.generatedAt, 'string');
+		assert.ok(!JSON.stringify(res.body).match(/password|secret|token|access[_-]?key/i), 'no secret material in meta');
+	} finally {
+		await fx.close();
+	}
+});
+
+test('POST /api/catalog/refresh invokes the service and returns its result', async () => {
+	const calls = [];
+	const fx = await startFixture({
+		refreshCatalog: async () => {
+			calls.push(1);
+			return { refreshed: true, catalogVersion: '2027.03.0', attestations: 0, providers: [] };
+		}
+	});
+	try {
+		const res = await fx.json('/api/catalog/refresh', { method: 'POST' });
+		assert.equal(res.status, 200);
+		assert.equal(res.body.refreshed, true);
+		assert.equal(calls.length, 1);
+	} finally {
+		await fx.close();
+	}
+});
+
+test('POST /api/catalog/refresh is 403 for non-admin roles', async () => {
+	// Mount an access layer that attributes requests to a pilot (non-admin)
+	// identity, mirroring how embedded instance access stamps request.auth.
+	const memberAccess = {
+		mount(app) {
+			app.use('/api', (request, response, next) => {
+				request.auth = { ...TENANT, role: 'pilot' };
+				next();
+			});
+		}
+	};
+	let refreshCalls = 0;
+	const fx = await startFixture({
+		access: memberAccess,
+		refreshCatalog: async () => {
+			refreshCalls += 1;
+			return { refreshed: true };
+		}
+	});
+	try {
+		const res = await fx.json('/api/catalog/refresh', { method: 'POST' });
+		assert.equal(res.status, 403);
+		assert.match(res.body.error, /admin/i);
+		assert.equal(refreshCalls, 0, 'service must not be invoked for non-admin');
 	} finally {
 		await fx.close();
 	}

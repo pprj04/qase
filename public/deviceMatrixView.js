@@ -417,11 +417,17 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 			capTd.title = 'Capabilities the runtime can actually exercise for this environment.';
 			tr.append(capTd);
 			// Availability cell: status dot + label (+ queue length when present).
+			// RT2 (#14754): when the board carries an exact unavailable reason,
+			// the tooltip shows it verbatim — the reason is discoverable in the
+			// SAME surface, not only in the picker.
 			const availTd = document.createElement('td');
 			const dot = document.createElement('span');
 			dot.className = `avail-dot avail-${meta.dot}`;
-			dot.title = meta.title;
+			dot.title = boardEntry?.unavailableReason
+				? `${meta.title}\n${boardEntry.unavailableReason}`
+				: meta.title;
 			availTd.append(dot, ' ', meta.label);
+			availTd.title = dot.title;
 			if (boardEntry?.queueLength > 0) {
 				const q = document.createElement('span');
 				q.className = 'avail-queue';
@@ -580,14 +586,35 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 			tbodyEl.innerHTML = '';
 			return;
 		}
-		const { metrics, rows, environments } = coveragePayload;
+		const { metrics, rows, environments, matrix } = coveragePayload;
 		metricsEl.textContent = `Coverage ${metrics.coveragePct}% · executed ${metrics.executedPairs}/${metrics.assignedPairs} pairs · pass rate ${metrics.passRatePct}% · ${metrics.environments} environment(s) · ${metrics.testCases} test case(s)`;
+		// #14652 (NI04 perf): with the NI01-sized catalog (tens of thousands of
+		// environments) a column per environment is unrenderable (≈18M cells).
+		// The grid keeps its structure but shows only environments LINKED to a
+		// test case or carrying a run cell — the columns that carry information.
+		const MAX_COVERAGE_COLUMNS = 200;
+		const referenced = new Set();
+		for (const row of rows) {
+			for (const envId of row.environmentIds ?? []) referenced.add(envId);
+			for (const envId of Object.keys(row.cells ?? {})) referenced.add(envId);
+		}
+		const linked = (environments ?? []).filter((env) => referenced.has(env.envId));
+		const visibleEnvironments = linked.length ? linked.slice(0, MAX_COVERAGE_COLUMNS) : [];
+		if ((environments ?? []).length > visibleEnvironments.length) {
+			const note = document.createElement('p');
+			note.className = 'cov-col-note';
+			note.textContent = `Showing ${visibleEnvironments.length} of ${environments.length} environments (those linked to test cases or runs) — use the Environments tab to browse the full catalog.`;
+			metricsEl.after(note);
+		}
+		// #14652 (NI04): matrix-run gap report from actual execution data —
+		// rendered additively under the existing case×env matrix.
+		renderMatrixGap(matrix);
 		headEl.innerHTML = '';
 		const corner = document.createElement('th');
 		corner.textContent = 'Test case';
 		corner.scope = 'col';
 		headEl.append(corner);
-		for (const environment of environments) {
+		for (const environment of visibleEnvironments) {
 			const th = document.createElement('th');
 			th.scope = 'col';
 			th.textContent = `${environment.device ?? environment.envId} · ${environment.browser ?? ''}${environment.browserVersion ? ` ${environment.browserVersion}` : ''}`;
@@ -597,7 +624,7 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 		if (!rows.length) {
 			const empty = document.createElement('tr');
 			const td = document.createElement('td');
-			td.colSpan = environments.length + 1;
+			td.colSpan = visibleEnvironments.length + 1;
 			td.textContent = environments.length
 				? 'No test cases yet — create one from the Test Cases panel to see coverage.'
 				: 'No active environments yet — build one from the Environment builder tab.';
@@ -611,7 +638,7 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 			label.textContent = `${row.caseNumber} · ${row.title}`;
 			if (row.tags?.length) label.dataset.tags = row.tags.join(', ');
 			tr.append(label);
-			for (const environment of environments) {
+			for (const environment of visibleEnvironments) {
 				const cell = row.cells?.[environment.envId];
 				const td = document.createElement('td');
 				const meta = coverageCellMeta(cell);
@@ -679,6 +706,147 @@ export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnviro
 		close.textContent = 'Close';
 		close.onclick = () => { detail.hidden = true; detail.innerHTML = ''; };
 		detail.append(close);
+	}
+
+	// ── Matrix-run gap report (#14652 NI04) ────────────────────────────────
+	// Every line comes from /api/coverage payload.matrix — computed from
+	// actual stored matrix items server-side, never hardcoded counts.
+	function renderMatrixGap(matrix) {
+		let wrap = document.getElementById('dm-matrix-gap');
+		if (!wrap) {
+			wrap = document.createElement('section');
+			wrap.id = 'dm-matrix-gap';
+			wrap.className = 'dm-matrix-gap';
+			// Insert after the cov-matrix-wrap, before the detail panel.
+			elements.coverageTbody?.closest('.cov-matrix-wrap')?.after(wrap)
+				?? elements.coverageDetail?.before(wrap);
+		}
+		wrap.textContent = '';
+		if (!matrix) {
+			wrap.hidden = true;
+			return;
+		}
+		wrap.hidden = false;
+		const head = document.createElement('h3');
+		head.textContent = 'Matrix coverage gap report';
+		wrap.append(head);
+
+		const exec = matrix.execution ?? {};
+		const execLine = document.createElement('p');
+		execLine.className = 'dm-matrix-exec';
+		execLine.textContent = `${exec.profilesRequested ?? 0} profiles requested · ${exec.profilesExecuted ?? 0} executed · ${exec.passed ?? 0} passed · ${exec.failed ?? 0} failed · ${exec.unavailable ?? 0} unavailable · ${exec.notRun ?? 0} not run · ${exec.notSupported ?? 0} not supported · ${exec.blocked ?? 0} blocked · ${exec.error ?? 0} error`;
+		wrap.append(execLine);
+
+		const grid = document.createElement('div');
+		grid.className = 'dm-matrix-gap-grid';
+		const devices = document.createElement('ul');
+		const browsers = document.createElement('ul');
+		const dHead = document.createElement('h4');
+		dHead.textContent = 'Devices';
+		devices.append(dHead);
+		for (const category of matrix.deviceCategories ?? []) {
+			const li = document.createElement('li');
+			const mark = category.covered ? '✓' : '⚠';
+			li.textContent = `${mark} ${category.label} — ${category.executed}/${category.requested} executed${!category.covered && category.gapReason ? ` (${String(category.gapReason).toLowerCase().replace(/_/g, ' ')})` : ''}`;
+			devices.append(li);
+		}
+		const bHead = document.createElement('h4');
+		bHead.textContent = 'Browsers';
+		browsers.append(bHead);
+		for (const browser of matrix.browsers ?? []) {
+			const li = document.createElement('li');
+			const mark = browser.covered ? '✓' : '⚠';
+			li.textContent = `${mark} ${browser.browser} — ${browser.executed}/${browser.requested} executed`;
+			if (!browser.covered && browser.gapReason) {
+				li.textContent += ` — ${browser.gapReason}`;
+			}
+			browsers.append(li);
+		}
+		grid.append(devices, browsers);
+		wrap.append(grid);
+
+		// #14652 (NI04): per-profile results with full context — every row is
+		// a stored matrix item; statuses come verbatim from execution.
+		// LAZY: the tables (potentially thousands of rows across many runs)
+		// are built only when the user opens the disclosure, and each run is
+		// capped per render — the Coverage tab paint stays fast.
+		const MAX_ROWS_PER_RUN = 50;
+		const results = document.createElement('details');
+		results.className = 'dm-matrix-results';
+		const summary = document.createElement('summary');
+		summary.textContent = `Per-profile results (${matrix.execution?.profilesRequested ?? 0} profiles)`;
+		results.append(summary);
+		const totalGapRows = (matrix.runs ?? []).reduce((sum, run) => sum + (run.gaps?.length ?? 0), 0);
+		let built = false;
+		results.addEventListener('toggle', () => {
+			if (results.open && !built) {
+				built = true;
+				buildMatrixResultTables(results, matrix.runs ?? [], MAX_ROWS_PER_RUN);
+			}
+		});
+		wrap.append(results);
+	}
+
+	function buildMatrixResultTables(container, runs, maxRows) {
+		let renderedAny = false;
+		for (const run of runs) {
+			if (!run.gaps?.length) continue;
+			renderedAny = true;
+			const runHead = document.createElement('h4');
+			runHead.textContent = `${run.title ?? run.id} — ${run.gaps.length} profile${run.gaps.length === 1 ? '' : 's'}`;
+			container.append(runHead);
+			const table = document.createElement('table');
+			table.className = 'dm-matrix-results-table';
+			const thead = document.createElement('thead');
+			const headRow = document.createElement('tr');
+			for (const label of ['Profile', 'Device', 'OS', 'Browser', 'Status', 'Time', 'Reason']) {
+				const th = document.createElement('th');
+				th.textContent = label;
+				headRow.append(th);
+			}
+			thead.append(headRow);
+			table.append(thead);
+			const tbody = document.createElement('tbody');
+			const slice = run.gaps.slice(0, maxRows);
+			for (const gap of slice) {
+				const tr = document.createElement('tr');
+				const time = Number.isFinite(gap.durationMs)
+					? `${(gap.durationMs / 1000).toFixed(1)}s`
+					: gap.updatedAt ? new Date(gap.updatedAt).toLocaleTimeString() : '—';
+			const cells = [
+				gap.profileId ?? '—',
+				gap.device ?? '—',
+				[gap.os, gap.osVersion].filter(Boolean).join(' ') || '—',
+				[gap.browser, gap.browserVersion].filter(Boolean).join(' ') || '—',
+				// RT5 (#14757): the distinct user-facing coverage state when the
+				// API provides it (Environment Unavailable / Browser Unavailable /
+				// Execution Failed / Device Offline / Not Selected / Not Supported
+				// / Not Run); raw status as fallback for older payloads.
+				gap.coverageStateLabel ?? gap.status,
+				time,
+				gap.reason ?? '—'
+			];
+				for (const [index, text] of cells.entries()) {
+					const td = document.createElement('td');
+					td.textContent = String(text);
+					if (index === 4) td.dataset.status = String(text).toUpperCase();
+					tr.append(td);
+				}
+				tbody.append(tr);
+			}
+			table.append(tbody);
+			container.append(table);
+			if (run.gaps.length > slice.length) {
+				const more = document.createElement('p');
+				more.textContent = `+ ${run.gaps.length - slice.length} more profiles in this run (see API /api/coverage → matrix.runs)`;
+				container.append(more);
+			}
+		}
+		if (!renderedAny) {
+			const none = document.createElement('p');
+			none.textContent = 'No gap items recorded — every requested profile was executed.';
+			container.append(none);
+		}
 	}
 
 	// ── Catalog forms tab ─────────────────────────────────────────────────

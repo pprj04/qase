@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './secrets.js';
 import { isEngineId } from './browserEngines.js';
+import { verifyRuntimeIdentity } from './runtimeIdentity.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -52,6 +53,12 @@ export function runtimeIntegrity(session) {
 	const executed = Boolean(session?.activities ?? []).length === false
 		? false
 		: (session.activities ?? []).some(activity => activity.status === 'done' && String(activity.toolName ?? '').startsWith('browser_'));
+	// R2 #14491: compare what the runtime OBSERVED (UA/brand/version/engine/
+	// platform) against the requested selection. Any mismatch forces BLOCKED.
+	const environment = session?.environmentSnapshot ?? null;
+	const identity = environment || facts
+		? verifyRuntimeIdentity({ runtimeFacts: facts, environment })
+		: null;
 	const checks = {
 		executed,
 		runtimeConnected: Boolean(facts || session?.deviceSessionId),
@@ -59,7 +66,8 @@ export function runtimeIntegrity(session) {
 		browserVerified: facts ? Boolean(facts.userAgent || facts.browser) : false,
 		osVerified: facts ? Boolean(facts.os || facts.platform || session?.environmentSnapshot?.os) : false,
 		capabilitiesAvailable: true,
-		evidenceBelongsToSession: true
+		evidenceBelongsToSession: true,
+		identityMatchesSelection: identity ? identity.ok : false
 	};
 	if (level === 'REAL_DEVICE') {
 		const att = facts?.attestation ?? session?.attestation ?? null;
@@ -69,11 +77,15 @@ export function runtimeIntegrity(session) {
 		checks.evidenceBelongsToSession = Boolean(att?.runtime_session_id);
 	}
 	const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
+	const identityReason = identity && !identity.ok
+		? `Runtime identity mismatch with the selected environment: ${identity.mismatches.join('; ')}.`
+		: null;
 	return {
 		level,
 		ok: failed.length === 0,
 		failedChecks: failed,
-		reason: failed.length ? 'Device runtime could not be verified.' : null,
+		reason: identityReason ?? (failed.length ? 'Device runtime could not be verified.' : null),
+		identity: identity?.identity ?? null,
 		checks
 	};
 }
@@ -313,6 +325,9 @@ const finishReport = {
 				summary: boundedText(input.summary, 20_000),
 				covered: boundedList(input.covered),
 				notCovered: boundedList(input.not_covered),
+				// R2 #14491: runtime-authoritative identity (observed browser
+				// brand/version/engine/platform) travels on every report.
+				runtimeIdentity: integrity.identity ?? undefined,
 				recommendations: boundedList(input.recommendations),
 				targetUrl: session.targetUrl,
 				findings: session.findings.length,
@@ -324,13 +339,6 @@ const finishReport = {
 					}))
 					: undefined,
 				attestation: attestationFor(session),
-				securityOutcomes: Array.isArray(input.security_outcomes) && input.security_outcomes.every(validInput)
-					? input.security_outcomes.map(entry => ({
-						check: entry.check,
-						outcome: entry.outcome,
-						...(hasText(entry.reason) ? { reason: boundedText(entry.reason, 2_000) } : {})
-					}))
-					: undefined,
 				bySeverity: SEVERITIES.reduce((counts, severity) => {
 					counts[severity] = session.findings.filter(finding => finding.severity === severity).length;
 					return counts;

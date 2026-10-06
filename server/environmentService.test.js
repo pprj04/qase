@@ -8,7 +8,8 @@ import {
 	createEnvironmentService,
 	normalizeEnvironmentInput,
 	EnvironmentValidationError,
-	EnvironmentConflictError
+	EnvironmentConflictError,
+	withExecutionMetadata
 } from './environmentService.js';
 
 function tempDir() {
@@ -98,6 +99,12 @@ test('environment service facade returns camelCase records and facets', async ()
 	assert.ok(facets.total >= 500);
 	assert.ok(facets.browser.some((entry) => entry.value === 'Safari'));
 	assert.ok(facets.browser.some((entry) => entry.value === 'Firefox'), 'Firefox appears on iOS after the 2026.10 expansion');
+	// #14275: executionLevels + providers facets are present and counted.
+	assert.ok(Array.isArray(facets.executionLevels) && facets.executionLevels.length > 0, 'executionLevels facet present');
+	assert.ok(facets.executionLevels.every((entry) => typeof entry.count === 'number' && entry.count > 0));
+	assert.ok(Array.isArray(facets.providers) && facets.providers.length > 0, 'providers facet present');
+	const builtinProvider = facets.providers.find((entry) => entry.value === 'builtin');
+	assert.ok(builtinProvider && builtinProvider.count === facets.total, 'all builtin-seeded rows report provider=builtin');
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -181,7 +188,7 @@ test('availability leaves only the Safari gap on Android/Windows', async () => {
 	const dir = tempDir();
 	const backend = createLocalEnvironmentBackend({ stateDir: dir });
 	const service = createEnvironmentService(backend);
-	const report = service.availability();
+	const report = await service.availability();
 	const mac = report.find((entry) => entry.platform === 'macos');
 	assert.equal(mac.unavailable.length, 0, 'macOS has no gaps after expansion');
 	const iosEntry = report.find((entry) => entry.platform === 'ios');
@@ -199,4 +206,126 @@ test('sanitizeFilters drops empty values', async () => {
 		platform: 'ios',
 		active: 'true'
 	});
+});
+
+// ---------------------------------------------------------------------------
+// #14275 (Phase 2): refreshCatalog + registry-sourced seed
+// ---------------------------------------------------------------------------
+
+/** Fake registry module shaped like catalogProviderRegistry.js. */
+function fakeRegistry(rows, { attestations = [] } = {}) {
+	return {
+		async mergeCatalog() {
+			return {
+				builtinVersion: '2027.01.0',
+				environments: rows,
+				attestations,
+				providers: [{ name: 'builtin', slug: 'builtin', kind: 'builtin', connected: true, stale: false, rowCount: 36619 }]
+			};
+		}
+	};
+}
+
+test('refreshCatalog upserts only PROV- rows and reports provider metadata', async () => {
+	const dir = tempDir();
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	const service = createEnvironmentService(backend);
+	const upserted = [];
+	const spyBackend = { ...backend, upsertProviderRow: async (_tenant, row) => {
+		upserted.push(row.envId);
+		return backend.upsertProviderRow(_tenant, row);
+	} };
+	const spyService = createEnvironmentService(spyBackend);
+	const rows = [
+		{ envId: 'ENV-IOS-IP16PRO-18.3-CHR-140', platform: 'ios' },
+		{ envId: 'PROV-FAKE-A', platform: 'android' },
+		{ envId: 'PROV-FAKE-B', platform: 'android' }
+	];
+	const result = await spyService.refreshCatalog(fakeRegistry(rows));
+	assert.equal(result.refreshed, true);
+	assert.equal(result.catalogVersion, '2027.01.0');
+	assert.deepEqual(upserted.sort(), ['PROV-FAKE-A', 'PROV-FAKE-B'], 'builtin rows are never upserted');
+	const stored = await spyBackend.get(null, 'PROV-FAKE-A');
+	assert.ok(stored, 'provider row landed in the store');
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('refreshCatalog is rate-limited to one call per minute', async () => {
+	const dir = tempDir();
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	const service = createEnvironmentService(backend);
+	const registry = fakeRegistry([]);
+	const first = await service.refreshCatalog(registry);
+	assert.equal(first.refreshed, true);
+	const second = await service.refreshCatalog(registry);
+	assert.equal(second.refreshed, false);
+	assert.equal(second.reason, 'rate-limited');
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('refreshCatalog preserves operator active state on re-upsert (idempotent)', async () => {
+	const dir = tempDir();
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	const row = { envId: 'PROV-FAKE-A', platform: 'android', active: true, device: 'Fake One' };
+	await backend.upsertProviderRow(null, row);
+	// Operator deactivates the provider row via the public update path.
+	await backend.update(null, 'PROV-FAKE-A', { active: false });
+	// Refresh upserts the same row again — active must stay false.
+	await backend.upsertProviderRow(null, { ...row, device: 'Fake One v2' });
+	const stored = await backend.get(null, 'PROV-FAKE-A');
+	assert.equal(stored.active, false, 'provider refresh must not resurrect a deactivated row');
+	assert.equal(stored.device, 'Fake One v2', 'descriptive fields refresh');
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('local backend upsertProviderRow rejects non-PROV envIds', async () => {
+	const dir = tempDir();
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	await assert.rejects(
+		() => backend.upsertProviderRow(null, { envId: 'ENV-IOS-IP16PRO-18.3-CHR-140', platform: 'ios' }),
+		EnvironmentValidationError
+	);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('seed merges registry provider overlays and is idempotent across reseeds', async () => {
+	const { registerCatalogProvider, unregisterCatalogProvider } = await import('./catalogProviderRegistry.js');
+	registerCatalogProvider({
+		name: 'SeedFake',
+		slug: 'seedfake',
+		async fetchCatalog() {
+			return {
+				environments: [
+					{ envId: 'SEEDFAKE-1', executionLevel: 'REAL_DEVICE', isRealDevice: true, platform: 'android', device: 'Seed Fake', os: 'Android', osVersion: '15', browser: 'Chrome', browserCode: 'chrome', browserVersion: '141', deviceType: 'mobile' }
+				],
+				attestations: []
+			};
+		}
+	});
+	try {
+		const dir = tempDir();
+		const backend = createLocalEnvironmentBackend({ stateDir: dir });
+		const first = await backend.seed();
+		assert.equal(first.providerRows, 1, 'provider overlay row seeded');
+		const stored = await backend.get(null, 'PROV-SEEDFAKE-SEEDFAKE-1');
+		assert.ok(stored, 'namespaced provider row present after seed');
+		// Operator deactivates it; a reseed must not resurrect it.
+		await backend.update(null, 'PROV-SEEDFAKE-SEEDFAKE-1', { active: false });
+		await backend.seed();
+		const after = await backend.get(null, 'PROV-SEEDFAKE-SEEDFAKE-1');
+		assert.equal(after.active, false, 'provider deprecation survives reseed');
+		fs.rmSync(dir, { recursive: true, force: true });
+	} finally {
+		unregisterCatalogProvider('seedfake');
+	}
+});
+
+// ---------------------------------------------------------------------------
+// R1 #14490 · Honest availability metadata
+// ---------------------------------------------------------------------------
+
+test('R1: withExecutionMetadata never defaults a catalog row to AVAILABLE', () => {
+	const env = withExecutionMetadata({ envId: 'X', platform: 'ios', device: 'iPhone 16 Pro', os: 'iOS', osVersion: '18.3', browser: 'Chrome', browserVersion: '140', active: true });
+	assert.equal(env.availability, 'UNAVAILABLE', 'no runtime board entry → REAL DEVICE · UNAVAILABLE, never AVAILABLE');
+	assert.equal(env.runtimeSessionId, null);
 });

@@ -8,8 +8,12 @@ import {
 	BROWSER_VERSIONS,
 	MACOS_SAFARI_VERSIONS,
 	safariVersionFor,
+	channelForVersion,
 	generateEnvironments,
 	buildEnvId,
+	buildProfileId,
+	ANDROID_DEVICES,
+	WINDOWS_DEVICES,
 	isCombinationSupported,
 	getDevice,
 	getBrowser,
@@ -18,6 +22,99 @@ import {
 
 test('catalog exposes a version stamp', () => {
 	assert.match(ENVIRONMENT_CATALOG_VERSION, /^\d{4}\.\d{2}\.\d+$/);
+	assert.equal(ENVIRONMENT_CATALOG_VERSION, '2027.03.0');
+});
+
+test('browser channel metadata is declared per brand (2027.02.0 #14420)', () => {
+	const byCode = Object.fromEntries(BROWSERS.map((b) => [b.code, b]));
+	// Chromium families carry the full pre-release ladder.
+	assert.deepEqual(byCode.chrome.channels, ['canary', 'dev', 'beta', 'stable']);
+	assert.deepEqual(byCode.edge.channels, ['canary', 'dev', 'beta', 'stable']);
+	// Gecko families use nightly instead of canary/dev.
+	assert.deepEqual(byCode.firefox.channels, ['nightly', 'beta', 'stable']);
+	assert.deepEqual(byCode.brave.channels, ['nightly', 'beta', 'stable']);
+	// Opera ships a public beta only.
+	assert.deepEqual(byCode.opera.channels, ['beta', 'stable']);
+	// Not independently versioned / no channels — stable only.
+	assert.deepEqual(byCode.safari.channels, ['stable']);
+	assert.deepEqual(byCode.duckduckgo.channels, ['stable']);
+	// Every channels array is newest-first and ends with stable.
+	for (const browser of BROWSERS) {
+		assert.ok(Array.isArray(browser.channels) && browser.channels.length > 0, `${browser.code} has channels`);
+		assert.equal(browser.channels.at(-1), 'stable', `${browser.code} channels end with stable`);
+	}
+});
+
+test('channelForVersion labels majors by position, never by hardcoded number (2027.02.0 #14420)', () => {
+	// Chrome [140..156], channels [canary, dev, beta, stable]:
+	const chrome = BROWSER_VERSIONS.chrome;
+	assert.equal(channelForVersion('chrome', chrome.at(-1)), 'canary', 'newest major = first channel');
+	assert.equal(channelForVersion('chrome', chrome.at(-2)), 'dev');
+	assert.equal(channelForVersion('chrome', chrome.at(-3)), 'beta');
+	assert.equal(channelForVersion('chrome', chrome.at(-4)), 'stable');
+	assert.equal(channelForVersion('chrome', chrome[0]), 'stable', 'back-catalog majors are previous stables');
+	// Firefox [141..158], channels [nightly, beta, stable]:
+	const firefox = BROWSER_VERSIONS.firefox;
+	assert.equal(channelForVersion('firefox', firefox.at(-1)), 'nightly');
+	assert.equal(channelForVersion('firefox', firefox.at(-2)), 'beta');
+	assert.equal(channelForVersion('firefox', firefox.at(-3)), 'stable');
+	// Opera [122..137], channels [beta, stable]:
+	const opera = BROWSER_VERSIONS.opera;
+	assert.equal(channelForVersion('opera', opera.at(-1)), 'beta');
+	assert.equal(channelForVersion('opera', opera.at(-2)), 'stable');
+	// Safari & DuckDuckGo: single-channel families — every version stable.
+	assert.equal(channelForVersion('safari', '26'), 'stable');
+	assert.equal(channelForVersion('duckduckgo', '3'), 'stable');
+	// Unknowns degrade safely.
+	assert.equal(channelForVersion('netscape', '5'), 'stable', 'unknown browser');
+	assert.equal(channelForVersion('chrome', '999'), 'stable', 'unknown version');
+	assert.equal(channelForVersion('chrome', 154), 'beta', 'numeric versions coerce');
+});
+
+test('Surface and Apple Silicon entry models are present with honest OS ranges (2027.02.0 #14420)', () => {
+	const wanted = [
+		'Surface Pro 9', 'Surface Pro 10', 'Surface Pro 11',
+		'Surface Laptop 5', 'Surface Laptop 6', 'Surface Laptop 7',
+		'Surface Go 3',
+		'MacBook Air (M1)', 'MacBook Pro 13 (M1)', 'MacBook Pro 13 (M2)',
+		'iMac (24-inch M1)'
+	];
+	for (const name of wanted) {
+		assert.ok(getDevice(name), `missing device: ${name}`);
+	}
+	// Surface Pro 9/10/11 ship with Windows 11 — never offered Win 10.
+	for (const name of ['Surface Pro 9', 'Surface Pro 10', 'Surface Pro 11']) {
+		assert.deepEqual(getDevice(name).osVersions, ['11'], `${name} ships Win 11 only`);
+	}
+	// Surface Laptop 5 spans Win 10→11; Laptop 6/7 are Win 11 only.
+	assert.deepEqual(getDevice('Surface Laptop 5').osVersions, ['10', '11']);
+	assert.deepEqual(getDevice('Surface Laptop 6').osVersions, ['11']);
+	assert.deepEqual(getDevice('Surface Laptop 7').osVersions, ['11']);
+	assert.deepEqual(getDevice('Surface Go 3').osVersions, ['10', '11']);
+	// MacBook Air (M1): Monterey floor, Sequoia ceiling — no Tahoe (2020 model
+	// dropped at Sequoia per Apple support window), no Big Sur (catalog floor is Monterey).
+	const mbaM1 = getDevice('MacBook Air (M1)');
+	assert.deepEqual(mbaM1.osVersions, ['Monterey', 'Ventura', 'Sonoma', 'Sequoia']);
+	// MacBook Pro 13 (M1/M2): same window — last 13-inch Pros cap at Sequoia.
+	assert.deepEqual(getDevice('MacBook Pro 13 (M1)').osVersions, ['Monterey', 'Ventura', 'Sonoma', 'Sequoia']);
+	assert.deepEqual(getDevice('MacBook Pro 13 (M2)').osVersions, ['Monterey', 'Ventura', 'Sonoma', 'Sequoia']);
+	// iMac 24 M1: Monterey→Sonoma (no Sequoia on 2021 iMac).
+	assert.deepEqual(getDevice('iMac (24-inch M1)').osVersions, ['Monterey', 'Ventura', 'Sonoma']);
+	// Intel-era caps preserved.
+	assert.ok(!getDevice('iMac (27-inch Intel 2020)').osVersions.includes('Sonoma'));
+});
+
+test('new device combinations validate and build deterministic env ids (2027.02.0 #14420)', () => {
+	const surfacePro11 = getDevice('Surface Pro 11');
+	assert.equal(isCombinationSupported('windows', surfacePro11, '11', 'chrome', '154').ok, true);
+	assert.equal(isCombinationSupported('windows', surfacePro11, '10', 'chrome', '154').ok, false, 'no Win 10 on Pro 11');
+	const mbaM1 = getDevice('MacBook Air (M1)');
+	assert.equal(isCombinationSupported('macos', mbaM1, 'Sonoma', 'chrome', '154').ok, true);
+	assert.equal(isCombinationSupported('macos', mbaM1, 'Tahoe', 'chrome', '154').ok, false, 'no Tahoe on M1 Air');
+	// Windows id scheme keeps the hardware slug tail for Surface models.
+	assert.equal(buildEnvId('windows', 'SURFPRO11', '11', 'CHR', '140'), 'ENV-WIN-11-CHR-140-SURFPRO11');
+	// macOS scheme keeps hardware slug + OS token.
+	assert.equal(buildEnvId('macos', 'MACMBA-M1', 'Sonoma', 'CHR', '140'), 'ENV-MAC-MACMBA-M1-SONOMA-CHR-140');
 });
 
 test('all requested iPhone models are present', () => {
@@ -247,8 +344,8 @@ test('macOS Safari map entries are all reachable via hardware models (2027.01.0)
 	}
 });
 
-test('availability report explains gaps for every platform', () => {
-	const report = availabilityReport();
+test('availability report explains gaps for every platform', async () => {
+	const report = await availabilityReport();
 	assert.equal(report.length, 5);
 	// 2026.10 expansion: all seven browsers available on Apple platforms; the
 	// only gaps left are Safari on Android/Windows.
@@ -267,11 +364,10 @@ test('availability report explains gaps for every platform', () => {
 });
 
 test('generated matrix size covers the full expanded availability', () => {
-	// 2027.01.0 (#14273): full iPad generations, legacy iPhones, Android
-	// manufacturer expansion, Windows form factors + OS 7/8/8.1, and macOS
-	// hardware models push the matrix to ~36.6k environments.
+	// 2027.02.0 (#14420): Surface line + MacBook 13"/iMac 24 M1 additions push
+	// the matrix to ~38.5k environments (2027.01.0 was 36,619).
 	const count = generateEnvironments().length;
-	assert.ok(count >= 36000 && count <= 42000, `unexpected matrix size: ${count}`);
+	assert.ok(count >= 38000 && count <= 44000, `unexpected matrix size: ${count}`);
 });
 
 test('chrome environments carry multiple versions per device/os', () => {
@@ -279,4 +375,63 @@ test('chrome environments carry multiple versions per device/os', () => {
 		(env) => env.envId.startsWith('ENV-IOS-IP16PRO-18.3-CHR-')
 	);
 	assert.deepEqual(chrome16Pro.map((env) => env.browserVersion).sort(), ['140','141','142','143','144','145','146','147','148','149','150','151','152','153','154','155','156']);
+});
+
+// --- 2027.03.0 (#14631) NI01 Phase 1: first-version coverage matrix ---
+
+test('NI01: android tablets are first-class tablet profiles, not phones', () => {
+	const androidTablets = ANDROID_DEVICES.filter((device) => device.deviceType === 'tablet');
+	const tabletSlugs = new Set(androidTablets.map((device) => device.slug));
+	assert.deepEqual([...tabletSlugs].sort(), ['GALTABA9P', 'GALTABS10', 'GALTABS9', 'LENOTABP12', 'PIXELTABLET']);
+	// Tablet emulation must be distinct from the default phone viewport.
+	for (const device of androidTablets) {
+		assert.ok(device.emulation.viewport.width >= 800, `${device.slug} tablet viewport too narrow for a tablet`);
+		assert.equal(device.emulation.hasTouch, true);
+	}
+	const envs = generateEnvironments();
+	for (const slug of tabletSlugs) {
+		const tabletEnvs = envs.filter((env) => env.envId.includes(`-${slug}-`));
+		assert.ok(tabletEnvs.length > 0, `${slug} generated no environments`);
+		assert.ok(tabletEnvs.every((env) => env.deviceType === 'tablet'), `${slug} envs must be deviceType tablet`);
+	}
+});
+
+test('NI01: stable lowercase profileId aliases are deterministic and unique', () => {
+	assert.equal(buildProfileId('ios', 'IP17PROMAX', '26.0', 'safari', '26.0'), 'iphone17promax-ios26-safari26');
+	assert.equal(buildProfileId('android', 'PIXEL9', '16', 'chrome', '140'), 'pixel9-android16-chrome140');
+	// Windows form factors read desktop/laptop without the WIN slug prefix.
+	assert.equal(buildProfileId('windows', 'WINLAPTOP', '11', 'chrome', '140'), 'windowslaptop-windows11-chrome140');
+	// macOS OS names keep their marketing token; minor iOS versions stay distinct.
+	assert.equal(buildProfileId('macos', 'MACMBA-M2', 'Tahoe', 'safari', '26.4'), 'macbookairm2-macos-tahoe-safari26');
+	assert.equal(buildProfileId('ios', 'IP16', '18.0', 'chrome', '140'), 'iphone16-ios18-chrome140');
+	assert.equal(buildProfileId('ios', 'IP16', '18.3', 'chrome', '140'), 'iphone16-ios183-chrome140');
+	const envs = generateEnvironments();
+	const profileIds = envs.map((env) => env.profileId);
+	assert.equal(new Set(profileIds).size, profileIds.length, 'profileId must be unique across the matrix');
+	// Every generated env carries one, and it round-trips the env fields.
+	assert.ok(envs.every((env) => typeof env.profileId === 'string' && env.profileId.length > 0));
+});
+
+test('NI01: windows exposes distinct resolution profiles per form factor', () => {
+	const laptops = WINDOWS_DEVICES.filter((device) => device.name.startsWith('Windows Laptop'));
+	const desktops = WINDOWS_DEVICES.filter((device) => device.name.startsWith('Windows Desktop'));
+	assert.ok(laptops.some((device) => device.emulation.viewport.width === 1536), 'HD laptop profile missing');
+	assert.ok(laptops.some((device) => device.emulation.viewport.width === 1920), 'FHD laptop profile missing');
+	assert.ok(desktops.some((device) => device.emulation.viewport.width === 2560), 'QHD desktop profile missing');
+});
+
+test('NI01: every required device family resolves to at least one environment', () => {
+	const envs = generateEnvironments();
+	const families = [
+		['iPhone SE (3rd gen)', 'ios'], ['iPhone 17 Pro Max', 'ios'], ['iPhone 11', 'ios'],
+		['iPad mini', 'ipados'], ['iPad Air', 'ipados'], ['iPad Pro 11', 'ipados'], ['iPad Pro 13', 'ipados'],
+		['Galaxy Tab S9', 'android'], ['Pixel Tablet', 'android'], ['Galaxy Z Fold 6', 'android'],
+		['Pixel 9', 'android'], ['OnePlus 13', 'android'], ['Xperia 1 VI', 'android'], ['POCO F6', 'android'],
+		['Windows Laptop', 'windows'], ['Windows Desktop', 'windows'], ['Surface Pro 11', 'windows'],
+		['MacBook Air', 'macos'], ['MacBook Pro', 'macos'], ['iMac', 'macos'], ['Mac mini', 'macos'], ['Mac Studio', 'macos'], ['Mac Pro', 'macos']
+	];
+	for (const [family, platform] of families) {
+		const match = envs.some((env) => env.device.includes(family) && env.platform === platform);
+		assert.ok(match, `${family} (${platform}) resolved no environments`);
+	}
 });

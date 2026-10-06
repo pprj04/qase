@@ -13,8 +13,12 @@
 
 export const AVAILABILITY_META = Object.freeze({
 	AVAILABLE: { label: 'Available', dot: 'ok', title: 'Device is free and can start a session now.' },
+	PREPARING: { label: 'Preparing', dot: 'busy', title: 'Runtime is preparing (engine launching, health checks running).' },
+	RUNNING: { label: 'Running', dot: 'busy', title: 'A session is executing on this profile right now.' },
 	BUSY: { label: 'Busy', dot: 'busy', title: 'A session is running on this device; new requests queue.' },
-	OFFLINE: { label: 'Offline', dot: 'offline', title: 'No provider currently reports this device.' },
+	OFFLINE: { label: 'Real device offline', dot: 'offline', title: 'No real-device runtime is connected for this environment — execution is blocked until a device-farm provider is registered.' },
+	ERROR: { label: 'Error', dot: 'offline', title: 'This profile\'s runtime reported an error — see the reason for details.' },
+	UNAVAILABLE: { label: 'Unavailable', dot: 'offline', title: 'This browser/OS combination cannot execute on this runtime — see the reason.' },
 	NOT_EXECUTABLE: { label: 'Not executable', dot: 'offline', title: 'No provider can execute on this combination.' }
 });
 

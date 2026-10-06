@@ -201,3 +201,47 @@ test('createCoverageService: pages the environment dimension past the 1000 cap',
 	assert.equal(payload.metrics.environments, 1001); // both pages aggregated
 	assert.deepEqual(offsetSeen, [0, 1000]); // stopped after the short page
 });
+
+// #14652 (NI04): the service-facade wiring — snapshot() must surface the
+// matrix gap report computed from the REAL listMatrixRuns input (regression
+// for the serviceFactory ordering bug where services.matrix was bound before
+// it existed in the postgres branch).
+test('createCoverageService: snapshot embeds payload.matrix from listMatrixRuns with real coverage numbers', async () => {
+	const environments = { list: async () => ({ environments: [{ envId: 'ENV-1', device: 'iPhone 16 Pro' }] }) };
+	const testCases = { list: async () => [] };
+	const runs = { list: async () => [] };
+	const matrixRuns = [{
+		id: 'matrix-1',
+		title: 'NI04 wiring run',
+		status: 'done',
+		items: [
+			{ id: 'it-1', status: 'PASSED', platform: 'ios', device: 'iPhone 17 Pro', os: 'iOS', osVersion: '26.0', browser: 'Safari', browserCode: 'safari', browserVersion: '26.0', profileId: 'iphone17pro-ios26-safari26' },
+			{ id: 'it-2', status: 'NOT_SUPPORTED', platform: 'ios', device: 'iPhone 17 Pro', browser: 'DuckDuckGo', browserCode: 'duckduckgo', browserVersion: null, profileId: 'iphone17pro-ddg', reason: 'DuckDuckGo is a mobile-only browser with no Playwright build.' }
+		]
+	}];
+	const listMatrixRuns = () => matrixRuns;
+	const service = createCoverageService({ testCases, environments, runs, listRuns: () => [], listMatrixRuns, tenantContext: {} });
+	const payload = await service.snapshot();
+	assert.ok(payload.matrix, 'snapshot must embed payload.matrix when listMatrixRuns is provided');
+	assert.equal(payload.matrix.execution.profilesRequested, 2);
+	assert.equal(payload.matrix.execution.profilesExecuted, 1);
+	assert.equal(payload.matrix.execution.notSupported, 1);
+	const safari = payload.matrix.browsers.find(b => b.browser === 'safari');
+	assert.equal(safari.executed, 1);
+	assert.equal(safari.covered, true);
+	const ddg = payload.matrix.browsers.find(b => b.browser === 'duckduckgo');
+	assert.equal(ddg.covered, false);
+	assert.match(ddg.gapReason, /no Playwright build/);
+	assert.equal(payload.matrix.runs[0].gaps.length, 1);
+	assert.equal(payload.matrix.runs[0].gaps[0].profileId, 'iphone17pro-ddg');
+});
+
+test('createCoverageService: no listMatrixRuns leaves payload.matrix absent (legacy shape)', async () => {
+	const environments = { list: async () => ({ environments: [] }) };
+	const testCases = { list: async () => [] };
+	const runs = { list: async () => [] };
+	const service = createCoverageService({ testCases, environments, runs, listRuns: () => [], tenantContext: {} });
+	const payload = await service.snapshot();
+	assert.equal(payload.matrix, undefined);
+	assert.ok(payload.metrics, 'legacy fields still present');
+});

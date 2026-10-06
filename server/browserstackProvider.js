@@ -1,4 +1,5 @@
 import { getDevice } from './environmentCatalog.js';
+import { resolveBrowserSupport, BROWSER_SUPPORT_STATUS } from './browserSupportResolution.js';
 
 /**
  * Execution provider for Apple compatibility environments.
@@ -84,9 +85,38 @@ export function environmentEmulationOptions(environment) {
  * only failure mode worth surfacing is "cannot use BrowserStack", which
  * downgrades to emulation with a recorded reason.
  */
-export function resolveExecution(environment, credentials = browserstackCredentials()) {
+/**
+ * R3 #14492 · Engine honesty for local execution. The selected browser must
+ * run on the engine family it actually belongs to — never Chrome-as-Firefox.
+ * Chromium-family browsers (Chrome/Edge/Opera/Brave/DuckDuckGo) share the
+ * Chromium engine; Firefox runs Gecko; Safari runs WebKit.
+ */
+export function engineForBrowser(browserCode) {
+	const code = String(browserCode ?? '').toLowerCase();
+	if (code === 'firefox') return 'firefox';
+	if (code === 'safari') return 'webkit';
+	if (['chrome', 'edge', 'opera', 'brave', 'duckduckgo'].includes(code)) return 'chromium';
+	return null;
+}
+
+export async function resolveExecution(environment, credentials = browserstackCredentials()) {
 	if (!environment) {
 		return { mode: 'default', label: 'local browser (no environment)', capabilities: null, connectOptions: null };
+	}
+	// #14632 (NI01 Phase 2): browser-level executability gate. A browser no
+	// execution provider can run (DuckDuckGo) BLOCKS here — reusing the same
+	// honest-block machinery as REAL DEVICE UNAVAILABLE. It can never execute,
+	// so it can never be recorded as PASSED.
+	const support = await resolveBrowserSupport(environment.platform, environment.browserCode);
+	if (support.status === BROWSER_SUPPORT_STATUS.NOT_SUPPORTED) {
+		return {
+			mode: 'blocked',
+			label: `${environment.device} · ${environment.browser} ${environment.browserVersion} — NOT SUPPORTED`,
+			reason: `${environment.browser} is NOT SUPPORTED — ${support.reason} (${support.provider})`,
+			capabilities: null,
+			connectOptions: null,
+			browserSupport: support
+		};
 	}
 	if (environment.executionProvider === 'environment' && credentials) {
 		const connectOptions = browserstackConnectOptions(environment, credentials);
@@ -99,16 +129,49 @@ export function resolveExecution(environment, credentials = browserstackCredenti
 			};
 		}
 	}
+	// R3 #14492 · No silent fallback: a REAL_DEVICE / VIRTUAL_DEVICE request
+	// with no configured remote runtime BLOCKS — it never quietly becomes a
+	// local emulation. Only an explicit SIMULATED choice may run locally.
+	const requested = environment.executionLevelRequested ?? null;
+	if (environment.executionProvider === 'environment' && !credentials
+		&& (requested === 'REAL_DEVICE' || requested === 'VIRTUAL_DEVICE')) {
+		return {
+			mode: 'blocked',
+			label: `${environment.device} · ${environment.browser} ${environment.browserVersion} — REAL DEVICE UNAVAILABLE`,
+			reason: 'REAL DEVICE UNAVAILABLE — no device-farm runtime is configured for this environment (BROWSERSTACK_USERNAME / BROWSERSTACK_ACCESS_KEY missing). Execution is blocked; choose Simulated explicitly or configure a runtime.',
+			capabilities: null,
+			connectOptions: null
+		};
+	}
 	const device = getDevice(environment.device);
 	const hints = device?.emulation;
-	const label = environment.executionProvider === 'environment' && !credentials
-		? `${environment.device} · ${environment.browser} ${environment.browserVersion} — local (emulated; remote runtime not configured)`
-		: `${environment.device} · ${environment.browser} ${environment.browserVersion} — local (emulated)`;
+	const engineId = engineForBrowser(environment.browserCode);
+	// RT1 (#14680): REAL branded binary when the local registry has one —
+	// Chrome/Brave/Opera launch their genuine binaries with the device
+	// profile emulated around them. The support resolution above already
+	// verified the binary; executablePath reaches browserBridge's launcher.
+	const brandedBinary = support.branded && support.executablePath ? support.executablePath : null;
+	const executionTypeLabel = brandedBinary
+		? `REAL ${environment.browser ?? support.detectedVersion} binary (${support.detectedVersion})`
+		: (support.engineEquivalent ? `engine-equivalent ${engineId}` : engineId ?? 'local');
+	const label = `${environment.device} · ${environment.browser} ${environment.browserVersion} — local ${executionTypeLabel}`.replace(/\s+/g, ' ');
 	return {
 		mode: 'emulated',
 		label,
 		capabilities: null,
 		connectOptions: null,
+		// R3 #14492: the ACTUAL engine for the selected browser — firefox runs
+		// the Firefox (Gecko) engine, safari the WebKit engine; never a
+		// Chromium relabeled as another browser.
+		executionEngine: engineId,
+		// RT1 (#14680): the genuine branded executable to launch (null = the
+		// bundled Playwright engine binary).
+		brandedExecutablePath: brandedBinary,
+		// #14632 (NI01 Phase 2): honest engine-equivalence marker — Opera/Brave/
+		// Safari (and Edge without branded binaries) execute on the Chromium/
+		// WebKit ENGINE; results must never read as the branded browser passing
+		// on a real device.
+		browserSupport: support,
 		emulation: hints ?? { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2, isMobile: false, hasTouch: false }
 	};
 }

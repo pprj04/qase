@@ -11,7 +11,7 @@ import {
 
 test('registry returns exactly the builtin catalog when no external providers are registered', async () => {
 	const merged = await mergeCatalog(['builtin']);
-	assert.equal(merged.builtinVersion, '2027.01.0');
+	assert.equal(merged.builtinVersion, '2027.03.0');
 	assert.equal(merged.providers.length, 1);
 	assert.equal(merged.providers[0].slug, 'builtin');
 	assert.equal(merged.providers[0].rowCount, merged.environments.length);
@@ -109,7 +109,7 @@ test('catalogProviderMeta reports builtin and disconnected providers', async () 
 	registerCatalogProvider({ name: 'Ghost', slug: 'ghost', connected: false, async fetchCatalog() { return { environments: [] }; } });
 	try {
 		const meta = await catalogProviderMeta();
-		assert.equal(meta.catalogVersion, '2027.01.0');
+		assert.equal(meta.catalogVersion, '2027.03.0');
 		assert.ok(meta.providers.some((p) => p.slug === 'builtin' && p.rowCount > 36000));
 		const ghost = meta.providers.find((p) => p.slug === 'ghost');
 		assert.equal(ghost.connected, false);

@@ -7,7 +7,8 @@
 <meta name="color-scheme" content="dark">
 <meta name="description" content="Qase is an autonomous website QA workspace with live browser testing, findings, and reports.">
 <title>Qase — autonomous QA agent</title>
-<link rel="stylesheet" href="styles.css?v=20261001-3">
+<script src="theme-bootstrap.js?v=2"></script>
+<link rel="stylesheet" href="styles.css?v=20261002-7">
 <link rel="stylesheet" href="bugsView.css?v=20261001-1">
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
@@ -601,7 +602,7 @@
     <header class="modal-head">
       <div>
         <h2 id="environments-title">Apple environments</h2>
-        <p>iPhone · iPad · macOS × Safari, Chrome, Firefox, Edge, Opera — only BrowserStack-executable combinations.</p>
+        <p>iPhone · iPad · macOS × Safari, Chrome, Firefox, Edge, Opera — only combinations a runtime can actually execute.</p>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" id="env-close">Close</button>
     </header>
@@ -673,6 +674,16 @@
         </select>
         <input id="cfg-model-custom" autocomplete="off" spellcheck="false" placeholder="Enter the exact model ID" hidden>
         <small id="cfg-model-note">Models are loaded from your endpoint. Choose Custom model ID if the model is not advertised.</small>
+      </label>
+
+      <label class="field">
+        <span>Theme</span>
+        <select id="cfg-theme" aria-describedby="cfg-theme-note">
+          <option value="dark">Dark Mode</option>
+          <option value="light">Light Mode</option>
+          <option value="system">System Default</option>
+        </select>
+        <small id="cfg-theme-note">Applies instantly. System Default follows your operating system's appearance.</small>
       </label>
 
       <div class="field-row">
@@ -748,8 +759,8 @@
           <summary>Advanced device options</summary>
           <div class="qa-advanced-body">
             <label class="field">
-              <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
-              <select id="qa-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
+              <span>Apple environment <small>(remote runtime matrix — overrides the device profile when selected)</small></span>
+              <select id="qa-environment-select"><option value="">Emulate locally (no remote environment)</option></select>
             </label>
             <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere. Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
           </div>
@@ -1205,10 +1216,16 @@
               <option value="notRun">Not run yet</option>
             </select>
           </label>
-          <label class="field" id="bulk-cases-field">
-            <span>Test cases <small>(Ctrl/Cmd-click for multiple)</small></span>
-            <select id="bulk-cases" multiple size="8"></select>
-          </label>
+          <div class="field" id="bulk-cases-field" hidden>
+            <div class="qa-tests-toolbar">
+              <span class="qa-tests-count" id="bulk-cases-count" aria-live="polite"></span>
+              <span class="qa-tests-bulk">
+                <button type="button" class="btn btn-ghost btn-sm" id="bulk-cases-all">Select all</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="bulk-cases-none">Clear all</button>
+              </span>
+            </div>
+            <div class="bulk-case-list" id="bulk-case-list" role="group" aria-label="Test cases to run"></div>
+          </div>
           <button type="button" class="btn btn-primary btn-sm bulk-next" data-bulk-next="2">Next: where →</button>
         </li>
         <li class="bulk-step" data-bulk-step="2" hidden>
@@ -1234,6 +1251,7 @@
         <li class="bulk-step" data-bulk-step="3" hidden>
           <h3>3 · Summary</h3>
           <p class="bulk-preview" id="bulk-preview"></p>
+          <div class="bulk-availability" id="bulk-availability" aria-live="polite"></div>
           <button type="button" class="btn btn-primary" id="bulk-launch">Run tests</button>
           <button type="button" class="btn btn-ghost btn-sm bulk-back" data-bulk-back="2" style="margin-left:8px">← Back</button>
           <pre class="bulk-result" id="bulk-result" hidden></pre>
@@ -1319,33 +1337,41 @@
   </div>
 </dialog>
 
-<!-- ONE Device Picker (DX Phase 1): device-first selection; environment
-     auto-resolves from the device card. Overlay dialog, same visual language
-     as the device drawer. -->
-<dialog id="device-picker" class="modal dp-modal" aria-labelledby="device-picker-title">
+<!-- ONE Device Picker (DX Phase 1 → Matrix M3 #14422): sidebar categories +
+     browser columns matrix inside the same overlay dialog. -->
+<dialog id="device-picker" class="modal dp-modal mx-modal" aria-labelledby="device-picker-title">
   <div class="modal-inner">
     <header class="modal-head">
       <div>
         <h2 id="device-picker-title">TEST ON DEVICE</h2>
-        <p class="dp-sub">Pick a device — OS, browser and environment are resolved automatically.</p>
+        <p class="dp-sub">Pick a device, then a browser version — the environment resolves automatically.</p>
       </div>
       <button type="button" class="btn btn-ghost btn-sm" id="dp-close">Close</button>
     </header>
     <div class="modal-body dp-body">
-      <label class="field"><span>Search</span><input id="dp-search" type="search" placeholder="e.g. iPhone, Pixel, Windows…" maxlength="120"></label>
-      <div class="dp-chip-row" role="tablist" aria-label="Platform">
-        <button type="button" class="dp-chip is-active" data-dp-tab="all">All</button>
-        <button type="button" class="dp-chip" data-dp-tab="apple">Apple</button>
-        <button type="button" class="dp-chip" data-dp-tab="android">Android</button>
-        <button type="button" class="dp-chip" data-dp-tab="windows">Windows</button>
+      <label class="field"><span>Search</span><input id="dp-search" type="search" placeholder="e.g. iPhone, Pixel, Chrome 154…" maxlength="120"></label>
+      <!-- Matrix shell (M3): sidebar + browser columns. The legacy chip filter
+           rows and card list were removed (M7 #14474) — the sidebar's
+           categories and search fully replace them. -->
+      <div class="mx-shell">
+        <nav class="mx-sidebar" id="mx-sidebar" aria-label="Device categories"></nav>
+        <div class="mx-main">
+          <!-- Matrix top bar (M4 #14423): target URL + refresh, bound to the
+               REAL run state — no decorative chrome. Refresh pre-fills the QA
+               launcher with the current target and reloads live picker data. -->
+          <div class="mx-topbar">
+            <button type="button" class="mx-sidebar-toggle" id="mx-sidebar-toggle" aria-expanded="true" aria-controls="mx-sidebar" title="Show or hide the device categories">▾ Categories</button>
+            <label class="mx-topbar-url">
+              <span class="sr-only" id="mx-url-label">Target URL</span>
+              <input id="mx-target-url" type="url" maxlength="2048" placeholder="https://example.com — target for the next run" aria-labelledby="mx-url-label">
+            </label>
+            <button type="button" class="btn btn-sm" id="mx-refresh" title="Refresh the device catalog and re-open the target">Refresh</button>
+          </div>
+          <div id="dp-cards" class="dp-cards" aria-label="Devices" hidden></div>
+          <div id="mx-columns" class="mx-columns" aria-label="Browsers for the selected device" hidden></div>
+          <p id="mx-columns-empty" class="dp-empty" hidden>Select a device from the sidebar to see its browsers.</p>
+        </div>
       </div>
-      <div class="dp-chip-row" role="tablist" aria-label="Device type">
-        <button type="button" class="dp-chip is-active" data-dp-type="all">All types</button>
-        <button type="button" class="dp-chip" data-dp-type="phone">Phone</button>
-        <button type="button" class="dp-chip" data-dp-type="tablet">Tablet</button>
-        <button type="button" class="dp-chip" data-dp-type="desktop">Desktop</button>
-      </div>
-      <div id="dp-cards" class="dp-cards" aria-label="Devices"></div>
       <p id="dp-summary" class="dp-summary" data-empty="true">SELECT A DEVICE</p>
     </div>
   </div>

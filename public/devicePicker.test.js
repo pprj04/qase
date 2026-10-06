@@ -63,6 +63,21 @@ test('resolveDeviceEnvironment auto-resolves and follows browser/os overrides', 
 	assert.equal(resolveDeviceEnvironment(ENVIRONMENTS, { device: 'Nokia 3310' }), null);
 });
 
+test('#14474: browserVersion override pins the exact matrix row (column click path)', () => {
+	// Regression: matrix column rows pass {osVersion, browser, browserVersion};
+	// without a version filter the resolver re-picked its ranked default
+	// (Chrome 140 instead of the clicked Chrome 153/156).
+	const many = [
+		{ ...env({ envId: 'PX0', platform: 'android', device: 'Pixel 9', os: 'Android', osVersion: '16', browser: 'Chrome', browserVersion: '140.0' }) },
+		{ ...env({ envId: 'PX1', platform: 'android', device: 'Pixel 9', os: 'Android', osVersion: '16', browser: 'Chrome', browserVersion: '153.0' }) },
+		{ ...env({ envId: 'PX2', platform: 'android', device: 'Pixel 9', os: 'Android', osVersion: '16', browser: 'Chrome', browserVersion: '156.0' }) }
+	];
+	assert.equal(resolveDeviceEnvironment(many, { device: 'Pixel 9', osVersion: '16', browser: 'Chrome', browserVersion: '153.0' }).envId, 'PX1');
+	assert.equal(resolveDeviceEnvironment(many, { device: 'Pixel 9', osVersion: '16', browser: 'Chrome', browserVersion: '156.0' }).envId, 'PX2');
+	// Unknown combo (no such version) falls back to the device's best, never null.
+	assert.ok(resolveDeviceEnvironment(many, { device: 'Pixel 9', browser: 'Chrome', browserVersion: '999.0' }));
+});
+
 test('filterDeviceCards: search, platform, device type', () => {
 	const cards = buildDeviceCards(ENVIRONMENTS);
 	assert.equal(filterDeviceCards(cards, { search: 'pixel' }).length, 1);

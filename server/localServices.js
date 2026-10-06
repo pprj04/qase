@@ -14,6 +14,7 @@ import { createLocalDeviceCatalogBackend } from './localDeviceCatalog.js';
 import { purgeRunWorkspace } from './workspaceLifecycle.js';
 import { createLocalAuthService } from './auth.js';
 import { currentRequestActor } from './requestActor.js';
+import { collectEvidenceBundle } from './evidenceBundle.js';
 import {
 	closeFeedbackStore, createFeedback, deleteFeedback, feedbackStats,
 	findFeedbackForRun, getFeedback, listFeedback, updateFeedback
@@ -112,7 +113,7 @@ export function createRuntimeApplicationServices(runStore, options = {}) {
 				}
 				if (disposalError) throw disposalError;
 			},
-			ensureRuntime: session => inWorkspace(() => ensureRuntime(session, runStore), session),
+			ensureRuntime: async session => inWorkspace(() => ensureRuntime(session, runStore), session),
 			runTurn: (session, turnOptions, fallbackRuntime) => inWorkspace(() => runTurn(session, turnOptions, runStore, deviceRuntime ?? fallbackRuntime), session),
 			getLiveState(sessionId) {
 				const record = runStore.peekLive?.(sessionId);
@@ -198,6 +199,9 @@ export function createLocalApplicationServices(options = {}) {
 	const artifactStore = options.artifactStore ?? createArtifactStore();
 
 	const runStore = {
+		// #14649: raw run-bus emitter for non-session event sources (the matrix
+		// orchestrator publishes progress keyed by matrix-run id through this).
+		bus,
 		async load() {
 			loadSessions();
 			initialized = true;
@@ -295,8 +299,8 @@ export function createLocalApplicationServices(options = {}) {
 		 * caps at 100 and filters by owner; the coverage matrix needs every
 		 * case×environment pair's latest run.
 		 */
-		async listAll(options) {
-			return listSessions({ ...(options ?? {}), ownerUserId: undefined });
+		async listAll() {
+			return listSessions({ unbounded: true });
 		},
 		async delete(id) {
 			return deleteSession(id, ownerUserId());
@@ -332,6 +336,21 @@ export function createLocalApplicationServices(options = {}) {
 		async saveEvidenceArtifact(session, bridgeHandle) {
 			// The agent passes { bridge } so runtime facts are available on it.
 			const bridge = bridgeHandle?.getLastFrame ? bridgeHandle : bridgeHandle?.bridge;
+			// RT5 (#14757): wire the session's video sink BEFORE any artifact
+			// flow — videos finalized at context close flow into the same
+			// per-session artifact store (stamped with execution metadata).
+			if (bridge?.setVideoSink) {
+				bridge.setVideoSink(async (bytes, meta) => {
+					if (!bytes?.length) return null;
+					return artifactStore.save(session, {
+						type: 'video',
+						fileName: meta.fileName,
+						bytes,
+						label: 'Session video recording (context-level, Chromium only)',
+						bridgeExecution: bridge.execution ?? null
+					});
+				});
+			}
 			const frame = bridge?.getLastFrame?.();
 			if (!frame?.base64) return null;
 			return artifactStore.save(session, {
@@ -339,6 +358,22 @@ export function createLocalApplicationServices(options = {}) {
 				fileName: `final-frame-${session.id.slice(0, 8)}.jpg`,
 				bytes: frame.base64,
 				label: 'Final browser frame at end of run',
+				bridgeExecution: bridge?.execution ?? null
+			});
+		},
+		/**
+		 * R4 #14493: persist the run's runtime-sourced evidence bundle —
+		 * observed identity, console, network, security blocks — as a JSON
+		 * artifact. Never fabricates: unobservable entries are recorded absent.
+		 */
+		async saveEvidenceBundle(session, bridgeHandle, { diagnostics = null } = {}) {
+			const bridge = bridgeHandle?.getLastFrame ? bridgeHandle : bridgeHandle?.bridge;
+			const { bundle } = collectEvidenceBundle({ session, bridge, diagnostics });
+			return artifactStore.save(session, {
+				type: 'evidence-bundle',
+				fileName: `evidence-bundle-${session.id.slice(0, 8)}.json`,
+				bytes: Buffer.from(JSON.stringify(bundle, null, 2), 'utf8'),
+				label: 'Runtime evidence bundle (identity · console · network · security blocks)',
 				bridgeExecution: bridge?.execution ?? null
 			});
 		},

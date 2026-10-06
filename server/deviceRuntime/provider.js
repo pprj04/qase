@@ -18,8 +18,12 @@ export const EXECUTION_LEVELS = Object.freeze({
 /** Availability states for the device status board. */
 export const AVAILABILITY = Object.freeze({
 	AVAILABLE: 'AVAILABLE',
+	PREPARING: 'PREPARING',
+	RUNNING: 'RUNNING',
 	BUSY: 'BUSY',
-	OFFLINE: 'OFFLINE'
+	OFFLINE: 'OFFLINE',
+	ERROR: 'ERROR',
+	UNAVAILABLE: 'UNAVAILABLE'
 });
 
 /**

@@ -11,7 +11,12 @@ import { createBulkRunView } from './bulkRunView.js';
 import { createBugView } from './bugView.js';
 import { createDeviceDrawer, chipLabel, RUNTIME_PROFILES } from './deviceDrawer.js';
 import { createActiveTestEnvironmentStore } from './activeTestEnvironment.js';
+import { createThemeStore, applyThemeToDocument } from './themePreference.js';
 import { createDevicePicker, createDeviceChipList, executionTypeText } from './devicePicker.js';
+import { createFavoritesStore, createRecentsStore, resolvePickerFocus, buildBrowserColumns, selectionDisplayString } from './deviceBrowserMatrix.js';
+import { createMatrixSidebar } from './matrixSidebar.js';
+import { createMatrixColumns } from './matrixColumns.js';
+import { channelFor as channelForClient } from './browserChannels.js';
 import { fallbackOptionsFor, availabilityMeta, describeQueue } from './deviceRuntimeUi.js';
 import { resolveActiveRuntimeEnvironment, viewForSelection } from './activeRuntimeEnvironment.js';
 import { chromeViewModel } from './browserChrome.js';
@@ -650,7 +655,7 @@ function renderRun(run) {
 		pill.className = 'run-device-pill';
 		pill.dataset.deviceKind = snap.platform === 'macos' ? 'desktop' : 'mobile';
 		pill.textContent = `${snap.device} · ${snap.browser} ${snap.browserVersion}`;
-		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'environment runtime (BrowserStack)' : 'local (simulated)'}`;
+		pill.title = `${snap.envId} — ${snap.osVersion} · ${snap.executionProvider === 'browserstack' ? 'remote environment runtime' : 'local (simulated)'}`;
 		meta.append(pill);
 		// Phase 22: honest execution-level badge — recorded facts only.
 		const level = run.runtimeFacts?.executionLevel ?? run.executionLevel;
@@ -804,7 +809,7 @@ function envOptionGroups(list) {
 async function loadEnvironments() {
 	if (envState.loaded) return envState.list;
 	try {
-		const payload = await api('/environments?active=true&limit=50000');
+		const payload = await api('/environments?active=true&limit=80000');
 		envState.list = Array.isArray(payload?.environments) ? payload.environments : [];
 		envState.loaded = true;
 	} catch {
@@ -1090,7 +1095,7 @@ function renderUnavailableState(view, execLabel) {	const panel = document.getEle
 	const env = document.getElementById('ldv-unavailable-env');
 	if (env) env.textContent = [view.device, [view.os, view.osVersion].filter(Boolean).join(' '), [view.browser, view.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 	const reason = document.getElementById('ldv-unavailable-reason');
-	if (reason) reason.textContent = 'Reason: Runtime unavailable for this device/browser combination.';
+	if (reason) reason.textContent = `Reason: ${view.unavailableReason ?? 'Runtime unavailable for this device/browser combination.'}`;
 	const retry = document.getElementById('ldv-retry');
 	if (retry) retry.onclick = () => { panel.hidden = true; if (state.sessionId) void startRun(); };
 	const change = document.getElementById('ldv-change-env');
@@ -2973,6 +2978,29 @@ function renderFinding(finding) {
 		meta.append(' ', chip);
 	}
 	body.append(meta);
+
+	// RT5 (#14757): the EXACT environment this finding occurred on —
+	// runtime-detected identity (profile, device, OS, browser+version, the
+	// engine that actually launched, execution level/provider) plus its
+	// session linkage. Structure unchanged; one compact env line added.
+	if (finding.environment) {
+		const env = finding.environment;
+		const parts = [
+			env.profileId,
+			[env.device, env.os, env.osVersion].filter(Boolean).join(' · '),
+			[env.browser, env.browserVersion].filter(Boolean).join(' '),
+			env.launchedEngine ? `engine: ${env.launchedEngine}` : null,
+			env.brandedBinary?.detectedVersion ? `binary ${env.brandedBinary.detectedVersion}` : null,
+			env.executionLevel ? `${env.executionLevel}${env.executionProvider ? ` · ${env.executionProvider}` : ''}` : null,
+			env.sessionId ? `session ${String(env.sessionId).slice(0, 8)}` : null
+		].filter(Boolean);
+		if (parts.length) {
+			const envLine = document.createElement('div');
+			envLine.className = 'finding-env';
+			envLine.textContent = parts.join(' — ');
+			body.append(envLine);
+		}
+	}
 
 	if (finding.steps?.length) {
 		const steps = document.createElement('ol');
@@ -5028,6 +5056,10 @@ function openQaStart() {
 	if (!qaUi.dialog) return;
 	setQaFormError();
 	qaUi.form.reset();
+	// M4 (#14423): the matrix top bar's target URL is the canonical prefill —
+	// applied AFTER reset() so it survives it.
+	const matrixUrl = $('mx-target-url')?.value?.trim();
+	if (matrixUrl && qaUi.targetUrl) qaUi.targetUrl.value = matrixUrl;
 	renderTestOn('qa-test-on');
 	qaUi._testCaseId = undefined;
 	qaUi._testCaseSnapshot = undefined;
@@ -5142,7 +5174,7 @@ if (qaUi.dialog) {
 		}
 		// AC14: the run uses exactly the environment shown in the TEST ON block,
 		// read from the store at submit time (falls back to the QA form's
-		// advanced BrowserStack environment picker when no TEST ON device is set).
+		// advanced remote-environment picker when no TEST ON device is set).
 		const environmentId = selectedEnvironmentForRun() || (qaUi.environmentSelect?.value) || '';
 		const testCaseId = qaUi._testCaseId || qaUi.environmentSelect?._testCaseId || undefined;
 		qaUi.submit.dataset.busy = 'true';
@@ -5581,6 +5613,7 @@ const cfg = {
 	reasoning: $('cfg-reasoning'),
 	maxTurns: $('cfg-maxturns'),
 	headless: $('cfg-headless'),
+	theme: $('cfg-theme'),
 	test: $('cfg-test'),
 	testBtn: $('cfg-test-btn'),
 	saveBtn: $('cfg-save')
@@ -5890,7 +5923,7 @@ async function refreshEnvTable() {
 			env.browser,
 			env.browserVersion,
 			env.deviceType,
-			env.executionProvider === 'browserstack' ? 'BrowserStack' : env.executionProvider,
+			env.executionProvider === 'browserstack' ? 'Remote runtime' : env.executionProvider,
 			env.active ? 'active' : 'inactive'
 		];
 		for (const [index, text] of cells.entries()) {
@@ -5901,7 +5934,7 @@ async function refreshEnvTable() {
 		}
 		tr.title = `${env.screenSize}${env.isRealDevice ? ' · real device' : ' · desktop VM'} — click to inspect capabilities`;
 		tr.onclick = () => {
-			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.browserstackCapabilities)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`;
+			envUi.detail.textContent = `${env.envId} → ${JSON.stringify(env.browserstackCapabilities ?? env.runtimeCapabilities ?? null)}${env.active ? '' : ' (INACTIVE — not selectable for new runs)'}`;
 		};
 		envUi.tbody.append(tr);
 	}
@@ -6101,11 +6134,15 @@ const bulkRunView = $('bulk-run') ? createBulkRunView({
 		close: $('bulk-close'),
 		what: $('bulk-what'),
 		casesField: $('bulk-cases-field'),
-		casesSelect: $('bulk-cases'),
+		caseList: $('bulk-case-list'),
+		casesCount: $('bulk-cases-count'),
+		casesAll: $('bulk-cases-all'),
+		casesNone: $('bulk-cases-none'),
 		where: $('bulk-where'),
 		deviceChips: $('bulk-device-chips'),
 		addDeviceBtn: $('bulk-add-device'),
 		preview: $('bulk-preview'),
+		availabilityEl: $('bulk-availability'),
 		launchBtn: $('bulk-launch'),
 		result: $('bulk-result'),
 		steps: [...document.querySelectorAll('#bulk-run [data-bulk-step]')]
@@ -6114,6 +6151,8 @@ const bulkRunView = $('bulk-run') ? createBulkRunView({
 if (bulkRunView) {
 	bulkRunView.setWizardFilter((mode) => filterCasesForWizard(bulkRunView.state.cases, mode, bulkRunView.state.lastRuns));
 	bulkRunView.setLastRunIndex(lastRunByCase);
+	// Phase D6 (#13782): step-3 availability rows read the runtime board.
+	bulkRunView.setRuntimeBoardFetch(fetchRuntimeBoard);
 }
 
 /* ── Phase 11: run-target dialog + quick actions + presets ────────── */
@@ -6300,6 +6339,32 @@ function renderRunEnvBlock(session) {
 
 /* ── ONE Device Picker + activeTestEnvironment store (DX Phase 1) ── */
 const activeTestEnvStore = createActiveTestEnvironmentStore();
+
+/* ── Theme store (#14383) ──
+ * theme-bootstrap.js already set data-theme before paint; this store is the
+ * runtime source of truth from here on — it re-applies the resolved theme
+ * (no-op when bootstrap matched) and keeps the attribute live when the OS
+ * preference changes while a 'system' selection is active. */
+const themeStore = createThemeStore({
+	onChange: ({ applied }) => applyThemeToDocument(document, applied)
+});
+applyThemeToDocument(document, themeStore.applied());
+globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
+
+/* ── Theme toggle in Settings (#14384) ──
+ * The select reflects the STORED preference (dark/light/system), never the
+ * resolved value — "System Default" stays selected even when the OS is dark.
+ * Changes apply instantly via the store's onChange; the dialog stays open. */
+if (cfg.theme) {
+	cfg.theme.value = themeStore.preference();
+	cfg.theme.addEventListener('change', () => {
+		themeStore.set(cfg.theme.value);
+		cfg.theme.value = themeStore.preference(); // normalize back (invalid never sticks)
+	});
+	// Re-sync whenever the dialog opens, so edits elsewhere (or a fresh
+	// store) can't desync the select.
+	cfg.dialog?.addEventListener('open', () => { cfg.theme.value = themeStore.preference(); });
+}
 /* UI Fix Phase 3: the feature-dock device chip (deviceDrawer.js, non-module
  * script scope boundary) reads the store through this accessor — one source
  * of truth for the selection. */
@@ -6308,8 +6373,6 @@ const devicePicker = $('device-picker') ? createDevicePicker({
 	elements: {
 		dialog: $('device-picker'),
 		search: $('dp-search'),
-		tabs: [...document.querySelectorAll('#device-picker [data-dp-tab]')],
-		types: [...document.querySelectorAll('#device-picker [data-dp-type]')],
 		cards: $('dp-cards'),
 		summary: $('dp-summary'),
 		closeBtn: $('dp-close')
@@ -6325,37 +6388,152 @@ const devicePicker = $('device-picker') ? createDevicePicker({
 		// + device frame reflect the new selection at once, not on next render.
 		renderLiveDeviceViewHeader(state.session ?? null, state.activeRuntimeEnvironment);
 		renderAllTestOnBlocks(); // start dialogs read the same selection (DX Phase 3)
+		// M3 (#14422): keep the sidebar highlight in sync with card selections.
+		matrixSidebar?.setSelection?.(selection?.device ?? null, selection?.osVersion ?? null);
 	},
 	onClose: () => void refreshDevicePickerData(),
-	onOpen: () => void refreshDevicePickerData()
+	onOpen: () => {
+		void refreshDevicePickerData();
+		// Re-sync the sidebar highlight to the current selection on every open.
+		const current = activeTestEnvStore.get();
+		if (current) matrixSidebar?.setSelection?.(current.device, current.osVersion);
+	}
 }) : null;
+
+/* ── Device & Browser Matrix (M3 #14422): sidebar + stores inside the picker.
+ * The M2 model layer builds the tree; this wires the renderer, the shared
+ * search box, and selection sync with the legacy card list. */
+const matrixFavorites = createFavoritesStore({});
+const matrixRecents = createRecentsStore({});
+/** Shared cache of the picker's environment data for column derivation. */
+const matrixPickerData = { environments: [], boardByEnvId: new Map() };
+const matrixSidebar = $('mx-sidebar') ? createMatrixSidebar({
+	container: $('mx-sidebar'),
+	favoritesStore: matrixFavorites,
+	recentsStore: matrixRecents,
+	onSelectDevice: (device, osVersion, env) => {
+		// Route through the picker's own selection path so add-mode (chip
+		// lists' [+ Add device]) and every onSelect side effect (drawer chip,
+		// session snapshot, header repaint) behave EXACTLY as the card path.
+		if (env) {
+			if (devicePicker?.state) devicePicker.state.selectedDevice = device;
+			devicePicker?.selectEnvironment?.(env);
+		}
+		// M4: device/OS selection drives the browser columns.
+		renderMatrixColumns();
+	}
+}) : null;
+// Shared search: the legacy card list filters via its own handler; the
+// sidebar mirrors the same query.
+if ($('dp-search')) $('dp-search').addEventListener('input', () => matrixSidebar?.setSearch?.($('dp-search').value));
+
+/* ── Browser columns + top bar (M4 #14423) ────────────────────────────── */
+const matrixColumns = $('mx-columns') ? createMatrixColumns({
+	container: $('mx-columns'),
+	emptyState: $('mx-columns-empty'),
+	favoritesStore: matrixFavorites,
+	recentsStore: matrixRecents,
+	onSelectVersion: (env, column, row) => {
+		// Same selection path as every other matrix surface: picker reselect
+		// (add-mode honored) + recents write-through. R5 #14494: carry the
+		// board's honest unavailability reason onto the selection so the live
+		// view can name WHY the device is unavailable.
+		env.unavailableReason = matrixPickerData.boardByEnvId?.get?.(env.envId)?.unavailableReason ?? null;
+		if (devicePicker?.state) devicePicker.state.selectedDevice = env.device;
+		devicePicker?.selectEnvironment?.(env);
+		matrixRecents?.record?.(env);
+	}
+}) : null;
+
+/** Derive + paint the browser columns for the sidebar's current selection. */
+function renderMatrixColumns() {
+	if (!matrixColumns || !matrixSidebar) return;
+	const { device, osVersion } = matrixSidebar.getSelection();
+	if (!device) {
+		matrixColumns.setColumns([]);
+		return;
+	}
+	const envs = matrixPickerData.environments ?? [];
+	const columns = buildBrowserColumns(device, osVersion, envs, {
+		favorites: matrixFavorites.list(),
+		channelFor: channelForClient,
+		boardByEnvId: matrixPickerData.boardByEnvId ?? new Map()
+	});
+	const current = activeTestEnvStore.get();
+	matrixColumns.setColumns(columns, current?.envId ?? null);
+}
+
+// channelForClient (top-of-file import) mirrors the server ladder client-side
+// (see browserChannels.js).
+
+/* Top bar: target URL bound to the REAL run state — the QA launcher's URL
+ * field is the canonical "next run target"; we prefill from the last session
+ * target when present. Refresh reloads picker data + re-opens QA prefilled. */
+if ($('mx-target-url')) {
+	const urlInput = $('mx-target-url');
+	urlInput.value = state.session?.targetUrl ?? '';
+}
+if ($('mx-refresh')) {
+	$('mx-refresh').addEventListener('click', async () => {
+		await refreshDevicePickerData();
+		renderMatrixColumns();
+		// Pre-open the QA launcher with the current target so Refresh is a
+		// one-click "reload catalog + go run this URL".
+		const url = $('mx-target-url')?.value?.trim();
+		if (url) {
+			const qa = $('qa-target-url');
+			if (qa) qa.value = url;
+		}
+	});
+}
+// M5 (#14424): mobile collapse toggle for the sidebar (CSS-only visibility;
+// the class flips on the shell, the button's aria state stays truthful).
+if ($('mx-sidebar-toggle')) {
+	const toggle = $('mx-sidebar-toggle');
+	toggle.addEventListener('click', () => {
+		const shell = toggle.closest('.mx-shell');
+		if (!shell) return;
+		const collapsed = shell.classList.toggle('mx-sidebar-collapsed');
+		toggle.setAttribute('aria-expanded', String(!collapsed));
+		toggle.textContent = collapsed ? '▸ Categories' : '▾ Categories';
+	});
+}
 
 async function refreshDevicePickerData() {
 	if (!devicePicker) return;
 	devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'loading' });
-	const environments = await api('/environments?active=true&limit=50000').then((p) => p.environments ?? []).catch(() => null);
+	matrixSidebar?.setData?.({ environments: [], boardByEnvId: new Map(), dataState: 'loading' });
+	const environments = await api('/environments?active=true&limit=80000').then((p) => p.environments ?? []).catch(() => null);
 	if (!Array.isArray(environments)) {
 		// Catalog fetch failed: surface an honest error state, not empty data.
 		devicePicker.setData({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
+		matrixSidebar?.setData?.({ environments: [], boardByEnvId: new Map(), dataState: 'error' });
 		return;
 	}
 	let boardByEnvId = new Map();
 	try {
 		const board = await api('/device-runtime/devices').catch(() => null);
 		for (const device of board?.devices ?? []) {
-			for (const e of device.environments ?? []) {
-				if (e?.envId) boardByEnvId.set(e.envId, { status: device.status, maximumLevel: device.maximumLevel ?? null });
-			}
+			// R1 #14490: board rows are flat per envId (one slot per environment).
+			if (device?.envId) boardByEnvId.set(device.envId, {
+				status: device.status,
+				maximumLevel: device.maximumLevel ?? null,
+				unavailableReason: device.unavailableReason ?? null
+			});
 		}
 	} catch { /* board unavailable — badges fall back to neutral */ }
 	devicePicker.setData({ environments, boardByEnvId, dataState: 'ready' });
+	matrixSidebar?.setData?.({ environments, boardByEnvId, dataState: 'ready' });
+	matrixPickerData.environments = environments;
+	matrixPickerData.boardByEnvId = boardByEnvId;
+	renderMatrixColumns();
 }
 
 // Hydrate the persisted selection once environments are known; data is
 // refreshed again every time the picker opens (onClose).
 void (async () => {
 	if (!devicePicker) return;
-	const environments = await api('/environments?active=true&limit=50000').then((p) => p.environments ?? []).catch(() => null);
+	const environments = await api('/environments?active=true&limit=80000').then((p) => p.environments ?? []).catch(() => null);
 	if (!Array.isArray(environments)) {
 		// Boot fetch failed: keep the picker in its honest error state instead
 		// of an empty catalog (which would read as "nothing configured").
@@ -6363,12 +6541,17 @@ void (async () => {
 		return;
 	}
 	devicePicker.setData({ environments, boardByEnvId: new Map() });
+	matrixSidebar?.setData?.({ environments, boardByEnvId: new Map(), dataState: 'ready' });
 	const persisted = activeTestEnvStore.persistedEnvId();
 	if (persisted) {
 		const env = environments.find((e) => e.envId === persisted);
 		if (env) devicePicker.hydrate(env);
 		else activeTestEnvStore.clear();
 	}
+	// Mirror the hydrated selection into the sidebar (focus device + OS).
+	const focus = resolvePickerFocus({ selection: activeTestEnvStore.get(), environments });
+	matrixSidebar?.setSelection?.(focus.device, focus.osVersion);
+	renderMatrixColumns();
 	renderAllTestOnBlocks();
 })();
 

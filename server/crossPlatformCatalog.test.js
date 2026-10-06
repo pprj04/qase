@@ -32,7 +32,10 @@ test('seed contains windows form factors, OS versions and browser support', () =
 		['windows-laptop', 'windows-desktop', 'windows-tablet', 'windows-2in1']
 	);
 	const windowsModels = seed.deviceModels.filter((m) => m.category_id.startsWith('windows-'));
-	assert.equal(windowsModels.length, 5);
+	// 2027.02.0 (#14420): + 7 Surface hardware models (Pro 9/10/11, Laptop 5/6/7, Go 3).
+	// 2027.03.0 (#14631): + FHD laptop and QHD desktop resolution profiles.
+	assert.equal(windowsModels.length, 14);
+	assert.ok(windowsModels.some((m) => m.display_name === 'Surface Pro 11'), 'Surface Pro 11 seeded');
 	const windowsOs = seed.osVersions.filter((v) => v.os_family_id === 'windows').map((v) => v.version);
 	assert.deepEqual(windowsOs, ['7', '8', '8.1', '10', '11']);
 	// Windows supports Chrome, Edge, Firefox, Opera, Brave, DuckDuckGo — never Safari.

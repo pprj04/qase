@@ -271,6 +271,28 @@ export function createDeviceRuntimeManager({ providers = [], now = () => Date.no
 			?? null;
 		if (!environment) return null;
 		const requested = session.executionLevelRequested ?? null;
+		// R3 #14492: a REAL/VIRTUAL request against an environment whose board
+		// maximum is SIMULATED-only can never run at the requested level —
+		// report 'not_available' with the honest reason instead of letting the
+		// provider default the level down to SIMULATED.
+		const boardMaximum = maximumLevelFor(environment);
+		const realRequested = requested === EXECUTION_LEVELS.REAL_DEVICE || requested === EXECUTION_LEVELS.VIRTUAL_DEVICE;
+		if (realRequested
+			&& boardMaximum !== EXECUTION_LEVELS.REAL_DEVICE
+			&& boardMaximum !== EXECUTION_LEVELS.VIRTUAL_DEVICE) {
+			const state = deviceState(environment);
+			return {
+				status: 'not_available',
+				requestedLevel: requested,
+				maximumLevel: boardMaximum,
+				notAvailable: NOT_AVAILABLE_FOR_REAL_EXECUTION,
+				reason: state.unavailableReason ?? `No connected runtime supports ${requested} execution for this environment.`,
+				choices: [
+					...(providerForLevel(EXECUTION_LEVELS.SIMULATED)
+						? [{ action: 'run_simulated', label: 'Run Simulated' }] : [])
+				]
+			};
+		}
 		const result = await requestSession({
 			environment,
 			requestedLevel: requested ?? EXECUTION_LEVELS.SIMULATED,
@@ -314,6 +336,7 @@ export function createDeviceRuntimeManager({ providers = [], now = () => Date.no
 			osVersion: state.osVersion,
 			browser: state.browser,
 			status: state.status,
+			unavailableReason: state.unavailableReason ?? null,
 			maximumLevel: state.maximumLevel,
 			currentSessionId: state.currentSessionId,
 			queueLength: queueFor(deviceKey({ envId: state.envId })).length,
@@ -327,11 +350,66 @@ export function createDeviceRuntimeManager({ providers = [], now = () => Date.no
 	 * Execution Type / Availability / queue length BEFORE the first session
 	 * touches a device. Purely additive — deviceState() is a no-op for keys
 	 * that already exist. Existing statuses (BUSY, lastTested…) are preserved.
+	 *
+	 * RT2 (#14704) honest availability baseline. The board reflects what the
+	 * LOCAL runtime can really execute (RT1 binary registry + browser support
+	 * resolution):
+	 *  - an environment whose browser resolves supported / engine-equivalent
+	 *    locally is AVAILABLE (its honest maximum level — SIMULATED for the
+	 *    local emulation provider — is labeled as such, never as a device
+	 *    farm; execution is a real local browser binary);
+	 *  - an environment whose browser is NOT_SUPPORTED (DuckDuckGo) or whose
+	 *    platform has no execution path is UNAVAILABLE with the exact reason;
+	 *  - a provider-attested REAL_DEVICE/VIRTUAL_DEVICE environment keeps the
+	 *    pre-RT2 semantics (AVAILABLE when connected, else OFFLINE naming the
+	 *    missing capability).
+	 *
+	 * @param {Array} environments catalog rows
+	 * @param {object} [options]
+	 * @param {(platform:string, browserCode:string) => Promise<{status:string, reason?:string}>} [options.resolveBrowserSupport]
+	 *   Injected (defaults to the real resolver) so tests can stub support.
 	 */
-	function seedBoard(environments = []) {
+	function seedBoard(environments = [], options = {}) {
 		for (const environment of environments) {
 			if (!environment?.envId) continue;
-			deviceState(environment);
+			const state = deviceState(environment);
+			if (state.currentSessionId) continue; // live session wins — never rewrite
+			const level = state.maximumLevel;
+			const realRuntime = level === EXECUTION_LEVELS.REAL_DEVICE || level === EXECUTION_LEVELS.VIRTUAL_DEVICE;
+			if (realRuntime) {
+				// Provider-attested runtime: AVAILABLE already set by the provider
+				// attestation path; leave it (dormant without a device farm).
+				continue;
+			}
+			if (level === EXECUTION_LEVELS.SIMULATED) {
+				// RT2: local simulated execution is REAL local-browser execution.
+				// Availability follows the browser-support resolution: executable
+				// locally → AVAILABLE; NOT_SUPPORTED → UNAVAILABLE with reason.
+				const resolve = options.resolveBrowserSupport;
+				if (typeof resolve !== 'function') continue;
+				const support = resolve(environment.platform, environment.browserCode);
+				const settled = support && typeof support.then === 'function'
+					? support.catch(() => null)
+					: Promise.resolve(support);
+				settled.then((result) => {
+					if (!result || state.currentSessionId) return;
+					if (result.status === 'not_supported') {
+						state.status = AVAILABILITY.UNAVAILABLE;
+						state.unavailableReason = result.reason ?? 'Browser not executable on this runtime.';
+					} else if (state.status === AVAILABILITY.AVAILABLE || state.status === AVAILABILITY.OFFLINE) {
+						state.status = AVAILABILITY.AVAILABLE;
+						state.unavailableReason = null;
+					}
+				}).catch(() => { /* keep prior status — resolution failures never flip a state */ });
+				continue;
+			}
+			// No provider can offer ANY level for this environment (e.g. a
+			// real-device provider without credentials) — honest OFFLINE naming
+			// the missing capability; never AVAILABLE by default.
+			if (state.status === AVAILABILITY.AVAILABLE) {
+				state.status = AVAILABILITY.OFFLINE;
+				state.unavailableReason = 'No execution runtime connected for this environment — register a provider to execute it.';
+			}
 		}
 		return devices.size;
 	}

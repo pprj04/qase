@@ -166,17 +166,21 @@ test('manager: sessions list is queryable and links run + test case', async () =
 
 test('selectForRun: agent bridge returns honest SIMULATED with a local provider and links the run', async () => {
 	const manager = createDeviceRuntimeManager({ providers: [createLocalSimulationProvider()] });
-	const selected = await manager.selectForRun({
+	// R3 #14492: a REAL_DEVICE request with only a SIMULATED provider is
+	// BLOCKED (not_available) — never silently downgraded.
+	const requested = await manager.selectForRun({
 		session: { id: 'run-777', environment: IPHONE_ENV, executionLevelRequested: LEVELS.REAL_DEVICE }
 	});
-	assert.ok(selected);
-	// No REAL_DEVICE provider → the level falls back honestly, never to REAL.
-	assert.notEqual(selected.executionLevel, LEVELS.REAL_DEVICE);
+	assert.equal(requested.status, 'not_available');
+	assert.notEqual(requested.executionLevel, LEVELS.REAL_DEVICE);
+	assert.ok(Array.isArray(requested.choices) && requested.choices.length > 0);
+	// An explicit SIMULATED request starts and links the run.
+	const selected = await manager.selectForRun({
+		session: { id: 'run-777b', environment: IPHONE_ENV, executionLevelRequested: LEVELS.SIMULATED }
+	});
 	assert.equal(selected.executionLevel, LEVELS.SIMULATED);
 	assert.equal(selected.provider, 'local-simulation');
-	// Requested REAL but no physical lab → honest not_available with fallback choices.
-	assert.equal(selected.status, 'not_available');
-	assert.ok(Array.isArray(selected.choices) && selected.choices.length > 0);
+	assert.equal(selected.deviceSession.linkedRunId, 'run-777b');
 });
 
 test('selectForRun: returns null when the record has no environment', async () => {
@@ -193,4 +197,93 @@ test('selectForRun: SIMULATED request starts a session linked to the run', async
 	assert.equal(selected.executionLevel, LEVELS.SIMULATED);
 	assert.equal(selected.deviceSession.linkedRunId, 'run-888');
 	assert.equal(selected.provider, 'local-simulation');
+});
+
+// ---------------------------------------------------------------------------
+// R1 #14490 · Honest availability baseline
+// ---------------------------------------------------------------------------
+
+test('R1/RT2: seedBoard marks local-simulated environments by real browser support', async () => {
+	const manager = createDeviceRuntimeManager({ providers: [createLocalSimulationProvider()] });
+	const seeded = manager.seedBoard(
+		[IPHONE_ENV],
+		// RT2: the real resolver decides executable vs not — chrome is
+		// executable locally, so the honest status is AVAILABLE (labeled
+		// SIMULATED execution — a real local browser binary, never a device farm).
+		{ resolveBrowserSupport: async () => ({ status: 'supported', reason: 'local binary' }) }
+	);
+	assert.equal(seeded, 1);
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	const board = manager.deviceBoard();
+	assert.equal(board[0].status, 'AVAILABLE');
+	assert.equal(board[0].unavailableReason, null);
+	assert.equal(board[0].maximumLevel, LEVELS.SIMULATED);
+});
+
+test('RT2: seedBoard marks NOT_SUPPORTED browsers UNAVAILABLE with the exact reason', async () => {
+	const manager = createDeviceRuntimeManager({ providers: [createLocalSimulationProvider()] });
+	manager.seedBoard(
+		[{ ...IPHONE_ENV, browserCode: 'duckduckgo', browser: 'DuckDuckGo' }],
+		{ resolveBrowserSupport: async () => ({ status: 'not_supported', reason: 'DuckDuckGo is a mobile-only browser with no Linux desktop build and no automation channel.' }) }
+	);
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	const board = manager.deviceBoard();
+	assert.equal(board[0].status, 'UNAVAILABLE');
+	assert.match(board[0].unavailableReason, /mobile-only browser/);
+});
+
+test('R1: seedBoard keeps AVAILABLE when a real runtime provider is connected', () => {
+	const manager = createDeviceRuntimeManager({
+		providers: [createBrowserstackRuntimeProvider({ credentials: { username: 'u', accessKey: 'k' } })]
+	});
+	manager.seedBoard([IPHONE_ENV]);
+	const board = manager.deviceBoard();
+	assert.equal(board[0].status, 'AVAILABLE');
+	assert.equal(board[0].unavailableReason, null);
+	assert.equal(board[0].maximumLevel, LEVELS.REAL_DEVICE);
+});
+
+test('R1: seedBoard is additive — an existing BUSY device is never forced OFFLINE', async () => {
+	const manager = createDeviceRuntimeManager({
+		providers: [createBrowserstackRuntimeProvider({ credentials: { username: 'u', accessKey: 'k' } })]
+	});
+	await manager.requestSession({ environment: IPHONE_ENV, requestedLevel: LEVELS.VIRTUAL_DEVICE });
+	assert.equal(manager.deviceBoard()[0].status, 'BUSY');
+	manager.seedBoard([IPHONE_ENV]);
+	assert.equal(manager.deviceBoard()[0].status, 'BUSY');
+});
+
+test('R1: a provider configured WITHOUT credentials leaves the board OFFLINE', () => {
+	const manager = createDeviceRuntimeManager({ providers: [createBrowserstackRuntimeProvider()] });
+	// No resolveBrowserSupport injected → the pre-attestation baseline holds
+	// (OFFLINE names the missing real-device runtime). The RT2 local-support
+	// pass only runs when the resolver is provided.
+	manager.seedBoard([IPHONE_ENV]);
+	const board = manager.deviceBoard();
+	assert.equal(board[0].status, 'OFFLINE');
+});
+
+// ---------------------------------------------------------------------------
+// R3 #14492 · No-silent-fallback in the agent bridge
+// ---------------------------------------------------------------------------
+
+test('R3: selectForRun blocks a REAL_DEVICE request when the board is SIMULATED-only', async () => {
+	const manager = createDeviceRuntimeManager({ providers: [createLocalSimulationProvider()] });
+	const selected = await manager.selectForRun({
+		session: { id: 'run-901', environment: IPHONE_ENV, executionLevelRequested: 'REAL_DEVICE' }
+	});
+	assert.equal(selected.status, 'not_available');
+	assert.match(selected.reason, /No connected runtime supports REAL_DEVICE/);
+	assert.ok(Array.isArray(selected.choices));
+	// The only honest choice left is an explicit Simulated run.
+	assert.ok(selected.choices.every((c) => c.action === 'run_simulated'));
+});
+
+test('R3: selectForRun still starts SIMULATED requests with the local provider', async () => {
+	const manager = createDeviceRuntimeManager({ providers: [createLocalSimulationProvider()] });
+	const selected = await manager.selectForRun({
+		session: { id: 'run-902', environment: IPHONE_ENV, executionLevelRequested: 'SIMULATED' }
+	});
+	assert.equal(selected.status, 'started');
+	assert.equal(selected.executionLevel, 'SIMULATED');
 });

@@ -32,17 +32,13 @@ const TYPE_BY_EXTENSION = {
 	log: 'text/plain'
 };
 
-function directoryFor(sessionId) {
-	return path.join(ARTIFACT_ROOT(), sessionId);
-}
-
 function safeId(id) {
 	// Session ids are server-generated UUIDs; reject anything path-like.
 	return typeof id === 'string' && /^[A-Za-z0-9-_.]+$/.test(id) ? id : null;
 }
 
 /** Stamps honest execution metadata from the session's recorded state. */
-export function executionMetadataFor(session, bridgeExecution = null) {
+	export function executionMetadataFor(session, bridgeExecution = null) {
 	const recorded = session?.runtimeFacts?.executionLevel
 		?? session?.executionLevel
 		?? bridgeExecution?.level
@@ -51,10 +47,22 @@ export function executionMetadataFor(session, bridgeExecution = null) {
 		?? session?.executionProviderActual
 		?? bridgeExecution?.provider
 		?? null;
-	return { executionLevel: recorded, executionProvider: provider };
+	// RT5 (#14757): the engine actually launched also travels with the stamp.
+	const launchedEngineId = session?.runtimeFacts?.launchedEngineId
+		?? bridgeExecution?.launchedEngineId
+		?? null;
+	return { executionLevel: recorded, executionProvider: provider, launchedEngineId };
 }
 
 export function createArtifactStore({ root = ARTIFACT_ROOT, now = () => Date.now() } = {}) {
+	// RT5 (#14757): root is resolved ONCE at store creation (a literal path
+	// or a factory function) — the store then owns a fixed root, so multiple
+	// stores in one process stay isolated and every operation targets the
+	// same directory. (Previously the injected root was silently ignored and
+	// all stores shared the cwd default — tests passed only via accidental
+	// accumulation across runs.)
+	const resolvedRoot = typeof root === 'function' ? root() : root;
+	const directoryFor = (sessionId) => path.join(resolvedRoot, sessionId);
 	function writeSidecar(dir, meta) {
 		fs.writeFileSync(path.join(dir, `${meta.artifactId}.json`), JSON.stringify(meta, null, 2));
 	}
@@ -110,8 +118,15 @@ export function createArtifactStore({ root = ARTIFACT_ROOT, now = () => Date.now
 				device: env?.device ?? env?.deviceLabel ?? null,
 				os: env?.os ?? env?.platform ?? null,
 				osVersion: env?.osVersion ?? null,
-				browser: env?.browser ?? null,
-				browserVersion: env?.browserVersion ?? null,
+				// RT5 (#14757, reviewer WARN fix): browser identity prefers the
+				// RUNTIME-DETECTED truth (branded binary actually launched +
+				// its detected version, and the engine that ran) over the
+				// catalog/environment snapshot label — an artifact must state
+				// what really executed, not what was requested.
+				browser: session?.runtimeFacts?.brandedBinary?.brand ?? env?.browser ?? null,
+				browserVersion: session?.runtimeFacts?.brandedBinary?.detectedVersion ?? env?.browserVersion ?? null,
+				launchedEngine: session?.runtimeFacts?.launchedEngineId ?? execution.launchedEngineId ?? null,
+				observedUserAgent: session?.runtimeFacts?.userAgent ?? null,
 				viewport: session?.runtimeFacts?.viewport ?? env?.screenResolution ?? null,
 				executionLevel: execution.executionLevel,
 				executionProvider: execution.executionProvider,

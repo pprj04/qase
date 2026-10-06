@@ -12,6 +12,7 @@
     "control-plane": "node server/controlPlane/index.js",
     "cell-heartbeat": "node server/cellHeartbeatController.js",
     "test": "node --test server/*.test.js server/postgres/*.test.js server/controlPlane/*.test.js public/*.test.js",
+    "validate:matrix": "node scripts/validate-matrix.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "control:db:migrate": "node scripts/migrate-control-plane.mjs",
     "db:import": "node scripts/import-sessions.mjs",
