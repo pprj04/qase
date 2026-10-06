@@ -1159,17 +1159,23 @@ function handleContextEvent(context) {
 /* ── Post-run layout: collapse the live browser, expand the findings ── */
 
 const STAGE_COLLAPSE_STATUSES = new Set(['done', 'error', 'interrupted', 'idle']);
+const STAGE_UNAVAILABLE_STATUSES = new Set(['done', 'error', 'interrupted']);
 
 function stageHasContent() {
 	return Boolean(state.session?.frame) || !el.stageInner.hidden;
 }
 
 function renderStageCollapse() {
-	const collapsed = STAGE_COLLAPSE_STATUSES.has(state.session?.status ?? 'idle')
-		&& stageHasContent()
-		&& !state.stageExpanded.has(state.sessionId);
+	const previewAvailable = stageHasContent();
+	const status = state.session?.status;
+	const ended = Boolean(state.session?.id) && STAGE_COLLAPSE_STATUSES.has(status);
+	// Ended runs always yield the main workspace to results. When no frame was
+	// captured, keep the compact strip but do not expose a fake preview action.
+	const collapsed = previewAvailable
+		? ended && !state.stageExpanded.has(state.sessionId)
+		: STAGE_UNAVAILABLE_STATUSES.has(status);
 	el.viewer.classList.toggle('stage-collapsed', collapsed);
-	el.stageToggle.hidden = !stageHasContent();
+	el.stageToggle.hidden = !previewAvailable;
 	const toggleLabel = collapsed ? 'Show live preview' : 'Minimize live preview';
 	el.stageToggle.textContent = collapsed ? '⤢' : '⤡';
 	el.stageToggle.title = toggleLabel;
@@ -1177,14 +1183,21 @@ function renderStageCollapse() {
 	el.stageToggle.setAttribute('aria-expanded', String(!collapsed));
 	el.stageNote.hidden = !collapsed;
 	if (collapsed) {
-		const count = state.session?.findings?.length ?? 0;
-		const result = count === 1 ? '1 finding' : `${count} findings`;
-		el.stageNote.textContent = state.session?.status === 'done'
-			? `Run complete · ${result} · Open preview`
-			: 'Run ended · Open saved preview';
-		el.stage.setAttribute('role', 'button');
-		el.stage.setAttribute('tabindex', '0');
-		el.stage.setAttribute('aria-label', 'Show saved live preview');
+		if (previewAvailable) {
+			const count = state.session?.findings?.length ?? 0;
+			const result = count === 1 ? '1 finding' : `${count} findings`;
+			el.stageNote.textContent = state.session?.status === 'done'
+				? `Run complete · ${result} · Open preview`
+				: 'Run ended · Open saved preview';
+			el.stage.setAttribute('role', 'button');
+			el.stage.setAttribute('tabindex', '0');
+			el.stage.setAttribute('aria-label', 'Show saved live preview');
+		} else {
+			el.stageNote.textContent = 'Preview unavailable · No saved browser image was captured for this run.';
+			el.stage.removeAttribute('role');
+			el.stage.removeAttribute('tabindex');
+			el.stage.removeAttribute('aria-label');
+		}
 	} else {
 		el.stage.removeAttribute('role');
 		el.stage.removeAttribute('tabindex');
@@ -6000,13 +6013,13 @@ window.addEventListener('resize', fitStageFrame, { passive: true });
 
 el.stageToggle.onclick = toggleStageCollapse;
 el.stage.addEventListener('click', event => {
-	if (el.viewer.classList.contains('stage-collapsed')) {
+	if (el.viewer.classList.contains('stage-collapsed') && stageHasContent()) {
 		event.preventDefault();
 		toggleStageCollapse();
 	}
 });
 el.stage.addEventListener('keydown', event => {
-	if (!el.viewer.classList.contains('stage-collapsed') || (event.key !== 'Enter' && event.key !== ' ')) return;
+	if (!el.viewer.classList.contains('stage-collapsed') || !stageHasContent() || (event.key !== 'Enter' && event.key !== ' ')) return;
 	event.preventDefault();
 	toggleStageCollapse();
 });

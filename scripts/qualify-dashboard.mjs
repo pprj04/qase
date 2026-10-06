@@ -180,6 +180,13 @@ try {
 	await page.locator('#stage-toggle').click();
 	assert.equal(await page.locator('#stage-toggle').getAttribute('aria-expanded'), 'false');
 	checks.push('Completed runs prioritize selectable findings and expose an accessible preview thumbnail');
+	delete qaSession.frame;
+	await page.reload();
+	await page.locator('.viewer.stage-collapsed').waitFor();
+	assert.equal(await page.locator('#stage-note').textContent(), 'Preview unavailable · No saved browser image was captured for this run.');
+	assert.equal(await page.locator('#stage-toggle').isHidden(), true);
+	assert.equal(await page.locator('#stage').getAttribute('role'), null);
+	checks.push('Completed runs without a saved frame show a truthful unavailable-preview state');
 	await page.locator('#tab-findings').click();
 	await page.locator('.finding-head').click();
 	assert.equal(await page.locator('.finding-fix-prompt').evaluate(node => node.open), false);
