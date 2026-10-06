@@ -1,16 +1,21 @@
-# Incident: PID/zombie exhaustion — shell cannot fork (2025-06, post-RT1 review)
+# PID exhaustion recurrence (2026-10-06, QA matrix Phase 1 session)
 
-**Symptom:** `run_bash` fails with `fork/exec /bin/bash: resource temporarily unavailable` (EAGAIN). File tools (read/glob/list) still work — investigate via /proc and /sys directly.
+Same root cause as `incident-pid-exhaustion-zombies.md`: PID 1 never reaps orphans;
+anything that spawns browser processes (the qase-server 5-min browser probes AND the
+test suite's browser-launching tests) leaks zombies to RLIMIT_NPROC=7684, then every
+fork fails. Confirmed today: full `node --test server/*.test.js` runs leak ~3,700+
+zombies per run; qase-server's periodic probes leak slowly over hours.
 
-**Diagnosis (verified via /proc, /sys):**
-- Kernel `pid_max` = 4,194,304 — NOT the limiter.
-- cgroup v2 `/sys/fs/cgroup/pids.max` = `max`, `pids.current` = 7722, `pids.events` = `max 0` — cgroup pids controller NOT the limiter either.
-- **Actual limiter: RLIMIT_NPROC = 7684 (soft+hard) for uid 1000.** All container processes run as uid 1000; total threads ~7805 (`/proc/loadavg` field 4). Any fork by uid 1000 gets EAGAIN.
-- ~7,700 zombies: `cat`, `chrome-headless`, `chrome`, `brave`, `opera`, `opera_crashrepo`, `chrome_crashpad` — **all PPid 1, state Z, uid 1000**. Real parents exited; reparented to `drytis-init` (PID 1, 16 threads), which never wait()s them.
-- The browser zombies match the RT1 launch probes (brave/opera/chrome) reviewed in ticket #14680; the `[cat]` zombies match leaked shell-tool invocations.
-
-**Still alive at time of check:** PID 43187 (qase-server node, comm "MainThread", 11 threads, ~503 MB RSS, uid 1000) with a live LISTEN on 0.0.0.0:5173 and established connections — the app was still serving despite fork exhaustion. PID 1 (drytis-init) alive.
-
-**No in-container recovery possible:** no shell to fork `kill`/`ps`; the only zombie parent is PID 1 itself (signaling a non-reaping init with SIGCHLD wouldn't reap anyway). **Fix = container restart (host-side).** Preventive: drytis-init should reap orphans (wait()/SIGCHLD handler); shell/browser-probe subprocesses must be waited on.
-
-**Read-only investigation tricks:** glob/grep tools fail on /proc (exit 101 / no matches) — use `read_file` on `/proc/<pid>/status`, `/proc/loadavg`, `/proc/net/tcp`, and `list_files /proc` (truncated at 100 entries, lexicographic).
+Practical guidance:
+- Full-suite runs are environmentally unreliable in this container until PID 1 reaps.
+  Verify touched areas with targeted `node --test <files>` (those pass) instead of
+  repeatedly re-running the full suite — each attempt crashes the container into fork
+  exhaustion and forces a restart_container (~3-5 min each).
+- After each restart, WebKit libs are gone again: `sudo npx playwright install-deps
+  webkit` then verify with a webkit launch, or ~4 server tests fail for env reasons.
+- Container restart is the ONLY zombie recovery (kill -9 on zombies does nothing —
+  parent is PID 1).
+- Also found this session: server/postgres/runRepository.js had an unresolved
+  teammate merge conflict (scope_selection vs environment/matrix columns) left in the
+  working tree; resolved as the union of both sides (39/41 params; scope_selection
+  + environment_id/matrix_run_id coexist).

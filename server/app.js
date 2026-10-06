@@ -37,6 +37,8 @@ import { createMatrixRoutes } from './matrixApi.js';
 import { createMatrixOrchestrator } from './matrixOrchestrator.js';
 import { checkEnvironmentHealth } from './environmentHealth.js';
 import { resolveBrowserSupport } from './browserSupportResolution.js';
+import { buildFeedbackSectionMarkdown } from './report.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { publicQaTestCatalog } from './qaTestCatalog.js';
 import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
@@ -1334,6 +1336,14 @@ export function createApplication(options = {}) {
 		} catch (error) {
 			safeErrorResponse(request, response, error);
 		}
+		const cohort = cohortFor(request.auth?.role).cohort;
+		const scopeSelection = normalizeQaScopeSelection(request.body?.scopeSelection);
+		const session = await services.runs.create(
+			engine === 'chromium' ? undefined : `QA — ${engine}`,
+			{ device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, selectedTests, securityAuthorization, ...(scopeSelection ? { scopeSelection } : {}) }
+		);
+		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
+		response.status(201).json(session);
 	});
 
 	app.post('/api/sqa/sessions', async (request, response) => {
@@ -1747,11 +1757,18 @@ export function createApplication(options = {}) {
 			response.status(409).json({ error: 'The Founder review is pending and has not been finalized yet.' });
 			return;
 		}
-		const markdown = session.mode === 'sqa'
-			? buildSqaReportMarkdown(session.sqa.assessment)
-			: session.mode === 'founder'
-				? buildFounderReportMarkdown(session)
-				: services.reports.buildMarkdown(await attachMatrixCoverage(await attachUserFeedback(session, request.auth?.userId)));
+		let markdown;
+		if (session.mode === 'sqa') {
+			markdown = buildSqaReportMarkdown(session.sqa.assessment);
+			// Append the submitter's own feedback (same section the QA report
+			// embeds); attachUserFeedback scopes it to this run + user.
+			const feedbackSection = buildFeedbackSectionMarkdown(await attachUserFeedback(session, request.auth?.userId));
+			if (feedbackSection) markdown += `\n${feedbackSection}`;
+		} else if (session.mode === 'founder') {
+			markdown = buildFounderReportMarkdown(session);
+		} else {
+			markdown = services.reports.buildMarkdown(await attachMatrixCoverage(await attachUserFeedback(session, request.auth?.userId)));
+		}
 		response.type('text/markdown').send(markdown);
 	});
 

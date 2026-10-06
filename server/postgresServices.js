@@ -6,6 +6,7 @@ import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { isEngineId } from './browserEngines.js';
 import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
 import { createPostgresFeedbackRepository } from './postgres/feedbackRepository.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
 
 function clone(value) {
 	return structuredClone(value);

@@ -8,6 +8,7 @@ import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { isEngineId } from './browserEngines.js';
 import { DEFAULT_ACTOR_USER_ID } from './tenancy.js';
 import { clearSecrets, secretNames } from './secrets.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
 
 /**
  * In-memory session store with a JSON mirror on disk.
@@ -255,6 +256,14 @@ export function createSession(title = 'New test run', options = {}) {
 			throw new TypeError('Security authorization must be { confirmed: boolean, notes?: string }.');
 		}
 	}
+	// Coverage scope selection (Supported Coverage panel): normalized via the
+	// shared qaScopeCatalog; undefined = full coverage (legacy behavior).
+	if (options.scopeSelection !== undefined) {
+		const normalized = normalizeQaScopeSelection(options.scopeSelection);
+		if (normalized === undefined) {
+			throw new TypeError('Run creation received an invalid scope selection.');
+		}
+	}
 	const timestamp = Date.now();
 	const session = {
 		id,
@@ -282,6 +291,8 @@ export function createSession(title = 'New test run', options = {}) {
 		/** Analytics cohort ('pilot' for invite-admitted users) — read by the
 		 *  run_started/run_finished status hook, which has no request context. */
 		cohort: options.cohort === 'pilot' ? 'pilot' : undefined,
+		/** Coverage values selected in the New QA Run dialog (whitelisted). */
+		scopeSelection: normalizeQaScopeSelection(options.scopeSelection) ?? undefined,
 		messages: [],
 		activities: [],
 		findings: (options.findings ?? []).map(normalizeFindingStatus),
