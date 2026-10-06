@@ -322,7 +322,7 @@ export function createFounderView({
 
 	function renderFounderPriorities(report) {
 		const recommendations = founderValues(report.recommendations);
-		const section = founderSection('Prioritized opportunities', `${recommendations.length} sequenced product and growth decisions.`);
+		const section = founderSection('What to build next', `${recommendations.length} recommendations ordered by impact, effort, and confidence. Each includes the reason it matters.`);
 		const listNode = doc.createElement('div');
 		listNode.className = 'founder-priority-list';
 		for (const [index, item] of recommendations.entries()) {
@@ -355,7 +355,7 @@ export function createFounderView({
 
 	function renderFounderQuickWins(report) {
 		const items = resolveFounderQuickWins(report);
-		const section = founderSection('Quick wins', 'Low-friction moves selected from the prioritized recommendation set.');
+		const section = founderSection('What to do first', 'Low-friction moves selected from the ordered recommendations.');
 		const grid = doc.createElement('div');
 		grid.className = 'founder-card-grid';
 		for (const item of items) grid.append(founderCard(item.title, item.actions, { trace: item }));
@@ -513,13 +513,13 @@ export function createFounderView({
 		thesis.body.append(thesisCopy);
 		container.append(
 			thesis.node,
-			renderFounderObservations(observations.productFindings, 'UI, UX & product findings', 'Evidence observed directly on the product surface.'),
+			renderFounderObservations(observations.productFindings, 'What to improve', 'Product and experience issues observed directly on the reviewed surface.'),
+			renderFounderPriorities(report),
+			renderFounderQuickWins(report),
 			renderFounderIcpPositioning(report),
 			renderFounderSales(report),
 			renderFounderMarketing(report),
 			renderFounderMonetization(report),
-			renderFounderPriorities(report),
-			renderFounderQuickWins(report),
 			renderFounderRoadmap(report),
 			renderFounderRisks(report),
 			renderFounderMetrics(report),

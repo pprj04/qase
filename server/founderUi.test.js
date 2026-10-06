@@ -71,18 +71,21 @@ test('Founder result rendering is safe, mode-scoped, and covers the full decisio
 	assert.match(renderer, /session\?\.mode !== 'founder'/);
 	for (const heading of [
 		'Executive thesis',
-		'UI, UX & product findings',
+		'What to improve',
+		'What to build next',
+		'What to do first',
 		'ICP & positioning',
 		'Sales & GTM',
 		'Marketing & growth',
 		'Monetization & pricing',
-		'Prioritized opportunities',
-		'Quick wins',
 		'30 \/ 60 \/ 90 roadmap',
 		'Risks & assumptions',
 		'Metrics & experiments',
 		'Evidence confidence'
 	]) assert.match(renderer, new RegExp(heading));
+	const completedReport = renderer.slice(renderer.indexOf('function appendFounderCompletedReport'), renderer.indexOf('\n\tfunction render()'));
+	assert.ok(completedReport.indexOf("'What to improve'") < completedReport.indexOf('renderFounderIcpPositioning(report)'));
+	assert.ok(completedReport.indexOf('renderFounderPriorities(report)') < completedReport.indexOf('renderFounderIcpPositioning(report)'));
 	assert.match(renderer, /declared\?\.limitation/);
 	assert.match(renderer, /declared\?\.assumptionCount/);
 	assert.match(renderer, /monetization\.pricingPresentation/);
