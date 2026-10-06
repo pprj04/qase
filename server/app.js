@@ -29,6 +29,7 @@ import {
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { buildFeedbackSectionMarkdown } from './report.js';
 import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
+import { createConfiguredWhatsAppNotifier } from './whatsappNotifier.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
@@ -145,6 +146,18 @@ export function createApplication(options = {}) {
 
 	const app = express();
 	app.disable('x-powered-by');
+	// WhatsApp feedback notifications: built once, disabled/invalid → undefined.
+	// Delivery is fire-and-forget AFTER the record is persisted; feedback
+	// storage and reports never depend on it.
+	const whatsappNotifier = options.whatsappNotifier !== undefined
+		? options.whatsappNotifier
+		: createConfiguredWhatsAppNotifier({
+			environment,
+			logger: logger ?? { info: () => {}, warn: () => {}, error: () => {} }
+		});
+	if (whatsappNotifier !== undefined && typeof whatsappNotifier?.dispatchFeedbackNotification !== 'function') {
+		throw new TypeError('WhatsApp notifier must provide dispatchFeedbackNotification().');
+	}
 	app.locals.qaseDemoEnabled = demoEnabled;
 	app.locals.qaseFrameAncestors = configuredFrameAncestors(environment);
 	if (options.trustProxy ?? String(environment.QASE_TRUST_PROXY ?? '').toLowerCase() === 'true') {
@@ -573,6 +586,16 @@ export function createApplication(options = {}) {
 				comments: request.body?.comments,
 				improvement: request.body?.improvement
 			});
+			// Notify AFTER the record is durably stored. Best-effort: a dispatch
+			// failure is logged by the notifier and never affects this response.
+			if (whatsappNotifier && record?.id) {
+				Promise.resolve(whatsappNotifier.dispatchFeedbackNotification(record, {
+					mode: session.mode,
+					title: session.title,
+					targetUrl: session.targetUrl,
+					submittedAt: record.submittedAt ?? Date.now()
+				})).catch(() => { /* notifier guarantees non-rejection; belt and braces */ });
+			}
 			response.status(201).json(record);
 		} catch (error) {
 			if (error?.code === 'duplicate_feedback') {
