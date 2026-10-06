@@ -32,7 +32,8 @@ test('Founder launcher matches the authenticated API input contract and limits',
 		['founder-primary-goal', 1000],
 		['founder-constraints', 2000]
 	]) assert.match(html, new RegExp(`id="${id}"[^>]+maxlength="${maximum}"`));
-	assert.match(html, /id="founder-target-name"[^>]+required/);
+	assert.match(html, /id="founder-target-name"[^>]+maxlength="200"/);
+	assert.doesNotMatch(html, /id="founder-target-name"[^>]+required/);
 	assert.match(html, /id="founder-target-url"[^>]+type="url"[^>]+required/);
 	assert.match(html, /id="founder-authorization"[^>]+type="checkbox"[^>]+required/);
 	// Business context the model can infer from the URL is no longer asked for.
@@ -40,12 +41,19 @@ test('Founder launcher matches the authenticated API input contract and limits',
 	assert.match(html, /id="founder-catalog-meta"[^>]+aria-live="polite"/);
 	assert.match(html, /id="tab-founder"[^>]+role="tab"[^>]+aria-controls="pane-founder"[^>]+hidden/);
 	assert.match(html, /id="pane-founder"[^>]+role="tabpanel"[^>]+aria-labelledby="tab-founder"/);
+	assert.match(html, /id="founder-customize"/);
+	const advanced = html.slice(html.indexOf('id="founder-customize"'), html.indexOf('id="founder-form-error"'));
+	for (const id of ['founder-target-release', 'founder-target-environment', 'founder-device-select', 'founder-environment-select']) {
+		assert.match(advanced, new RegExp(`id="${id}"`));
+	}
+	assert.doesNotMatch(html.slice(html.indexOf('id="founder-start"'), html.indexOf('id="founder-customize"')), /BrowserStack|provider matrix/i);
 });
 
 test('Founder frontend creates an idle scope, then starts through the existing message endpoint', () => {
 	assert.match(app, /api\('\/founder\/catalog'\)/);
 	assert.match(app, /api\('\/founder\/sessions',\s*\{\s*method:\s*'POST'/);
 	assert.match(app, /authorizationConfirmed:\s*true/);
+	assert.match(app, /name:\s*founderUi\.targetName\.value\.trim\(\) \|\| new URL\(targetUrl\)\.hostname/);
 	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*environmentId:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
 	assert.match(app, /api\(`\/sessions\/\$\{session\.id\}\/message`,\s*\{/);
 	assert.match(app, /JSON\.stringify\(\{ text: `Review \$\{targetUrl\}` \}\)/);

@@ -997,88 +997,96 @@
   <form class="modal-inner founder-modal-inner" id="founder-form">
     <header class="modal-head" data-path="~/qase/founder/new">
       <div>
-        <span class="founder-kicker">Founder Mode // product intelligence</span>
-        <h2 id="founder-start-title">Start founder review</h2>
-        <p id="founder-start-description">Give Qase the product and business context it needs to connect observed UX evidence to focused growth decisions.</p>
+        <h2 id="founder-start-title">Review Product Ideas</h2>
+        <p id="founder-start-description">Find what to improve, what to build next, why it matters, and what to prioritize.</p>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" id="founder-close">Close</button>
     </header>
 
     <div class="modal-body founder-modal-body">
-      <aside class="founder-intro" role="note">
+      <aside class="founder-intro founder-recommended" role="note">
         <span aria-hidden="true">◆</span>
         <div>
-          <strong>Evidence first. Strategy second.</strong>
-          <p>Founder Mode reviews the authorized product surface, then separates observed evidence from strategic assumptions. It does not contact prospects, change pricing, publish content, or modify the target.</p>
+          <strong>Recommended Product Review</strong>
+          <p>Qase reviews the current product, connects observed evidence to opportunities, and orders the recommendations for you.</p>
           <small id="founder-catalog-meta" aria-live="polite">Loading review catalog…</small>
         </div>
       </aside>
 
-      <fieldset class="founder-fieldset">
-        <legend>Product target</legend>
-        <div class="field-row founder-target-row">
-          <label class="field">
-            <span>Product or project</span>
-            <input id="founder-target-name" name="targetName" required maxlength="200" autocomplete="off" placeholder="Acme workspace" autofocus>
-          </label>
-          <label class="field">
-            <span>Release</span>
-            <input id="founder-target-release" name="targetRelease" maxlength="200" autocomplete="off" placeholder="2026.08">
-          </label>
-          <label class="field">
-            <span>Environment</span>
-            <input id="founder-target-environment" name="targetEnvironment" maxlength="100" autocomplete="off" placeholder="production">
-          </label>
-        </div>
+      <fieldset class="founder-fieldset founder-target-primary">
+        <legend>Product to review</legend>
         <label class="field">
           <span>Target URL</span>
-          <input id="founder-target-url" name="targetUrl" type="url" required maxlength="8192" inputmode="url" autocomplete="url" placeholder="https://product.example.com">
-          <small>Qase opens this URL after the review scope is created.</small>
-        </label>
-      </fieldset>
-
-      <fieldset class="founder-fieldset">
-        <legend>Business context <small class="founder-context-note">optional — Qase infers the rest from your site</small></legend>
-        <label class="field">
-          <span>Primary goal</span>
-          <textarea id="founder-primary-goal" name="primaryGoal" rows="2" maxlength="1000" placeholder="The single outcome this review should optimize for…"></textarea>
-        </label>
-        <label class="field">
-          <span>Constraints</span>
-          <textarea id="founder-constraints" name="constraints" rows="3" maxlength="2000" placeholder="Team, runway, compliance, technical or launch constraints…"></textarea>
+          <input id="founder-target-url" name="targetUrl" type="url" required maxlength="8192" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://product.example.com…">
+          <small>Qase uses the current Studio project when it is available.</small>
         </label>
       </fieldset>
 
       <label class="check founder-authorization">
         <input id="founder-authorization" type="checkbox" required>
-        <span>I confirm that I own this target or am authorized to review it using non-destructive browser testing.<small>Founder Mode observes and analyzes; it does not execute external business actions.</small></span>
+        <span>I have permission to review this product.<small>Qase observes the product without changing it or taking external business actions.</small></span>
       </label>
 
-      <fieldset class="qa-device-fieldset founder-device-fieldset">
-        <legend>Target device</legend>
-        <div class="field-row">
-          <label class="field">
-            <span>Device</span>
-            <select id="founder-device-select"></select>
-          </label>
-          <label class="check qa-landscape">
-            <input id="founder-device-landscape" type="checkbox">
-            <span>Landscape orientation</span>
-          </label>
+      <details class="qa-customize founder-customize" id="founder-customize">
+        <summary>Advanced Options</summary>
+        <div class="qa-customize-body founder-customize-body">
+          <fieldset class="founder-fieldset">
+            <legend>Project Details</legend>
+            <div class="field-row founder-target-row">
+              <label class="field">
+                <span>Product or project <small>(optional)</small></span>
+                <input id="founder-target-name" name="targetName" maxlength="200" autocomplete="off" placeholder="Acme workspace…">
+              </label>
+              <label class="field">
+                <span>Release <small>(optional)</small></span>
+                <input id="founder-target-release" name="targetRelease" maxlength="200" autocomplete="off" placeholder="Current…">
+              </label>
+              <label class="field">
+                <span>Environment <small>(optional)</small></span>
+                <input id="founder-target-environment" name="targetEnvironment" maxlength="100" autocomplete="off" placeholder="Preview…">
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="founder-fieldset">
+            <legend>Business Context <small class="founder-context-note">optional</small></legend>
+            <label class="field">
+              <span>Primary goal</span>
+              <textarea id="founder-primary-goal" name="primaryGoal" rows="2" maxlength="1000" placeholder="The outcome this review should optimize for…"></textarea>
+            </label>
+            <label class="field">
+              <span>Constraints</span>
+              <textarea id="founder-constraints" name="constraints" rows="3" maxlength="2000" placeholder="Team, runway, compliance, or launch constraints…"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="qa-device-fieldset founder-device-fieldset">
+            <legend>Browser &amp; Device</legend>
+            <div class="field-row">
+              <label class="field">
+                <span>Device</span>
+                <select id="founder-device-select"></select>
+              </label>
+              <label class="check qa-landscape">
+                <input id="founder-device-landscape" type="checkbox">
+                <span>Landscape orientation</span>
+              </label>
+            </div>
+            <label class="field">
+              <span>Saved Device Environment <small>(optional)</small></span>
+              <select id="founder-environment-select"><option value="">Use the selected browser profile</option></select>
+            </label>
+            <small>Provider and execution details stay within this advanced section.</small>
+          </fieldset>
         </div>
-        <label class="field">
-          <span>Apple environment <small>(BrowserStack matrix — overrides the device profile when selected)</small></span>
-          <select id="founder-environment-select"><option value="">Emulate locally (no BrowserStack env)</option></select>
-        </label>
-        <small>Founder Mode uses this profile when opening the target site.</small>
-      </fieldset>
+      </details>
 
       <div class="test-result" id="founder-form-error" role="alert" aria-live="assertive"></div>
     </div>
 
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="founder-cancel">Cancel</button>
-      <button class="btn btn-primary founder-submit" type="submit" id="founder-submit">Start founder review</button>
+      <button class="btn btn-primary founder-submit" type="submit" id="founder-submit">Start Product Review</button>
     </footer>
   </form>
 </dialog>

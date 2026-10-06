@@ -4986,6 +4986,7 @@ function syncFounderSubmitState() {
 async function openFounderStart() {
 	setFounderFormError();
 	founderUi.form.reset();
+	$('founder-customize').open = false;
 	const studioContext = applyStudioTarget(founderUi.targetUrl);
 	if (studioContext && founderUi.targetName) founderUi.targetName.value = studioContext.project;
 	populateDeviceSelect(founderUi.deviceSelect, pendingDeviceId());
@@ -5031,11 +5032,6 @@ founderUi.form.onsubmit = async event => {
 		founderUi.targetUrl.focus();
 		return;
 	}
-	if (!founderUi.targetName.value.trim()) {
-		setFounderFormError('Enter the product or project name.');
-		founderUi.targetName.focus();
-		return;
-	}
 	if (!founderUi.authorization.checked) {
 		setFounderFormError('Confirm review authorization and the non-destructive boundary first.');
 		founderUi.authorization.focus();
@@ -5043,7 +5039,7 @@ founderUi.form.onsubmit = async event => {
 	}
 
 	const target = {
-		name: founderUi.targetName.value.trim(),
+		name: founderUi.targetName.value.trim() || new URL(targetUrl).hostname,
 		url: targetUrl,
 		...(founderOptional(founderUi.targetRelease.value) ? { release: founderUi.targetRelease.value.trim() } : {}),
 		...(founderOptional(founderUi.targetEnvironment.value) ? { environment: founderUi.targetEnvironment.value.trim() } : {})

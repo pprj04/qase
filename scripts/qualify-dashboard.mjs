@@ -214,12 +214,13 @@ try {
 	assert.deepEqual(sqaSession.sqa.scope.target, {name:'127.0.0.1',release:'Current',environment:'Preview'});
 	checks.push('Quality review uses recommended defaults, authorization, and optional advanced scope');
 	await page.locator('#new-founder').click();await page.locator('#founder-start[open]').waitFor();
-	await page.locator('#founder-target-name').fill('Fixture');await page.locator('#founder-target-url').fill(targetUrl);await page.locator('#founder-authorization').check();
+	assert.equal(await page.locator('#founder-customize').evaluate(node => node.open), false);
+	await page.locator('#founder-target-url').fill(targetUrl);await page.locator('#founder-authorization').check();
 	await screenshot(page,'founder-launch.png');
 	await page.locator('#founder-submit').click();await page.locator('#founder-start').waitFor({state:'hidden'});
 	await page.locator('#tab-founder').waitFor({state:'visible'});await page.locator('#tab-founder').click();
-	assert.ok([...sessions.values()].some(s=>s.mode==='founder'&&s.founder.scope.authorization.confirmed));
-	checks.push('Founder context, authorization, launcher API, pending review panel');
+	assert.ok([...sessions.values()].some(s=>s.mode==='founder'&&s.founder.scope.authorization.confirmed&&s.founder.scope.target.name==='127.0.0.1'));
+	checks.push('Founder infers project context, hides technical options, and opens its pending review panel');
 	await page.screenshot({path:path.join(output,'desktop.png')});
 	for(const width of [1280,768,390,360]) {
 		await page.setViewportSize({width,height:844});
