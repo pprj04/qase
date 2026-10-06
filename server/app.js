@@ -635,6 +635,47 @@ export function createApplication(options = {}) {
 		response.json(await feedback.stats());
 	});
 
+	// WhatsApp notification status — admin visibility into delivery attempts.
+	// Contract note: 'SENT' means the provider ACCEPTED the message request
+	// for that recipient; provider-side delivery status is not available
+	// without webhook integration.
+	app.get('/api/feedback/notifications', (request, response) => {
+		if (!requireFeedbackAdmin(request, response)) return;
+		if (!whatsappNotifier?.listNotifications) {
+			response.status(200).json({ enabled: false, notifications: [], note: 'WhatsApp notifications are not enabled in this environment.' });
+			return;
+		}
+		const q = request.query;
+		const notifications = whatsappNotifier.listNotifications({
+			status: typeof q.status === 'string' && q.status.trim() !== '' ? q.status.trim().toUpperCase() : undefined,
+			feedbackId: typeof q.feedbackId === 'string' && q.feedbackId.trim() !== '' ? q.feedbackId.trim() : undefined
+		});
+		response.json({ enabled: true, notifications, note: "status 'SENT' reflects provider acceptance, not device delivery." });
+	});
+
+	// Retry a FAILED notification — replays only recipients not yet accepted.
+	app.post('/api/feedback/notifications/:id/retry', async (request, response) => {
+		if (!requireFeedbackAdmin(request, response)) return;
+		if (!whatsappNotifier?.retryNotification) {
+			response.status(501).json({ error: 'WhatsApp notifications are not enabled in this environment.' });
+			return;
+		}
+		const result = await whatsappNotifier.retryNotification(String(request.params.id ?? ''));
+		if (!result.ok) {
+			const statusByReason = { not_found: 404, already_sent: 409, in_progress: 409, not_replayable: 409 };
+			const status = statusByReason[result.reason] ?? 400;
+			const messageByReason = {
+				not_found: 'No such notification.',
+				already_sent: 'Notification already sent to all recipients.',
+				in_progress: 'Notification dispatch is already in progress.',
+				not_replayable: 'Notification cannot be replayed (missing stored feedback).'
+			};
+			response.status(status).json({ error: messageByReason[result.reason] ?? 'Retry not allowed.', reason: result.reason });
+			return;
+		}
+		response.json({ ...result.notification, note: "status 'SENT' reflects provider acceptance, not device delivery." });
+	});
+
 	app.get('/api/feedback', async (request, response) => {
 		const feedback = feedbackService();
 		if (!feedback) return;

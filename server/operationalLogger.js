@@ -5,7 +5,9 @@ const SAFE_FIELDS = new Set([
 	'accessMode', 'provider', 'model', 'registered', 'consecutiveFailures',
 	// keepalive + run-resume diagnostics
 	'url', 'ip', 'status', 'intervalMs', 'quietAfterMs', 'attempt', 'attempts',
-	'resumed', 'runId', 'reason', 'outcome'
+	'resumed', 'runId', 'reason', 'outcome',
+	// whatsapp notification diagnostics
+	'state', 'recipients', 'notificationId', 'feedbackId'
 ]);
 
 function safeName(value, label, pattern, maximum) {
