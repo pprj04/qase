@@ -1641,7 +1641,7 @@ function applyFeedbackSubmittedState() {
 		} else {
 			el.feedbackSubmit.textContent = 'Feedback submitted ✓';
 			el.feedbackCancel.textContent = 'Done';
-			el.feedbackSuccess.textContent = 'Thank you! Your feedback has been submitted successfully.';
+			el.feedbackSuccess.textContent = 'Sent to the Qase team’s Feedback Inbox for human review.';
 			el.feedbackEdit.hidden = false;
 		}
 	} else {
@@ -1708,7 +1708,7 @@ async function submitFeedback(event) {
 			state.feedback.existing = record;
 			state.feedback.editing = false;
 			applyFeedbackSubmittedState();
-			toast('Feedback updated.', 'good');
+			toast('Feedback updated in the Qase team’s Feedback Inbox.', 'good');
 			void refreshRuns();
 			renderReport();
 		} else {
@@ -1718,7 +1718,7 @@ async function submitFeedback(event) {
 			});
 			state.feedback.existing = record;
 			applyFeedbackSubmittedState();
-			toast('Thank you! Your feedback has been submitted successfully.', 'good');
+			toast('Feedback sent to the Qase team’s Feedback Inbox.', 'good');
 			void refreshRuns();
 			renderReport();
 		}
