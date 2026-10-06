@@ -524,6 +524,7 @@ export function updateActivity(session, id, patch) {
 export function setStatus(session, status, detail) {
 	applyStatusTiming(session, status);
 	session.status = status;
+	session.statusDetail = detail || undefined;
 	// Compatibility aliases: keep the Phase-4 UI timer / analytics fields in
 	// lockstep with the server-authoritative timing fields above.
 	if (session.startedAt !== undefined && typeof session.runStartedAt !== 'number') {

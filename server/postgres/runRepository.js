@@ -501,6 +501,7 @@ function hydrateRun(row, children) {
 		createdAt: epoch(row.created_at),
 		updatedAt: epoch(row.updated_at),
 		status: row.status,
+		statusDetail: row.status_detail ?? undefined,
 		mode: row.run_mode === 'sqa' || row.run_mode === 'founder' ? row.run_mode : 'qa',
 		targetUrl: row.target_url ?? undefined,
 		engine: runEngine({ engine: row.engine }),
@@ -1034,7 +1035,8 @@ export function createPostgresRunRepository({
 					END,
 					failure_reason = CASE WHEN $30 IS NOT NULL THEN $30 ELSE failure_reason END,
 					engine = $33, device = $34, device_landscape = $35,
-					cohort = $36
+					cohort = $36,
+					status_detail = $38
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND lock_version = $37 AND deleted_at IS NULL
 					AND ($21::uuid IS NULL OR created_by_user_id = $21)
@@ -1068,7 +1070,8 @@ export function createPostgresRunRepository({
 					session.resumedPauseSeconds ?? 0,                        // $32
 					runEngine(session), runDevice(session), session.deviceLandscape === true, // $33-$35
 					runCohort(session),                                       // $36
-					expectedVersion                                          // $37
+					expectedVersion,                                         // $37
+					session.statusDetail ?? null                              // $38
 				]
 			);
 			if (!result.rows?.length) {

@@ -1044,10 +1044,11 @@ function setStatus(status) {
 	if (state.session) state.session.status = status;
 	document.body.dataset.runStatus = status;
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
+	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
 	el.statusChip.dataset.status = status;
 	el.statusChip.textContent = stopping ? 'stopping…' : status === 'awaiting_input'
 		? 'waiting for you'
-		: status === 'done' ? 'done ✓' : status;
+		: status === 'done' ? 'done ✓' : stoppedByUser ? 'stopped' : status;
 	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
@@ -4060,6 +4061,7 @@ function handleEvent(event) {
 			break;
 
 		case 'status':
+			session.statusDetail = event.detail || undefined;
 			setStatus(event.status);
 			if (event.status === 'running' && typeof session.runStartedAt !== 'number') {
 				session.runStartedAt = event.ts ?? Date.now();
