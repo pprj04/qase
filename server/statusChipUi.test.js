@@ -23,7 +23,7 @@ test('the run-status (progress-top) row renders no status chip', () => {
 test('the live status chip is still wired for all run states', async () => {
 	// The header chip receives dataset.status + label from setStatus().
 	assert.match(app, /el\.statusChip\.dataset\.status = status;/);
-	assert.match(app, /el\.statusChip\.textContent = status === 'awaiting_input'/);
+    assert.match(app, /el\.statusChip\.textContent = stopping \? 'stopping…' : status === 'awaiting_input'/);
 	// CSS styling for every run state still targets the chip.
 	const styles = await readFile('public/styles.css', 'utf8');
 	for (const state of ['running', 'awaiting_input', 'done', 'error', 'interrupted']) {

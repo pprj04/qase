@@ -11,7 +11,7 @@ test('feature dock exposes one accessible launcher per mode outside the working 
 	assert.match(html, /<nav class="feature-dock" aria-label="Qase features">/);
 	for (const [id, label, feature, tip] of [
 		['new-run', 'Start standard QA run', 'qa', 'feature-tip-qa'],
-		['new-sqa', 'Start SQA assessment', 'sqa', 'feature-tip-sqa'],
+		['new-sqa', 'Start quality review', 'sqa', 'feature-tip-sqa'],
 		['new-founder', 'Start Founder Mode review', 'founder', 'feature-tip-founder']
 	]) {
 		assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1);
@@ -63,13 +63,13 @@ test('Founder result rendering is safe, mode-scoped, and covers the full decisio
 	assert.match(renderer, /session\?\.mode !== 'founder'/);
 	for (const heading of [
 		'Executive thesis',
-		'UI, UX & product findings',
+		'What to improve',
 		'ICP & positioning',
 		'Sales & GTM',
 		'Marketing & growth',
 		'Monetization & pricing',
-		'Prioritized opportunities',
-		'Quick wins',
+		'What to build next',
+		'What to do first',
 		'30 \/ 60 \/ 90 roadmap',
 		'Risks & assumptions',
 		'Metrics & experiments',

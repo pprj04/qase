@@ -36,8 +36,9 @@ test('QA frontend defaults to all tests selected and reuses Studio components', 
 });
 
 test('QA submit is disabled with no selection and selection survives configuration', () => {
-	// Disabled at zero selected tests.
-	assert.match(app, /qaUi\.submit\.disabled = selected === 0 \|\| qaUi\.submit\.dataset\.busy === 'true'/);
+	// Disabled at zero selected tests (or invalid URL, unloaded matrix, over-cap,
+	// or while a run is starting).
+	assert.match(app, /qaUi\.submit\.disabled = selected === 0 \|\| !urlValid \|\| !matrixReady \|\| !withinCap \|\| qaUi\.submit\.dataset\.busy === 'true'/);
 	// Guard on submit as well — defense in depth.
 	assert.match(app, /if \(selectedTests\.length === 0\) \{\s*setQaFormError\('Select at least one test\.'\)/);
 	// Bulk controls rewrite every checkbox.
