@@ -225,6 +225,50 @@ export function buildMatrixSectionMarkdown(session) {
 		lines.push(`- ${mark} ${browser.browser} — ${browser.executed}/${browser.requested} executed${reason}`);
 	}
 	lines.push('');
+
+	// #14942 (Phase 4): per-configuration rows + totals for the whole QA matrix
+	// run, straight from the recorded items. Same honesty rules as the UI board:
+	// an unexecuted configuration can never appear as a pass, and every
+	// non-terminal item surfaces as a coverage gap with its recorded reason.
+	const items = session.matrixCoverage?.runItems ?? session.matrixItems ?? null;
+	if (Array.isArray(items) && items.length) {
+		const passed = items.filter((item) => item.status === 'PASSED' && (item.verdict || item.sessionId));
+		const failed = items.filter((item) => item.status === 'FAILED');
+		const blocked = items.filter((item) => item.status === 'BLOCKED');
+		const skipped = items.filter((item) => item.status === 'SKIPPED');
+		const cancelled = items.filter((item) => item.status === 'CANCELLED');
+		const terminal = ['PASSED', 'FAILED', 'BLOCKED', 'SKIPPED', 'CANCELLED', 'NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'ERROR'];
+		const gaps = items.filter((item) => !terminal.includes(item.status));
+
+		lines.push('**Configurations**', '');
+		const completedCount = items.filter((item) => terminal.includes(item.status)).length;
+		lines.push(`Planned ${items.length} · completed ${completedCount} · passed ${passed.length} · failed ${failed.length} · blocked ${blocked.length} · skipped ${skipped.length} · cancelled ${cancelled.length} · coverage gaps ${gaps.length}`, '');
+		for (const item of items) {
+			const identity = [item.device, item.os, item.osVersion, item.browser ?? item.browserCode, item.browserVersion]
+				.filter(Boolean).join(' · ');
+			const facts = item.runtimeFacts ?? {};
+			const actual = facts.launchedEngine || facts.engine
+				? ` (engine: ${facts.launchedEngine ?? facts.engine}` +
+					(facts.executionType || item.executionLevel ? `, execution: ${facts.executionType ?? item.executionLevel}` : '') + ')'
+				: '';
+			const reason = item.reason ? item.reason : '';
+			const evidence = [
+				Array.isArray(item.artifactRefs) && item.artifactRefs.length ? `📎 ${item.artifactRefs.length}` : null,
+				Array.isArray(item.defects) && item.defects.length ? `🐞 ${item.defects.length}` : null
+			].filter(Boolean).join(' ');
+			const tail = [evidence, reason].filter(Boolean).join(' · ');
+			lines.push(`- **${String(item.status ?? '')}** ${identity}${actual}${tail ? ` — ${tail}` : ''}`);
+		}
+		if (gaps.length) {
+			lines.push('', '**Coverage gaps**', '');
+			for (const item of gaps) {
+				const identity = [item.device, item.os, item.browser ?? item.browserCode, item.browserVersion]
+					.filter(Boolean).join(' · ');
+				lines.push(`- ⚠ ${identity}: ${String(item.status ?? '').toLowerCase()}${item.reason ? ` — ${item.reason}` : ''}`);
+			}
+		}
+		lines.push('');
+	}
 	return lines.join('\n');
 }
 

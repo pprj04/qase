@@ -564,7 +564,27 @@ export function createApplication(options = {}) {
 			const run = await services.matrix.get(session.matrixRunId);
 			if (!run) return session;
 			session.matrixCoverage = computeMatrixCoverage([run]);
-		} catch {
+			// #14942 (Phase 4): the report layer renders per-configuration rows
+			// from the recorded items (see buildMatrixSectionMarkdown). Items are
+			// enriched with the same per-environment defect linkage the API uses,
+			// so report rows carry their own evidence counts.
+			const items = Array.isArray(run.items) ? run.items : [];
+			const byEnvironment = new Map();
+			for (const item of items) {
+				if (!item.environmentId) continue;
+				if (!byEnvironment.has(item.environmentId)) {
+					try {
+						byEnvironment.set(item.environmentId, await services.bugs.list({ environmentId: item.environmentId }));
+					} catch {
+						byEnvironment.set(item.environmentId, []);
+					}
+				}
+				const defects = byEnvironment.get(item.environmentId) ?? [];
+				item.defects = defects.map(({ bugNumber, title, severity, status }) => ({ bugNumber, title, severity, status }));
+			}
+			session.matrixItems = items;
+		} catch (error) {
+			console.warn('attachMatrixCoverage failed:', error?.message ?? error);
 			session.matrixCoverage = undefined;
 		}
 		return session;

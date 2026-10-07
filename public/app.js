@@ -5508,6 +5508,13 @@ if (qaUi.securityAuthorized) {
 	// wording is visible regardless of how the browser renders the bubble.
 	qaUi.securityAuthorized.addEventListener('invalid', () => {
 		setQaFormError('Confirm the target is an explicitly authorized, isolated test environment before running security tests.');
+		// #15270: a first Start click that only surfaces this gate reads as
+		// "the button does nothing" — bring the checkbox into view and focus
+		// it so the required action is unmissable, still inside this modal.
+		if (!qaUi.securityAuthorized.checked && typeof qaUi.securityAuthorized.scrollIntoView === 'function') {
+			qaUi.securityAuthorized.scrollIntoView({ block: 'center', behavior: 'smooth' });
+		}
+		qaUi.securityAuthorized.focus({ preventScroll: true });
 	});
 	// Checking the box resolves the validity error immediately.
 	qaUi.securityAuthorized.addEventListener('change', () => {
