@@ -18,6 +18,7 @@ import {
 	PLATFORM_GROUPS,
 	buildSummary,
 	isValidTargetUrl,
+	MAX_RUN_CONFIGURATIONS,
 	configurationsForDevice,
 	compatibleBrowserFamilies,
 	defaultSelectionForDevice,
@@ -5317,11 +5318,13 @@ function qaMatrixRender() {
 		.filter(provider => !provider.connected)
 		.map(provider => `${provider.name}: not configured`);
 	const scopeLabel = qaMatrixScopeLabel();
+	const overCap = summary.total > MAX_RUN_CONFIGURATIONS;
 	matrix.summary.textContent = scopeLabel
 		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} of this device's configurations selected`
 		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
 			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
-			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '');
+			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '')
+			+ (overCap ? ` · over the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — narrow the selection to start` : '');
 	matrix.summary.title = Object.entries(summary.byFamily)
 		.filter(([, count]) => count > 0)
 		.map(([code, count]) => `${code}: ${count}`)
@@ -5401,9 +5404,15 @@ function syncQaSubmitState() {
 	const selected = qaUi.selectedTests.size;
 	// QA matrix (#15013): Start also requires a valid URL and ≥1 selected
 	// configuration while the dialog is open (fetch error → 0 selected → held).
+	// #14942 fix: the server caps a run at MAX_RUN_CONFIGURATIONS (2000) —
+	// a default full-matrix selection (37k+) previously POSTed anyway and
+	// died on the 1mb body limit as an opaque 413. Gate Start the same way
+	// the server does, with an honest reason, instead of letting it fail.
 	const urlValid = !qaUi.dialog?.open || isValidTargetUrl(qaUi.targetUrl?.value);
-	const matrixReady = !qaUi.dialog?.open || qaMatrixState.selectedEnvIds.length > 0;
-	qaUi.submit.disabled = selected === 0 || !urlValid || !matrixReady || qaUi.submit.dataset.busy === 'true';
+	const selectedCount = qaMatrixState.selectedEnvIds.length;
+	const matrixReady = !qaUi.dialog?.open || selectedCount > 0;
+	const withinCap = !qaUi.dialog?.open || selectedCount <= MAX_RUN_CONFIGURATIONS;
+	qaUi.submit.disabled = selected === 0 || !urlValid || !matrixReady || !withinCap || qaUi.submit.dataset.busy === 'true';
 	if (qaUi.testsCount) {
 		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
 	}
@@ -5822,6 +5831,12 @@ if (qaUi.dialog) {
 		const selectedEnvIds = sanitizeSelection(qaMatrixState.index, qaMatrixState.selectedEnvIds);
 		if (selectedEnvIds.length === 0) {
 			setQaFormError('The selected configurations are no longer available. Reload the catalog and pick again.');
+			return;
+		}
+		// #14942 fix: mirror the server's run cap client-side so the honest
+		// message surfaces here instead of as a raw 413/422 from the API.
+		if (selectedEnvIds.length > MAX_RUN_CONFIGURATIONS) {
+			setQaFormError(`Too many configurations selected (${selectedEnvIds.length.toLocaleString()}). The maximum per run is ${MAX_RUN_CONFIGURATIONS.toLocaleString()} — narrow the selection (platform, manufacturer, browser, or OS filters) and start again.`);
 			return;
 		}
 		// AC14 context is carried by the launcher's matrix run itself; the

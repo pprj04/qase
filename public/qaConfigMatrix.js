@@ -392,8 +392,15 @@ export function isValidTargetUrl(value) {
 	}
 }
 
+/** Maximum configurations per matrix run — matches the server's
+ *  MAX_MATRIX_CONFIGURATIONS cap (route: POST /api/qa-matrix-runs). */
+export const MAX_RUN_CONFIGURATIONS = 2000;
+
 export function canStartRun({ targetUrl, selectedEnvIds }) {
-	return isValidTargetUrl(targetUrl) && Array.isArray(selectedEnvIds) && selectedEnvIds.length > 0;
+	return isValidTargetUrl(targetUrl)
+		&& Array.isArray(selectedEnvIds)
+		&& selectedEnvIds.length > 0
+		&& selectedEnvIds.length <= MAX_RUN_CONFIGURATIONS;
 }
 
 // ---------------------------------------------------------------------------

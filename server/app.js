@@ -249,6 +249,14 @@ export function createApplication(options = {}) {
 	// bytes. It must be mounted before any JSON middleware can transform them.
 	drytisIntegrationApi?.mount(app);
 
+	// QA matrix launcher (#14942): the request body carries every selected
+	// configuration id (a full default selection is ~37k ids ≈ 2MB). The route
+	// itself caps the RUN at 2000 configurations with an actionable 422 —
+	// the global 1mb limit would preempt that with a bare 413 ("Request body
+	// is too large") that gives the user nothing to act on. A generous
+	// route-specific limit lets the cap message win; arbitrary bulk beyond it
+	// is still bounded.
+	app.use('/api/qa-matrix-runs', express.json({ limit: '8mb' }));
 	app.use(express.json({ limit: '1mb' }));
 	app.get('/login', (_request, response) => {
 		response.sendFile(path.join(publicDirectory, 'index.html'));
