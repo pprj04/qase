@@ -53,8 +53,8 @@ function enabledFlag(environment) {
 	const raw = environment.QASE_TELEGRAM_ENABLED;
 	if (raw === undefined || raw === null || String(raw).trim() === '') return false;
 	const normalized = String(raw).trim().toLowerCase();
-	if (normalized === 'true') return true;
-	if (normalized === 'false') return false;
+	if (['true', 'enabled', 'on', '1'].includes(normalized)) return true;
+	if (['false', 'disabled', 'off', '0'].includes(normalized)) return false;
 	throw new TypeError('QASE_TELEGRAM_ENABLED must be true or false.');
 }
 
