@@ -29,7 +29,7 @@ import {
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { buildFeedbackSectionMarkdown } from './report.js';
 import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
-import { createConfiguredWhatsAppNotifier } from './whatsappNotifier.js';
+import { createConfiguredTelegramNotifier } from './telegramNotifier.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { renderReportPdf } from './reportPdf.js';
 import { buildAllFixPromptsMarkdown } from './fixPromptBuilder.js';
@@ -146,17 +146,17 @@ export function createApplication(options = {}) {
 
 	const app = express();
 	app.disable('x-powered-by');
-	// WhatsApp feedback notifications: built once, disabled/invalid → undefined.
+	// Telegram feedback notifications: built once, disabled/invalid → undefined.
 	// Delivery is fire-and-forget AFTER the record is persisted; feedback
 	// storage and reports never depend on it.
-	const whatsappNotifier = options.whatsappNotifier !== undefined
-		? options.whatsappNotifier
-		: createConfiguredWhatsAppNotifier({
+	const telegramNotifier = options.telegramNotifier !== undefined
+		? options.telegramNotifier
+		: createConfiguredTelegramNotifier({
 			environment,
 			logger: logger ?? { info: () => {}, warn: () => {}, error: () => {} }
 		});
-	if (whatsappNotifier !== undefined && typeof whatsappNotifier?.dispatchFeedbackNotification !== 'function') {
-		throw new TypeError('WhatsApp notifier must provide dispatchFeedbackNotification().');
+	if (telegramNotifier !== undefined && typeof telegramNotifier?.dispatchFeedbackNotification !== 'function') {
+		throw new TypeError('Telegram notifier must provide dispatchFeedbackNotification().');
 	}
 	app.locals.qaseDemoEnabled = demoEnabled;
 	app.locals.qaseFrameAncestors = configuredFrameAncestors(environment);
@@ -213,72 +213,26 @@ export function createApplication(options = {}) {
 		response.set('Cache-Control', 'no-store');
 		next();
 	});
-	// ── WhatsApp delivery-status webhook (mounted BEFORE /api auth + CSRF) ──
+	// ── Telegram webhook (mounted BEFORE /api auth + CSRF) ──────────
 	// Meta calls back on message lifecycle (sent/delivered/read/failed).
 	// GET = subscription verification; POST = status payloads. Both must be
 	// reachable without QASE session auth; Meta never holds our session
 	// cookies, so /api gating would reject it.
-	const whatsappWebhookVerifyToken = String(environment.QASE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '').trim();
-	app.get('/webhooks/whatsapp', (request, response) => {
-		response.set('Cache-Control', 'no-store');
-		const q = request.query;
-		if (q['hub.mode'] !== 'subscribe' || !whatsappWebhookVerifyToken) {
-			// Unconfigured: 403, no detail — never confirm a token guess.
-			response.status(403).send('Forbidden');
-			return;
-		}
-		if (q['hub.verify_token'] !== whatsappWebhookVerifyToken) {
-			response.status(403).send('Forbidden');
-			return;
-		}
-		response.status(200).send(String(q['hub.challenge'] ?? ''));
-	});
-	app.post('/webhooks/whatsapp', async (request, response) => {
-		// Always answer 200 quickly: Meta retries anything else aggressively
+	const telegramWebhookSecretToken = String(environment.QASE_TELEGRAM_WEBHOOK_SECRET ?? '').trim();
+	// ── Telegram webhook (mounted BEFORE /api auth + CSRF) ──────────
+	// Telegram delivers updates to configured webhooks. QASE does not use
+	// Telegram as an inbound channel, so the endpoint only verifies it is
+	// reachable and acknowledges; nothing triggers notifications here.
+	// A shared secret (set via BotFather / setWebhook secret_token) keeps
+	// outsiders from probing: unauthenticated POSTs are simply dropped.
+	app.post('/webhooks/telegram', (request, response) => {
+		// Always answer 200 quickly: Telegram retries non-200 aggressively
 		// and we must never leak internals into the response body.
 		response.status(200).send('OK');
-		if (!whatsappWebhookVerifyToken || typeof whatsappNotifier?.recordDeliveryStatus !== 'function') {
-			return;
-		}
-		try {
-			// Read the raw body manually (capped): malformed JSON from a
-			// webhook source must not 400 — Meta retries hard on non-200.
-			// The global express.json already consumed the stream, but kept
-			// the parsed object for us; fall back to raw reading if absent.
-			let parsed = request.body;
-			if (parsed === undefined || parsed === null) {
-				const chunks = [];
-				let total = 0;
-				for await (const chunk of request) {
-					total += chunk.length;
-					if (total > 262_144) return; // 256 KiB cap; drop oversized
-					chunks.push(chunk);
-				}
-				try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return; }
-			}
-			// Let the microtask queue run so assertions in tests see the
-			// updates before the HTTP response is consumed.
-			const updates = [];
-			// Meta Cloud API webhook shape: entry[].changes[].value.statuses[]
-			const entries = Array.isArray(parsed?.entry) ? parsed.entry : [];
-			for (const entry of entries) {
-				for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
-					for (const status of Array.isArray(change?.value?.statuses) ? change.value.statuses : []) {
-						if (typeof status?.id !== 'string') continue;
-						updates.push(whatsappNotifier.recordDeliveryStatus({
-							messageId: status.id,
-							status: status.status,
-							timestamp: Number(status.timestamp) * 1000,
-							errorCode: status.errors?.[0]?.code,
-							errorMessage: status.errors?.[0]?.message
-						}));
-					}
-				}
-			}
-			await Promise.allSettled(updates);
-		} catch (error) {
-			console.error(`[Qase server] whatsapp webhook ingestion error: ${sanitizeErrorDetail(error)}`);
-		}
+		if (!telegramWebhookSecretToken) return;
+		const header = request.headers['x-telegram-bot-api-secret-token'];
+		if (header !== telegramWebhookSecretToken) return;
+		// No inbound commands are implemented; acknowledged and ignored.
 	});
 
 	app.use('/api', (request, response, next) => {
@@ -597,33 +551,35 @@ export function createApplication(options = {}) {
 
 	/* ── User feedback on test runs ───────────────────────────── */
 
-	/** Public base URL used in WhatsApp deep links back to the run report. */
-	const whatsappQaseUrl = (() => {
+	/** Public base URL used in Telegram message deep links back to the run report. */
+	const telegramQaseUrl = (() => {
 		const raw = String(environment.QASE_PUBLIC_URL ?? '').trim();
 		return raw === '' ? undefined : raw;
 	})();
-	/** How long POST /api/feedback may WAIT for the WhatsApp dispatch result. */
-	const whatsappResultTimeoutMs = (() => {
-		const parsed = Number(environment.QASE_WHATSAPP_RESULT_TIMEOUT_MS);
+	/** How long POST /api/feedback may WAIT for the Telegram dispatch result. */
+	const telegramResultTimeoutMs = (() => {
+		const parsed = Number(environment.QASE_TELEGRAM_RESULT_TIMEOUT_MS);
 		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10_000;
 	})();
 
 	/** Response projection of a notification record — sanitized, no replay data. */
-	function whatsappProjection(notification) {
+	function telegramProjection(notification) {
 		const status = notification?.status;
 		const message = status === 'FAILED'
-			? 'Feedback saved, but the WhatsApp notification failed.'
-			: status === 'PENDING' || status === 'RETRYING'
-				? 'Feedback saved, but the WhatsApp notification result is pending.'
+			? 'Feedback saved, but the Telegram notification failed.'
+			: status === 'PENDING' || status === 'SENDING'
+				? 'Feedback saved, but the Telegram notification result is pending.'
 				: undefined;
 		return {
 			status,
 			...(message ? { message } : {}),
 			recipients: (notification?.recipients ?? []).map(recipient => ({
-				to: recipient.to,
+				chatId: recipient.chatId,
 				state: recipient.state,
-				...(recipient.whatsappMessageId ? { whatsappMessageId: recipient.whatsappMessageId } : {}),
-				...(recipient.deliveryStatus ? { deliveryStatus: recipient.deliveryStatus } : {})
+				attempts: recipient.attempts,
+				...(recipient.messageId ? { messageId: recipient.messageId } : {}),
+				...(recipient.errorCode ? { errorCode: recipient.errorCode } : {}),
+				...(recipient.lastError ? { lastError: recipient.lastError } : {})
 			}))
 		};
 	}
@@ -687,37 +643,37 @@ export function createApplication(options = {}) {
 			});
 			// Notify AFTER the record is durably stored. The dispatch is
 			// bounded by an await-with-timeout so the response truthfully
-			// reports {feedbackSaved, whatsappSent} from real provider
+			// reports {feedbackSaved, telegramSent} from real provider
 			// results — but a stuck/slow provider can never hang feedback:
 			// the dispatch itself keeps running detached, only the await
 			// gives up. A dispatch failure is logged by the notifier and
 			// never fails this request.
-			let whatsapp;
-			if (whatsappNotifier && record?.id) {
-				const dispatched = Promise.resolve(whatsappNotifier.dispatchFeedbackNotification(record, {
+			let telegram;
+			if (telegramNotifier && record?.id) {
+				const dispatched = Promise.resolve(telegramNotifier.dispatchFeedbackNotification(record, {
 					mode: session.mode,
 					title: session.title,
 					targetUrl: session.targetUrl,
-					qaseUrl: whatsappQaseUrl,
+					qaseUrl: telegramQaseUrl,
 					submittedByName: request.auth?.userName ?? request.auth?.name,
 					submittedAt: record.submittedAt ?? Date.now()
 				}));
 				// Await with a strict timeout (default 10s): PENDING result on
 				// expiry, feedback still saved, dispatch continues detached.
-				whatsapp = await new Promise(resolve => {
-					const timer = setTimeout(() => resolve(undefined), whatsappResultTimeoutMs);
+				telegram = await new Promise(resolve => {
+					const timer = setTimeout(() => resolve(undefined), telegramResultTimeoutMs);
 					if (typeof timer?.unref === 'function') timer.unref();
 					dispatched.then(
-						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); },
-						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); }
+						() => { clearTimeout(timer); resolve(telegramNotifier.getNotification?.(record.id)); },
+						() => { clearTimeout(timer); resolve(telegramNotifier.getNotification?.(record.id)); }
 					);
 				}).then(notification => notification ?? { status: 'PENDING' });
 			}
 			response.status(201).json({
 				...record,
 				feedbackSaved: true,
-				whatsappSent: Boolean(whatsapp?.status === 'SENT'),
-				...(whatsapp ? { whatsapp: whatsappProjection(whatsapp) } : {})
+				telegramSent: Boolean(telegram?.status === 'SENT'),
+				...(telegram ? { telegram: telegramProjection(telegram) } : {})
 			});
 		} catch (error) {
 			if (error?.code === 'duplicate_feedback') {
@@ -750,45 +706,45 @@ export function createApplication(options = {}) {
 		response.json(await feedback.stats());
 	});
 
-	// WhatsApp notification status — admin visibility into delivery attempts.
-	// Contract note: 'SENT' means the provider ACCEPTED the message request
-	// for that recipient; provider-side delivery status is not available
-	// without webhook integration.
+	// Telegram notification status — admin visibility into delivery attempts.
+	// Contract note: 'SENT' means the Telegram Bot API ACCEPTED the message
+	// (message_id returned) for that chat; group delivery beyond acceptance
+	// is not tracked.
 	app.get('/api/feedback/notifications', (request, response) => {
 		if (!requireFeedbackAdmin(request, response)) return;
-		if (!whatsappNotifier?.listNotifications) {
-			response.status(200).json({ enabled: false, notifications: [], note: 'WhatsApp notifications are not enabled in this environment.' });
+		if (!telegramNotifier?.listNotifications) {
+			response.status(200).json({ enabled: false, notifications: [], note: 'Telegram notifications are not enabled in this environment.' });
 			return;
 		}
 		const q = request.query;
-		const notifications = whatsappNotifier.listNotifications({
+		const notifications = telegramNotifier.listNotifications({
 			status: typeof q.status === 'string' && q.status.trim() !== '' ? q.status.trim().toUpperCase() : undefined,
 			feedbackId: typeof q.feedbackId === 'string' && q.feedbackId.trim() !== '' ? q.feedbackId.trim() : undefined
 		});
-		response.json({ enabled: true, notifications, note: "status 'SENT' reflects provider acceptance, not device delivery." });
+		response.json({ enabled: true, notifications, note: "status 'SENT' reflects Telegram API acceptance." });
 	});
 
-	// Retry a FAILED notification — replays only recipients not yet accepted.
+	// Retry a FAILED notification — replays only chats not yet accepted.
 	app.post('/api/feedback/notifications/:id/retry', async (request, response) => {
 		if (!requireFeedbackAdmin(request, response)) return;
-		if (!whatsappNotifier?.retryNotification) {
-			response.status(501).json({ error: 'WhatsApp notifications are not enabled in this environment.' });
+		if (!telegramNotifier?.retryNotification) {
+			response.status(501).json({ error: 'Telegram notifications are not enabled in this environment.' });
 			return;
 		}
-		const result = await whatsappNotifier.retryNotification(String(request.params.id ?? ''));
+		const result = await telegramNotifier.retryNotification(String(request.params.id ?? ''));
 		if (!result.ok) {
 			const statusByReason = { not_found: 404, already_sent: 409, in_progress: 409, not_replayable: 409 };
 			const status = statusByReason[result.reason] ?? 400;
 			const messageByReason = {
 				not_found: 'No such notification.',
-				already_sent: 'Notification already sent to all recipients.',
+				already_sent: 'Notification already sent to all chats.',
 				in_progress: 'Notification dispatch is already in progress.',
 				not_replayable: 'Notification cannot be replayed (missing stored feedback).'
 			};
 			response.status(status).json({ error: messageByReason[result.reason] ?? 'Retry not allowed.', reason: result.reason });
 			return;
 		}
-		response.json({ ...result.notification, note: "status 'SENT' reflects provider acceptance, not device delivery." });
+		response.json({ ...result.notification, note: "status 'SENT' reflects Telegram API acceptance." });
 	});
 
 	app.get('/api/feedback', async (request, response) => {
@@ -1620,9 +1576,9 @@ export function createApplication(options = {}) {
 			next(error);
 			return;
 		}
-		// The WhatsApp webhook always answers 200 (Meta retries non-200
+		// The Telegram webhook always answers 200 (Telegram retries non-200
 		// aggressively); a JSON parse error there must not surface as 400.
-		if (request.path === '/webhooks/whatsapp') {
+		if (request.path === '/webhooks/telegram') {
 			response.status(200).send('OK');
 			return;
 		}

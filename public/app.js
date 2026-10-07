@@ -1568,21 +1568,21 @@ async function submitFeedback(event) {
 			state.feedback.existing = record;
 			state.feedback.editing = false;
 			// Truthful outcome line: the server now reports whether the
-			// WhatsApp notification was actually dispatched. Feedback is
+			// Telegram notification was actually dispatched. Feedback is
 			// ALWAYS saved first — a notification failure is never presented
 			// as a submission failure (record exists → 201, never 5xx).
-			const sent = record?.whatsappSent === true;
-			const pending = record?.whatsapp?.status === 'PENDING' || record?.whatsapp?.status === 'RETRYING';
-			const failed = record?.whatsapp?.status === 'FAILED';
+			const sent = record?.telegramSent === true;
+			const pending = record?.telegram?.status === 'PENDING' || record?.telegram?.status === 'SENDING';
+			const failed = record?.telegram?.status === 'FAILED';
 			if (sent) {
 				toast('Thank you! Your feedback has been submitted successfully.', 'good');
-				state.feedback.notified = 'WhatsApp notification sent ✓';
+				state.feedback.notified = 'Telegram notification sent ✓';
 			} else if (pending) {
-				toast('Feedback saved. WhatsApp notification is still being delivered.', 'info');
-				state.feedback.notified = 'WhatsApp notification pending — feedback saved.';
+				toast('Feedback saved. Telegram notification is still being delivered.', 'info');
+				state.feedback.notified = 'Telegram notification pending — feedback saved.';
 			} else if (failed) {
-				toast('Feedback saved. WhatsApp notification could not be delivered.', 'info');
-				state.feedback.notified = 'WhatsApp notification failed — feedback saved.';
+				toast('Feedback saved. Telegram notification could not be delivered.', 'info');
+				state.feedback.notified = 'Telegram notification failed — feedback saved.';
 			} else {
 				toast('Thank you! Your feedback has been submitted successfully.', 'good');
 				state.feedback.notified = '';
