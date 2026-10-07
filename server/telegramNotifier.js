@@ -109,10 +109,13 @@ export function parseTelegramConfig(environment) {
 		throw new TypeError('QASE_TELEGRAM_BOT_TOKEN is not a valid bot token.');
 	}
 	const chatIds = parseChatIds(environment.QASE_TELEGRAM_CHAT_IDS);
+	const apiOriginRaw = String(environment.QASE_TELEGRAM_API_ORIGIN ?? '').trim();
 	return Object.freeze({
 		botToken,
 		chatIds,
-		apiOrigin: (environment.QASE_TELEGRAM_API_ORIGIN ?? 'https://api.telegram.org').replace(/\/+$/, ''),
+		// Blank (present-but-empty) values must not wipe the default origin —
+		// env materializers write empty strings for unset optional keys.
+		apiOrigin: (apiOriginRaw === '' ? 'https://api.telegram.org' : apiOriginRaw).replace(/\/+$/, ''),
 		timeoutMs: 15_000
 	});
 }
