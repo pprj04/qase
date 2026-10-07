@@ -39,7 +39,7 @@ function makeNotifierHarness() {
 			getNotification: feedbackId => ({
 				status: 'SENT',
 				recipients: [
-					{ to: '+15550000001', state: 'sent', whatsappMessageId: 'wamid.1', deliveryStatus: 'accepted' }
+					{ chatId: '-1001110001111', state: 'sent', attempts: 1, messageId: 7 }
 				]
 			})
 		}
@@ -57,7 +57,7 @@ function makeSyncNotifier() {
 				dispatches.push({ feedback: { ...feedback }, context: { ...context } });
 				return new Promise(() => {}); // never resolves — proves the bounded wait
 			},
-			getNotification: () => ({ status: 'RETRYING' })
+			getNotification: () => ({ status: 'SENDING' })
 		}
 	};
 }
@@ -74,7 +74,7 @@ function makeFailingNotifier() {
 			getNotification: () => ({
 				status: 'FAILED',
 				recipients: [
-					{ to: '+15550000001', state: 'failed', lastError: 'WhatsApp API is unreachable.' }
+					{ chatId: '-1001110001111', state: 'failed', attempts: 3, lastError: 'Telegram API is unreachable.' }
 				]
 			})
 		}
@@ -98,7 +98,7 @@ async function buildApp(notifier, extraEnvironment = {}) {
 		services,
 		access: createInstanceAccess({ tenantContext: TENANT }),
 		authRequired: true,
-		whatsappNotifier: notifier,
+		telegramNotifier: notifier,
 		environment: { ...process.env, ...extraEnvironment }
 	});
 	const server = await new Promise(resolve => {
@@ -159,7 +159,7 @@ test('POST /api/feedback dispatches after save with run context (id, mode, title
 	}
 });
 
-test('the HTTP response reports feedbackSaved + whatsappSent truthfully (awaited result)', async () => {
+test('the HTTP response reports feedbackSaved + telegramSent truthfully (awaited result)', async () => {
 	const harness = makeNotifierHarness();
 	const app = await buildApp(harness.notifier);
 	try {
@@ -172,10 +172,10 @@ test('the HTTP response reports feedbackSaved + whatsappSent truthfully (awaited
 		assert.equal(response.status, 201);
 		const body = await response.json();
 		assert.equal(body.feedbackSaved, true);
-		assert.equal(body.whatsappSent, true);
-		assert.equal(body.whatsapp.status, 'SENT');
-		assert.equal(body.whatsapp.recipients[0].whatsappMessageId, 'wamid.1');
-		assert.equal(body.whatsapp.recipients[0].deliveryStatus, 'accepted');
+		assert.equal(body.telegramSent, true);
+		assert.equal(body.telegram.status, 'SENT');
+		assert.equal(body.telegram.recipients[0].chatId, '-1001110001111');
+		assert.equal(body.telegram.recipients[0].messageId, 7);
 		// Backward compat: original record fields still present.
 		assert.ok(body.id);
 		assert.equal(body.rating, 5);
@@ -186,7 +186,7 @@ test('the HTTP response reports feedbackSaved + whatsappSent truthfully (awaited
 
 test('a stuck dispatch reports PENDING after the bounded wait — feedback saved', async () => {
 	const harness = makeSyncNotifier(); // dispatch promise never resolves
-	const app = await buildApp(harness.notifier, { QASE_WHATSAPP_RESULT_TIMEOUT_MS: '50' });
+	const app = await buildApp(harness.notifier, { QASE_TELEGRAM_RESULT_TIMEOUT_MS: '50' });
 	try {
 		const session = await finishedRun(app.services);
 		const response = await fetch(`${app.origin}/api/feedback`, {
@@ -197,9 +197,9 @@ test('a stuck dispatch reports PENDING after the bounded wait — feedback saved
 		assert.equal(response.status, 201);
 		const body = await response.json();
 		assert.equal(body.feedbackSaved, true);
-		assert.equal(body.whatsappSent, false);
-		assert.equal(body.whatsapp.status, 'PENDING');
-		assert.match(body.whatsapp.message, /pending/);
+		assert.equal(body.telegramSent, false);
+		assert.equal(body.telegram.status, 'PENDING');
+		assert.match(body.telegram.message, /pending/);
 		assert.equal(harness.dispatches.length, 1);
 		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
 	} finally {
@@ -220,9 +220,9 @@ test('provider failure is reported, never swallowed — feedback still saved', a
 		assert.equal(response.status, 201);
 		const body = await response.json();
 		assert.equal(body.feedbackSaved, true);
-		assert.equal(body.whatsappSent, false);
-		assert.equal(body.whatsapp.status, 'FAILED');
-		assert.match(body.whatsapp.message, /failed/);
+		assert.equal(body.telegramSent, false);
+		assert.equal(body.telegram.status, 'FAILED');
+		assert.match(body.telegram.message, /failed/);
 		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
 	} finally {
 		await app.close();
@@ -241,8 +241,8 @@ test('feedback survives when the notifier rejects outright', async () => {
 		assert.equal(response.status, 201);
 		const body = await response.json();
 		assert.equal(body.feedbackSaved, true);
-		assert.equal(body.whatsappSent, false); // rejection never reads as success
-		assert.equal(body.whatsapp.status, 'PENDING');
+		assert.equal(body.telegramSent, false); // rejection never reads as success
+		assert.equal(body.telegram.status, 'PENDING');
 		assert.ok(await app.services.feedback.forRun(session.id, TENANT.actorUserId));
 	} finally {
 		await app.close();
@@ -299,7 +299,7 @@ test('invalid injected notifier shape is rejected at construction', () => {
 		createApplication({
 			services: createLocalApplicationServices({ tenantContext: TENANT }),
 			access: createInstanceAccess({ tenantContext: TENANT }),
-			whatsappNotifier: { nope: true }
+			telegramNotifier: { nope: true }
 		});
 	}, /dispatchFeedbackNotification/);
 });
