@@ -265,6 +265,35 @@ html[data-qase-layout="studio-mock"] .studio-tool-header {
 	font-size: 11px;
 }
 
+.studio-theme-control {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: var(--studio-host-muted);
+	font-size: 11px;
+}
+
+.studio-theme-control select {
+	min-height: 32px;
+	padding: 5px 28px 5px 9px;
+	border: 1px solid var(--studio-host-border);
+	border-radius: 7px;
+	background-color: var(--studio-host-surface);
+	color: var(--studio-host-text);
+	cursor: pointer;
+	font: inherit;
+	touch-action: manipulation;
+}
+
+.studio-theme-control select:hover {
+	border-color: color-mix(in srgb, var(--studio-host-action) 55%, var(--studio-host-border));
+}
+
+.studio-theme-control select:focus-visible {
+	outline: 2px solid var(--studio-host-action);
+	outline-offset: 2px;
+}
+
 .studio-context-toggle {
 	min-height: 32px;
 	padding: 5px 9px;
@@ -387,6 +416,18 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 
 	html[data-qase-layout="studio-mock"] .studio-demo-badge {
 		display: none;
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-theme-control > span {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 
 	html[data-qase-layout="studio-mock"] .app {

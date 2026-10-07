@@ -104,6 +104,14 @@
         <span><strong>Qase</strong><small>Quality workspace</small></span>
       </div>
       <span class="studio-demo-badge">Studio demo</span>
+      <label class="studio-theme-control" for="studio-theme-select">
+        <span>Theme</span>
+        <select id="studio-theme-select" name="studioTheme" data-theme-control aria-label="Workspace theme">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
       <button class="studio-context-toggle" id="studio-context-toggle" type="button" aria-controls="studio-context" aria-expanded="true">Hide context</button>
     </header>
 
@@ -337,7 +345,7 @@
       <textarea id="composer-input" rows="1" placeholder="Paste a URL or tell Qase what to test…" autocomplete="off" aria-describedby="composer-hint"></textarea>
       <span class="sr-only" id="composer-hint">Press Enter to send. Press Shift and Enter for a new line.</span>
       <button type="submit" class="btn btn-primary" id="send-btn">Send</button>
-      <p class="composer-hint" id="composer-running-hint" hidden>Agent working — the message box is disabled until the run stops or asks for you.</p>
+      <p class="composer-hint" id="composer-running-hint" hidden>Agent is working. You can reply when it pauses.</p>
     </form>
   </main>
 
@@ -819,12 +827,15 @@
           <div class="qa-security-auth" id="qa-security-auth" hidden>
             <label class="check qa-security-auth-confirm">
               <input type="checkbox" id="qa-security-authorized">
-              <span>I confirm the target is an explicitly authorized, isolated test environment for security testing.</span>
+              <span>I confirm this is an explicitly authorized, isolated test environment.</span>
             </label>
-            <label class="field qa-security-auth-scope">
-              <span>Scope notes (optional)</span>
-              <textarea id="qa-security-notes" rows="2" placeholder="e.g. isolated staging copy, no production data"></textarea>
-            </label>
+            <details class="qa-security-scope" id="qa-security-scope">
+              <summary>Add scope notes <small>(optional)</small></summary>
+              <label class="field qa-security-auth-scope">
+                <span class="sr-only">Security testing scope notes</span>
+                <textarea id="qa-security-notes" rows="2" autocomplete="off" placeholder="Example: isolated staging copy, no production data…"></textarea>
+              </label>
+            </details>
           </div>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
     </div>
