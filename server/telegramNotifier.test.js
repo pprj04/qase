@@ -132,10 +132,20 @@ test('buildFeedbackMessage emits the exact agreed format', () => {
 		'📝 User Feedback:',
 		'The automation testing was smooth and the results were easy to understand.',
 		'',
-		'📊 QA Run: New QA Run #cf5b7e5f',
+		'📊 QA Run: Homepage regression sweep (#cf5b7e5f)',
+		'🌐 Target URL: https://qase.dev/',
 		'👤 Submitted By: QA User',
 		'🕒 Submitted On: 07-Oct-2026 10:00 PM'
 	].join('\n'));
+});
+
+test('buildFeedbackMessage omits target URL and falls back to mode label when context lacks them', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 4, comments: 'no context fields' },
+		{ mode: 'sqa', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.doesNotMatch(message, /Target URL/);
+	assert.match(message, /📊 QA Run: SQA #abcd1234/);
 });
 
 test('buildFeedbackMessage clamps ratings, defaults missing fields', () => {

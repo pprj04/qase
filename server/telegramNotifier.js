@@ -145,6 +145,11 @@ export function buildFeedbackMessage(feedback, context = {}) {
 	const modeLabel = MODE_LABELS[context.mode] ?? 'QASE Test';
 	const shortId = typeof feedback.runId === 'string' && feedback.runId.length >= 8
 		? feedback.runId.slice(0, 8) : '—';
+	const title = typeof context.title === 'string' && context.title.trim() !== ''
+		? context.title.trim() : undefined;
+	const runLabel = title ? `${title} (#${shortId})` : `${modeLabel} #${shortId}`;
+	const targetUrl = typeof context.targetUrl === 'string' && context.targetUrl.trim() !== ''
+		? context.targetUrl.trim() : undefined;
 	const submittedBy = typeof context.submittedByName === 'string' && context.submittedByName.trim() !== ''
 		? context.submittedByName.trim() : 'QASE user';
 	const submittedOn = Number.isFinite(context.submittedAt) ? formatSubmittedOn(context.submittedAt) : formatSubmittedOn(Date.now());
@@ -158,7 +163,8 @@ export function buildFeedbackMessage(feedback, context = {}) {
 		'📝 User Feedback:',
 		comments,
 		'',
-		`📊 QA Run: ${modeLabel} #${shortId}`,
+		`📊 QA Run: ${runLabel}`,
+		...(targetUrl ? [`🌐 Target URL: ${targetUrl}`] : []),
 		`👤 Submitted By: ${submittedBy}`,
 		`🕒 Submitted On: ${submittedOn}`
 	].join('\n');
