@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { buildFindingFixPrompt } from './fixPromptBuilder.js';
 import { getDeviceProfile } from './deviceProfiles.js';
+import { QA_SCOPE_OPTIONS } from '../public/qaScopeCatalog.js';
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
 const SEVERITY_COLOR = {
@@ -53,11 +54,15 @@ function environmentLine(session) {
 		[snapshot.browser, snapshot.browserVersion].filter(Boolean).join(' ')
 	].filter(Boolean);
 	const label = parts.join(' \u00b7 ');
-	const provider = snapshot.executionProvider === 'browserstack'
-		? 'BrowserStack real device'
-		: snapshot.executionProvider === 'local'
-			? 'local (emulated)'
-			: snapshot.executionProvider;
+	// Phase 22: the execution label comes from RECORDED facts, never from the
+	// catalog capability hint — a simulated run must never read "real device".
+	const level = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	const rawProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+	// D7: user-facing PDF text uses QASE-neutral provider labels.
+	const provider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawProvider] ?? rawProvider;
+	if (level === 'REAL_DEVICE') return `${label} \u2014 REAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'VIRTUAL_DEVICE') return `${label} \u2014 VIRTUAL DEVICE${provider ? ` (${provider})` : ''}`;
+	if (level === 'SIMULATED') return `${label} \u2014 SIMULATED${provider ? ` (${provider})` : ''}`;
 	return provider ? `${label} \u2014 ${provider}` : label;
 }
 
@@ -74,6 +79,15 @@ function headerBlock(session, title, verdictText) {
 			['Started', created],
 			['Updated', finished]
 		];
+	// Phase 22: an explicit Execution row so every PDF states the level.
+	const pdfLevel = session.runtimeFacts?.executionLevel ?? session.executionLevel;
+	if (pdfLevel) {
+		const rawPdfProvider = session.runtimeFacts?.provider ?? session.executionProviderActual;
+		const pdfProvider = { browserstack: 'remote environment runtime', local: 'local runtime' }[rawPdfProvider] ?? rawPdfProvider;
+		rows.push(['Execution', `${pdfLevel === 'REAL_DEVICE' ? 'REAL DEVICE' : pdfLevel}${pdfProvider ? ` (${pdfProvider})` : ''}`]);
+	} else if (session.environmentSnapshot) {
+		rows.push(['Execution', 'NOT AVAILABLE FOR REAL EXECUTION']);
+	}
 	if (verdictText) rows.push(['Verdict', verdictText]);
 	if (session.tokenUsage && Number.isFinite(session.tokenUsage.totalTokens)) {
 		const usage = session.tokenUsage;
@@ -181,6 +195,27 @@ function titledList(title, items, empty = '') {
 	return content ? '<h3>' + escapeHtml(title) + '</h3>' + content : '';
 }
 
+/**
+ * "What was tested — selected coverage" section: the persisted scopeSelection
+ * with per-option marks, so selected coverage is distinguishable from the
+ * agent-executed Covered / Not covered lists above it.
+ */
+function coverageSelectionHtml(session) {
+	const selected = Array.isArray(session?.scopeSelection) ? session.scopeSelection : null;
+	if (!selected || selected.length === 0) return '';
+	const blocks = [];
+	for (const group of [{ key: 'uiux', label: 'UI &amp; User Experience' }, { key: 'other', label: 'Other supported coverage' }]) {
+		const options = QA_SCOPE_OPTIONS.filter(option => option.group === group.key);
+		if (options.length === 0 || !options.some(option => selected.includes(option.value))) continue;
+		blocks.push('<h3>' + group.label + '</h3><ul class="coverage">'
+			+ options.map(option => '<li data-on="' + (selected.includes(option.value) ? '1' : '0') + '">'
+				+ '<span class="coverage-mark">' + (selected.includes(option.value) ? '\u2713' : '\u2717') + '</span>'
+				+ escapeHtml(option.friendly) + '</li>').join('') + '</ul>');
+	}
+	if (blocks.length === 0) return '';
+	return '<section><h2>What was tested \u2014 selected coverage</h2>' + blocks.join('') + '</section>';
+}
+
 function buildQaBody(session) {
 	const report = session.report ?? {};
 	const parts = [
@@ -199,7 +234,29 @@ function buildQaBody(session) {
 	parts.push(plainList(report.notCovered, 'Not covered'));
 	parts.push(findingsSection(session.findings ?? [], session));
 	parts.push(plainList(report.recommendations, 'Recommendations'));
+	parts.push(feedbackSectionHtml(session));
 	return parts.join('');
+}
+
+/**
+ * User Feedback section for the PDF report. Rendered only when the run has
+ * feedback attached (server injects it as session.userFeedback); content is
+ * escaped, isolated per run by construction.
+ */
+function feedbackSectionHtml(session) {
+	const feedback = session.userFeedback;
+	if (!feedback || !Number.isFinite(feedback.rating)) return '';
+	const stars = '\u2605'.repeat(feedback.rating) + '\u2606'.repeat(5 - feedback.rating);
+	const submittedBy = escapeHtml(feedback.userName || 'User');
+	const submittedOn = feedback.submittedAt ? new Date(feedback.submittedAt).toLocaleString() : '\u2014';
+	const description = feedback.comments
+		? '<p>' + paragraphs(String(feedback.comments)) + '</p>'
+		: '';
+	return '<section><h2>User feedback</h2>'
+		+ '<table class="meta"><tr><th>Rating</th><td>' + escapeHtml(stars) + ' ' + escapeHtml(feedback.rating) + '/5</td></tr>'
+		+ (description ? '<tr><th>Description</th><td>' + description + '</td></tr>' : '')
+		+ '<tr><th>Submitted by</th><td>' + submittedBy + '</td></tr>'
+		+ '<tr><th>Submitted on</th><td>' + escapeHtml(submittedOn) + '</td></tr></table></section>';
 }
 
 function buildSqaBody(session) {
@@ -329,6 +386,9 @@ function buildSqaBody(session) {
 	if (assessment.disclaimer) {
 		parts.push('<section class="boundary"><h2>Assessment boundary</h2>' + paragraphs(assessment.disclaimer) + '</section>');
 	}
+	// User feedback section — same embed as the QA report, only when the
+	// submitter left feedback for this run (session.userFeedback).
+	parts.push(feedbackSectionHtml(session));
 	return parts.join('');
 }
 

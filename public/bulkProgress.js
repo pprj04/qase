@@ -57,16 +57,19 @@ export function aggregateBatch(batch, sessionsById) {
 		if (!session) { pending += 1; continue; }
 		const status = String(session.status ?? '').toLowerCase();
 		if (['running', 'queued', 'starting', 'awaiting_input', 'resuming'].includes(status)) { running += 1; continue; }
-		if (status === 'done') {
-			const verdict = session.report?.verdict ?? session.verdict;
-			if (verdict === 'pass') { passed += 1; continue; }
-			if (verdict === 'fail') { failed += 1; continue; }
-			// No verdict: findings heuristic — never fabricate a pass.
-			const findings = Array.isArray(session.findings) ? session.findings : [];
-			if (findings.length) failed += 1;
-			else passed += 1;
-			continue;
-		}
+			if (status === 'done') {
+				const verdict = session.report?.verdict ?? session.verdict;
+				if (verdict === 'pass') { passed += 1; continue; }
+				if (verdict === 'fail') { failed += 1; continue; }
+				// No verdict: findings heuristic — never fabricate a pass.
+				// Accept findingCount from list payloads (no findings array).
+				const hasFindings = Array.isArray(session.findings)
+					? session.findings.length > 0
+					: Number(session.findingCount ?? 0) > 0;
+				if (hasFindings) failed += 1;
+				else passed += 1;
+				continue;
+			}
 		if (status === 'failed' || status === 'interrupted') { failed += 1; continue; }
 		pending += 1;
 	}
@@ -88,9 +91,33 @@ export function batchRows(batch, sessionsById) {
 			id,
 			title: batch.testCaseTitles?.[id] ?? session?.title ?? id,
 			state,
-			env: session?.environmentSnapshot?.device ?? session?.environmentId ?? ''
+			env: session?.environmentSnapshot?.device ?? session?.environmentId ?? '',
+			// Per-environment record (Phase 23): the honest execution level this
+			// row ran at, from the run's recorded facts — never the requested one.
+			executionLevel: session?.executionLevel ?? null
 		};
 	});
+}
+
+/**
+ * Pick the batch run the live preview should follow (Phase 4):
+ * the first session still executing (running/starting), else the most
+ * recent non-done session. Returns a session id or null.
+ * One live preview per batch — the ACTIVE run owns it, never a blend.
+ */
+export function activeBatchRunId(batch, sessionsById) {
+	if (!batch?.sessionIds?.length) return null;
+	const sessions = batch.sessionIds.map((id) => sessionsById.get(id)).filter(Boolean);
+	if (sessions.length === 0) return null;
+	const activeStates = new Set(['running', 'starting', 'awaiting_input']);
+	const executing = sessions.find((s) => activeStates.has(String(s.status ?? '').toLowerCase()));
+	if (executing) return executing.id;
+	const open = sessions.filter((s) => {
+		const status = String(s.status ?? '').toLowerCase();
+		return !['done', 'error', 'interrupted', 'cancelled'].includes(status);
+	});
+	if (open.length > 0) return open[open.length - 1].id;
+	return sessions[sessions.length - 1].id;
 }
 
 export function createBatchTracker({ api, elements, onTick }) {
@@ -119,14 +146,18 @@ export function createBatchTracker({ api, elements, onTick }) {
 		}
 		if (list && list.closest('details')?.open) {
 			list.innerHTML = '';
+			const activeId = activeBatchRunId(batch, sessionsById);
 			for (const row of batchRows(batch, sessionsById)) {
 				const li = document.createElement('li');
-				li.className = `bp-row bp-row-${row.state.toLowerCase()}`;
+				li.className = `bp-row bp-row-${row.state.toLowerCase()}` + (row.id === activeId ? ' bp-row-active' : '');
 				const title = document.createElement('span');
-				title.textContent = [row.title, row.env].filter(Boolean).join(' — ');
+				title.textContent = (row.id === activeId ? '▶ ' : '') + [row.title, row.env].filter(Boolean).join(' — ');
+				const level = document.createElement('span');
+				level.className = 'bp-exec-level';
+				level.textContent = row.executionLevel ?? '';
 				const state = document.createElement('span');
 				state.textContent = row.state;
-				li.append(title, state);
+				li.append(title, level, state);
 				list.append(li);
 			}
 		}

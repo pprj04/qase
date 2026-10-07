@@ -194,10 +194,29 @@ test('Environment snapshot replaces the device line and labels the provider', ()
 		osVersion: '18.3',
 		browser: 'Safari',
 		browserVersion: '18.3',
-		executionProvider: 'browserstack'
+		executionProvider: 'environment'
 	};
 	const html = buildReportHtml(makeSession({ environmentSnapshot: snapshot }));
 	assert.match(html, /iPhone 15 Pro &#183;|iPhone 15 Pro \u00b7/);
-	assert.match(html, /BrowserStack real device/);
+	// Phase 22: a catalog hint alone never claims "real device" — no recorded
+	// level means the honest NOT AVAILABLE FOR REAL EXECUTION label.
+	assert.doesNotMatch(html, /BrowserStack real device/);
+	assert.match(html, /NOT AVAILABLE FOR REAL EXECUTION/);
 	assert.doesNotMatch(html, /portrait, 393/);
+});
+
+test('PDF labels REAL DEVICE only from recorded runtime facts', () => {
+	const html = buildReportHtml(makeSession({
+		environmentSnapshot: { envId: 'ENV-R', device: 'Pixel 9', osVersion: '15', browser: 'Chrome', browserVersion: '140' },
+		runtimeFacts: { executionLevel: 'REAL_DEVICE', provider: 'browserstack' }
+	}));
+	assert.match(html, /REAL DEVICE \(remote environment runtime\)/);
+
+	const simHtml = buildReportHtml(makeSession({
+		environmentSnapshot: { envId: 'ENV-S', device: 'Pixel 9', osVersion: '15', browser: 'Chrome', browserVersion: '140' },
+		executionLevelRequested: 'REAL_DEVICE',
+		runtimeFacts: { executionLevel: 'SIMULATED', provider: 'local-simulation' }
+	}));
+	assert.match(simHtml, /SIMULATED \(local-simulation\)/);
+	assert.doesNotMatch(simHtml, /REAL DEVICE/);
 });

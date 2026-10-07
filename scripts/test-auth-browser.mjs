@@ -64,7 +64,10 @@ try {
 		return { status:response.status, body:response.status === 204 ? null : await response.json() };
 	}, { url, method, body });
 	assert.equal((await api('/config', 'PUT', { provider:'custom', baseUrl:'https://example.com', model:'alice-model', apiKey:'alice-secret-key' })).status, 200);
-	await page.locator('#qa-close').click();
+	// A fresh workspace no longer ambushes with the blocking QA modal — the
+	// welcome toast points at the composer instead (bootWorkspace change).
+	// Close it only if a previous step happened to open it.
+	if (await page.locator('#qa-start').isVisible()) await page.locator('#qa-close').click();
 	assert.equal((await api('/sessions', 'POST', {})).status, 201);
 	await page.locator('#open-profile').click();
 	await page.locator('#profile-name').fill('Alice QA');

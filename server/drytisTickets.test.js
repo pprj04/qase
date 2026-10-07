@@ -24,8 +24,7 @@ function memoryServices(delivery) {
 	return {
 		services: {
 			lifecycle: { close: async () => {} },
-			// PUSHKAR added an environments service group to the runtime contract.
-			environments: { seed: async () => undefined, list: async () => ({ rows: [], total: 0 }), get: async () => null, create: async () => ({}), update: async () => ({}), facets: async () => ({ total: 0 }), availability: () => ({ ready: [] }), catalogVersion: () => '0' },
+			environments: { seed: async () => ({ inserted: 0 }), list: async () => ({ rows: [], total: 0 }), get: async () => null, create: async () => ({}), update: async () => ({}), facets: async () => ({ total: 0 }), availability: () => ({ ready: [] }), catalogVersion: () => '0' },
 			reports: { buildMarkdown: () => '# report' },
 			events: {
 				publish,

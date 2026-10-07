@@ -1,5 +1,5 @@
 /**
- * Apple Device Matrix UI (Phase 3).
+ * Device & Environment Matrix UI (Phase 3).
  *
  * Self-contained module that renders the Device Matrix dialog: a catalog browser
  * (devices × OS versions × browsers with facet counts and search), an environment
@@ -10,6 +10,8 @@
  * Deliberately DOM-framework-free to match the vanilla-JS dashboard. Pure helper
  * functions are exported separately so they can be unit-tested without a DOM.
  */
+
+import { availabilityMeta, executionTypeLabel, boardByEnvId, lastRunByEnv, formatWhen } from './deviceRuntimeUi.js';
 
 /** @typedef {{slug:string, display:string, osVersionId:string}} CompatOs */
 
@@ -60,7 +62,23 @@ export function debounce(fn, ms = 250) {
 	};
 }
 
-export function createDeviceMatrixView({ api, toast, fail, elements }) {
+/**
+ * Cell state for a coverage matrix cell: never-run vs live vs executed with a
+ * verdict. Pure — exported for unit tests.
+ */
+export function coverageCellMeta(cell) {
+	if (!cell) return { label: '', cls: 'cov-none', title: 'Never run' };
+	// An idle run was created but never started — it is not in flight.
+	if (cell.status === 'idle') return { label: '○', cls: 'cov-idle', title: 'run created — never started' };
+	if (!['done', 'error'].includes(cell.status)) return { label: '●', cls: 'cov-live', title: `${cell.status} — running or awaiting` };
+	if (cell.verdict === 'pass') return { label: '✓', cls: 'cov-pass', title: 'pass' };
+	if (cell.verdict === 'pass_with_issues') return { label: '~', cls: 'cov-pass-warn', title: 'pass with issues' };
+	if (cell.verdict === 'fail') return { label: '✕', cls: 'cov-fail', title: 'fail' };
+	if (cell.verdict === 'blocked') return { label: '⊘', cls: 'cov-blocked', title: 'blocked' };
+	return { label: '·', cls: 'cov-exec', title: 'executed — no verdict recorded' };
+}
+
+export function createDeviceMatrixView({ api, toast, fail, elements, onRunEnvironment, onOpenRun }) {
 	const state = {
 		catalog: { deviceCategories: [], deviceModels: [], osVersions: [], browsers: [], browserVersions: {} },
 		facets: {},
@@ -69,7 +87,10 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 		total: 0,
 		filters: { platform: '', category: '', browser: '', active: '', search: '' },
 		page: 0,
-		pageSize: 50
+		pageSize: 50,
+		// Phase 23 control layer: availability board + last runs per environment.
+		board: new Map(),
+		lastRuns: new Map()
 	};
 	const { dialog, navButton, tabs } = elements;
 	let currentTab = 'browse';
@@ -105,8 +126,22 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 	function refreshAll() {
 		refreshFacets();
 		refreshEnvironments();
+		refreshRuntimeBoard();
+		void refreshCoverage();
 		if (currentTab === 'browse') renderBrowse();
 		if (currentTab === 'builder') renderBuilder();
+		if (currentTab === 'environments') renderEnvironments();
+	}
+
+	/** Phase 23: fetch the device-runtime availability board and recent runs. */
+	async function refreshRuntimeBoard() {
+		const [boardPayload, runsPayload] = await Promise.all([
+			api('/device-runtime/devices').catch(() => null),
+			api('/sessions?limit=100').catch(() => null)
+		]);
+		state.board = boardByEnvId(boardPayload?.devices ?? []);
+		const runs = Array.isArray(runsPayload) ? runsPayload : runsPayload?.sessions ?? [];
+		state.lastRuns = lastRunByEnv(runs);
 		if (currentTab === 'environments') renderEnvironments();
 	}
 
@@ -319,7 +354,11 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 	// ── Environments tab ───────────────────────────────────────────────────
 	async function refreshEnvironments() {
 		const params = new URLSearchParams();
-		if (state.filters.platform) params.set('platform', state.filters.platform);
+		// Phase D4: platform group tabs — Apple/Android/Windows map to their
+		// underlying OS platforms server-side.
+		const platformGroup = { apple: 'ios,ipados,macos', android: 'android', windows: 'windows' };
+		const platform = platformGroup[state.filters.platform] ?? state.filters.platform;
+		if (platform) params.set('platform', platform);
 		if (state.filters.browser) params.set('browser', state.filters.browser);
 		if (state.filters.active) params.set('active', state.filters.active);
 		if (state.filters.search) params.set('search', state.filters.search);
@@ -335,20 +374,88 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 		const tbody = elements.envTbody;
 		if (!tbody) return;
 		tbody.innerHTML = '';
+		if (!state.environments.length) {
+			const empty = document.createElement('tr');
+			const td = document.createElement('td');
+			td.colSpan = 15;
+			td.textContent = 'No environments match the current filters.';
+			empty.append(td);
+			tbody.append(empty);
+		}
 		for (const env of state.environments) {
 			const tr = document.createElement('tr');
 			tr.className = env.active ? '' : 'env-inactive';
+			const boardEntry = state.board.get(env.envId) ?? null;
+			const meta = availabilityMeta(boardEntry?.status);
+			// Phase D4: 14-column matrix. Execution shows the strict type;
+			// unsupported/never-tested states come from the env's own metadata.
+			const manufacturer = env.platform === 'ios' || env.platform === 'ipados' || env.platform === 'macos' ? 'Apple'
+				: env.platform === 'android' ? (env.device.split(' ')[0] === 'Galaxy' ? 'Samsung' : env.device.split(' ')[0])
+				: env.platform === 'windows' ? 'Microsoft' : (env.manufacturer ?? '—');
+			const form = env.deviceType === 'desktop' ? 'Desktop' : env.platform === 'ipados' || /ipad|tablet/i.test(env.device) ? 'Tablet' : 'Phone';
 			const cells = [
-				env.envId, env.device, `${env.os} ${env.osVersion}`, env.browser, env.browserVersion,
-				env.screenResolution ?? '—', env.orientation ?? '—',
-				env.executionProvider === 'browserstack' ? 'BrowserStack' : env.executionProvider
+				`${env.device} (${form})`, manufacturer, env.device, env.os, env.osVersion,
+				env.browser, env.browserVersion,
+				env.screenResolution ?? '—', env.orientation ?? (env.deviceType === 'desktop' ? 'landscape' : 'portrait'),
+				executionTypeLabel(boardEntry?.maximumLevel)
 			];
-			for (const text of cells) {
-				const td = document.createElement('td');
-				td.textContent = String(text);
-				tr.append(td);
+		for (const text of cells) {
+			const td = document.createElement('td');
+			td.textContent = String(text);
+			td.title = String(text); // tooltip for ellipsized cells (UI Fix Phase 4)
+			tr.append(td);
+		}
+			// Capabilities cell (honest: from env metadata, not the profile alone).
+			const capTd = document.createElement('td');
+			const caps = [
+				env.deviceType !== 'desktop' ? 'Touch' : null,
+				'Mic',
+				env.deviceType !== 'desktop' ? 'Camera' : null,
+				env.deviceType === 'desktop' || env.platform === 'macos' ? 'Screen' : null
+			].filter(Boolean);
+			capTd.textContent = caps.length ? caps.join(' / ') : '—';
+			capTd.title = 'Capabilities the runtime can actually exercise for this environment.';
+			tr.append(capTd);
+			// Availability cell: status dot + label (+ queue length when present).
+			// RT2 (#14754): when the board carries an exact unavailable reason,
+			// the tooltip shows it verbatim — the reason is discoverable in the
+			// SAME surface, not only in the picker.
+			const availTd = document.createElement('td');
+			const dot = document.createElement('span');
+			dot.className = `avail-dot avail-${meta.dot}`;
+			dot.title = boardEntry?.unavailableReason
+				? `${meta.title}\n${boardEntry.unavailableReason}`
+				: meta.title;
+			availTd.append(dot, ' ', meta.label);
+			availTd.title = dot.title;
+			if (boardEntry?.queueLength > 0) {
+				const q = document.createElement('span');
+				q.className = 'avail-queue';
+				q.textContent = ` · ${boardEntry.queueLength} queued`;
+				availTd.append(q);
 			}
+			tr.append(availTd);
+			// Last tested / last result from the newest run on this environment.
+			const last = state.lastRuns.get(env.envId) ?? null;
+			const lastTestedTd = document.createElement('td');
+			lastTestedTd.textContent = formatWhen(last?.at ?? boardEntry?.lastTestedAt);
+			tr.append(lastTestedTd);
+			const lastResultTd = document.createElement('td');
+			const lastResult = last?.result ?? boardEntry?.lastResult ?? null;
+			lastResultTd.textContent = lastResult == null ? '—' : String(lastResult);
+			if (lastResult) lastResultTd.dataset.result = String(lastResult).toLowerCase();
+			tr.append(lastResultTd);
 			const actionsTd = document.createElement('td');
+			if (onRunEnvironment) {
+				const run = document.createElement('button');
+				run.type = 'button';
+				run.className = 'btn btn-primary btn-sm';
+				run.textContent = 'Run';
+				run.title = 'One-click test on this environment';
+				run.disabled = !env.active;
+				run.onclick = () => { void onRunEnvironment(env); };
+				actionsTd.append(run, ' ');
+			}
 			const toggle = document.createElement('button');
 			toggle.type = 'button';
 			toggle.className = 'btn btn-ghost btn-sm';
@@ -401,7 +508,7 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 			{ key: 'screenResolution', label: 'Screen resolution (e.g. 1179x2556)', value: env.screenResolution ?? '' },
 			{ key: 'orientation', label: 'Orientation', value: env.orientation ?? '', select: ['', 'portrait', 'landscape'] },
 			{ key: 'description', label: 'Description', value: env.description ?? '' },
-			{ key: 'executionProvider', label: 'Execution provider', value: env.executionProvider ?? 'browserstack', select: ['browserstack', 'local'] }
+			{ key: "executionProvider", label: "Execution provider", value: env.executionProvider ?? "environment", select: ["environment", "local"] }
 		];
 		const inputs = {};
 		for (const field of fields) {
@@ -459,6 +566,287 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 		cancel.onclick = () => { editor.hidden = true; editor.innerHTML = ''; };
 		buttonRow.append(save, cancel);
 		editor.append(buttonRow);
+	}
+
+	// ── Coverage tab (Phase 7) ─────────────────────────────────────────────
+	let coveragePayload = null;
+	async function refreshCoverage() {
+		coveragePayload = await api('/coverage').catch(() => null);
+		if (currentTab === 'coverage') renderCoverage();
+	}
+
+	function renderCoverage() {
+		const metricsEl = elements.coverageMetrics;
+		const headEl = elements.coverageHead;
+		const tbodyEl = elements.coverageTbody;
+		if (!metricsEl || !headEl || !tbodyEl) return;
+		if (!coveragePayload) {
+			metricsEl.textContent = 'Coverage is unavailable right now.';
+			headEl.innerHTML = '';
+			tbodyEl.innerHTML = '';
+			return;
+		}
+		const { metrics, rows, environments, matrix } = coveragePayload;
+		metricsEl.textContent = `Coverage ${metrics.coveragePct}% · executed ${metrics.executedPairs}/${metrics.assignedPairs} pairs · pass rate ${metrics.passRatePct}% · ${metrics.environments} environment(s) · ${metrics.testCases} test case(s)`;
+		// #14652 (NI04 perf): with the NI01-sized catalog (tens of thousands of
+		// environments) a column per environment is unrenderable (≈18M cells).
+		// The grid keeps its structure but shows only environments LINKED to a
+		// test case or carrying a run cell — the columns that carry information.
+		const MAX_COVERAGE_COLUMNS = 200;
+		const referenced = new Set();
+		for (const row of rows) {
+			for (const envId of row.environmentIds ?? []) referenced.add(envId);
+			for (const envId of Object.keys(row.cells ?? {})) referenced.add(envId);
+		}
+		const linked = (environments ?? []).filter((env) => referenced.has(env.envId));
+		const visibleEnvironments = linked.length ? linked.slice(0, MAX_COVERAGE_COLUMNS) : [];
+		if ((environments ?? []).length > visibleEnvironments.length) {
+			const note = document.createElement('p');
+			note.className = 'cov-col-note';
+			note.textContent = `Showing ${visibleEnvironments.length} of ${environments.length} environments (those linked to test cases or runs) — use the Environments tab to browse the full catalog.`;
+			metricsEl.after(note);
+		}
+		// #14652 (NI04): matrix-run gap report from actual execution data —
+		// rendered additively under the existing case×env matrix.
+		renderMatrixGap(matrix);
+		headEl.innerHTML = '';
+		const corner = document.createElement('th');
+		corner.textContent = 'Test case';
+		corner.scope = 'col';
+		headEl.append(corner);
+		for (const environment of visibleEnvironments) {
+			const th = document.createElement('th');
+			th.scope = 'col';
+			th.textContent = `${environment.device ?? environment.envId} · ${environment.browser ?? ''}${environment.browserVersion ? ` ${environment.browserVersion}` : ''}`;
+			headEl.append(th);
+		}
+		tbodyEl.innerHTML = '';
+		if (!rows.length) {
+			const empty = document.createElement('tr');
+			const td = document.createElement('td');
+			td.colSpan = visibleEnvironments.length + 1;
+			td.textContent = environments.length
+				? 'No test cases yet — create one from the Test Cases panel to see coverage.'
+				: 'No active environments yet — build one from the Environment builder tab.';
+			empty.append(td);
+			tbodyEl.append(empty);
+		}
+		for (const row of rows) {
+			const tr = document.createElement('tr');
+			const label = document.createElement('th');
+			label.scope = 'row';
+			label.textContent = `${row.caseNumber} · ${row.title}`;
+			if (row.tags?.length) label.dataset.tags = row.tags.join(', ');
+			tr.append(label);
+			for (const environment of visibleEnvironments) {
+				const cell = row.cells?.[environment.envId];
+				const td = document.createElement('td');
+				const meta = coverageCellMeta(cell);
+				td.className = `cov-cell ${meta.cls}${cell?.unassigned ? ' cov-unassigned' : ''}`;
+				td.title = cell?.unassigned
+					? `${meta.title} (run against an environment not assigned to this case)`
+					: meta.title;
+				td.textContent = meta.label;
+				td.setAttribute('role', 'button');
+				td.tabIndex = 0;
+				td.onclick = () => openCoverageDetail(row, environment, cell);
+				td.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openCoverageDetail(row, environment, cell); } };
+				tr.append(td);
+			}
+			tbodyEl.append(tr);
+		}
+	}
+
+	function openCoverageDetail(row, environment, cell) {
+		const detail = elements.coverageDetail;
+		if (!detail) return;
+		detail.innerHTML = '';
+		detail.hidden = false;
+		const title = document.createElement('h3');
+		title.textContent = `${row.caseNumber} × ${environment.device ?? environment.envId}`;
+		detail.append(title);
+		if (!cell) {
+			const hint = document.createElement('p');
+			hint.textContent = 'Never run on this environment. Start one from the Environments tab (Run) or the Bulk Runs wizard.';
+			detail.append(hint);
+		} else {
+			const list = document.createElement('ul');
+			list.className = 'cov-detail-list';
+			const entries = [
+				['Run', cell.latestRunId ?? '—'],
+				['Status', cell.status ?? '—'],
+				['Verdict', ['done', 'error'].includes(cell.status)
+					? (cell.verdict ?? 'executed — no verdict recorded')
+					: '— (run not completed)'],
+				['Execution level', cell.executionLevel ?? '—'],
+				['Last updated', formatWhen(cell.at)],
+				['Assignment', cell.unassigned ? 'run against an unassigned environment' : 'assigned']
+			];
+			for (const [key, value] of entries) {
+				const li = document.createElement('li');
+				li.textContent = `${key}: ${value}`;
+				list.append(li);
+			}
+			detail.append(list);
+			if (cell.latestRunId && onOpenRun) {
+				const open = document.createElement('button');
+				open.type = 'button';
+				open.className = 'btn btn-primary btn-sm';
+				open.textContent = 'Open run';
+				open.onclick = () => {
+					dialog.close();
+					onOpenRun(cell.latestRunId);
+				};
+				detail.append(open);
+			}
+		}
+		const close = document.createElement('button');
+		close.type = 'button';
+		close.className = 'btn btn-ghost btn-sm';
+		close.textContent = 'Close';
+		close.onclick = () => { detail.hidden = true; detail.innerHTML = ''; };
+		detail.append(close);
+	}
+
+	// ── Matrix-run gap report (#14652 NI04) ────────────────────────────────
+	// Every line comes from /api/coverage payload.matrix — computed from
+	// actual stored matrix items server-side, never hardcoded counts.
+	function renderMatrixGap(matrix) {
+		let wrap = document.getElementById('dm-matrix-gap');
+		if (!wrap) {
+			wrap = document.createElement('section');
+			wrap.id = 'dm-matrix-gap';
+			wrap.className = 'dm-matrix-gap';
+			// Insert after the cov-matrix-wrap, before the detail panel.
+			elements.coverageTbody?.closest('.cov-matrix-wrap')?.after(wrap)
+				?? elements.coverageDetail?.before(wrap);
+		}
+		wrap.textContent = '';
+		if (!matrix) {
+			wrap.hidden = true;
+			return;
+		}
+		wrap.hidden = false;
+		const head = document.createElement('h3');
+		head.textContent = 'Matrix coverage gap report';
+		wrap.append(head);
+
+		const exec = matrix.execution ?? {};
+		const execLine = document.createElement('p');
+		execLine.className = 'dm-matrix-exec';
+		execLine.textContent = `${exec.profilesRequested ?? 0} profiles requested · ${exec.profilesExecuted ?? 0} executed · ${exec.passed ?? 0} passed · ${exec.failed ?? 0} failed · ${exec.unavailable ?? 0} unavailable · ${exec.notRun ?? 0} not run · ${exec.notSupported ?? 0} not supported · ${exec.blocked ?? 0} blocked · ${exec.error ?? 0} error`;
+		wrap.append(execLine);
+
+		const grid = document.createElement('div');
+		grid.className = 'dm-matrix-gap-grid';
+		const devices = document.createElement('ul');
+		const browsers = document.createElement('ul');
+		const dHead = document.createElement('h4');
+		dHead.textContent = 'Devices';
+		devices.append(dHead);
+		for (const category of matrix.deviceCategories ?? []) {
+			const li = document.createElement('li');
+			const mark = category.covered ? '✓' : '⚠';
+			li.textContent = `${mark} ${category.label} — ${category.executed}/${category.requested} executed${!category.covered && category.gapReason ? ` (${String(category.gapReason).toLowerCase().replace(/_/g, ' ')})` : ''}`;
+			devices.append(li);
+		}
+		const bHead = document.createElement('h4');
+		bHead.textContent = 'Browsers';
+		browsers.append(bHead);
+		for (const browser of matrix.browsers ?? []) {
+			const li = document.createElement('li');
+			const mark = browser.covered ? '✓' : '⚠';
+			li.textContent = `${mark} ${browser.browser} — ${browser.executed}/${browser.requested} executed`;
+			if (!browser.covered && browser.gapReason) {
+				li.textContent += ` — ${browser.gapReason}`;
+			}
+			browsers.append(li);
+		}
+		grid.append(devices, browsers);
+		wrap.append(grid);
+
+		// #14652 (NI04): per-profile results with full context — every row is
+		// a stored matrix item; statuses come verbatim from execution.
+		// LAZY: the tables (potentially thousands of rows across many runs)
+		// are built only when the user opens the disclosure, and each run is
+		// capped per render — the Coverage tab paint stays fast.
+		const MAX_ROWS_PER_RUN = 50;
+		const results = document.createElement('details');
+		results.className = 'dm-matrix-results';
+		const summary = document.createElement('summary');
+		summary.textContent = `Per-profile results (${matrix.execution?.profilesRequested ?? 0} profiles)`;
+		results.append(summary);
+		const totalGapRows = (matrix.runs ?? []).reduce((sum, run) => sum + (run.gaps?.length ?? 0), 0);
+		let built = false;
+		results.addEventListener('toggle', () => {
+			if (results.open && !built) {
+				built = true;
+				buildMatrixResultTables(results, matrix.runs ?? [], MAX_ROWS_PER_RUN);
+			}
+		});
+		wrap.append(results);
+	}
+
+	function buildMatrixResultTables(container, runs, maxRows) {
+		let renderedAny = false;
+		for (const run of runs) {
+			if (!run.gaps?.length) continue;
+			renderedAny = true;
+			const runHead = document.createElement('h4');
+			runHead.textContent = `${run.title ?? run.id} — ${run.gaps.length} profile${run.gaps.length === 1 ? '' : 's'}`;
+			container.append(runHead);
+			const table = document.createElement('table');
+			table.className = 'dm-matrix-results-table';
+			const thead = document.createElement('thead');
+			const headRow = document.createElement('tr');
+			for (const label of ['Profile', 'Device', 'OS', 'Browser', 'Status', 'Time', 'Reason']) {
+				const th = document.createElement('th');
+				th.textContent = label;
+				headRow.append(th);
+			}
+			thead.append(headRow);
+			table.append(thead);
+			const tbody = document.createElement('tbody');
+			const slice = run.gaps.slice(0, maxRows);
+			for (const gap of slice) {
+				const tr = document.createElement('tr');
+				const time = Number.isFinite(gap.durationMs)
+					? `${(gap.durationMs / 1000).toFixed(1)}s`
+					: gap.updatedAt ? new Date(gap.updatedAt).toLocaleTimeString() : '—';
+			const cells = [
+				gap.profileId ?? '—',
+				gap.device ?? '—',
+				[gap.os, gap.osVersion].filter(Boolean).join(' ') || '—',
+				[gap.browser, gap.browserVersion].filter(Boolean).join(' ') || '—',
+				// RT5 (#14757): the distinct user-facing coverage state when the
+				// API provides it (Environment Unavailable / Browser Unavailable /
+				// Execution Failed / Device Offline / Not Selected / Not Supported
+				// / Not Run); raw status as fallback for older payloads.
+				gap.coverageStateLabel ?? gap.status,
+				time,
+				gap.reason ?? '—'
+			];
+				for (const [index, text] of cells.entries()) {
+					const td = document.createElement('td');
+					td.textContent = String(text);
+					if (index === 4) td.dataset.status = String(text).toUpperCase();
+					tr.append(td);
+				}
+				tbody.append(tr);
+			}
+			table.append(tbody);
+			container.append(table);
+			if (run.gaps.length > slice.length) {
+				const more = document.createElement('p');
+				more.textContent = `+ ${run.gaps.length - slice.length} more profiles in this run (see API /api/coverage → matrix.runs)`;
+				container.append(more);
+			}
+		}
+		if (!renderedAny) {
+			const none = document.createElement('p');
+			none.textContent = 'No gap items recorded — every requested profile was executed.';
+			container.append(none);
+		}
 	}
 
 	// ── Catalog forms tab ─────────────────────────────────────────────────
@@ -560,6 +948,7 @@ export function createDeviceMatrixView({ api, toast, fail, elements }) {
 				if (currentTab === 'builder') renderBuilder();
 				if (currentTab === 'environments') renderEnvironments();
 				if (currentTab === 'catalogForms') renderCatalogForms();
+				if (currentTab === 'coverage') renderCoverage();
 			});
 		}
 		elements.browseSearch?.addEventListener('input', debounce(renderBrowse, 200));

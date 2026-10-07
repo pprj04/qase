@@ -31,7 +31,7 @@ test('seed inserts every generated environment and upserts by env_id without tou
 	const pool = scriptedPool();
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	const result = await repo.seed();
-	assert.equal(result.catalogVersion, '2026.09.1');
+	assert.equal(result.catalogVersion, '2027.03.0');
 	const inserts = pool._calls.filter((call) => call.text.startsWith('INSERT INTO environments'));
 	assert.ok(inserts.length >= 250, `expected hundreds of upserts, got ${inserts.length}`);
 	for (const call of inserts) {
@@ -41,6 +41,21 @@ test('seed inserts every generated environment and upserts by env_id without tou
 		assert.ok(!updateList.includes('active'), 'seed upsert must not reset active');
 	}
 	assert.equal(new Set(inserts.map((call) => call.params[3])).size, inserts.length, 'env_id must be unique per insert');
+});
+
+test('seed upserts carry a deterministic profile_id for every environment (2027.03.0 #14631)', async () => {
+	const pool = scriptedPool();
+	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	await repo.seed();
+	const inserts = pool._calls.filter((call) => call.text.startsWith('INSERT INTO environments'));
+	assert.ok(inserts.length >= 250);
+	for (const call of inserts) {
+		// profile_id is the last ENV_COLUMN — trailing param after env_id+tenant columns
+		const profileId = call.params[call.params.length - 1];
+		assert.match(profileId, /^[a-z0-9-]+$/, `malformed profile_id: ${profileId}`);
+	}
+	assert.equal(new Set(inserts.map((call) => call.params[call.params.length - 1])).size, inserts.length,
+		'profile_id must be unique across the seeded matrix');
 });
 
 test('seed sets tenant RLS settings inside the transaction', async () => {
@@ -68,24 +83,31 @@ test('get returns the matching row and null otherwise', async () => {
 test('create validates through the catalog validator before touching the database', async () => {
 	const pool = scriptedPool();
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	// 2026.10 expansion: Brave is valid on macOS now — the still-invalid pair
+	// is Safari on Android.
 	await assert.rejects(
-		() => repo.create(TENANT, { platform: 'macos', device: 'macOS Sonoma', osVersion: 'Sonoma', browser: 'brave' }),
+		() => repo.create(TENANT, { platform: 'android', device: 'Galaxy S24', osVersion: '15', browser: 'safari' }),
 		(error) => {
 			assert.ok(error instanceof EnvironmentValidationError);
-			assert.match(error.message, /not available on macOS/);
+			assert.match(error.message, /not (available|supported) on android/i);
 			return true;
 		}
 	);
 	assert.equal(pool._calls.length, 0, 'invalid input must never reach the database');
 });
 
-test('create rejects Firefox on iOS', async () => {
-	const pool = scriptedPool();
+test('create rejects Safari on Android (Firefox on iOS is valid after the 2026.10 expansion)', async () => {
+	const pool = scriptedPool(({ text }) => {
+		if (text.startsWith('INSERT INTO environments')) return { rows: [{ env_id: 'created' }] };
+		return { rows: [] };
+	});
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	await assert.rejects(
-		() => repo.create(TENANT, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'firefox', browserVersion: '142' }),
+		() => repo.create(TENANT, { platform: 'android', device: 'Galaxy S24', osVersion: '15', browser: 'safari' }),
 		EnvironmentValidationError
 	);
+	const accepted = await repo.create(TENANT, { platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'firefox', browserVersion: '142' });
+	assert.equal(accepted.env_id, 'created');
 });
 
 test('create rejects a Safari version that contradicts the OS version', async () => {
@@ -182,7 +204,9 @@ test('list clamps limit and offset', async () => {
 	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
 	await repo.list(TENANT, { limit: '99999', offset: '-5' });
 	const select = pool._calls.find((call) => call.text.includes('LIMIT'));
-	assert.equal(select.params.at(-2), 1000);
+	// 2027.01.0 (#14273): list cap raised 20000 → 50000; 2027.02.0 (#14420):
+	// raised again to 80000 for the 38.5k-row matrix with Surface + Apple additions.
+	assert.equal(select.params.at(-2), 80000);
 	assert.equal(select.params.at(-1), 0);
 });
 
@@ -201,4 +225,108 @@ test('seed failure rolls back the transaction', async () => {
 	await assert.rejects(() => repo.seed(), /scripted failure/);
 	const rollback = failing._calls.find((call) => call.text === 'ROLLBACK');
 	assert.ok(rollback, 'must ROLLBACK on failure');
+});
+
+// ---------------------------------------------------------------------------
+// #14275 (Phase 2): upsertProviderRow
+// ---------------------------------------------------------------------------
+
+test('upsertProviderRow rejects non-PROV envIds before touching the database', async () => {
+	const pool = scriptedPool();
+	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	await assert.rejects(
+		() => repo.upsertProviderRow(TENANT, { envId: 'ENV-IOS-IP16PRO-18.3-CHR-140' }),
+		EnvironmentValidationError
+	);
+	assert.equal(pool._calls.filter((call) => call.text.includes('INSERT INTO environments')).length, 0, 'no write attempted');
+});
+
+test('upsertProviderRow inserts new provider rows and preserves id/active on conflict', async () => {
+	const pool = scriptedPool(({ text }) => {
+		if (text.startsWith('SELECT id, active')) return { rows: [] };
+		if (text.startsWith('INSERT INTO environments')) return { rows: [{ env_id: 'PROV-X-1', active: true }] };
+		return { rows: [] };
+	});
+	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	const row = await repo.upsertProviderRow(TENANT, {
+		envId: 'PROV-X-1', platform: 'android', device: 'X One', executionLevel: 'REAL_DEVICE', isRealDevice: true
+	});
+	assert.equal(row.env_id, 'PROV-X-1');
+	const insert = pool._calls.find((call) => call.text.startsWith('INSERT INTO environments'));
+	assert.ok(insert, 'insert issued');
+	assert.match(insert.text, /ON CONFLICT \(organization_id, project_id, env_id\) DO UPDATE/);
+	// active must NOT be a SET target on the conflict path
+	const updateList = insert.text.split('DO UPDATE SET')[1].split(', updated_at')[0];
+	assert.ok(!updateList.includes('active'), 'upsert must never reset active');
+	assert.ok(updateList.includes('device'), 'descriptive fields refresh on conflict');
+
+	// Existing row: id + active are preserved from the pre-read.
+	const poolExisting = scriptedPool(({ text }) => {
+		if (text.startsWith('SELECT id, active')) return { rows: [{ id: 'preserved-uuid', active: false }] };
+		if (text.startsWith('INSERT INTO environments')) return { rows: [{ env_id: 'PROV-X-1', active: false }] };
+		return { rows: [] };
+	});
+	const repoExisting = createPostgresEnvironmentRepository(poolExisting, { tenantContext: TENANT });
+	const upserted = await repoExisting.upsertProviderRow(TENANT, { envId: 'PROV-X-1', platform: 'android' });
+	assert.equal(upserted.active, false, 'operator deactivation survives provider refresh');
+	const insertExisting = poolExisting._calls.find((call) => call.text.startsWith('INSERT INTO environments'));
+	assert.equal(insertExisting.params[0], 'preserved-uuid', 'surrogate id preserved');
+	assert.equal(insertExisting.params[4], false, 'active passed through from the preserved row');
+});
+
+test('upsertProviderRow failure rolls back the transaction', async () => {
+	const pool = scriptedPool(({ text }) => {
+		if (text.startsWith('INSERT INTO environments')) return 'throw';
+		return { rows: [] };
+	});
+	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	await assert.rejects(
+		() => repo.upsertProviderRow(TENANT, { envId: 'PROV-X-1', platform: 'android' }),
+		/scripted failure/
+	);
+	const texts = pool._calls.map((call) => call.text);
+	assert.ok(texts.includes('ROLLBACK'), 'transaction rolled back');
+});
+
+test('seed retire step never deactivates PROV- provider rows (#14275)', async () => {
+	const pool = scriptedPool();
+	const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+	await repo.seed();
+	const retire = pool._calls.find((call) => call.text.startsWith('UPDATE environments'));
+	assert.ok(retire, 'retire statement issued');
+	assert.match(retire.text, /env_id NOT LIKE 'PROV-%'/, 'PROV- rows excluded from retirement');
+});
+
+test('seed upserts registry provider overlays idempotently (#14275)', async () => {
+	const { registerCatalogProvider, unregisterCatalogProvider } = await import('../catalogProviderRegistry.js');
+	registerCatalogProvider({
+		name: 'PgSeedFake',
+		slug: 'pgseedfake',
+		async fetchCatalog() {
+			return {
+				environments: [
+					{ envId: 'PGFAKE-1', executionLevel: 'REAL_DEVICE', isRealDevice: true, platform: 'android', device: 'Pg Fake', os: 'Android', osVersion: '15', browser: 'Chrome', browserCode: 'chrome', browserVersion: '141', deviceType: 'mobile' }
+				],
+				attestations: []
+			};
+		}
+	});
+	try {
+		const pool = scriptedPool(({ text }) => {
+			if (text.startsWith('SELECT id, active')) return { rows: [{ id: 'kept-uuid', active: false }] };
+			if (text.startsWith('INSERT INTO environments') && text.includes('PROV-PGSEEDFAKE-')) return { rows: [{ env_id: 'PROV-PGSEEDFAKE-PGFAKE-1' }] };
+			return { rows: [] };
+		});
+		const repo = createPostgresEnvironmentRepository(pool, { tenantContext: TENANT });
+		const result = await repo.seed();
+		assert.equal(result.providerRows, 1, 'provider overlay upserted during seed');
+		const providerInsert = pool._calls.find((call) => call.text.includes('PROV-PGSEEDFAKE-') || (call.text.startsWith('INSERT INTO environments') && call.params[3] === 'PROV-PGSEEDFAKE-PGFAKE-1'));
+		assert.ok(providerInsert, 'provider insert issued');
+		assert.equal(providerInsert.params[0], 'kept-uuid', 'existing surrogate id preserved');
+		assert.equal(providerInsert.params[4], false, 'operator deactivation preserved');
+		const updateList = providerInsert.text.split('DO UPDATE SET')[1].split(', updated_at')[0];
+		assert.ok(!updateList.includes('active'), 'seed overlay must never reset active');
+	} finally {
+		unregisterCatalogProvider('pgseedfake');
+	}
 });

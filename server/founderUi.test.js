@@ -11,7 +11,7 @@ test('feature dock exposes one accessible launcher per mode outside the working 
 	assert.match(html, /<nav class="feature-dock" aria-label="Qase features">/);
 	for (const [id, label, feature, tip] of [
 		['new-run', 'Start standard QA run', 'qa', 'feature-tip-qa'],
-		['new-sqa', 'Start quality review', 'sqa', 'feature-tip-sqa'],
+		['new-sqa', 'Start SQA assessment', 'sqa', 'feature-tip-sqa'],
 		['new-founder', 'Start Founder Mode review', 'founder', 'feature-tip-founder']
 	]) {
 		assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1);
@@ -32,8 +32,7 @@ test('Founder launcher matches the authenticated API input contract and limits',
 		['founder-primary-goal', 1000],
 		['founder-constraints', 2000]
 	]) assert.match(html, new RegExp(`id="${id}"[^>]+maxlength="${maximum}"`));
-	assert.match(html, /id="founder-target-name"[^>]+maxlength="200"/);
-	assert.doesNotMatch(html, /id="founder-target-name"[^>]+required/);
+	assert.match(html, /id="founder-target-name"[^>]+required/);
 	assert.match(html, /id="founder-target-url"[^>]+type="url"[^>]+required/);
 	assert.match(html, /id="founder-authorization"[^>]+type="checkbox"[^>]+required/);
 	// Business context the model can infer from the URL is no longer asked for.
@@ -41,19 +40,12 @@ test('Founder launcher matches the authenticated API input contract and limits',
 	assert.match(html, /id="founder-catalog-meta"[^>]+aria-live="polite"/);
 	assert.match(html, /id="tab-founder"[^>]+role="tab"[^>]+aria-controls="pane-founder"[^>]+hidden/);
 	assert.match(html, /id="pane-founder"[^>]+role="tabpanel"[^>]+aria-labelledby="tab-founder"/);
-	assert.match(html, /id="founder-customize"/);
-	const advanced = html.slice(html.indexOf('id="founder-customize"'), html.indexOf('id="founder-form-error"'));
-	for (const id of ['founder-target-release', 'founder-target-environment', 'founder-device-select', 'founder-environment-select']) {
-		assert.match(advanced, new RegExp(`id="${id}"`));
-	}
-	assert.doesNotMatch(html.slice(html.indexOf('id="founder-start"'), html.indexOf('id="founder-customize"')), /BrowserStack|provider matrix/i);
 });
 
 test('Founder frontend creates an idle scope, then starts through the existing message endpoint', () => {
 	assert.match(app, /api\('\/founder\/catalog'\)/);
 	assert.match(app, /api\('\/founder\/sessions',\s*\{\s*method:\s*'POST'/);
 	assert.match(app, /authorizationConfirmed:\s*true/);
-	assert.match(app, /name:\s*founderUi\.targetName\.value\.trim\(\) \|\| new URL\(targetUrl\)\.hostname/);
 	assert.match(app, /target,\s*device:[^,]+,\s*deviceLandscape:[^,]+,\s*environmentId:[^,]+,\s*\.\.\.\(Object\.keys\(productContext\)\.length/);
 	assert.match(app, /api\(`\/sessions\/\$\{session\.id\}\/message`,\s*\{/);
 	assert.match(app, /JSON\.stringify\(\{ text: `Review \$\{targetUrl\}` \}\)/);
@@ -71,21 +63,18 @@ test('Founder result rendering is safe, mode-scoped, and covers the full decisio
 	assert.match(renderer, /session\?\.mode !== 'founder'/);
 	for (const heading of [
 		'Executive thesis',
-		'What to improve',
-		'What to build next',
-		'What to do first',
+		'UI, UX & product findings',
 		'ICP & positioning',
 		'Sales & GTM',
 		'Marketing & growth',
 		'Monetization & pricing',
+		'Prioritized opportunities',
+		'Quick wins',
 		'30 \/ 60 \/ 90 roadmap',
 		'Risks & assumptions',
 		'Metrics & experiments',
 		'Evidence confidence'
 	]) assert.match(renderer, new RegExp(heading));
-	const completedReport = renderer.slice(renderer.indexOf('function appendFounderCompletedReport'), renderer.indexOf('\n\tfunction render()'));
-	assert.ok(completedReport.indexOf("'What to improve'") < completedReport.indexOf('renderFounderIcpPositioning(report)'));
-	assert.ok(completedReport.indexOf('renderFounderPriorities(report)') < completedReport.indexOf('renderFounderIcpPositioning(report)'));
 	assert.match(renderer, /declared\?\.limitation/);
 	assert.match(renderer, /declared\?\.assumptionCount/);
 	assert.match(renderer, /monetization\.pricingPresentation/);
@@ -111,9 +100,14 @@ test('the generic Report tab renders the finalized Founder brief and live finali
 });
 
 test('feature dock reserves a fourth desktop column and becomes a bottom dock responsively', () => {
-	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
-	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.app\s*\{[\s\S]*?grid-template-columns:[^;]+56px;/);
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1101px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+76px;/);
 	assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);
+	assert.match(styles, /@media \(min-width: 1281px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+58px;/);
+	assert.match(styles, /@media \(max-width: 1280px\) and \(min-width: 1024px\)[\s\S]*?\.cli-theme \.app\s*\{[\s\S]*?grid-template-columns:[^;]+52px;/);
+	assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.feature-dock\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?bottom:\s*9px;/);
 	assert.match(styles, /\.feature-action:focus-visible \.feature-tooltip/);
 	assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.feature-tooltip/);
 	assert.match(styles, /\.founder-evidence-grid/);

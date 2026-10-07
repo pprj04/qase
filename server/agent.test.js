@@ -261,7 +261,7 @@ test('the real SDK registry and advertised descriptions enforce each mode bounda
 		for (const mode of ['qa','sqa','founder']) {
 			const live = {};
 			const session = {id:randomUUID(),mode,secretNames:[],activities:[],findings:[],todos:[],messages:[]};
-			const record = ensureRuntime(session, {liveFor:()=>live,publish(){},commit:async()=>{}});
+			const record = await ensureRuntime(session, {liveFor:()=>live,publish(){},commit:async()=>{}});
 			try {
 				const names=record.runtime.headlessRuntime.getTools().map(tool=>tool.name);
 				assert.deepEqual(new Set(names),allowedToolNames(mode));

@@ -58,7 +58,9 @@ feedback: {
 		reports: { buildMarkdown: async () => '' },
 		agent: { ensureRuntime: async () => ({}), runTurn: async () => ({}), closeBrowser: async () => undefined, getLiveState: () => ({}), stop: async () => undefined, invalidateIdleRuntimes: () => undefined },
 		readiness: { check: async () => ({ ready: true }) },
+		feedback: { create: async () => ({}), get: async () => undefined, list: async () => [], update: async () => ({}), remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		lifecycle: { close: async () => undefined },
+		feedback: { create: async () => undefined, get: async () => undefined, list: async () => [], update: async () => undefined, remove: async () => undefined, stats: async () => ({}), forRun: async () => undefined },
 		deviceCatalog,
 		environments: {
 			seed: async () => ({ inserted: 0 }),
@@ -131,19 +133,50 @@ test('GET unknown catalog entity → 400', async () => {
 	}
 });
 
-test('POST /api/catalog/browserVersions adds Chrome 154, then env validation accepts it', async () => {
+// #14648 (NI01 Phase 2): meta MUST be registered before the :entity wildcard —
+// otherwise 'meta' resolves as an unknown entity and the endpoint 400s.
+test('GET /api/catalog/meta is reachable and carries the browser support report (#14648)', async () => {
+	const fixture = await startFixture();
+	try {
+		const result = await fixture.json('/api/catalog/meta');
+		assert.equal(result.status, 200);
+		assert.ok(result.body.catalogVersion, 'catalogVersion missing');
+		assert.ok(Array.isArray(result.body.providers), 'providers missing');
+		const support = result.body.browserSupport;
+		assert.ok(Array.isArray(support), 'browserSupport report must be an array');
+		assert.equal(support.length, 7);
+		const duck = support.find((entry) => entry.browser === 'duckduckgo');
+		assert.ok(duck, 'duckduckgo entry missing');
+		assert.equal(duck.status, 'not_supported', 'duckduckgo must resolve not_supported');
+		assert.ok(duck.reason, 'duckduckgo reason missing');
+		const opera = support.find((entry) => entry.browser === 'opera');
+		// RT1 (#14680): opera is 'supported' when a launch-verified branded
+		// binary exists on this host, 'engine_equivalent' otherwise — never a
+		// fabricated branded pass. Accept both truthful outcomes.
+		assert.ok(['supported', 'engine_equivalent'].includes(opera.status),
+			`opera resolved unexpected status ${opera.status}`);
+		if (opera.status === 'supported') {
+			assert.ok(opera.branded === true && opera.executablePath,
+				'a supported opera must cite the real binary');
+		}
+	} finally {
+		await fixture.close();
+	}
+});
+
+test('POST /api/catalog/browserVersions adds Chrome 160, then env validation accepts it', async () => {
 	const fixture = await startFixture();
 	try {
 		const created = await fixture.json('/api/catalog/browserVersions', {
 			method: 'POST',
-			json: { browser_id: 'chrome', version: '154' }
+			json: { browser_id: 'chrome', version: '160' }
 		});
 		assert.equal(created.status, 201);
-		assert.equal(created.body.id, 'chrome:154');
+		assert.equal(created.body.id, 'chrome:160');
 
 		const duplicate = await fixture.json('/api/catalog/browserVersions', {
 			method: 'POST',
-			json: { browser_id: 'chrome', version: '154' }
+			json: { browser_id: 'chrome', version: '160' }
 		});
 		assert.equal(duplicate.status, 409);
 		assert.equal(duplicate.body.code, 'QASE_CATALOG_CONFLICT');
@@ -247,9 +280,14 @@ test('GET /api/catalog/validate rejects invalid pairs with reasons', async () =>
 		const crossPlatform = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=macos&osVersion=Sonoma&browser=chrome');
 		assert.equal(crossPlatform.body.ok, false);
 
-		const badBrowser = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=ios&osVersion=18.3&browser=firefox');
+		// 2026.10 expansion: Firefox IS available on iOS now — assert the new
+		// truth and keep a genuinely invalid pair (Safari on Android).
+		const goodBrowser = await fixture.json('/api/catalog/validate?device=IP16PRO&platform=ios&osVersion=18.3&browser=firefox');
+		assert.equal(goodBrowser.body.ok, true);
+
+		const badBrowser = await fixture.json('/api/catalog/validate?device=GALS24&platform=android&osVersion=15&browser=safari');
 		assert.equal(badBrowser.body.ok, false);
-		assert.match(badBrowser.body.reason, /not available on ios/);
+		assert.match(badBrowser.body.reason, /not (available|supported) on android/i);
 
 		const noDevice = await fixture.json('/api/catalog/validate');
 		assert.equal(noDevice.status, 400);
@@ -341,7 +379,7 @@ test('GET /api/catalog/browsers/:id/versions lists versions for a browser', asyn
 	const fixture = await startFixture(stubCatalog((entity, filters = {}) => {
 		if (entity === 'browsers') return filters.id === 'chrome' ? [{ id: 'chrome', display_name: 'Chrome' }] : [];
 		if (entity === 'browserVersions') return filters.browser_id === 'chrome'
-			? [{ id: 'chrome:153', version: '153' }, { id: 'chrome:154', version: '154' }]
+			? [{ id: 'chrome:153', version: '153' }, { id: 'chrome:160', version: '160' }]
 			: [];
 		return [];
 	}));
@@ -351,7 +389,7 @@ test('GET /api/catalog/browsers/:id/versions lists versions for a browser', asyn
 		const { status, body } = await fixture.json('/api/catalog/browsers/chrome/versions');
 		assert.equal(status, 200);
 		assert.equal(body.count, 2);
-		assert.deepEqual(body.rows.map((r) => r.version), ['153', '154']);
+		assert.deepEqual(body.rows.map((r) => r.version), ['153', '160']);
 	} finally {
 		await fixture.close();
 	}

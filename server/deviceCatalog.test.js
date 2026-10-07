@@ -64,30 +64,36 @@ test('isCombinationSupported accepts valid and rejects invalid pairs (data-drive
 	});
 	assert.equal(crossPlatform.ok, false);
 
-	const unsupportedBrowser = await backend.isCombinationSupported({
+	// 2026.10 expansion: Firefox is valid on iOS; Safari stays invalid on Android.
+	const supportedBrowser = await backend.isCombinationSupported({
 		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'firefox'
 	});
+	assert.equal(supportedBrowser.ok, true);
+
+	const unsupportedBrowser = await backend.isCombinationSupported({
+		deviceSlug: 'GALS24', platform: 'android', osVersion: '15', browserCode: 'safari'
+	});
 	assert.equal(unsupportedBrowser.ok, false);
-	assert.match(unsupportedBrowser.reason, /not available on ios/);
+	assert.match(unsupportedBrowser.reason, /not (available|supported) on android/i);
 });
 
 test('adding a browser version via data makes it valid — no code change', async () => {
 	const backend = tempBackend();
 	await backend.seed();
 	const before = await backend.isCombinationSupported({
-		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '154'
+		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '160'
 	});
 	assert.equal(before.ok, false);
 
-	await backend.create('browserVersions', { browser_id: 'chrome', version: '154', sort_key: '000154' });
+	await backend.create('browserVersions', { browser_id: 'chrome', version: '160', sort_key: '000160' });
 	const after = await backend.isCombinationSupported({
-		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '154'
+		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '160'
 	});
 	assert.equal(after.ok, true);
 	// re-seed must not remove the operator-added version
 	await backend.seed();
 	const persisted = await backend.isCombinationSupported({
-		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '154'
+		deviceSlug: 'IP16PRO', platform: 'ios', osVersion: '18.3', browserCode: 'chrome', browserVersion: '160'
 	});
 	assert.equal(persisted.ok, true, 're-seed must not delete admin-added rows');
 });
@@ -110,20 +116,20 @@ test('environment validation switches to the DB-backed catalog when attached', a
 	const catalog = createLocalDeviceCatalogBackend({ stateDir: catalogDir, stateFile: path.join(catalogDir, 'catalog.json') });
 	await catalog.seed();
 
-	// Operator adds Chrome 154 through data only.
-	await catalog.create('browserVersions', { browser_id: 'chrome', version: '154', sort_key: '000154' });
+	// Operator adds Chrome 160 through data only.
+	await catalog.create('browserVersions', { browser_id: 'chrome', version: '160', sort_key: '000160' });
 	const withCatalog = await normalizeEnvironmentInput(
-		{ platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '154' },
+		{ platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '160' },
 		{ catalogBackend: catalog }
 	);
-	assert.equal(withCatalog.envId, 'ENV-IOS-IP16PRO-18.3-CHR-154');
+	assert.equal(withCatalog.envId, 'ENV-IOS-IP16PRO-18.3-CHR-160');
 
 	// Same version WITHOUT the catalog attached (frozen module) must still fail —
 	// proves the check actually went through the DB-backed backend above.
 	const { EnvironmentValidationError } = await import('./environmentService.js');
 	await assert.rejects(
 		() => normalizeEnvironmentInput(
-			{ platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '154' },
+			{ platform: 'ios', device: 'iPhone 16 Pro', osVersion: '18.3', browser: 'chrome', browserVersion: '160' },
 			{ catalogBackend: null }
 		),
 		(error) => error instanceof EnvironmentValidationError

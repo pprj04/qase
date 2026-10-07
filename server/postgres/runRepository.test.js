@@ -674,20 +674,14 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 	await repository.create(session({ tokenUsage: usage }), { eventType: 'run.created', actorType: 'user' });
 	const runInsert = fake.calls.find(call => call.text.startsWith('INSERT INTO qa_runs'));
 	assert.match(runInsert.text, /token_usage/);
-	// Merged insert tail: createdAt, updatedAt, queuedAt, pausedAt, selectedTests,
-	// securityAuthorization, environmentId, environmentSnapshot, testCaseId.
-	// Plus DEV's structural-integrity check: distinct placeholders must equal
-	// params length and the highest placeholder must bind the last param.
-	assert.equal(runInsert.params[runInsert.params.length - 1], null, 'testCaseId tail');
-	assert.equal(runInsert.params[runInsert.params.length - 2], null, 'environmentSnapshot tail');
-	assert.equal(runInsert.params[runInsert.params.length - 3], null, 'environmentId tail');
-	assert.equal(runInsert.params[runInsert.params.length - 4], null, 'securityAuthorization tail (unset)');
-	assert.equal(runInsert.params[runInsert.params.length - 5], null, 'selectedTests tail (unset)');
-	assert.equal(runInsert.params[runInsert.params.length - 6], null, 'pausedAt tail (unset)');
-	assert.equal(runInsert.params[runInsert.params.length - 7], null, 'queuedAt tail (unset)');
-	assert.equal(runInsert.params[runInsert.params.length - 8].getTime(), new Date(NOW).getTime(), 'updatedAt');
+	// Structural integrity of the INSERT: the number of target columns must
+	// equal the number of VALUES expressions, and the highest placeholder must
+	// bind every param. (A fake pool never parses SQL, so an off-by-one here
+	// would otherwise pass silently and break real Postgres at parse time.)
 	const columnList = runInsert.text.match(/INSERT INTO qa_runs \(([\s\S]*?)\)\s*VALUES/)?.[1] ?? '';
 	const columnCount = columnList.split(',').length;
+	// Expressions include literals (NULL, 0), so the real invariant is:
+	// (placeholders bound = params.length) and (columns = placeholders + literals).
 	const placeholders = [...runInsert.text.matchAll(/\$(\d+)/g)].map(match => Number(match[1]));
 	const maxPlaceholder = Math.max(...placeholders);
 	const literalCount = columnCount - placeholders.length;
@@ -705,6 +699,16 @@ test('token usage round-trips on the run row and surfaces in list summaries', as
 		literalCount === 2,
 		`expected exactly 2 literal VALUES expressions (NULL, 0), found ${literalCount} — column/expr imbalance?`
 	);
+	// Param tail after cohort: createdAt(-12), updatedAt(-13), queued_at(-11,
+	// null without queuedAt), paused_at(-10), selected_tests, security_authorization,
+	// then the environment block, then matrix_run_id (trailing, null).
+	assert.equal(runInsert.params[runInsert.params.length - 1], null);          // matrix_run_id
+	assert.equal(runInsert.params[runInsert.params.length - 2], null);          // runtime_facts
+	assert.equal(runInsert.params[runInsert.params.length - 3], null);          // execution_provider_actual
+	assert.equal(runInsert.params[runInsert.params.length - 4], null);          // execution_level_actual
+	assert.equal(runInsert.params[runInsert.params.length - 11], null);         // queued_at
+	assert.equal(runInsert.params[runInsert.params.length - 10], null);         // paused_at
+	assert.equal(runInsert.params[runInsert.params.length - 12].getTime(), new Date(NOW).getTime()); // updated_at
 
 	// save: token_usage is updated on the run row (append-only usage rows stay untouched).
 	const saveStart = fake.calls.length;
@@ -893,7 +897,10 @@ test('get and list read PostgreSQL authoritatively without crossing tenant scope
 		messageCount: 3,
 		todoTotal: 0,
 		todoCompleted: 0,
-		tokenUsage: undefined
+		tokenUsage: undefined,
+		executionLevel: undefined,
+		executionProviderActual: undefined,
+		runtimeFacts: undefined
 	}]);
 	const scopedRunReads = fake.calls.filter(call => call.text.includes('FROM qa_runs'));
 	assert.ok(scopedRunReads.every(call => /organization_id = \$1 AND project_id = \$2/.test(call.text)));

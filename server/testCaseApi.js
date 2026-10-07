@@ -4,7 +4,7 @@
  */
 import { TestCaseValidationError } from './testCaseService.js';
 
-export function createTestCaseRoutes({ testCases, onError }) {
+export function createTestCaseRoutes({ testCases, runs, autogen, onError }) {
 	return (app) => {
 		app.get('/api/test-cases', async (request, response) => {
 			try {
@@ -13,6 +13,8 @@ export function createTestCaseRoutes({ testCases, onError }) {
 				if (query.search) filters.search = String(query.search);
 				if (query.tag) filters.tag = String(query.tag);
 				if (query.environmentId) filters.environmentId = String(query.environmentId);
+				if (query.source) filters.source = String(query.source);
+				if (query.sourceRunId) filters.sourceRunId = String(query.sourceRunId);
 				const rows = await testCases.list(filters);
 				response.set('Cache-Control', 'no-store');
 				response.json({ total: rows.length, testCases: rows });
@@ -23,7 +25,13 @@ export function createTestCaseRoutes({ testCases, onError }) {
 
 		app.post('/api/test-cases', async (request, response) => {
 			try {
-				const record = await testCases.create(request.body ?? {});
+				// Provenance is server-controlled: the public API always creates
+				// manual cases; source fields from the client are ignored.
+				const body = { ...(request.body ?? {}) };
+				delete body.source;
+				delete body.sourceRunId;
+				delete body.sourceUrl;
+				const record = await testCases.create(body);
 				response.status(201).json(record);
 			} catch (error) {
 				if (error?.code === 'QASE_TESTCASE_INVALID') {
@@ -78,6 +86,44 @@ export function createTestCaseRoutes({ testCases, onError }) {
 				}
 				response.status(204).end();
 			} catch (error) {
+				onError(request, response, error);
+			}
+		});
+
+		// Agent generation on demand: derive test cases from a completed run.
+		// Idempotent — the engine skips runs it already generated cases for.
+		app.post('/api/test-cases/generate', async (request, response) => {
+			try {
+				if (!autogen) {
+					response.status(501).json({ error: 'Generation is not available on this deployment.' });
+					return;
+				}
+				const runId = String(request.body?.runId ?? '').trim();
+				if (!runId) {
+					response.status(422).json({ error: 'runId is required.' });
+					return;
+				}
+				const session = runs?.get ? await runs.get(runId) : null;
+				if (!session) {
+					response.status(404).json({ error: 'Unknown run.' });
+					return;
+				}
+				if (!session.report) {
+					response.status(409).json({ error: 'This run has no published report yet.' });
+					return;
+				}
+				const result = await autogen.generateForRun(session);
+				response.json({
+					created: result.created,
+					count: result.created.length,
+					skipped: result.skipped ?? null,
+					path: result.path ?? null
+				});
+			} catch (error) {
+				if (error?.code === 'QASE_TESTCASE_INVALID') {
+					response.status(422).json({ error: error.message, code: error.code });
+					return;
+				}
 				onError(request, response, error);
 			}
 		});

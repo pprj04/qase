@@ -6,6 +6,7 @@ import { PublicInputError } from './publicErrors.js';
 import { createInstanceAccess } from './instanceAccess.js';
 import { finishSqaAssessment } from './sqaService.js';
 import { aggregateSessionFindings, setFindingStatus } from './store.js';
+import { createCoverageService } from './coverageService.js';
 
 const TEST_TENANT = Object.freeze({
 	organizationId: '55c15025-8ef4-4ce8-8ad5-4562f33f1852',
@@ -618,7 +619,7 @@ test('run creation with an environmentId snapshots the frozen environment onto t
 	const frozen = {
 		envId: 'ENV-IOS-IP15PRO-18.3-SAF-18.3', platform: 'ios', device: 'iPhone 15 Pro',
 		osVersion: '18.3', browser: 'Safari', browserVersion: '18.3',
-		deviceType: 'phone', executionProvider: 'browserstack', isRealDevice: true, active: true
+		deviceType: 'phone', executionProvider: 'environment', isRealDevice: true, active: true
 	};
 	fixture.services.environments.get = async envId => (envId === frozen.envId ? frozen : null);
 	fixture.services.environments.list = async () => [frozen];
@@ -630,7 +631,7 @@ test('run creation with an environmentId snapshots the frozen environment onto t
 	}));
 	assert.equal(created.environmentId, frozen.envId);
 	assert.equal(created.environmentSnapshot.device, 'iPhone 15 Pro');
-	assert.equal(created.environmentSnapshot.executionProvider, 'browserstack');
+	assert.equal(created.environmentSnapshot.executionProvider, 'environment');
 
 	const summaries = await body(await fixture.request('/api/sessions'));
 	assert.equal(summaries[0].environmentSnapshot.envId, frozen.envId);
@@ -1257,6 +1258,231 @@ test('only explicitly public input errors retain their message', async t => {
 	assert.equal(spoofedPayload.error, 'The request could not be completed. Try again.');
 	assert.doesNotMatch(JSON.stringify(spoofedPayload), /workspace|auth\.json/);
 });
+
+test('finding status PATCH validates ownership, input, and broadcasts the transition', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+	const session = fixture.services.runs.create('Bug route run');
+	const finding = {
+		id: randomUUID(), ts: 900, severity: 'critical', title: 'Login loop',
+		category: 'auth', url: 'https://example.test/login', expected: 'session', actual: 'redirects forever'
+	};
+	session.findings = [finding];
+	const events = [];
+	fixture.services.events.subscribe(session.id, event => events.push(event));
+
+	const happy = await fixture.request(`/api/sessions/${session.id}/findings/${finding.id}`, {
+		method: 'PATCH', json: { status: 'in_progress', note: 'under investigation' }
+	});
+	assert.equal(happy.status, 200);
+	const happyBody = await body(happy);
+	assert.equal(happyBody.ok, true);
+	assert.equal(happyBody.finding.status, 'in_progress');
+	assert.equal(happyBody.finding.statusNote, 'under investigation');
+	assert.equal(session.findings[0].status, 'in_progress');
+	assert.equal(events.filter(event => event.type === 'finding_status').length, 1);
+
+	const unknownFinding = await fixture.request(`/api/sessions/${session.id}/findings/${randomUUID()}`, {
+		method: 'PATCH', json: { status: 'fixed' }
+	});
+	assert.equal(unknownFinding.status, 404);
+
+	const invalidStatus = await fixture.request(`/api/sessions/${session.id}/findings/${finding.id}`, {
+		method: 'PATCH', json: { status: 'closed' }
+	});
+	assert.equal(invalidStatus.status, 400);
+	const invalidBody = await body(invalidStatus);
+	assert.match(invalidBody.error, /status/i);
+
+	const longNote = await fixture.request(`/api/sessions/${session.id}/findings/${finding.id}`, {
+		method: 'PATCH', json: { status: 'fixed', note: 'x'.repeat(501) }
+	});
+	assert.equal(longNote.status, 400);
+
+	const unknownSession = await fixture.request(`/api/sessions/${randomUUID()}/findings/${finding.id}`, {
+		method: 'PATCH', json: { status: 'fixed' }
+	});
+	assert.equal(unknownSession.status, 404);
+
+	// Clearing a note with an empty string is a valid transition.
+	const cleared = await fixture.request(`/api/sessions/${session.id}/findings/${finding.id}`, {
+		method: 'PATCH', json: { status: 'fixed', note: '' }
+	});
+	assert.equal(cleared.status, 200);
+	assert.equal((await body(cleared)).finding.statusNote, '');
+});
+
+test('the finding PATCH route enforces the shared auth and CSRF middleware contract', async t => {
+	// The same /api middleware guards every route; this pins the contract for
+	// the findings endpoint specifically: 401 without a session, 403 without
+	// a CSRF double-submit on mutations, and pass-through with both. Bug
+	// tracking is ownership-scoped (any authenticated user manages their own
+	// runs' bugs), so there is no additional role gate.
+	const memory = createMemoryServices();
+	const sessionsSeen = [];
+	memory.services.runs.get = async id => {
+		sessionsSeen.push(id);
+		return undefined;
+	};
+	const authService = {
+		async authenticate(token) {
+			if (token !== 'valid') return null;
+			return { userId: 'auth-user', role: 'owner' };
+		},
+		async register() { throw new Error('unused'); },
+		async login() { throw new Error('unused'); }
+	};
+	const fixture = await startFixture({ memory, environment: { QASE_AUTH_REQUIRED: 'true' } });
+	// startFixture does not inject authService; rebuild the app with it.
+	const { createApplication } = await import('./app.js');
+	const application = createApplication({
+		services: { ...memory.services, auth: authService },
+		access: createTestAccess(),
+		environment: { QASE_AUTH_REQUIRED: 'true' },
+		sseHeartbeatMs: 1_000
+	});
+	const server = await new Promise(resolve => {
+		const candidate = application.app.listen(0, '127.0.0.1', () => resolve(candidate));
+	});
+	const origin = `http://127.0.0.1:${server.address().port}`;
+	t.after(async () => {
+		await application.whenIdle();
+		await new Promise(resolve => server.close(resolve));
+		await fixture.close();
+	});
+
+	const path = '/api/sessions/00000000-0000-4000-8000-000000000000/findings/00000000-0000-4000-8000-000000000001';
+
+	const anon = await fetch(`${origin}${path}`, {
+		method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'fixed' })
+	});
+	assert.equal(anon.status, 401, 'no session cookie → rejected by auth middleware');
+	assert.deepEqual(sessionsSeen, [], 'auth rejects before the route runs');
+
+	// Authenticated but no CSRF header/cookie pair → 403 before the route runs.
+	const noCsrf = await fetch(`${origin}${path}`, {
+		method: 'PATCH',
+		headers: { 'content-type': 'application/json', cookie: 'qase_session=valid' },
+		body: JSON.stringify({ status: 'fixed' })
+	});
+	assert.equal(noCsrf.status, 403, 'mutation without CSRF double-submit → 403');
+	assert.deepEqual(sessionsSeen, [], 'CSRF rejects before the route runs');
+
+	// A GET is mutation-free: no CSRF requirement, and unknown sessions 404.
+	const get = await fetch(`${origin}${path}`, { headers: { cookie: 'qase_session=valid' } });
+	assert.equal(get.status, 404);
+});
+
+test('GET /api/findings returns the owned backlog with composed filters', async t => {
+	const fixture = await startFixture();
+	t.after(() => fixture.close());
+	const first = fixture.services.runs.create('Checkout audit');
+	first.mode = 'qa';
+	const second = fixture.services.runs.create('Homepage audit');
+	second.mode = 'qa';
+	const findings = [
+		{ id: randomUUID(), ts: 100, severity: 'critical', title: 'Payment fails', category: 'checkout', url: 'https://shop.test/pay', expected: 'ok', actual: '500' },
+		{ id: randomUUID(), ts: 200, severity: 'medium', title: 'Logo blur', category: 'ui', url: 'https://shop.test/', expected: 'sharp', actual: 'blurry' }
+	];
+	first.findings = findings;
+	second.findings = [
+		{ id: randomUUID(), ts: 300, severity: 'high', title: 'Nav overlap', category: 'ui', url: 'https://shop.test/home', expected: 'ok', actual: 'overlap' }
+	];
+	// Track one finding through its lifecycle before listing.
+	await fixture.services.runs.setFindingStatus(first, findings[0].id, { status: 'fixed', note: 'hotfix shipped' });
+
+	const all = await body(await fixture.request('/api/findings'));
+	assert.equal(all.findings.length, 3);
+	assert.deepEqual(all.findings.map(row => row.severity), ['critical', 'high', 'medium'], 'severity-first, newest within severity');
+	assert.equal(all.findings[0].status, 'fixed');
+	assert.equal(all.findings[0].statusNote, 'hotfix shipped');
+	assert.equal(all.findings[0].runTitle, 'Checkout audit');
+	assert.equal(typeof all.serverNow, 'number');
+
+	const fixed = await body(await fixture.request('/api/findings?status=fixed'));
+	assert.deepEqual(fixed.findings.map(row => row.title), ['Payment fails']);
+
+	const uiOpen = await body(await fixture.request('/api/findings?severity=medium&status=open'));
+	assert.deepEqual(uiOpen.findings.map(row => row.title), ['Logo blur']);
+
+	const byRun = await body(await fixture.request(`/api/findings?run=${second.id}`));
+	assert.deepEqual(byRun.findings.map(row => row.title), ['Nav overlap']);
+
+	const search = await body(await fixture.request('/api/findings?q=PAYMENT'));
+	assert.equal(search.findings.length, 1);
+
+	const limited = await body(await fixture.request('/api/findings?limit=2'));
+	assert.equal(limited.findings.length, 2);
+
+	const badStatus = await fixture.request('/api/findings?status=closed');
+	assert.equal(badStatus.status, 400);
+
+	const badSeverity = await fixture.request('/api/findings?severity=blocker');
+	assert.equal(badSeverity.status, 400);
+
+	const empty = await body(await fixture.request('/api/findings?q=nothing-matches'));
+	assert.deepEqual(empty.findings, []);
+});
+
+test('GET /api/coverage aggregates cases × environments × runs with honest metrics', async t => {
+	const env = {
+		envId: 'ENV-IOS-IP16PRO-18.3-SAF-18.3', platform: 'ios', device: 'iPhone 16 Pro',
+		osVersion: '18.3', browser: 'Safari', browserVersion: '18.3', active: true
+	};
+	// The route mounts only when the coverage group exists at startup, so the
+	// fixture swaps the snapshot result per stage rather than the service.
+	let snapshotResult = { metrics: { environments: 0, testCases: 0, assignedPairs: 0, executedPairs: 0, passedPairs: 0, coveragePct: 0, passRatePct: 0, runsConsidered: 0 }, rows: [], environments: [] };
+	const memory = createMemoryServices();
+	memory.services.coverage = { snapshot: async () => snapshotResult };
+	const fixture = await startFixture({ memory });
+	t.after(() => fixture.close());
+
+	// Empty workspace → zeros/empty, not an error.
+	const empty = await body(await fixture.request('/api/coverage'));
+	assert.equal(empty.metrics.coveragePct, 0);
+	assert.equal(empty.metrics.assignedPairs, 0);
+	assert.deepEqual(empty.rows, []);
+	assert.deepEqual(empty.environments, []);
+
+	fixture.services.environments.list = async () => [env];
+	const expected = createCoverageService({
+		testCases: {
+			list: async () => ({ testCases: [
+				{ caseNumber: 'TC-1', title: 'Checkout flow', tags: [], environmentIds: [env.envId] },
+				{ caseNumber: 'TC-2', title: 'Login', tags: [], environmentIds: [env.envId], deleted: true }
+			] })
+		},
+		environments: fixture.services.environments,
+		runs: fixture.services.runs,
+		listRuns: async () => [
+			{ id: 'r1', testCaseId: 'TC-1', environmentId: env.envId, status: 'done', updatedAt: 10, report: { verdict: 'pass_with_issues' } }
+		],
+		tenantContext: {}
+	});
+	snapshotResult = await expected.snapshot();
+
+	const payload = await body(await fixture.request('/api/coverage'));
+	assert.equal(payload.metrics.environments, 1);
+	assert.equal(payload.metrics.testCases, 1); // deleted case excluded
+	assert.equal(payload.metrics.assignedPairs, 1);
+	assert.equal(payload.metrics.executedPairs, 1);
+	assert.equal(payload.metrics.passedPairs, 1); // pass_with_issues is a pass
+	assert.equal(payload.metrics.coveragePct, 100);
+	assert.equal(payload.metrics.passRatePct, 100);
+	assert.equal(payload.rows[0].caseNumber, 'TC-1');
+	assert.equal(payload.rows[0].cells[env.envId].latestRunId, 'r1');
+	assert.equal(payload.rows[0].cells[env.envId].verdict, 'pass_with_issues');
+	assert.equal(payload.environments[0].envId, env.envId);
+});
+
+test('GET /api/coverage is absent when no coverage service is configured', async t => {
+	const fixture = await startFixture({ memory: createMemoryServices() });
+	t.after(() => fixture.close());
+	assert.equal(fixture.services.coverage, undefined);
+	const response = await fixture.request('/api/coverage');
+	assert.equal(response.status, 404);
+});
+
 
 test('finding status PATCH validates ownership, input, and broadcasts the transition', async t => {
 	const fixture = await startFixture();

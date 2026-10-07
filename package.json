@@ -11,7 +11,8 @@
     "worker": "node server/worker.js",
     "control-plane": "node server/controlPlane/index.js",
     "cell-heartbeat": "node server/cellHeartbeatController.js",
-    "test": "node --test server/*.test.js server/postgres/*.test.js server/controlPlane/*.test.js",
+    "test": "node --test server/*.test.js server/postgres/*.test.js server/controlPlane/*.test.js public/*.test.js",
+    "validate:matrix": "node scripts/validate-matrix.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "control:db:migrate": "node scripts/migrate-control-plane.mjs",
     "db:import": "node scripts/import-sessions.mjs",
@@ -28,13 +29,16 @@
     "qualify:agent": "node scripts/qualify-agent.mjs",
     "install-browser": "playwright install chromium firefox webkit",
     "package": "node scripts/package.mjs",
-    "test:auth": "node scripts/test-auth-browser.mjs"
+    "test:auth": "node scripts/test-auth-browser.mjs",
+    "test:ui": "node scripts/test-ui-responsive.mjs",
+    "test:acceptance": "node scripts/test-acceptance.mjs"
   },
   "engines": {
     "node": ">=22 <25"
   },
   "dependencies": {
     "@cleanslate/sdk": "^0.1.0",
+    "compression": "^1.8.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.22.0",

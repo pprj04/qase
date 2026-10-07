@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { expandSelection, summarizeCombos, groupEnvironmentsByDevice, debounce } from '../public/deviceMatrixView.js';
+import { expandSelection, summarizeCombos, groupEnvironmentsByDevice, debounce, coverageCellMeta } from '../public/deviceMatrixView.js';
 
 test('expandSelection cross-products devices × OS × browsers in input order', () => {
 	const combos = expandSelection({
@@ -58,4 +58,27 @@ test('debounce collapses bursts into a single trailing call', async () => {
 	assert.equal(calls, 0);
 	await new Promise((resolve) => setTimeout(resolve, 60));
 	assert.equal(calls, 1);
+});
+
+test('coverageCellMeta maps every cell state to a distinct honest label', () => {
+	assert.deepEqual(coverageCellMeta(undefined), { label: '', cls: 'cov-none', title: 'Never run' });
+	assert.deepEqual(coverageCellMeta(null), { label: '', cls: 'cov-none', title: 'Never run' });
+	// Live states pulse; they are never a pass.
+	assert.equal(coverageCellMeta({ status: 'running' }).cls, 'cov-live');
+	assert.equal(coverageCellMeta({ status: 'awaiting_input' }).cls, 'cov-live');
+	// An idle run was created but never started — static, not in flight.
+	assert.equal(coverageCellMeta({ status: 'idle' }).cls, 'cov-idle');
+	// Executed with verdict.
+	assert.equal(coverageCellMeta({ status: 'done', verdict: 'pass' }).cls, 'cov-pass');
+	assert.equal(coverageCellMeta({ status: 'done', verdict: 'pass_with_issues' }).cls, 'cov-pass-warn');
+	assert.equal(coverageCellMeta({ status: 'done', verdict: 'fail' }).cls, 'cov-fail');
+	assert.equal(coverageCellMeta({ status: 'done', verdict: 'blocked' }).cls, 'cov-blocked');
+	// Executed WITHOUT a verdict: neutral "executed", never a pass.
+	assert.equal(coverageCellMeta({ status: 'done' }).cls, 'cov-exec');
+	assert.equal(coverageCellMeta({ status: 'error', verdict: undefined }).cls, 'cov-exec');
+	// Every cls used by the matrix is distinct.
+	const classes = [
+		'cov-none', 'cov-idle', 'cov-live', 'cov-pass', 'cov-pass-warn', 'cov-fail', 'cov-blocked', 'cov-exec'
+	];
+	assert.equal(new Set(classes).size, classes.length);
 });

@@ -5,7 +5,8 @@ import {
 	groupModelsByCategory,
 	filterDrawerSections,
 	selectionCountLabel,
-	chipLabel
+	chipLabel,
+	RUNTIME_PROFILES
 } from '../public/deviceDrawer.js';
 
 describe('deviceDrawer helpers', () => {
@@ -60,7 +61,7 @@ describe('deviceDrawer helpers', () => {
 	});
 
 	test('chipLabel composes device, OS and browser from env or a friendly default', () => {
-		assert.equal(chipLabel(null), 'None yet');
+		assert.equal(chipLabel(null), 'none yet');
 		assert.equal(
 			chipLabel({ device: 'Galaxy S24', os: 'android', osVersion: '15', browser: 'chrome', browserVersion: '141' }),
 			'Galaxy S24 — android 15 — chrome 141'
@@ -69,5 +70,18 @@ describe('deviceDrawer helpers', () => {
 			chipLabel({ device: 'iPhone 16 Pro', osLabel: 'iOS 18.3', browserLabel: 'Safari 18.3' }),
 			'iPhone 16 Pro — iOS 18.3 — Safari 18.3'
 		);
+	});
+
+	test('RUNTIME_PROFILES never claims real hardware or unsupported capabilities', () => {
+		// Every catalog platform has a profile.
+		for (const platform of ['ios', 'ipados', 'macos', 'android', 'windows']) {
+			assert.ok(RUNTIME_PROFILES[platform], `${platform} profile exists`);
+		}
+		// iOS screen share is honestly limited — never "supported".
+		assert.notEqual(RUNTIME_PROFILES.ios.media.screenShare.supported, true);
+		assert.notEqual(RUNTIME_PROFILES.android.media.screenShare.supported, true);
+		// Phone platforms are touch-first; desktops are mouse+keyboard.
+		assert.ok(RUNTIME_PROFILES.ios.input.includes('touch'));
+		assert.ok(!RUNTIME_PROFILES.macos.input.includes('touch'));
 	});
 });

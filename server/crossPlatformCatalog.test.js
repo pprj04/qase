@@ -26,11 +26,18 @@ test('seed contains android manufacturers, models and OS versions', () => {
 test('seed contains windows form factors, OS versions and browser support', () => {
 	const seed = buildCatalogSeed();
 	const windowsCategories = seed.deviceCategories.filter((c) => c.platform === 'windows');
-	assert.deepEqual(windowsCategories.map((c) => c.id), ['windows-laptop', 'windows-desktop', 'windows-tablet']);
+	// 2027.01.0 (#14273): + touchscreen laptop row shares 'laptop', + 2-in-1
+	assert.deepEqual(
+		windowsCategories.map((c) => c.id),
+		['windows-laptop', 'windows-desktop', 'windows-tablet', 'windows-2in1']
+	);
 	const windowsModels = seed.deviceModels.filter((m) => m.category_id.startsWith('windows-'));
-	assert.equal(windowsModels.length, 3);
+	// 2027.02.0 (#14420): + 7 Surface hardware models (Pro 9/10/11, Laptop 5/6/7, Go 3).
+	// 2027.03.0 (#14631): + FHD laptop and QHD desktop resolution profiles.
+	assert.equal(windowsModels.length, 14);
+	assert.ok(windowsModels.some((m) => m.display_name === 'Surface Pro 11'), 'Surface Pro 11 seeded');
 	const windowsOs = seed.osVersions.filter((v) => v.os_family_id === 'windows').map((v) => v.version);
-	assert.deepEqual(windowsOs, ['10', '11']);
+	assert.deepEqual(windowsOs, ['7', '8', '8.1', '10', '11']);
 	// Windows supports Chrome, Edge, Firefox, Opera, Brave, DuckDuckGo — never Safari.
 	for (const browser of ['chrome', 'edge', 'firefox', 'opera', 'brave', 'duckduckgo']) {
 		assert.ok(seed.browserPlatformSupport.some(
@@ -59,7 +66,7 @@ test('compatibility: valid android/windows combos accepted, invalid rejected', a
 	assert.equal((await isCombinationSupported('windows', 'Windows Desktop', '11', 'brave', '140')).ok, true);
 	const safariOnWindows = await isCombinationSupported('windows', 'Windows Laptop', '11', 'safari');
 	assert.equal(safariOnWindows.ok, false);
-	assert.match(safariOnWindows.reason, /not available/);
+	assert.match(safariOnWindows.reason, /not supported on Windows/);
 	// Windows tolerates 'Windows 11' spelled out
 	assert.equal((await isCombinationSupported('windows', 'Windows Laptop', 'Windows 11', 'edge', '141')).ok, true);
 });
@@ -102,30 +109,36 @@ test('environment service creates Android and Windows environments end-to-end (l
 	);
 	await envs.seed();
 
-	// Samsung Galaxy S24 / Android 15 / Chrome
-	const android = await envs.create({
-		platform: 'android', device: 'Galaxy S24', osVersion: '15',
-		browserCode: 'chrome', browserVersion: '141'
-	});
-	assert.equal(android.envId, 'ENV-AND-GALS24-15-CHR-141');
-	assert.equal(android.platform, 'android');
-	assert.equal(android.os, 'Android');
-	assert.equal(android.deviceType, 'mobile');
-	assert.equal(android.orientation, 'portrait');
-	assert.equal(android.browserstackCapabilities.os, 'android');
-	assert.equal(android.browserstackCapabilities.deviceName, 'Samsung Galaxy S24');
+	// Samsung Galaxy S24 / Android 15 / Chrome — with the full cross-platform
+	// seed active, seeded rows already exist; assert the seeded row's shape
+	// directly (create of the same envId now conflicts by design).
+	const seededAndroid = (await envs.list({ platform: 'android', device: 'Galaxy S24', osVersion: '15', browserCode: 'chrome', browserVersion: '141' }))[0];
+	assert.ok(seededAndroid, 'seeded android env exists');
+	assert.equal(seededAndroid.envId, 'ENV-AND-GALS24-15-CHR-141');
+	assert.equal(seededAndroid.platform, 'android');
+	assert.equal(seededAndroid.os, 'Android');
+	assert.equal(seededAndroid.deviceType, 'mobile');
+	assert.equal(seededAndroid.orientation, 'portrait');
+	assert.equal(seededAndroid.runtimeCapabilities.os, 'android');
+	assert.equal(seededAndroid.runtimeCapabilities.deviceName, 'Samsung Galaxy S24');
 
-	// Windows Laptop / Windows 11 / Edge
-	const windows = await envs.create({
-		platform: 'windows', device: 'Windows Laptop', osVersion: '11',
-		browserCode: 'edge', browserVersion: '141'
-	});
-	assert.equal(windows.envId, 'ENV-WIN-11-EDG-141-WINLAPTOP');
-	assert.equal(windows.platform, 'windows');
-	assert.equal(windows.deviceType, 'desktop');
-	assert.equal(windows.orientation, null);
-	assert.equal(windows.browserstackCapabilities.os, 'Windows');
-	assert.equal(windows.browserstackCapabilities.osVersion, '11');
+	// Windows Laptop / Windows 11 / Edge (seeded)
+	const seededWindows = (await envs.list({ platform: 'windows', device: 'Windows Laptop', osVersion: '11', browserCode: 'edge', browserVersion: '141' }))[0];
+	assert.ok(seededWindows, 'seeded windows env exists');
+	assert.equal(seededWindows.envId, 'ENV-WIN-11-EDG-141-WINLAPTOP');
+	assert.equal(seededWindows.platform, 'windows');
+	assert.equal(seededWindows.deviceType, 'desktop');
+	// Phase D1: orientation is a required metadata field — desktops default to landscape.
+	assert.equal(seededWindows.orientation, 'landscape');
+	assert.equal(seededWindows.runtimeCapabilities.os, 'Windows');
+	assert.equal(seededWindows.runtimeCapabilities.osVersion, '11');
+
+	// Creating a duplicate is a conflict, and an unscreened combination still
+	// goes through the create path.
+	await assert.rejects(
+		() => envs.create({ platform: 'android', device: 'Galaxy S24', osVersion: '15', browserCode: 'chrome', browserVersion: '141' }),
+		(error) => error.code === 'QASE_ENVIRONMENT_CONFLICT'
+	);
 
 	// Windows + Safari rejected end-to-end
 	await assert.rejects(
@@ -137,7 +150,9 @@ test('environment service creates Android and Windows environments end-to-end (l
 	);
 
 	// Both environments appear in the picker list alongside Apple ones.
-	const listed = await envs.list({ limit: 1000 });
+	// 2027.01.0 (#14273): the matrix is 36k+ rows — the raised 50000 cap covers it.
+	const listed = await envs.list({ limit: 50000 });
+	assert.ok(listed.length >= 36000, `expected the full expanded catalog, got ${listed.length}`);
 	assert.ok(listed.some((e) => e.envId === 'ENV-AND-GALS24-15-CHR-141'));
 	assert.ok(listed.some((e) => e.envId === 'ENV-WIN-11-EDG-141-WINLAPTOP'));
 	assert.ok(listed.some((e) => e.platform === 'ios'), 'apple environments still seeded');

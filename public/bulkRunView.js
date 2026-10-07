@@ -20,16 +20,26 @@ export function pairsToRun(cases, environmentSelection) {
 	return pairs;
 }
 
-export function createBulkRunView({ api, toast, fail, elements, presets }) {
+import { createDeviceChipList } from './devicePicker.js';
+
+export function createBulkRunView({ api, toast, fail, elements, presets, onLaunch }) {
 	const {
 		dialog, navButton, close,
-		what, casesField, casesSelect, where, envsField, envsSelect,
-		preview, launchBtn, result,
+		what, casesField, caseList, casesCount, casesAll, casesNone,
+		where, envsField, deviceChips, addDeviceBtn,
+		preview, availabilityEl, launchBtn, result,
 		steps
 	} = elements;
 	if (!dialog) return { open() {}, refresh() {} };
 
-	const state = { cases: [], environments: [], lastRuns: new Map(), step: 1 };
+	/** TEST ON DEVICES chip list (DX Phase 4) — replaces the Ctrl/Cmd multi-select. */
+	const state = { cases: [], environments: [], environmentsById: new Map(), lastRuns: new Map(), step: 1, chosenCases: new Set(), boardByEnvId: new Map() };
+	const deviceList = createDeviceChipList({
+		container: deviceChips,
+		addBtn: addDeviceBtn,
+		environmentsById: (id) => state.environmentsById.get(id),
+		onChange: () => renderPreview()
+	});
 
 	function showStep(n) {
 		state.step = n;
@@ -57,12 +67,13 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			]);
 			state.cases = Array.isArray(casePayload?.testCases) ? casePayload.testCases : [];
 			state.environments = Array.isArray(envPayload?.environments) ? envPayload.environments : [];
+			state.environmentsById = new Map(state.environments.map((e) => [e.envId, e]));
 			const sessions = Array.isArray(sessionPayload) ? sessionPayload : [];
 			// Rebuild the case → last-run map from qaWorkflows (imported lazily
 			// through the module-level binding set by app.js wiring).
 			state.lastRuns = lastRunIndex(sessions);
 			renderCases();
-			renderEnvs();
+			deviceList.set(deviceList.ids); // re-resolve chip labels against fresh envs
 			renderPreview();
 		} catch (error) {
 			fail(error);
@@ -76,8 +87,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 	function casesForWhat() {
 		const mode = what?.value ?? 'all';
 		if (mode === 'selected') {
-			const chosen = [...(casesSelect?.selectedOptions ?? [])].map((o) => state.cases.find((c) => c.caseNumber === o.value)).filter(Boolean);
-			return chosen;
+			return state.cases.filter((c) => state.chosenCases.has(c.caseNumber));
 		}
 		return wizardFilter(mode);
 	}
@@ -94,36 +104,56 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			const envId = state.defaultEnvId ?? '';
 			return envId ? cases.flatMap((testCase) => (testCase.environmentIds ?? []).includes(envId) ? [{ testCase, envId }] : []) : [];
 		}
-		const chosen = [...(envsSelect?.selectedOptions ?? [])].map((o) => o.value);
+		const chosen = deviceList.ids;
 		return cases.flatMap((testCase) => chosen.filter((id) => (testCase.environmentIds ?? []).includes(id)).map((envId) => ({ testCase, envId })));
 	}
 
+	/** Phase D6 (#13782): checkbox case list — Select all / Clear all / live
+	 * counter; replaces the Ctrl/Cmd-click multi-select. */
 	function renderCases() {
-		if (!casesSelect) return;
-		const selected = new Set([...casesSelect.selectedOptions].map((o) => o.value));
-		casesSelect.innerHTML = '';
+		if (!caseList) return;
+		caseList.textContent = '';
 		for (const testCase of state.cases) {
-			const option = document.createElement('option');
-			option.value = testCase.caseNumber;
-			option.textContent = `${testCase.caseNumber} — ${testCase.title} (${(testCase.environmentIds ?? []).length} envs)`;
-			option.selected = selected.has(testCase.caseNumber);
-			casesSelect.append(option);
+			const label = document.createElement('label');
+			label.className = 'check bulk-case';
+			const box = document.createElement('input');
+			box.type = 'checkbox';
+			box.value = testCase.caseNumber;
+			box.checked = state.chosenCases.has(testCase.caseNumber);
+			box.addEventListener('change', () => {
+				if (box.checked) state.chosenCases.add(testCase.caseNumber);
+				else state.chosenCases.delete(testCase.caseNumber);
+				renderCasesCount();
+				renderPreview();
+			});
+			const text = document.createElement('span');
+			text.textContent = `${testCase.caseNumber} — ${testCase.title ?? ''} (${(testCase.environmentIds ?? []).length} envs)`;
+			label.append(box, text);
+			caseList.append(label);
+		}
+		renderCasesCount();
+	}
+
+	function renderCasesCount() {
+		if (casesCount) {
+			casesCount.textContent = state.chosenCases.size
+				? `Selected: ${state.chosenCases.size} case${state.chosenCases.size === 1 ? '' : 's'}`
+				: 'No cases selected';
 		}
 	}
 
-	function renderEnvs() {
-		if (!envsSelect) return;
-		const selected = new Set([...envsSelect.selectedOptions].map((o) => o.value));
-		envsSelect.innerHTML = '';
-		for (const env of state.environments) {
-			const option = document.createElement('option');
-			option.value = env.envId;
-			option.textContent = `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
-			option.selected = selected.has(env.envId);
-			envsSelect.append(option);
-		}
-	}
+	if (casesAll) casesAll.addEventListener('click', () => {
+		for (const c of state.cases) state.chosenCases.add(c.caseNumber);
+		renderCases();
+		renderPreview();
+	});
+	if (casesNone) casesNone.addEventListener('click', () => {
+		state.chosenCases.clear();
+		renderCases();
+		renderPreview();
+	});
 
+	// DX Phase 4: renderEnvs() replaced by the TEST ON DEVICES chip list.
 	function renderPreview() {
 		if (!preview) return;
 		const pairs = resolvedPairs();
@@ -134,6 +164,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			preview.textContent = what?.value === 'failed'
 				? 'No failed runs — nothing to re-run.'
 				: 'Nothing to run yet — choose tests and devices.';
+			renderAvailability(pairs); // clears any stale rows from a previous visit
 			launchBtn.disabled = true;
 			launchBtn.textContent = 'Run tests';
 			return;
@@ -148,8 +179,56 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			warn.textContent = summary.warnText;
 			preview.append(warn);
 		}
+		renderAvailability(pairs);
 		launchBtn.disabled = false;
 		launchBtn.textContent = `Run ${summary.total} test${summary.total === 1 ? '' : 's'}`;
+	}
+
+	/** Phase D6 (#13782): per-device availability + execution type in the
+	 * step-3 summary BEFORE launch — the user sees what each device can
+	 * honestly run (from the runtime board) before committing. */
+	function renderAvailability(pairs) {
+		if (!availabilityEl) return;
+		availabilityEl.textContent = '';
+		const byDevice = new Map();
+		for (const { envId } of pairs) {
+			if (!byDevice.has(envId)) byDevice.set(envId, { envId, count: 0 });
+			byDevice.get(envId).count += 1;
+		}
+		const rows = [...byDevice.values()].map(({ envId, count }) => {
+			const env = state.environmentsById.get(envId);
+			const board = state.boardByEnvId.get(envId) ?? null;
+			const status = board?.status ?? 'UNKNOWN';
+			const level = board?.maximumLevel ?? env?.runtimeAttestedLevel ?? null;
+			const label = env ? `${env.device ?? envId} · ${[env.os, env.osVersion].filter(Boolean).join(' ')} · ${env.browser ?? ''} ${env.browserVersion ?? ''}`.trim() : envId;
+			const availText = status === 'AVAILABLE' ? 'Available' : status === 'BUSY' ? 'Busy — will queue' : status === 'UNKNOWN' ? 'Status unknown' : status;
+			return { envId, count, label, availText, status, level };
+		});
+		for (const row of rows) {
+			const el = document.createElement('div');
+			el.className = 'bulk-avail-row';
+			const dot = document.createElement('span');
+			// Dot class from the raw board status, not the display text —
+			// "Status unknown" must map to is-unknown (review WARN fix).
+			dot.className = `bulk-avail-dot is-${String(row.status).toLowerCase()}`;
+			const text = document.createElement('span');
+			text.textContent = `${row.label} — ${row.availText}${row.level ? ` · ${row.level.replace(/_/g, ' ').toLowerCase()}` : ''} · ${row.count} run${row.count === 1 ? '' : 's'}`;
+			el.append(dot, text);
+			availabilityEl.append(el);
+		}
+	}
+
+	/** Injected by app.js: cached runtime-board fetch (availability data). */
+	let boardFetch = null;
+	function setRuntimeBoardFetch(fn) { boardFetch = fn; }
+
+	async function refreshBoard() {
+		if (!boardFetch) return;
+		try {
+			const devices = (await boardFetch(true)) ?? [];
+			state.boardByEnvId = new Map(devices.map((d) => [d.envId, d]));
+		} catch { /* board unavailable — rows show honest 'Status unknown' */ }
+		renderPreview();
 	}
 
 	// Wiring
@@ -165,10 +244,9 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			renderPreview();
 		});
 	}
-	if (casesSelect) casesSelect.addEventListener('change', renderPreview);
-	if (envsSelect) envsSelect.addEventListener('change', renderPreview);
+	// Fresh availability every time the summary step is shown (#13782).
 	for (const next of dialog.querySelectorAll('[data-bulk-next]')) {
-		next.addEventListener('click', () => showStep(Number(next.dataset.bulkNext)));
+		next.addEventListener('click', () => { showStep(Number(next.dataset.bulkNext)); if (Number(next.dataset.bulkNext) === 3) void refreshBoard(); });
 	}
 	for (const back of dialog.querySelectorAll('[data-bulk-back]')) {
 		back.addEventListener('click', () => showStep(Number(back.dataset.bulkBack)));
@@ -178,6 +256,25 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		const pairs = resolvedPairs();
 		if (!pairs.length) {
 			toast('Nothing selected — pick at least one test case and device.', 'bad');
+			return;
+		}
+		// Delegate to the shared launcher when available: it records the batch
+		// for per-environment progress (executions list with honest levels).
+		if (typeof onLaunch === 'function') {
+			launchBtn.disabled = true;
+			launchBtn.textContent = `Launching ${pairs.length} runs…`;
+			try {
+				const { created, failures } = await onLaunch(pairs, 'Bulk run: ');
+				if (result) {
+					result.hidden = false;
+					result.textContent = failures.length
+						? `${created} created, ${failures.length} failed:\n${failures.join('\n')}`
+						: `${created} run${created === 1 ? '' : 's'} created.`;
+				}
+			} finally {
+				launchBtn.disabled = false;
+				renderPreview();
+			}
 			return;
 		}
 		launchBtn.disabled = true;
@@ -214,8 +311,7 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 			where.value = 'pick';
 			if (envsField) envsField.hidden = false;
 		}
-		renderEnvs();
-		for (const option of envsSelect?.options ?? []) option.selected = envs.some((e) => e.envId === option.value);
+		deviceList.set(envs.map((e) => e.envId));
 		if (what) what.value = 'all';
 		if (casesField) casesField.hidden = true;
 		renderPreview();
@@ -228,8 +324,10 @@ export function createBulkRunView({ api, toast, fail, elements, presets }) {
 		open, refresh,
 		runPreset: applyPreset,
 		setWizardFilter, setLastRunIndex,
+		setRuntimeBoardFetch,
 		setDefaultEnvId(envId) { state.defaultEnvId = envId; },
-		get state() { return state; }
+		get state() { return state; },
+		get deviceList() { return deviceList; }
 	};
 }
 

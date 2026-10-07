@@ -2,12 +2,15 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import compression from 'compression';
 import { createInstanceAccess, securityHeaders } from './instanceAccess.js';
 import { isDeviceId, DEFAULT_DEVICE_ID, publicDeviceProfile, DEVICE_PROFILES } from './deviceProfiles.js';
 import { engineRegistryResolved, isEngineId } from './browserEngines.js';
 import { probeTargetReachability } from './targetReachability.js';
 import { assertApplicationServices } from './contracts.js';
 import { mountDemoSite } from './demoSite.js';
+import { mountDefectFixtures, listDefectFixtures, getDefectFixture, fixtureExpectation } from './defectFixtures.js';
+import { verifyFixtureAgainstProfile } from './defectFixtureRunner.js';
 import { createOperationalControls } from './operations.js';
 import { runWithRequestActor } from './requestActor.js';
 import { authThrottleKey, createAuthThrottle } from './authThrottle.js';
@@ -27,8 +30,17 @@ import {
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
+import { computeMatrixCoverage } from './matrixCoverage.js';
 import { createCatalogRoutes } from './catalogApi.js';
 import { createTestCaseRoutes } from './testCaseApi.js';
+import { createBugRoutes } from './bugApi.js';
+import { createMatrixRoutes } from './matrixApi.js';
+import { createMatrixOrchestrator } from './matrixOrchestrator.js';
+import { checkEnvironmentHealth } from './environmentHealth.js';
+import { resolveBrowserSupport } from './browserSupportResolution.js';
+import { buildFeedbackSectionMarkdown } from './report.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
+import { createConfiguredWhatsAppNotifier } from './whatsappNotifier.js';
 import { createSqaState, createSqaTodoPlan, publicSqaCatalog, recordReviewerSqaObservation } from './sqaService.js';
 import { publicQaTestCatalog } from './qaTestCatalog.js';
 import { validateQaSelectedTests, validateSecurityAuthorization } from './appQaSelection.js';
@@ -188,12 +200,28 @@ export function createApplication(options = {}) {
 
 	const app = express();
 	app.disable('x-powered-by');
+	// WhatsApp feedback notifications: built once, disabled/invalid → undefined.
+	// Delivery is fire-and-forget AFTER the record is persisted; feedback
+	// storage and reports never depend on it.
+	const whatsappNotifier = options.whatsappNotifier !== undefined
+		? options.whatsappNotifier
+		: createConfiguredWhatsAppNotifier({
+			environment,
+			logger: logger ?? { info: () => {}, warn: () => {}, error: () => {} }
+		});
+	if (whatsappNotifier !== undefined && typeof whatsappNotifier?.dispatchFeedbackNotification !== 'function') {
+		throw new TypeError('WhatsApp notifier must provide dispatchFeedbackNotification().');
+	}
 	app.locals.qaseDemoEnabled = demoEnabled;
 	app.locals.qaseFrameAncestors = configuredFrameAncestors(environment);
 	if (options.trustProxy ?? String(environment.QASE_TRUST_PROXY ?? '').toLowerCase() === 'true') {
 		app.set('trust proxy', 1);
 	}
 	app.use(operations.middleware);
+	app.use(securityHeaders);
+	// Gzip the big catalog payloads (the full-catalog index is ~13MB raw,
+	// ~300KB gzipped) — keeps the launcher's first load off the SSE limit.
+	app.use(compression());
 	app.use(securityHeaders);
 
 	app.get('/healthz', (_request, response) => {
@@ -221,12 +249,25 @@ export function createApplication(options = {}) {
 	// bytes. It must be mounted before any JSON middleware can transform them.
 	drytisIntegrationApi?.mount(app);
 
+	// QA matrix launcher (#14942): the request body carries every selected
+	// configuration id (a full default selection is ~37k ids ≈ 2MB). The route
+	// itself caps the RUN at 2000 configurations with an actionable 422 —
+	// the global 1mb limit would preempt that with a bare 413 ("Request body
+	// is too large") that gives the user nothing to act on. A generous
+	// route-specific limit lets the cap message win; arbitrary bulk beyond it
+	// is still bounded.
+	app.use('/api/qa-matrix-runs', express.json({ limit: '8mb' }));
 	app.use(express.json({ limit: '1mb' }));
 	app.get('/login', (_request, response) => {
 		response.sendFile(path.join(publicDirectory, 'index.html'));
 	});
 	app.use(express.static(publicDirectory));
+	// #14650 (NI02 Phase 2): known-defect fixture pages — mounted BEFORE
+	// mountDemoSite because its router has a catch-all 404 under /demo that
+	// would otherwise swallow /demo/defects/*. Reproduction depends on the
+	// emulated form factor (viewport/touch), never fabricated.
 	if (demoEnabled) {
+		mountDefectFixtures(app);
 		mountDemoSite(app);
 	}
 
@@ -243,6 +284,74 @@ export function createApplication(options = {}) {
 		response.set('Cache-Control', 'no-store');
 		next();
 	});
+	// ── WhatsApp delivery-status webhook (mounted BEFORE /api auth + CSRF) ──
+	// Meta calls back on message lifecycle (sent/delivered/read/failed).
+	// GET = subscription verification; POST = status payloads. Both must be
+	// reachable without QASE session auth; Meta never holds our session
+	// cookies, so /api gating would reject it.
+	const whatsappWebhookVerifyToken = String(environment.QASE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? '').trim();
+	app.get('/webhooks/whatsapp', (request, response) => {
+		response.set('Cache-Control', 'no-store');
+		const q = request.query;
+		if (q['hub.mode'] !== 'subscribe' || !whatsappWebhookVerifyToken) {
+			// Unconfigured: 403, no detail — never confirm a token guess.
+			response.status(403).send('Forbidden');
+			return;
+		}
+		if (q['hub.verify_token'] !== whatsappWebhookVerifyToken) {
+			response.status(403).send('Forbidden');
+			return;
+		}
+		response.status(200).send(String(q['hub.challenge'] ?? ''));
+	});
+	app.post('/webhooks/whatsapp', async (request, response) => {
+		// Always answer 200 quickly: Meta retries anything else aggressively
+		// and we must never leak internals into the response body.
+		response.status(200).send('OK');
+		if (!whatsappWebhookVerifyToken || typeof whatsappNotifier?.recordDeliveryStatus !== 'function') {
+			return;
+		}
+		try {
+			// Read the raw body manually (capped): malformed JSON from a
+			// webhook source must not 400 — Meta retries hard on non-200.
+			// The global express.json already consumed the stream, but kept
+			// the parsed object for us; fall back to raw reading if absent.
+			let parsed = request.body;
+			if (parsed === undefined || parsed === null) {
+				const chunks = [];
+				let total = 0;
+				for await (const chunk of request) {
+					total += chunk.length;
+					if (total > 262_144) return; // 256 KiB cap; drop oversized
+					chunks.push(chunk);
+				}
+				try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return; }
+			}
+			// Let the microtask queue run so assertions in tests see the
+			// updates before the HTTP response is consumed.
+			const updates = [];
+			// Meta Cloud API webhook shape: entry[].changes[].value.statuses[]
+			const entries = Array.isArray(parsed?.entry) ? parsed.entry : [];
+			for (const entry of entries) {
+				for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+					for (const status of Array.isArray(change?.value?.statuses) ? change.value.statuses : []) {
+						if (typeof status?.id !== 'string') continue;
+						updates.push(whatsappNotifier.recordDeliveryStatus({
+							messageId: status.id,
+							status: status.status,
+							timestamp: Number(status.timestamp) * 1000,
+							errorCode: status.errors?.[0]?.code,
+							errorMessage: status.errors?.[0]?.message
+						}));
+					}
+				}
+			}
+			await Promise.allSettled(updates);
+		} catch (error) {
+			console.error(`[Qase server] whatsapp webhook ingestion error: ${sanitizeErrorDetail(error)}`);
+		}
+	});
+
 	app.use('/api', (request, response, next) => {
 		const publicAuthRoute = request.path === '/auth/register' || request.path === '/auth/login' || request.path === '/pilot-status';
 		if (!authService || !authRequired || publicAuthRoute) {
@@ -428,11 +537,77 @@ export function createApplication(options = {}) {
 		return session;
 	}
 
+	/**
+	 * Attaches the requesting user's feedback for this run (reports embed the
+	 * submitter's own record; nothing from other runs or users leaks in).
+	 */
+	async function attachUserFeedback(session, userId) {
+		if (!services.feedback || !session?.id) return session;
+		try {
+			const record = await services.feedback.forRun(session.id, userId ?? null);
+			if (record) {
+				if (userId && authService?.profile) {
+					try {
+						const submitter = await authService.profile(userId);
+						record.userName = submitter?.displayName || submitter?.email?.split('@')[0];
+					} catch { /* display name is best-effort */ }
+				}
+			}
+			session.userFeedback = record ?? undefined;
+		} catch {
+			session.userFeedback = undefined;
+		}
+		return session;
+	}
+
+	/**
+	 * #14652 (NI04): inject the matrix coverage snapshot for sessions spawned
+	 * by a matrix run, so the downloaded report renders the per-run gap
+	 * section from ACTUAL item data (userFeedback-style injection — the
+	 * session record itself is never mutated in the store).
+	 */
+	async function attachMatrixCoverage(session) {
+		if (!session?.matrixRunId || !services.matrix?.get || !services.matrix?.list) return session;
+		try {
+			const run = await services.matrix.get(session.matrixRunId);
+			if (!run) return session;
+			session.matrixCoverage = computeMatrixCoverage([run]);
+			// #14942 (Phase 4): the report layer renders per-configuration rows
+			// from the recorded items (see buildMatrixSectionMarkdown). Items are
+			// enriched with the same per-environment defect linkage the API uses,
+			// so report rows carry their own evidence counts.
+			const items = Array.isArray(run.items) ? run.items : [];
+			const byEnvironment = new Map();
+			for (const item of items) {
+				if (!item.environmentId) continue;
+				if (!byEnvironment.has(item.environmentId)) {
+					try {
+						byEnvironment.set(item.environmentId, await services.bugs.list({ environmentId: item.environmentId }));
+					} catch {
+						byEnvironment.set(item.environmentId, []);
+					}
+				}
+				const defects = byEnvironment.get(item.environmentId) ?? [];
+				item.defects = defects.map(({ bugNumber, title, severity, status }) => ({ bugNumber, title, severity, status }));
+			}
+			session.matrixItems = items;
+		} catch (error) {
+			console.warn('attachMatrixCoverage failed:', error?.message ?? error);
+			session.matrixCoverage = undefined;
+		}
+		return session;
+	}
+
 	/** Runs a turn detached: HTTP returns immediately and progress arrives by SSE. */
 	function startTurn(session, turnOptions) {
 		let turn;
 		try {
-			turn = Promise.resolve(services.agent.runTurn(session, turnOptions));
+			turn = Promise.resolve(services.agent.runTurn(
+				session,
+				turnOptions,
+				services.runs,
+				services.deviceRuntime
+			));
 		} catch (error) {
 			turn = Promise.reject(error);
 		}
@@ -508,7 +683,19 @@ export function createApplication(options = {}) {
 	// browserVersion, deviceType, executionProvider, active, isRealDevice, search,
 	// limit, offset).
 	// DB-backed catalog routes (Phase 2 of the device matrix): /api/catalog/*.
+	// #14648: mount the read-only /api/catalog/meta route BEFORE the
+	// /api/catalog/:entity wildcard these routes register, otherwise 'meta'
+	// resolves as an unknown catalog entity and the metadata endpoint 400s.
 	if (services.deviceCatalog) {
+		app.get('/api/catalog/meta', async (_request, response) => {
+			try {
+				const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+				response.set('Cache-Control', 'no-store');
+				response.json(await catalogProviderMeta());
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 		const { route: catalogRoutes } = createCatalogRoutes({
 			catalogBackend: services.deviceCatalog,
 			onError: safeErrorResponse
@@ -516,21 +703,373 @@ export function createApplication(options = {}) {
 		catalogRoutes(app);
 	}
 
+	// Launcher configuration catalog (QA matrix Phase 1, #14935): the complete
+	// honestly-annotated device–OS–browser–version set for the Start QA
+	// dialog. Derived from the environment catalog + browser support
+	// resolution + runtime board — no new data source, no invented versions.
+	if (services.environments) {
+		app.get('/api/qa-configurations', async (request, response) => {
+			try {
+				const query = request.query ?? {};
+				const limit = query.limit === undefined ? 200 : Number(query.limit);
+				if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 80000)) {
+					response.status(400).json({ error: 'limit must be an integer from 1 through 80000.' });
+					return;
+				}
+				const offset = query.offset === undefined ? undefined : Number(query.offset);
+				if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 0)) {
+					response.status(400).json({ error: 'offset must be a non-negative integer.' });
+					return;
+				}
+				const { buildQaConfigurations } = await import('./qaConfigurations.js');
+				const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+				const [providersMeta] = await Promise.all([
+					catalogProviderMeta().catch(() => ({ providers: [] })),
+					Promise.resolve()
+				]);
+				const providers = (providersMeta?.providers ?? []).map((provider) => ({
+					slug: provider.slug,
+					name: provider.name ?? provider.slug,
+					kind: provider.kind ?? 'catalog',
+					connected: Boolean(provider.connected),
+					stale: Boolean(provider.stale)
+				}));
+				const board = services.deviceRuntime && typeof services.deviceRuntime.deviceBoard === 'function'
+					? services.deviceRuntime.deviceBoard()
+					: [];
+				const result = await buildQaConfigurations(
+					{
+						environmentsService: services.environments,
+						providers,
+						board,
+						limit,
+						offset,
+						index: query.index === '1' || query.index === 'true'
+					},
+					{
+						platform: query.platform,
+						manufacturer: query.manufacturer,
+						osVersion: query.osVersion,
+						orientation: query.orientation,
+						browserCode: query.browserCode,
+						search: query.search
+					}
+				);
+				response.set('Cache-Control', 'no-store');
+				response.json(result);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+	}
+
+	// Device runtime control plane (Phase 21): availability board, sessions,
+	// queue, honest fallbacks. Never downgrades a level silently.
+	if (services.deviceRuntime) {
+		const runtime = services.deviceRuntime;
+		// Pre-register every environment on the availability board so the UI
+		// can show honest execution type / availability before first use.
+		if (typeof runtime.seedBoard === 'function' && services.environments?.list) {
+			// RT2 (#14704): pass the real browser-support resolver so the board
+			// reflects which browsers the local runtime can genuinely execute.
+			const reseedBoard = () => Promise.resolve(services.environments.list({ limit: 80000 }))
+				.then((rows) => runtime.seedBoard(Array.isArray(rows) ? rows : rows?.environments ?? [], { resolveBrowserSupport }))
+				.catch(() => { /* board fills lazily via sessions */ });
+			void reseedBoard();
+			// RT2 (#14753): the board is LIVE, not boot-only. Re-run the
+			// resolver on an interval so a capability change (binary removed /
+			// installed, registry TTL re-probe) flips statuses within one
+			// refresh interval. seedBoard preserves live sessions (BUSY/
+			// RUNNING wins — never rewritten) so this is safe mid-flight.
+			setInterval(() => { void reseedBoard(); }, 60_000).unref?.();
+		}
+		app.get('/api/device-runtime/devices', (request, response) => {
+			response.json({
+				devices: runtime.deviceBoard(),
+				providers: runtime.providers
+			});
+		});
+		app.post('/api/device-runtime/sessions', async (request, response) => {
+			try {
+				const body = request.body ?? {};
+				let environment = body.environment ?? null;
+				if (!environment && typeof body.environmentId === 'string') {
+					environment = await services.environments.get(body.environmentId).catch(() => null);
+				}
+				const result = await runtime.requestSession({
+					environment,
+					requestedLevel: body.requestedLevel,
+					linkedRunId: body.linkedRunId,
+					linkedTestCaseId: body.linkedTestCaseId,
+					allowQueue: body.allowQueue !== false
+				});
+				const statusByResult = { started: 201, queued: 202, busy: 409, not_available: 503, failed: 500 };
+				response.status(statusByResult[result.status] ?? 200).json(result);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+		app.get('/api/device-runtime/sessions', (request, response) => {
+			response.json({ sessions: services.deviceRuntime.listSessions({ status: request.query?.status }) });
+		});
+		app.get('/api/device-runtime/sessions/:id', (request, response) => {
+			const session = runtime.getSession(request.params.id);
+			if (!session) {
+				response.status(404).json({ error: 'Unknown device session.' });
+				return;
+			}
+			response.json(session);
+		});
+		app.post('/api/device-runtime/sessions/:id/cancel', async (request, response) => {
+			const result = await runtime.cancelSession(request.params.id);
+			if (!result.cancelled) {
+				response.status(409).json(result);
+				return;
+			}
+			response.json(result);
+		});
+	}
+
 	// Test cases with multi-environment assignment (Phase 4): /api/test-cases.
 	if (services.testCases) {
 		const testCaseRoutes = createTestCaseRoutes({
 			testCases: services.testCases,
+			runs: services.runs,
+			autogen: services.testCaseAutogen ?? null,
 			onError: safeErrorResponse
 		});
 		testCaseRoutes(app);
+	}
+
+	// Bug reports with BUG-XXXX ids + auto environment association (Phase 6).
+	if (services.bugs) {
+		createBugRoutes({
+			bugs: services.bugs,
+			onError: safeErrorResponse
+		})(app);
+	}
+
+	// Matrix runs — one shared workflow across device/browser profiles
+	// (#14633 NI02 Phase 1). The orchestrator binds to the session machinery
+	// that lives in this closure (startTurn, resolveEnvironmentForRun).
+	if (services.matrix) {
+		// Engine follows the browser: firefox → Firefox engine, safari → WebKit,
+		// everything else Chromium (the same mapping resolveExecution applies at
+		// launch — this is just the session-level default tag).
+		const engineForMatrixItem = (item) => {
+			if (item.browserCode === 'firefox') return 'firefox';
+			if (item.browserCode === 'safari') return 'webkit';
+			return 'chromium';
+		};
+		const orchestrator = createMatrixOrchestrator(
+			{ runs: services.runs, agent: services.agent, matrix: services.matrix, environments: services.environments },
+			{
+				// RT2 (#14704): pre-execution health gate — real engine/network/
+				// emulation probes; a FAIL blocks the item with the exact reason.
+				checkEnvironmentHealth,
+				// Start a real session for the item — the same path
+				// POST /api/sessions + message uses, so emulation, runtime gates,
+				// findings, and reports behave identically for matrix items.
+				startSession: async (matrixRun, item) => {
+					const environment = await resolveEnvironmentForRun(services, item.environmentId);
+					const session = await services.runs.create(
+						`${matrixRun.title} — ${item.device} · ${item.browser} ${item.browserVersion}`,
+						{
+							device: DEFAULT_DEVICE_ID,
+							engine: engineForMatrixItem(item),
+							ownerUserId: matrixRun.ownerUserId ?? undefined,
+							environmentId: environment.envId,
+							environmentSnapshot: environment,
+							testCaseId: item.testCaseId ?? matrixRun.items?.[0]?.testCaseId ?? undefined,
+							selectedTests: matrixRun.selectedTests ?? undefined,
+							securityAuthorization: matrixRun.securityAuthorization ?? undefined,
+							scopeSelection: matrixRun.scopeSelection ?? undefined,
+							matrixRunId: matrixRun.id
+						}
+					);
+					return session;
+				},
+				sendTask: async (session, matrixRun) => {
+					// #15043 (B1): QA-start runs carry their own kickoff text
+					// (target URL + coverage message); test-case runs send the
+					// raw target as before.
+					const text = matrixRun.kickoffText ?? matrixRun.targetUrl;
+					await services.runs.addMessage(session, { role: 'user', text });
+					session.targetUrl = matrixRun.targetUrl;
+					await services.agent.ensureRuntime(session);
+					startTurn(session, { task: text });
+				},
+				// #14650 (NI02 Phase 2): per-profile evidence — list the
+				// artifacts the session ACTUALLY produced (screenshots/video
+				// from the existing Phase-22 store). Empty list = none
+				// captured; never fabricated.
+				collectArtifacts: async (session) => {
+					const list = services.artifacts?.list?.(session.id) ?? [];
+					return list.map((meta) => ({
+						artifactId: meta.artifactId,
+						type: meta.type,
+						contentType: meta.contentType,
+						bytes: meta.bytes,
+						capturedAt: meta.capturedAt,
+						label: meta.label ?? null
+					}));
+				},
+				// #14650 (NI02 Phase 2): known-defect fixtures verified per
+				// profile — the ENGINE probes the fixture page under the
+				// item's emulated context; verdicts record reproduced
+				// TRUE/FALSE/NOT_VERIFIED with evidence, never a guess.
+				// Note: listDefectFixtures() entries are summary-only (no
+				// verify/affects functions) — resolve the FULL fixture by id
+				// at verification time, never execute the stripped form.
+				resolveEnvironment: (item) => resolveEnvironmentForRun(services, item.environmentId),
+				verifyFixtures: listDefectFixtures(),
+				runFixtureVerification: ({ fixture, environment }) => {
+					const fullFixture = getDefectFixture(fixture?.id);
+					if (!fullFixture) {
+						return Promise.resolve({
+							reproduced: 'NOT_VERIFIED',
+							evidence: null,
+							error: `Unknown fixture "${fixture?.id}".`,
+							expected: 'NOT_VERIFIED'
+						});
+					}
+					const baseUrl = process.env.QASE_PUBLIC_URL?.trim()
+						|| `http://127.0.0.1:${Number(process.env.PORT ?? 5173)}`;
+					// The full fixture (with its affects predicate) is resolved
+					// HERE — the caller only ever sees the serializable summary,
+					// so the expectation must be computed on the full object.
+					return verifyFixtureAgainstProfile({ fixture: fullFixture, environment, baseUrl })
+						.then((verdict) => ({
+							...verdict,
+							expected: fixtureExpectation(fullFixture, environment)
+						}));
+				},
+			emit: (matrixRunId, payload) => {
+				// #14649: matrix events ride the existing SSE run bus keyed by
+				// matrix-run id. services.events.publish() re-targets a SESSION
+				// aggregate (it stamps updatedAt on its first argument), so we
+				// go through the raw run-store bus instead. Fan-out failures
+				// must never stall execution — swallow + log.
+				try {
+					services.runs?.bus?.emit?.(matrixRunId, {
+						type: payload.type,
+						sessionId: matrixRunId,
+						ts: Date.now(),
+						...payload
+					});
+				} catch (error) {
+					console.error('[matrix] event emit failed', matrixRunId, error);
+				}
+			}
+		}
+		);
+		services.matrixOrchestrator = orchestrator;
+		// #14633 (NI02 Phase 1): clean up any matrix run a previous container
+		// died mid-flight — dangling RUNNING items become ERROR "interrupted".
+		orchestrator.resumeRecovery();
+		// #15043 (B1): QA-start path — Start QA submits its selected
+		// device–browser configurations here; one matrix run, one item per
+		// configuration, honest statuses for everything not executable.
+		app.post('/api/qa-matrix-runs', async (request, response) => {
+			try {
+				const body = request.body ?? {};
+				const targetUrl = String(body.targetUrl ?? '').trim();
+				if (!/^https?:\/\//i.test(targetUrl)) {
+					response.status(400).json({ error: 'targetUrl must be an http(s) URL.' });
+					return;
+				}
+				const envIds = Array.isArray(body.configurationEnvIds)
+					? body.configurationEnvIds.map(String).filter(Boolean)
+					: [];
+				if (envIds.length === 0) {
+					response.status(400).json({ error: 'At least one configuration is required.' });
+					return;
+				}
+				// Robustness cap (review #14937): a full-default launcher
+				// selection is ~37k rows — one item each is a months-long queue
+				// and a very heavy state file. The UI narrows selection before
+				// Start; a request larger than this is a client bug, refuse it
+				// honestly rather than self-inflicting the load.
+				const MAX_MATRIX_CONFIGURATIONS = 2000;
+				if (envIds.length > MAX_MATRIX_CONFIGURATIONS) {
+					response.status(422).json({
+						error: `Too many configurations selected (${envIds.length}). The maximum per run is ${MAX_MATRIX_CONFIGURATIONS} — narrow the selection (platform, manufacturer, browser, or OS filters) and start again.`
+					});
+					return;
+				}
+				// Validate the QA context exactly as POST /api/sessions does —
+				// the same tests/scope/security rules apply to every item.
+				let selectedTests;
+				let securityAuthorization;
+				try {
+					selectedTests = validateQaSelectedTests(body.selectedTests);
+					securityAuthorization = validateSecurityAuthorization(body.securityAuthorization, selectedTests);
+				} catch (error) {
+					response.status(422).json({ error: error instanceof Error ? error.message : String(error) });
+					return;
+				}
+				let scopeSelection = null;
+				if (body.scopeSelection !== undefined && body.scopeSelection !== null) {
+					const { normalizeQaScopeSelection } = await import('../public/qaScopeCatalog.js');
+					try {
+						scopeSelection = normalizeQaScopeSelection(body.scopeSelection);
+					} catch (error) {
+						response.status(422).json({ error: error instanceof Error ? error.message : String(error) });
+						return;
+					}
+				}
+				// Unknown envIds are NOT rejected here — the matrix service
+				// records them as honest BLOCKED items ("no longer in the
+				// catalog") so every selected configuration gets a result.
+				const record = await services.matrix.create({
+					title: String(body.title ?? `QA run — ${targetUrl}`).slice(0, 120),
+					targetUrl,
+					testCaseId: body.testCaseId,
+					configurationEnvIds: envIds,
+					kickoffText: body.kickoffText,
+					selectedTests,
+					securityAuthorization,
+					scopeSelection
+				}, { ownerUserId: request.auth?.userId ?? null });
+				const started = orchestrator.start(record.id);
+				if (!started.ok) {
+					response.status(409).json({ error: started.error });
+					return;
+				}
+				response.status(201).json(await services.matrix.get(record.id));
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
+		createMatrixRoutes({
+			matrix: services.matrix,
+			orchestrator,
+			bugs: services.bugs,
+			onError: safeErrorResponse
+		})(app);
+	}
+
+	// Coverage dashboard aggregation (Phase 7): cases × environments × runs.
+	if (services.coverage) {
+		app.get('/api/coverage', async (request, response) => {
+			try {
+				const payload = await services.coverage.snapshot();
+				// Read-your-write matters for the dashboard (a run just finished
+				// must appear immediately), so never cache the snapshot.
+				response.set('Cache-Control', 'no-store');
+				response.json(payload);
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 	}
 
 	app.get('/api/environments', async (request, response) => {
 		try {
 			const query = request.query;
 			const limit = query.limit === undefined ? undefined : Number(query.limit);
-			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)) {
-				response.status(400).json({ error: 'limit must be an integer from 1 through 1000.' });
+			if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 80000)) {
+				response.status(400).json({ error: 'limit must be an integer from 1 through 80000.' });
 				return;
 			}
 			const offset = query.offset === undefined ? undefined : Number(query.offset);
@@ -561,9 +1100,42 @@ export function createApplication(options = {}) {
 
 	// Browser availability per platform, including why unavailable browsers
 	// (Brave, DuckDuckGo, Firefox-on-iOS) are excluded from the matrix.
+	// #14632: short cache — verdicts recompute per call server-side and must
+	// not survive a provider-credential change on the client for long.
 	app.get('/api/environments/availability', (_request, response) => {
-		response.set('Cache-Control', 'private, max-age=300');
+		response.set('Cache-Control', 'private, max-age=30');
 		response.json(services.environments.availability());
+	});
+
+	// #14648: read-only catalog metadata — version, registered
+	// providers with connected/rowCount, generatedAt (incl. live browser
+	// support report). No secrets, ever. Registered earlier (before the
+	// /api/catalog/:entity wildcard) when the device catalog is attached.
+	app.get('/api/catalog/meta', async (_request, response) => {
+		try {
+			const { catalogProviderMeta } = await import('./catalogProviderRegistry.js');
+			response.set('Cache-Control', 'no-store');
+			response.json(await catalogProviderMeta());
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
+	});
+
+	// #14275 (Phase 2): admin-gated manual catalog refresh — re-fetches
+	// provider overlays (provider rows only; builtin rows are untouchable).
+	app.post('/api/catalog/refresh', async (request, response) => {
+		try {
+			const identity = request.auth;
+			const isAdmin = !identity?.role || ['owner', 'admin'].includes(identity.role);
+			if (!isAdmin) {
+				response.status(403).json({ error: 'Catalog refresh requires an admin session.' });
+				return;
+			}
+			const result = await services.environments.refreshCatalog();
+			response.json(result);
+		} catch (error) {
+			safeErrorResponse(request, response, error);
+		}
 	});
 
 	// Bulk environment operations (Phase 3 device matrix UI). Mounted BEFORE
@@ -640,7 +1212,12 @@ export function createApplication(options = {}) {
 				return;
 			}
 			if (patch.executionProvider !== undefined && !['local', 'browserstack'].includes(patch.executionProvider)) {
-				response.status(400).json({ error: 'executionProvider must be "local" or "browserstack".' });
+				response.status(400).json({ error: 'executionProvider must be "environment" or "local".' });
+				return;
+			}
+			if (patch.executionLevelRequested !== undefined && patch.executionLevelRequested !== null
+				&& !['REAL_DEVICE', 'VIRTUAL_DEVICE', 'SIMULATED'].includes(patch.executionLevelRequested)) {
+				response.status(400).json({ error: 'executionLevelRequested must be REAL_DEVICE, VIRTUAL_DEVICE or SIMULATED.' });
 				return;
 			}
 			if (patch.orientation !== undefined && patch.orientation !== null && !['portrait', 'landscape'].includes(patch.orientation)) {
@@ -658,6 +1235,11 @@ export function createApplication(options = {}) {
 			}
 			response.json(updated);
 		} catch (error) {
+			// Phase 20 scenario validation errors are user input errors, not 500s.
+			if (error?.code === 'QASE_ENVIRONMENT_INVALID') {
+				response.status(422).json({ error: error.message });
+				return;
+			}
 			safeErrorResponse(request, response, error);
 		}
 	});
@@ -675,6 +1257,13 @@ export function createApplication(options = {}) {
 		} catch (error) {
 			safeErrorResponse(request, response, error);
 		}
+	});
+
+	app.get('/api/engines', async (_request, response) => {
+		response.json({
+			default: 'chromium',
+			engines: await engineRegistryResolved()
+		});
 	});
 
 	app.get('/api/sessions', async (request, response) => {
@@ -714,6 +1303,37 @@ export function createApplication(options = {}) {
 	});
 
 	/* ── User feedback on test runs ───────────────────────────── */
+
+	/** Public base URL used in WhatsApp deep links back to the run report. */
+	const whatsappQaseUrl = (() => {
+		const raw = String(environment.QASE_PUBLIC_URL ?? '').trim();
+		return raw === '' ? undefined : raw;
+	})();
+	/** How long POST /api/feedback may WAIT for the WhatsApp dispatch result. */
+	const whatsappResultTimeoutMs = (() => {
+		const parsed = Number(environment.QASE_WHATSAPP_RESULT_TIMEOUT_MS);
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10_000;
+	})();
+
+	/** Response projection of a notification record — sanitized, no replay data. */
+	function whatsappProjection(notification) {
+		const status = notification?.status;
+		const message = status === 'FAILED'
+			? 'Feedback saved, but the WhatsApp notification failed.'
+			: status === 'PENDING' || status === 'RETRYING'
+				? 'Feedback saved, but the WhatsApp notification result is pending.'
+				: undefined;
+		return {
+			status,
+			...(message ? { message } : {}),
+			recipients: (notification?.recipients ?? []).map(recipient => ({
+				to: recipient.to,
+				state: recipient.state,
+				...(recipient.whatsappMessageId ? { whatsappMessageId: recipient.whatsappMessageId } : {}),
+				...(recipient.deliveryStatus ? { deliveryStatus: recipient.deliveryStatus } : {})
+			}))
+		};
+	}
 
 	const feedbackService = () => {
 		if (!services.feedback) {
@@ -772,7 +1392,40 @@ export function createApplication(options = {}) {
 				comments: request.body?.comments,
 				improvement: request.body?.improvement
 			});
-			response.status(201).json(record);
+			// Notify AFTER the record is durably stored. The dispatch is
+			// bounded by an await-with-timeout so the response truthfully
+			// reports {feedbackSaved, whatsappSent} from real provider
+			// results — but a stuck/slow provider can never hang feedback:
+			// the dispatch itself keeps running detached, only the await
+			// gives up. A dispatch failure is logged by the notifier and
+			// never fails this request.
+			let whatsapp;
+			if (whatsappNotifier && record?.id) {
+				const dispatched = Promise.resolve(whatsappNotifier.dispatchFeedbackNotification(record, {
+					mode: session.mode,
+					title: session.title,
+					targetUrl: session.targetUrl,
+					qaseUrl: whatsappQaseUrl,
+					submittedByName: request.auth?.userName ?? request.auth?.name,
+					submittedAt: record.submittedAt ?? Date.now()
+				}));
+				// Await with a strict timeout (default 10s): PENDING result on
+				// expiry, feedback still saved, dispatch continues detached.
+				whatsapp = await new Promise(resolve => {
+					const timer = setTimeout(() => resolve(undefined), whatsappResultTimeoutMs);
+					if (typeof timer?.unref === 'function') timer.unref();
+					dispatched.then(
+						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); },
+						() => { clearTimeout(timer); resolve(whatsappNotifier.getNotification?.(record.id)); }
+					);
+				}).then(notification => notification ?? { status: 'PENDING' });
+			}
+			response.status(201).json({
+				...record,
+				feedbackSaved: true,
+				whatsappSent: Boolean(whatsapp?.status === 'SENT'),
+				...(whatsapp ? { whatsapp: whatsappProjection(whatsapp) } : {})
+			});
 		} catch (error) {
 			if (error?.code === 'duplicate_feedback') {
 				response.status(409).json({ error: 'Feedback already exists for this test run.', existingId: error.existingId });
@@ -802,6 +1455,47 @@ export function createApplication(options = {}) {
 		if (!feedback) return;
 		if (!requireFeedbackAdmin(request, response)) return;
 		response.json(await feedback.stats());
+	});
+
+	// WhatsApp notification status — admin visibility into delivery attempts.
+	// Contract note: 'SENT' means the provider ACCEPTED the message request
+	// for that recipient; provider-side delivery status is not available
+	// without webhook integration.
+	app.get('/api/feedback/notifications', (request, response) => {
+		if (!requireFeedbackAdmin(request, response)) return;
+		if (!whatsappNotifier?.listNotifications) {
+			response.status(200).json({ enabled: false, notifications: [], note: 'WhatsApp notifications are not enabled in this environment.' });
+			return;
+		}
+		const q = request.query;
+		const notifications = whatsappNotifier.listNotifications({
+			status: typeof q.status === 'string' && q.status.trim() !== '' ? q.status.trim().toUpperCase() : undefined,
+			feedbackId: typeof q.feedbackId === 'string' && q.feedbackId.trim() !== '' ? q.feedbackId.trim() : undefined
+		});
+		response.json({ enabled: true, notifications, note: "status 'SENT' reflects provider acceptance, not device delivery." });
+	});
+
+	// Retry a FAILED notification — replays only recipients not yet accepted.
+	app.post('/api/feedback/notifications/:id/retry', async (request, response) => {
+		if (!requireFeedbackAdmin(request, response)) return;
+		if (!whatsappNotifier?.retryNotification) {
+			response.status(501).json({ error: 'WhatsApp notifications are not enabled in this environment.' });
+			return;
+		}
+		const result = await whatsappNotifier.retryNotification(String(request.params.id ?? ''));
+		if (!result.ok) {
+			const statusByReason = { not_found: 404, already_sent: 409, in_progress: 409, not_replayable: 409 };
+			const status = statusByReason[result.reason] ?? 400;
+			const messageByReason = {
+				not_found: 'No such notification.',
+				already_sent: 'Notification already sent to all recipients.',
+				in_progress: 'Notification dispatch is already in progress.',
+				not_replayable: 'Notification cannot be replayed (missing stored feedback).'
+			};
+			response.status(status).json({ error: messageByReason[result.reason] ?? 'Retry not allowed.', reason: result.reason });
+			return;
+		}
+		response.json({ ...result.notification, note: "status 'SENT' reflects provider acceptance, not device delivery." });
 	});
 
 	app.get('/api/feedback', async (request, response) => {
@@ -938,23 +1632,33 @@ export function createApplication(options = {}) {
 				response.status(400).json({ error: error instanceof Error ? error.message : 'Invalid test selection.' });
 				return;
 			}
-			const cohort = cohortFor(request.auth?.role).cohort;
 			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
 			const testCase = await resolveTestCaseForRun(services, request.body?.testCaseId, environment?.envId);
-			const session = await services.runs.create(engine === 'chromium' ? undefined : `QA — ${engine}`, {
-				device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort,
-				environmentId: environment?.envId,
-				environmentSnapshot: environment,
-				testCaseId: testCase?.caseNumber,
-				testCaseSnapshot: testCase,
-				selectedTests,
-				securityAuthorization
-			});
+			const cohort = cohortFor(request.auth?.role).cohort;
+			const session = await services.runs.create(
+				engine === 'chromium' ? undefined : `QA — ${engine}`,
+				{
+					device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+					cohort, selectedTests, securityAuthorization,
+					environmentId: environment?.envId,
+					environmentSnapshot: environment,
+					testCaseId: testCase?.caseNumber,
+					testCaseSnapshot: testCase
+				}
+			);
 			track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
 			response.status(201).json(session);
 		} catch (error) {
 			safeErrorResponse(request, response, error);
 		}
+		const cohort = cohortFor(request.auth?.role).cohort;
+		const scopeSelection = normalizeQaScopeSelection(request.body?.scopeSelection);
+		const session = await services.runs.create(
+			engine === 'chromium' ? undefined : `QA — ${engine}`,
+			{ device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, selectedTests, securityAuthorization, ...(scopeSelection ? { scopeSelection } : {}) }
+		);
+		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
+		response.status(201).json(session);
 	});
 
 	app.post('/api/sqa/sessions', async (request, response) => {
@@ -965,7 +1669,11 @@ export function createApplication(options = {}) {
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
 			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
-			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort, environmentId: environment?.envId, environmentSnapshot: environment });
+			session = await services.runs.create(`SQA — ${sqa.scope.target.name}`, {
+				device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+				cohort: cohortFor(request.auth?.role).cohort,
+				environmentId: environment?.envId, environmentSnapshot: environment
+			});
 			session.mode = 'sqa';
 			session.sqa = sqa;
 			session.todos = createSqaTodoPlan(sqa);
@@ -1002,7 +1710,11 @@ export function createApplication(options = {}) {
 			const deviceLandscape = request.body?.deviceLandscape === true;
 			const engine = isEngineId(request.body?.engine) ? request.body.engine : 'chromium';
 			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
-			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, { device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort: cohortFor(request.auth?.role).cohort, environmentId: environment?.envId, environmentSnapshot: environment });
+			session = await services.runs.create(`Founder — ${founder.scope.target.name}`, {
+				device, deviceLandscape, engine, ownerUserId: request.auth?.userId,
+				cohort: cohortFor(request.auth?.role).cohort,
+				environmentId: environment?.envId, environmentSnapshot: environment
+			});
 			session.mode = 'founder';
 			session.founder = founder;
 			session.todos = createFounderReviewTodos();
@@ -1128,6 +1840,7 @@ export function createApplication(options = {}) {
 		if (deleted) {
 			const cleanup = await Promise.allSettled([
 				Promise.resolve().then(() => services.secrets.clear(session.id)),
+				Promise.resolve().then(() => services.artifacts?.removeAll(session.id)),
 				Promise.resolve().then(() => services.agent.purgeArtifacts?.(session.id))
 			]);
 			const failed = cleanup
@@ -1238,7 +1951,7 @@ export function createApplication(options = {}) {
 		}
 
 		try {
-			services.agent.ensureRuntime(session);
+			await services.agent.ensureRuntime(session);
 		} catch (error) {
 			const message = sanitizeErrorDetail(error);
 			await services.runs.addMessage(session, { role: 'system', text: message, kind: 'error' });
@@ -1327,6 +2040,27 @@ export function createApplication(options = {}) {
 		response.json({ ok: true });
 	});
 
+	// Phase 22: evidence artifacts with environment + execution-level metadata.
+	app.get('/api/sessions/:id/artifacts', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		response.json({ artifacts: services.artifacts?.list(session.id) ?? [] });
+	});
+
+	app.get('/api/sessions/:id/artifacts/:artifactId', async (request, response) => {
+		const session = await requireSession(request, response);
+		if (!session) return;
+		const found = services.artifacts?.get(session.id, request.params.artifactId);
+		if (!found) {
+			response.status(404).json({ error: 'Unknown artifact.' });
+			return;
+		}
+		response.set('Content-Type', found.meta.contentType);
+		response.set('X-Qase-Execution-Level', found.meta.executionLevel ?? 'UNKNOWN');
+		response.set('X-Qase-Execution-Provider', found.meta.executionProvider ?? 'unknown');
+		response.send(found.bytes);
+	});
+
 	app.get('/api/sessions/:id/report.md', async (request, response) => {
 		const session = await requireSession(request, response);
 		if (!session) return;
@@ -1338,11 +2072,18 @@ export function createApplication(options = {}) {
 			response.status(409).json({ error: 'The Founder review is pending and has not been finalized yet.' });
 			return;
 		}
-		const markdown = session.mode === 'sqa'
-			? buildSqaReportMarkdown(session.sqa.assessment)
-			: session.mode === 'founder'
-				? buildFounderReportMarkdown(session)
-				: services.reports.buildMarkdown(session);
+		let markdown;
+		if (session.mode === 'sqa') {
+			markdown = buildSqaReportMarkdown(session.sqa.assessment);
+			// Append the submitter's own feedback (same section the QA report
+			// embeds); attachUserFeedback scopes it to this run + user.
+			const feedbackSection = buildFeedbackSectionMarkdown(await attachUserFeedback(session, request.auth?.userId));
+			if (feedbackSection) markdown += `\n${feedbackSection}`;
+		} else if (session.mode === 'founder') {
+			markdown = buildFounderReportMarkdown(session);
+		} else {
+			markdown = services.reports.buildMarkdown(await attachMatrixCoverage(await attachUserFeedback(session, request.auth?.userId)));
+		}
 		response.type('text/markdown').send(markdown);
 	});
 
@@ -1370,7 +2111,7 @@ export function createApplication(options = {}) {
 			return;
 		}
 		try {
-			const pdf = await renderReportPdf(session);
+			const pdf = await renderReportPdf(await attachUserFeedback(session, request.auth?.userId));
 			response.setHeader('Content-Type', 'application/pdf');
 			response.setHeader('Content-Disposition', 'attachment; filename="qase-' + (session.mode || 'qa') + '-report.pdf"');
 			response.send(pdf);
@@ -1652,6 +2393,12 @@ export function createApplication(options = {}) {
 	app.use((error, request, response, next) => {
 		if (response.headersSent) {
 			next(error);
+			return;
+		}
+		// The WhatsApp webhook always answers 200 (Meta retries non-200
+		// aggressively); a JSON parse error there must not surface as 400.
+		if (request.path === '/webhooks/whatsapp') {
+			response.status(200).send('OK');
 			return;
 		}
 		if (error?.type === 'entity.too.large') {

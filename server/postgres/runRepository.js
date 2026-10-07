@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { MAX_FOUNDER_STATE_BYTES, normalizeFounderState } from '../founderService.js';
 import { normalizePendingSqaState } from '../sqaService.js';
 import { currentRequestActor } from '../requestActor.js';
+import { normalizeQaScopeSelection } from '../../public/qaScopeCatalog.js';
 
 /**
  * PostgreSQL persistence for the current Qase run aggregate.
@@ -259,6 +260,12 @@ function runCohort(session) {
 	return session?.cohort === 'pilot' ? 'pilot' : null;
 }
 
+/** Persisted QA coverage selection (whitelisted array) or NULL for legacy runs. */
+function scopeSelectionJson(session) {
+	const normalized = normalizeQaScopeSelection(session?.scopeSelection);
+	return Array.isArray(normalized) ? JSON.stringify(normalized) : null;
+}
+
 /** Server-authoritative timing columns, hydrated into the run aggregate. */
 const TIMING_COLUMNS = `started_at, completed_at, queued_at, setup_started_at, setup_ended_at,
 	report_started_at, report_ended_at, cancelled_at, paused_at, paused_seconds, failure_reason`;
@@ -501,13 +508,13 @@ function hydrateRun(row, children) {
 		createdAt: epoch(row.created_at),
 		updatedAt: epoch(row.updated_at),
 		status: row.status,
-		statusDetail: row.status_detail ?? undefined,
 		mode: row.run_mode === 'sqa' || row.run_mode === 'founder' ? row.run_mode : 'qa',
 		targetUrl: row.target_url ?? undefined,
 		engine: runEngine({ engine: row.engine }),
 		device: runDevice({ device: row.device }),
 		deviceLandscape: row.device_landscape === true,
 		cohort: row.cohort === 'pilot' ? 'pilot' : undefined,
+		scopeSelection: normalizeQaScopeSelection(row.scope_selection) ?? undefined,
 		messages: (children.messages.get(row.id) ?? []).map(hydrateMessage),
 		activities: (children.activities.get(row.id) ?? []).map(hydrateActivity),
 		findings: (children.findings.get(row.id) ?? []).map(hydrateFinding),
@@ -521,7 +528,11 @@ function hydrateRun(row, children) {
 		tokenUsage: row.token_usage ?? undefined,
 		environmentId: row.environment_id ?? undefined,
 		environmentSnapshot: row.environment_snapshot ?? undefined,
+		executionLevel: row.execution_level_actual ?? undefined,
+		executionProviderActual: row.execution_provider_actual ?? undefined,
+		runtimeFacts: row.runtime_facts ?? undefined,
 		testCaseId: row.test_case_id ?? undefined,
+		matrixRunId: row.matrix_run_id ?? undefined,
 		secretNames: names(row.secret_names),
 		selectedTests: row.selected_tests?.length ? [...row.selected_tests] : undefined,
 		securityAuthorization: row.security_authorization ?? undefined,
@@ -702,7 +713,7 @@ async function appendEvent(client, tenant, runId, sequence, event, createdAt) {
 	);
 }
 
-async function insertAggregate(client, tenant, session, event, nowValue) {
+	async function insertAggregate(client, tenant, session, event, nowValue) {
 	const updatedAt = asDate(session.updatedAt, nowValue);
 	const createdAt = asDate(session.createdAt, updatedAt);
 	const nextEventSequence = event.type ? 2 : 1;
@@ -712,9 +723,11 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			status, status_detail, run_mode, sqa_profiles, sqa_assessment, founder_assessment,
 			drytis_integration, pending_question, context_usage, token_usage, secret_names,
 			message_count, finding_count, lock_version, next_event_sequence,
-			engine, device, device_landscape, cohort,
-			created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization, environment_id, environment_snapshot, test_case_id
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+			engine, device, device_landscape, cohort, scope_selection,
+			created_at, updated_at, queued_at, paused_at, selected_tests, security_authorization,
+			environment_id, environment_snapshot, test_case_id,
+			execution_level_actual, execution_provider_actual, runtime_facts, matrix_run_id
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
 			RETURNING lock_version, updated_at`,
 		[
 			session.id, tenant.organizationId, tenant.projectId, session.ownerUserId ?? event.actorUserId ?? tenant.actorUserId,
@@ -728,6 +741,7 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			nextEventSequence,
 			runEngine(session), runDevice(session), session.deviceLandscape === true,
 			runCohort(session),
+			scopeSelectionJson(session),
 			createdAt, updatedAt,
 			asNullableDate(session.queuedAt),
 			asNullableDate(session.pausedAt),
@@ -735,7 +749,11 @@ async function insertAggregate(client, tenant, session, event, nowValue) {
 			session.securityAuthorization ? json(session.securityAuthorization) : null,
 			session.environmentId ?? null,
 			json(session.environmentSnapshot),
-			session.testCaseId ?? null
+			session.testCaseId ?? null,
+			session.executionLevel ?? session.executionLevelActual ?? null,
+			session.executionProviderActual ?? null,
+			json(session.runtimeFacts ?? null),
+			session.matrixRunId ?? null
 		]
 	);
 	await replaceChildren(client, tenant, session, updatedAt);
@@ -849,8 +867,8 @@ export function createPostgresRunRepository({
 			const scope = [tenant.organizationId, tenant.projectId];
 			const runs = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, created_at, updated_at, lock_version,
-					environment_id, environment_snapshot, ${TIMING_COLUMNS}
+					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, scope_selection, created_at, updated_at, lock_version,
+					environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, matrix_run_id, ${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND deleted_at IS NULL
 				 ORDER BY updated_at DESC, id ASC`,
@@ -867,8 +885,8 @@ export function createPostgresRunRepository({
 		return transaction(async client => {
 			const result = await client.query(
 				`SELECT id, created_by_user_id, title, target_url, status, run_mode, sqa_profiles, sqa_assessment, founder_assessment, drytis_integration,
-					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, created_at, updated_at, lock_version,
-					environment_id, environment_snapshot, ${TIMING_COLUMNS}
+					pending_question, context_usage, token_usage, secret_names, engine, device, device_landscape, cohort, selected_tests, security_authorization, scope_selection, created_at, updated_at, lock_version,
+					environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, matrix_run_id, ${TIMING_COLUMNS}
 				 FROM qa_runs
 				 WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND deleted_at IS NULL
@@ -884,8 +902,8 @@ export function createPostgresRunRepository({
 		const limit = boundedInteger(options.limit, 100, 1, 100, 'limit');
 		return transaction(async client => {
 			const result = await client.query(
-				`SELECT id, title, status, run_mode, target_url, engine, device, device_landscape, cohort, created_at, updated_at,
-					message_count, finding_count, token_usage, environment_id, environment_snapshot, ${TIMING_COLUMNS}, ${timingSelect()},
+				`SELECT id, title, status, run_mode, target_url, engine, device, device_landscape, cohort, scope_selection, created_at, updated_at,
+					message_count, finding_count, token_usage, environment_id, environment_snapshot, test_case_id, execution_level_actual, execution_provider_actual, runtime_facts, matrix_run_id, ${TIMING_COLUMNS}, ${timingSelect()},
 					(SELECT COUNT(*)::int FROM qa_plan_items
 						WHERE organization_id = $1 AND project_id = $2 AND run_id = id) AS todo_total,
 					(SELECT COUNT(*)::int FROM qa_plan_items
@@ -918,7 +936,10 @@ export function createPostgresRunRepository({
 				// Plan progress for the sidebar card — derived from the child table.
 				todoTotal: Number(row.todo_total ?? 0),
 				todoCompleted: Number(row.todo_completed ?? 0),
-				tokenUsage: row.token_usage ?? undefined
+				tokenUsage: row.token_usage ?? undefined,
+				executionLevel: row.execution_level_actual ?? undefined,
+				executionProviderActual: row.execution_provider_actual ?? undefined,
+				runtimeFacts: row.runtime_facts ?? undefined
 			}));
 		});
 	}
@@ -1036,7 +1057,7 @@ export function createPostgresRunRepository({
 					failure_reason = CASE WHEN $30 IS NOT NULL THEN $30 ELSE failure_reason END,
 					engine = $33, device = $34, device_landscape = $35,
 					cohort = $36,
-					status_detail = $38
+					scope_selection = $38
 					WHERE organization_id = $1 AND project_id = $2 AND id = $3
 					AND lock_version = $37 AND deleted_at IS NULL
 					AND ($21::uuid IS NULL OR created_by_user_id = $21)
@@ -1071,7 +1092,7 @@ export function createPostgresRunRepository({
 					runEngine(session), runDevice(session), session.deviceLandscape === true, // $33-$35
 					runCohort(session),                                       // $36
 					expectedVersion,                                         // $37
-					session.statusDetail ?? null                              // $38
+					scopeSelectionJson(session)                              // $38
 				]
 			);
 			if (!result.rows?.length) {
@@ -1495,3 +1516,4 @@ export function createPostgresRunRepository({
 		}
 	};
 }
+

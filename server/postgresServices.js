@@ -6,6 +6,7 @@ import { DEFAULT_DEVICE_ID, isDeviceId } from './deviceProfiles.js';
 import { isEngineId } from './browserEngines.js';
 import { aggregateSessionFindings, applyStatusTiming, setFindingStatus, timingForEvent, markReportPhase, markExecutionStarted } from './store.js';
 import { createPostgresFeedbackRepository } from './postgres/feedbackRepository.js';
+import { normalizeQaScopeSelection } from '../public/qaScopeCatalog.js';
 
 function clone(value) {
 	return structuredClone(value);
@@ -45,6 +46,13 @@ function createSession(title, now, options = {}) {
 		securityAuthorization: options.securityAuthorization
 			? structuredClone(options.securityAuthorization)
 			: undefined,
+		/** Compatibility environment this run executes in (frozen snapshot). */
+		environmentId: options.environmentId,
+		environmentSnapshot: options.environmentSnapshot ? structuredClone(options.environmentSnapshot) : undefined,
+		/** Test case this run executes (frozen snapshot). */
+		testCaseId: options.testCaseId,
+		/** #14633 (NI02 Phase 1): matrix run that spawned this session, if any. */
+		matrixRunId: options.matrixRunId,
 		ownerUserId: options.ownerUserId ?? currentRequestActor()?.actorUserId ?? options.tenantContext?.actorUserId
 	};
 	if (options.drytisIntegration !== undefined) {
@@ -115,6 +123,7 @@ function eventActor(type, payload, tenantContext) {
 export function createPostgresApplicationServices({
 	repository,
 	tenantContext,
+	deviceRuntime,
 	eventTransport,
 	auth,
 	hydrateAll = true,
@@ -229,6 +238,10 @@ export function createPostgresApplicationServices({
 	}
 
 	const runStore = {
+		// #14649: raw event-bus emitter for non-session event sources (matrix
+		// orchestrator progress keyed by matrix-run id); SSE subscribes via
+		// subscribe() which prefers the transport when configured.
+		bus,
 		async load() {
 			await eventTransport?.load();
 			await repository.bootstrapTenant();
@@ -322,14 +335,21 @@ export function createPostgresApplicationServices({
 				.map(summary);
 		},
 		/**
-		 * Unscoped cross-user accessors for the operator feedback-review
-		 * endpoint (app.js /api/analytics/feedback) — same rationale as
-		 * localServices: the request-scoped get/list above filter by the
-		 * current actor, which would hide pilot users' sessions from the
-		 * operator. The caller re-applies its own role gate before use.
+		 * Unscoped accessors, two consumers:
+		 * - Operator feedback-review endpoint (app.js /api/analytics/feedback):
+		 *   request-scoped get/list filter by the current actor, which would
+		 *   hide pilot users' sessions from the operator. The caller re-applies
+		 *   its own role gate before use.
+		 * - Coverage aggregation (Phase 7): the matrix needs every
+		 *   case×environment pair's latest run. PostgreSQL is authoritative:
+		 *   repository.loadAll() hydrates full records for the tenant.
 		 */
 		async listAll(options) {
 			if (typeof repository.listAll === 'function') return repository.listAll(options);
+			if (typeof repository.loadAll === 'function') {
+				const records = await repository.loadAll();
+				return records.map(record => record.session).filter(Boolean);
+			}
 			return [...sessions.values()]
 				.sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
 				.slice(0, Math.min(100, Math.max(1, Number(options?.limit) || 100)))
@@ -446,6 +466,24 @@ export function createPostgresApplicationServices({
 	markExecutionStarted(session) {
 		markExecutionStarted(session);
 	},
+	/** Persist execution-level facts on a run by mutating session + committing. */
+	async persistExecutionFacts(runId, { executionLevel, executionProviderActual, runtimeFacts } = {}) {
+		const session = sessions.get(runId);
+		if (!session) return null;
+		if (executionLevel !== undefined) session.executionLevel = executionLevel;
+		if (executionProviderActual !== undefined) session.executionProviderActual = executionProviderActual;
+		if (runtimeFacts !== undefined) session.runtimeFacts = runtimeFacts;
+		try {
+			await commit(session, 'execution_facts', {
+				executionLevel: session.executionLevel,
+				executionProviderActual: session.executionProviderActual,
+				runtimeFacts: session.runtimeFacts
+			});
+		} catch (error) {
+			console.warn('[qase] failed to persist execution facts:', error?.message ?? error);
+		}
+		return session;
+	},
 		publish,
 		subscribe(sessionId, listener) {
 			if (eventTransport) return eventTransport.subscribe(sessionId, listener);
@@ -492,6 +530,7 @@ export function createPostgresApplicationServices({
 
 	const services = createRuntimeApplicationServices(runStore, {
 		auth,
+		deviceRuntime,
 		feedbackStore: feedbackRepository ?? createPostgresFeedbackRepository({ pool: repository.pool ?? repository, tenantContext })
 	});
 	// In PostgreSQL mode the Redis transport is the global event fan-out.

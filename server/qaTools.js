@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './secrets.js';
 import { isEngineId } from './browserEngines.js';
+import { verifyRuntimeIdentity } from './runtimeIdentity.js';
 
 /**
  * The two tools the SDK's registry does not ship, because they are specific to
@@ -32,7 +33,87 @@ function boundedList(value, maximum = 5_000) {
 		: [];
 }
 
-export function createQaTools(session, runStore) {
+/**
+ * Phase D3 · Result integrity gate.
+ *
+ * Before a PASS/FAIL verdict is published, verify the run actually executed
+ * against a verified device runtime. The checks, per the device-execution
+ * spec: (1) test executed, (2) runtime connected, (3) device identity
+ * verified, (4) browser verified, (5) OS verified, (6) required capabilities
+ * available, (7) evidence belongs to this runtime session. Any failure forces
+ * BLOCKED — never a silent PASS.
+ *
+ * REAL_DEVICE demands a full attestation. VIRTUAL_DEVICE / SIMULATED only
+ * demand evidence of actual browser execution (the honest labeling still
+ * applies — they are never reported as REAL DEVICE).
+ */
+export function runtimeIntegrity(session) {
+	const facts = session?.runtimeFacts ?? null;
+	const level = facts?.executionLevel ?? session?.executionLevel ?? null;
+	const executed = Boolean(session?.activities ?? []).length === false
+		? false
+		: (session.activities ?? []).some(activity => activity.status === 'done' && String(activity.toolName ?? '').startsWith('browser_'));
+	// R2 #14491: compare what the runtime OBSERVED (UA/brand/version/engine/
+	// platform) against the requested selection. Any mismatch forces BLOCKED.
+	const environment = session?.environmentSnapshot ?? null;
+	const identity = environment || facts
+		? verifyRuntimeIdentity({ runtimeFacts: facts, environment })
+		: null;
+	const checks = {
+		executed,
+		runtimeConnected: Boolean(facts || session?.deviceSessionId),
+		deviceIdentityVerified: true,
+		browserVerified: facts ? Boolean(facts.userAgent || facts.browser) : false,
+		osVerified: facts ? Boolean(facts.os || facts.platform || session?.environmentSnapshot?.os) : false,
+		capabilitiesAvailable: true,
+		evidenceBelongsToSession: true,
+		identityMatchesSelection: identity ? identity.ok : false
+	};
+	if (level === 'REAL_DEVICE') {
+		const att = facts?.attestation ?? session?.attestation ?? null;
+		checks.deviceIdentityVerified = Boolean(att?.device_id && att.capabilities_verified);
+		checks.browserVerified = Boolean(att?.browser);
+		checks.osVerified = Boolean(att?.os && att.os_version);
+		checks.evidenceBelongsToSession = Boolean(att?.runtime_session_id);
+	}
+	const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
+	const identityReason = identity && !identity.ok
+		? `Runtime identity mismatch with the selected environment: ${identity.mismatches.join('; ')}.`
+		: null;
+	return {
+		level,
+		ok: failed.length === 0,
+		failedChecks: failed,
+		reason: identityReason ?? (failed.length ? 'Device runtime could not be verified.' : null),
+		identity: identity?.identity ?? null,
+		checks
+	};
+}
+
+/** Attestation carried on the published report, mirroring the spec shape. */
+export function attestationFor(session) {
+	const facts = session?.runtimeFacts ?? null;
+	const level = facts?.executionLevel ?? session?.executionLevel ?? null;
+	const snap = session?.environmentSnapshot ?? {};
+	return {
+		execution_type: level,
+		device_id: snap.deviceModelSlug ?? snap.envId ?? null,
+		manufacturer: snap.platform === 'ios' || snap.platform === 'macos' ? 'Apple'
+			: snap.platform === 'android' ? 'Android' : snap.platform === 'windows' ? 'Microsoft' : null,
+		model: snap.device ?? null,
+		os: snap.os ?? null,
+		os_version: snap.osVersion ?? null,
+		browser: snap.browser ?? null,
+		browser_version: snap.browserVersion ?? null,
+		runtime_session_id: session?.deviceSessionId ?? facts?.runtimeSessionId ?? null,
+		connected_at: facts?.capturedAt ?? null,
+		capabilities_verified: level === 'REAL_DEVICE'
+			? Boolean(facts?.attestation?.capabilities_verified)
+			: null
+	};
+}
+
+export function createQaTools(session, runStore, { deviceRuntime } = {}) {
 	const reportFinding = {
 		name: 'report_finding',
 		description: 'Files one confirmed defect found while testing the site. Call once per distinct defect, as soon as you have confirmed it. Never include credentials or other secrets in any field.',
@@ -200,7 +281,27 @@ const finishReport = {
 			if (activeActivities.length > 0) {
 				return { success: false, error: 'QA checks are still running. Wait for their tool results before publishing.', active_activity_ids: activeActivities.map(item => item.id) };
 			}
-			if (input.verdict === 'blocked') {
+			// Phase D3 · result integrity: any failed runtime verification
+			// downgrades the verdict to BLOCKED — a run whose device runtime
+			// cannot be verified is never reported PASS. The downgrade happens
+			// AFTER the structural gates (plan, browser evidence, coverage)
+			// so a broken run still cannot publish any report at all.
+			const structuralOk = (session.todos ?? []).some(item => hasText(item?.text) && item.status === 'completed')
+				&& (session.activities ?? []).some(activity => activity.status === 'done' && String(activity.toolName ?? '').startsWith('browser_'))
+				&& (input.covered?.length ?? 0) > 0;
+			const integrity = runtimeIntegrity(session);
+			let verdict = input.verdict;
+			if (verdict !== 'blocked' && structuralOk && !integrity.ok) {
+				verdict = 'blocked';
+				input = {
+					...input,
+					not_covered: [
+						...(input.not_covered ?? []),
+						`Blocked: ${integrity.reason} (failed checks: ${integrity.failedChecks.join(', ')})`
+					]
+				};
+			}
+			if (verdict === 'blocked') {
 				if (!input.not_covered?.length) {
 					return { success: false, error: 'A blocked report must explain the unavailable checks and concrete blocking prerequisite in not_covered.' };
 				}
@@ -215,7 +316,6 @@ const finishReport = {
 					return { success: false, error: 'A completed QA report must list the areas actually exercised in covered.' };
 				}
 			}
-			let verdict = input.verdict;
 			if (verdict === 'pass' && session.findings.length > 0) verdict = 'pass_with_issues';
 			if (verdict === 'pass_with_issues'
 				&& session.findings.some(finding => ['critical', 'high'].includes(finding.severity))) verdict = 'fail';
@@ -225,6 +325,9 @@ const finishReport = {
 				summary: boundedText(input.summary, 20_000),
 				covered: boundedList(input.covered),
 				notCovered: boundedList(input.not_covered),
+				// R2 #14491: runtime-authoritative identity (observed browser
+				// brand/version/engine/platform) travels on every report.
+				runtimeIdentity: integrity.identity ?? undefined,
 				recommendations: boundedList(input.recommendations),
 				targetUrl: session.targetUrl,
 				findings: session.findings.length,
@@ -235,6 +338,7 @@ const finishReport = {
 						...(hasText(entry.reason) ? { reason: boundedText(entry.reason, 2_000) } : {})
 					}))
 					: undefined,
+				attestation: attestationFor(session),
 				bySeverity: SEVERITIES.reduce((counts, severity) => {
 					counts[severity] = session.findings.filter(finding => finding.severity === severity).length;
 					return counts;
