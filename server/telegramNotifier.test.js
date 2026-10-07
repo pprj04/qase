@@ -86,10 +86,22 @@ test('parseTelegramConfig returns undefined when disabled or unset', () => {
 	assert.equal(parseTelegramConfig({}), undefined);
 	assert.equal(parseTelegramConfig({ QASE_TELEGRAM_ENABLED: 'false' }), undefined);
 	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: 'false' }), undefined);
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: 'Disabled' }), undefined);
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: 'off' }), undefined);
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: '0' }), undefined);
+});
+
+test('parseTelegramConfig accepts the standard truthy spellings, case-insensitive', () => {
+	for (const value of ['true', 'TRUE', 'Enabled', 'enabled', 'ON', 'on', '1']) {
+		const config = parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: value });
+		assert.ok(config, `expected config for QASE_TELEGRAM_ENABLED=${value}`);
+		assert.deepEqual(config.chatIds, ['-1001110001111', '-1002220002222', '-1003330003333', '123456789']);
+	}
 });
 
 test('parseTelegramConfig throws on a non-boolean enable flag', () => {
 	assert.throws(() => parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: 'yes' }), /true or false/);
+	assert.throws(() => parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_ENABLED: 'maybe' }), /true or false/);
 });
 
 test('parseTelegramConfig requires bot token and chat ids when enabled', () => {
