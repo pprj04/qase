@@ -85,6 +85,11 @@ export function coverageStateOf(item) {
 		return COVERAGE_STATES.EXECUTION_FAILED;
 	}
 	if (status === 'PENDING') return COVERAGE_STATES.NOT_RUN;
+	// #14937 Phase 3 statuses: queued work is not-yet-executed coverage
+	// (distinct from running); cancelled items stay visible as gaps with their
+	// recorded reason so the report never silently drops them.
+	if (status === 'QUEUED') return COVERAGE_STATES.NOT_RUN;
+	if (status === 'CANCELLED') return COVERAGE_STATES.NOT_SELECTED;
 	return COVERAGE_STATES.EXECUTION_FAILED;
 }
 
@@ -191,6 +196,13 @@ export function computeMatrixCoverage(matrixRuns = []) {
 		profilesExecuted: (counts.PASSED ?? 0) + (counts.FAILED ?? 0),
 		passed: counts.PASSED ?? 0,
 		failed: counts.FAILED ?? 0,
+		// #14942 Phase 4: the full honest vocabulary is surfaced — every
+		// status reports its own count so totals add up to the planned set.
+		skipped: counts.SKIPPED ?? 0,
+		cancelled: counts.CANCELLED ?? 0,
+		queued: counts.QUEUED ?? 0,
+		running: counts.RUNNING ?? 0,
+		pending: counts.PENDING ?? 0,
 		notRun: counts.NOT_RUN ?? 0,
 		unavailable: counts.UNAVAILABLE ?? 0,
 		notSupported: counts.NOT_SUPPORTED ?? 0,
@@ -216,7 +228,7 @@ export function computeMatrixCoverage(matrixRuns = []) {
 	const runs = matrixRuns.map((run) => {
 		const runCounts = countBy(run.items ?? [], (item) => item.status);
 		const gaps = (run.items ?? [])
-			.filter((item) => ['NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'BLOCKED', 'ERROR', 'PENDING'].includes(item.status))
+			.filter((item) => ['NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'BLOCKED', 'ERROR', 'PENDING', 'QUEUED', 'CANCELLED'].includes(item.status))
 			.map((item) => ({
 				profileId: item.profileId,
 				device: item.device,

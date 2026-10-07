@@ -41,7 +41,15 @@ export const EXECUTION_TYPES = {
  *  - SIMULATED everything else            → browser_emulation
  */
 export function executionTypeFor(env) {
-	const level = env.executionLevel ?? env.executionType;
+	// environmentService.withExecutionMetadata stamps a DEFAULT
+	// executionType='VIRTUAL_DEVICE' on every catalog row when no explicit
+	// level was requested; honoring that default here collapsed the whole
+	// catalog to "Virtual machine" and the honest emulator/simulator/
+	// browser-emulation labels never rendered (#15123). Only an EXPLICIT
+	// request (executionLevelRequested / executionLevel) carries the strict
+	// level; the blanket executionType stamp is ignored and the type is
+	// derived from platform + browser support instead.
+	const level = env.executionLevelRequested ?? env.executionLevel ?? null;
 	if (level === 'REAL_DEVICE') return EXECUTION_TYPES.PHYSICAL_DEVICE;
 	if (level === 'VIRTUAL_DEVICE') return EXECUTION_TYPES.VIRTUAL_MACHINE;
 	const mobile = env.deviceType === 'mobile' || env.deviceType === 'tablet'
@@ -166,6 +174,11 @@ export function toConfiguration(env, { boardByEnvId = new Map(), providers = [] 
 			engine: support.engine ?? null,
 			branded: Boolean(support.branded),
 			detectedVersion: support.detectedVersion ?? null,
+			// #15162: failed launch probe → launchVerified:false; the probe
+			// error travels as probeNote (run-results territory), never as
+			// the availability reason.
+			launchVerified: support.launchVerified !== false,
+			probeNote: support.probeNote ?? null,
 			provider: support.provider ?? 'local-playwright'
 		},
 		availability: availability.availability,
@@ -271,8 +284,10 @@ export function assembleQaConfigurations(options = {}) {
 
 	const totals = {
 		configurations: total,
-		available: configurations.filter((configuration) => configuration.availability === 'AVAILABLE').length,
-		unavailable: configurations.filter((configuration) => configuration.availability !== 'AVAILABLE').length
+		// Totals are HONEST: over the full filtered set, not the paginated
+		// slice, so the launcher summary matches the catalog even at limit=200.
+		available: filtered.filter((configuration) => configuration.availability === 'AVAILABLE').length,
+		unavailable: filtered.filter((configuration) => configuration.availability !== 'AVAILABLE').length
 	};
 	return {
 		configurations,
@@ -286,9 +301,41 @@ export function assembleQaConfigurations(options = {}) {
 /**
  * Convenience for route wiring: required services are injected so tests can
  * pass fakes. Degrades honestly — a failing environment store surfaces as an
- * error, never an empty catalog pretending everything is fine.
+ * error, never an empty catalog pretending everything is fine. Filters and
+ * pagination are applied to the assembled configurations (facet filtering
+ * happens post-join, so provider/board rows participate).
  */
-export async function buildQaConfigurations({ environmentsService, providers = [], board = [] }, filters = {}) {
-	const rows = await environmentsService.list({ ...filters, active: 'true', limit: 80000 });
-	return assembleQaConfigurations({ environments: rows, providers, board });
+export async function buildQaConfigurations(
+	{ environmentsService, providers = [], board = [], limit = 200, offset = 0, index = false } = {},
+	filters = {}
+) {
+	const rows = await environmentsService.list({ active: 'true', limit: 80000 });
+	const assembled = assembleQaConfigurations({ environments: rows, providers, board, filters, limit, offset });
+	if (!index) return assembled;
+	// Compact full-catalog index: the launcher uses it for selection math,
+	// family counts and facets while the tree renders windowed slices only.
+	const full = assembleQaConfigurations({ environments: rows, providers, board, filters, limit: 80000, offset: 0 });
+	const indexRows = full.configurations.map((configuration) => ({
+		envId: configuration.envId,
+		platform: configuration.platform,
+		manufacturer: configuration.manufacturer,
+		device: configuration.device,
+		deviceType: configuration.deviceType,
+		orientation: configuration.orientation,
+		os: configuration.os,
+		osVersion: configuration.osVersion,
+		browser: configuration.browser,
+		browserCode: configuration.browserCode,
+		browserVersion: configuration.browserVersion,
+		executionType: configuration.executionType,
+		availability: configuration.availability,
+		availabilityReason: configuration.availabilityReason
+	}));
+	const pageSize = Math.max(1, Math.min(Number(limit) || 1, 80000));
+	return {
+		...assembled,
+		configurations: indexRows.slice(offset, offset + pageSize),
+		index: indexRows,
+		totals: full.totals
+	};
 }

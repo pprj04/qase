@@ -329,3 +329,33 @@ test('R1: withExecutionMetadata never defaults a catalog row to AVAILABLE', () =
 	assert.equal(env.availability, 'UNAVAILABLE', 'no runtime board entry → REAL DEVICE · UNAVAILABLE, never AVAILABLE');
 	assert.equal(env.runtimeSessionId, null);
 });
+
+/* iPadOS manufacturer regression (#15013 review finding): Apple platforms must
+ * never fall through to the Microsoft branch. */
+test('enriched ipadOS rows carry manufacturer Apple', async () => {
+	const dir = tempDir();
+	// NOTE: the backend option is `stateDir` — `dataDirectory` is ignored and
+	// silently falls back to the real workspace .qase state (#15123).
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	const service = createEnvironmentService(backend);
+	await service.seed(); // fresh temp dir → must seed the builtin catalog first
+	const rows = await service.list({ platform: 'ipados', limit: 50 });
+	assert.ok(rows.length > 0);
+	for (const row of rows) {
+		assert.equal(row.deviceManufacturer, 'Apple', `row ${row.envId} should be Apple`);
+	}
+});
+
+/* #15123: android manufacturer comes from the catalog row (Samsung, Google…),
+ * never from the first word of the device name ("Galaxy Galaxy S24"). */
+test('enriched android rows carry catalog manufacturer, not device-name prefix', async () => {
+	const dir = tempDir();
+	const backend = createLocalEnvironmentBackend({ stateDir: dir });
+	const service = createEnvironmentService(backend);
+	await service.seed();
+	const rows = await service.list({ platform: 'android', limit: 80000 });
+	assert.ok(rows.length > 0);
+	const seen = new Set(rows.map((row) => row.deviceManufacturer));
+	assert.ok(seen.has('Samsung'), `expected Samsung, saw ${[...seen].join(', ')}`);
+	assert.ok(seen.has('Google'), `expected Google, saw ${[...seen].join(', ')}`);
+});

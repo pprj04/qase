@@ -788,6 +788,8 @@
           <button type="button" class="btn btn-ghost btn-sm" id="qa-matrix-retry">Retry</button>
         </div>
       </fieldset>
+      <fieldset class="qa-scope-fieldset">
+        <legend>Coverage selection</legend>
         <div class="coverage-heading">Supported Coverage</div>
         <div class="scope-controls">
           <button type="button" class="btn btn-ghost btn-sm" id="qa-scope-select-all">Select All</button>
@@ -830,73 +832,6 @@
           <label class="check"><input id="qa-compliance" type="checkbox"><span>Compliance (SQA assessment)</span></label>
         </div>
         <small>Both are optional. When checked, the corresponding review flow opens after this QA run starts — prefilled with the same target, and you confirm before anything runs.</small>
-      </fieldset>
-      <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
-        <legend>Tests</legend>
-        <div class="qa-tests-toolbar">
-          <span class="qa-tests-count" id="qa-tests-count" aria-live="polite"></span>
-          <span class="qa-tests-bulk">
-            <button class="btn btn-ghost btn-sm" type="button" id="qa-select-all">Select all</button>
-            <button class="btn btn-ghost btn-sm" type="button" id="qa-deselect-all">Deselect all</button>
-          </span>
-        </div>
-        <div class="sqa-catalog-state" id="qa-tests-state" role="status" aria-live="polite">Loading standard tests…</div>
-        <section class="qa-category" id="qa-category-standard">
-          <h4 class="qa-category-heading">
-            <label class="check qa-category-toggle">
-              <input type="checkbox" id="qa-category-standard-toggle" checked>
-              <span>Standard tests</span>
-            </label>
-          </h4>
-          <div class="sqa-option-grid" id="qa-test-options"></div>
-        </section>
-        <section class="qa-category" id="qa-category-security" hidden>
-          <h4 class="qa-category-heading">
-            <label class="check qa-category-toggle">
-              <input type="checkbox" id="qa-category-security-toggle" checked>
-              <span>Security testing</span>
-            </label>
-          </h4>
-          <div class="sqa-option-grid" id="qa-security-options"></div>
-          <div class="qa-security-auth" id="qa-security-auth" hidden>
-            <label class="check qa-security-auth-confirm">
-              <input type="checkbox" id="qa-security-authorized">
-              <span>I confirm the target is an explicitly authorized, isolated test environment for security testing.</span>
-            </label>
-            <label class="field qa-security-auth-scope">
-              <span>Scope notes (optional)</span>
-              <textarea id="qa-security-notes" rows="2" placeholder="e.g. isolated staging copy, no production data"></textarea>
-            </label>
-          </div>
-        </section>
-      </fieldset>
-      <fieldset class="qa-engine-fieldset">
-        <legend>Browser engines</legend>
-        <div class="scope-options" id="qa-engine-options">
-          <label class="check"><input class="qa-engine" type="checkbox" value="chromium" checked><span>Chromium (Chrome)</span></label>
-          <label class="check"><input class="qa-engine" type="checkbox" value="firefox" checked><span>Firefox</span></label>
-          <label class="check"><input class="qa-engine" type="checkbox" value="webkit" checked><span>WebKit (Safari engine)</span></label>
-        </div>
-        <small>Each checked engine starts its own run of this site. Chromium runs the full sweep; other engines focus on core flows for cross-browser comparison.</small>
-      </fieldset>
-      <fieldset class="qa-scope-fieldset">
-        <legend>What to test</legend>
-        <div class="scope-controls">
-          <label class="check scope-all">
-            <input id="qa-scope-all" type="checkbox" checked>
-            <span><strong>Select all</strong> — test everything below</span>
-          </label>
-        </div>
-        <div class="scope-options" id="qa-scope-options">
-          <label class="check"><input class="qa-scope" type="checkbox" value="desktop-layout" checked><span>Desktop layout &amp; responsive behaviour</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="mobile-layout" checked><span>Mobile layout (if device profile allows)</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="forms" checked><span>Forms &amp; input validation</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked><span>Console &amp; network errors</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked><span>Navigation &amp; links</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked><span>Accessibility basics</span></label>
-          <label class="check"><input class="qa-scope" type="checkbox" value="security" checked><span>Security checks (headers, XSS reflection, SQL error signs)</span></label>
-        </div>
-        <small>Everything is pre-checked so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
       </fieldset>
       <fieldset class="sqa-fieldset qa-tests-fieldset" id="qa-tests-fieldset" disabled>
         <legend>Tests</legend>
@@ -1288,6 +1223,23 @@
         </li>
       </ol>
     </div>
+  </div>
+</dialog>
+
+<!-- QA matrix run results board (#14942 Phase 4): per-configuration results,
+     evidence and totals for the launcher's matrix runs. -->
+<dialog class="modal" id="qa-matrix-run-dialog" aria-labelledby="qa-matrix-run-title">
+  <div class="modal-inner qmr-modal-inner">
+    <header class="modal-head">
+      <div>
+        <h2 id="qa-matrix-run-title">QA run</h2>
+        <p class="qmr-subtitle" id="qa-matrix-run-sub"></p>
+      </div>
+      <span>
+        <button type="button" class="btn btn-ghost btn-sm" id="qa-matrix-run-close">Close</button>
+      </span>
+    </header>
+    <div class="modal-body" id="qa-matrix-run-body"></div>
   </div>
 </dialog>
 

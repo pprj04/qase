@@ -5,9 +5,30 @@ import { createFounderView } from './founderView.js';
 import { followUpSuggestions, buildFollowUpMessage } from './followUp.js';
 import { createBugsView } from './bugsView.js';
 import { QA_SCOPE_OPTIONS, buildQaKickoffMessage } from './qaKickoff.js';
+import {
+	createDeselectionStore,
+	computeSelection,
+	sanitizeSelection,
+	filterConfigurations,
+	groupDeviceTree,
+	facetValues,
+	familyRows,
+	isSelectable,
+	executionTypeLabel,
+	PLATFORM_GROUPS,
+	buildSummary,
+	isValidTargetUrl,
+	configurationsForDevice,
+	compatibleBrowserFamilies,
+	defaultSelectionForDevice,
+	fetchQaConfigurations,
+	fetchConfigurationIndex,
+	fetchConfigurationWindow
+} from './qaConfigMatrix.js';
 import { createDeviceMatrixView } from './deviceMatrixView.js';
 import { createTestCaseView } from './testCaseView.js';
 import { createBulkRunView } from './bulkRunView.js';
+import { createQaMatrixResultsView } from './qaMatrixResultsView.js';
 import { createBugView } from './bugView.js';
 import { createDeviceDrawer, chipLabel, RUNTIME_PROFILES } from './deviceDrawer.js';
 import { createActiveTestEnvironmentStore } from './activeTestEnvironment.js';
@@ -828,6 +849,38 @@ function pendingEnvironmentId() {
 function renderTestOn(containerId) {
 	const box = document.getElementById(containerId);
 	if (!box) return;
+	// #15164: the Start-QA TEST ON block mirrors the in-modal matrix
+	// selection (device scope or full-matrix counts) — never a separate
+	// picker state. Other containers (SQA/Founder) keep picker semantics.
+	if (containerId === 'qa-test-on') {
+		box.textContent = '';
+		if (qaMatrixState.deviceScope) {
+			const label = qaMatrixScopeLabel();
+			if (label) {
+				delete box.dataset.empty;
+				const name = document.createElement('strong');
+				name.className = 'test-on-device';
+				name.textContent = qaMatrixState.deviceScope.device;
+				const line = document.createElement('span');
+				line.className = 'test-on-line';
+				line.textContent = label;
+				box.append(name, line);
+				return;
+			}
+		}
+		const summaryCount = qaMatrixState.selectedEnvIds.length;
+		if (summaryCount > 0) {
+			delete box.dataset.empty;
+			const name = document.createElement('strong');
+			name.className = 'test-on-device';
+			name.textContent = 'Full device matrix';
+			const line = document.createElement('span');
+			line.className = 'test-on-line';
+			line.textContent = `${summaryCount.toLocaleString()} configurations · all compatible browsers`;
+			box.append(name, line);
+			return;
+		}
+	}
 	const sel = activeTestEnvStore?.get?.();
 	box.textContent = '';
 	if (!sel) {
@@ -4785,9 +4838,25 @@ const qaUi = {
 	scopeOptions: $('qa-scope-options'),
 	founderMode: $('qa-founder-mode'),
 	compliance: $('qa-compliance'),
-	engineOptions: $('qa-engine-options'),
 	environmentSelect: $('qa-environment-select'),
-	error: $('qa-form-error')
+	error: $('qa-form-error'),
+	// QA matrix (Phase 2 #15013): device & browser configuration matrix.
+	matrix: {
+		fieldset: $('qa-matrix-fieldset'),
+		state: $('qa-matrix-state'),
+		root: $('qa-matrix-root'),
+		error: $('qa-matrix-error'),
+		errorText: $('qa-matrix-error-text'),
+		retry: $('qa-matrix-retry'),
+		search: $('qa-matrix-search'),
+		filterPlatform: $('qa-matrix-filter-platform'),
+		filterManufacturer: $('qa-matrix-filter-manufacturer'),
+		filterOs: $('qa-matrix-filter-os'),
+		filterOrientation: $('qa-matrix-filter-orientation'),
+		browsers: $('qa-matrix-browsers'),
+		devices: $('qa-matrix-devices'),
+		summary: $('qa-matrix-summary')
+	}
 };
 
 function selectedQaScopeValues() {
@@ -4795,39 +4864,469 @@ function selectedQaScopeValues() {
 	const values = [...qaUi.scopeOptions.querySelectorAll('.qa-scope')]
 		.filter(box => box.checked)
 		.map(box => box.value);
-	// Browser compatibility is a UI alias for the engine checkboxes: reflect it
-	// in the persisted selection so reports show it as selected coverage.
-	if (selectedQaEngines().length > 0 && !values.includes('browser-compatibility')) {
+	// Browser compatibility is a UI alias for the configuration matrix: reflect
+	// it in the persisted selection when at least one configuration is chosen.
+	if (qaMatrixState.selectedEnvIds.length > 0 && !values.includes('browser-compatibility')) {
 		values.push('browser-compatibility');
 	}
 	return values;
 }
 
-/** Engines checked in the launcher; chromium first when chosen. */
-function selectedQaEngines() {
-	const boxes = qaUi.engineOptions ? [...qaUi.engineOptions.querySelectorAll('.qa-engine')] : [];
-	const chosen = boxes.filter(box => box.checked && !box.disabled).map(box => box.value);
-	if (!chosen.includes('chromium') && boxes.some(box => box.value === 'chromium' && box.disabled)) return chosen;
-	return chosen.includes('chromium') ? ['chromium', ...chosen.filter(id => id !== 'chromium')] : chosen;
+/* ── QA configuration matrix (Phase 2 #15013) ────────────────────── */
+
+const qaMatrixState = {
+	fetchState: 'loading', // loading | ready | empty | error
+	index: [], // compact full-catalog rows: selection/facets/summary math
+	windowRows: [], // heavy rows currently rendered in the device tree
+	windowTotal: 0,
+	windowLoading: false,
+	browserFamilies: [],
+	providers: [],
+	selectedEnvIds: [],
+	// #15163: active device scope — {platform, device, manufacturer, osVersion?}
+	// When set, the run configuration is scoped to that device and ALL its
+	// compatible browsers are auto-selected. Session-scoped deselections reset
+	// on device change; the persisted full-matrix store is untouched.
+	deviceScope: null,
+	deviceScopeSessionDeselections: new Set(),
+	filters: { search: '', platform: '', manufacturer: '', osVersion: '', orientation: '' }
+};
+
+const qaMatrixStore = createDeselectionStore(window.localStorage);
+
+function qaMatrixFiltered() {
+	// Facet filtering runs over the compact index (full catalog) — the tree
+	// itself renders the server-windowed rows (qaMatrixState.windowRows).
+	return filterConfigurations(qaMatrixState.index, {
+		search: qaMatrixState.filters.search,
+		platform: qaMatrixState.filters.platform || undefined,
+		manufacturer: qaMatrixState.filters.manufacturer || undefined,
+		osVersion: qaMatrixState.filters.osVersion || undefined,
+		orientation: qaMatrixState.filters.orientation || undefined
+	});
 }
 
-/** Mark launcher engines the server reports unavailable (greyed, unchecked). */
-async function syncEngineAvailability() {
-	if (!qaUi.engineOptions) return;
-	try {
-		const { engines } = await api('/engines');
-		for (const engine of engines ?? []) {
-			const box = qaUi.engineOptions.querySelector(`.qa-engine[value="${engine.id}"]`);
-			if (!box) continue;
-			const unavailable = engine.available === false;
-			box.disabled = unavailable;
-			if (unavailable) box.checked = false;
-			const label = box.parentElement?.querySelector('span');
-			if (label && unavailable && engine.reason) label.title = engine.reason;
-		}
-	} catch {
-		// Registry unreachable: leave the static defaults; run creation still validates.
+function qaMatrixSetState(fetchState, message) {
+	qaMatrixState.fetchState = fetchState;
+	const matrix = qaUi.matrix;
+	if (!matrix.state) return;
+	matrix.state.hidden = fetchState === 'ready';
+	matrix.state.textContent = message ?? '';
+	matrix.state.dataset.state = fetchState;
+	if (matrix.root) matrix.root.hidden = fetchState !== 'ready';
+	if (matrix.error) {
+		const hasError = fetchState === 'error';
+		matrix.error.hidden = !hasError;
+		if (hasError && matrix.errorText) matrix.errorText.textContent = message ?? 'The device catalog could not be loaded.';
 	}
+}
+
+/** Reload the launcher catalog with honest loading/empty/error states. */
+async function loadQaMatrixCatalog() {
+	const controller = new AbortController();
+	if (qaMatrixState.abort) qaMatrixState.abort.abort();
+	qaMatrixState.abort = controller;
+	qaMatrixSetState('loading', 'Loading device & browser catalog…');
+	try {
+		const payload = await fetchQaConfigurations({ signal: controller.signal });
+		if (controller.signal.aborted) return;
+		qaMatrixState.browserFamilies = payload.browserFamilies ?? [];
+		qaMatrixState.providers = payload.providers ?? [];
+		const index = await fetchConfigurationIndex({ signal: controller.signal });
+		if (controller.signal.aborted) return;
+		qaMatrixState.index = index;
+		// Selection: default = every available configuration minus the user's
+		// explicit deselections (persisted across dialog reopens). An active
+		// device scope survives reopen and re-derives from the fresh index
+		// (#15163); a device that vanished from the catalog drops the scope.
+		if (qaMatrixState.deviceScope) {
+			const stillThere = configurationsForDevice(index, qaMatrixState.deviceScope).length > 0;
+			if (!stillThere) qaMatrixState.deviceScope = null;
+		}
+		qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
+		qaMatrixFillFilters();
+		await qaMatrixLoadWindow(0, controller.signal);
+		qaMatrixSetState(qaMatrixState.index.length === 0 ? 'empty' : 'ready', '');
+		if (qaMatrixState.index.length === 0) {
+			qaMatrixSetState('empty', 'No device or browser configurations are available. Connect an execution provider or check the catalog.');
+		}
+	} catch (error) {
+		if (controller.signal.aborted || error?.name === 'AbortError') return;
+		qaMatrixState.index = [];
+		qaMatrixState.windowRows = [];
+		qaMatrixState.selectedEnvIds = [];
+		qaMatrixSetState('error', error instanceof Error ? error.message : String(error));
+	} finally {
+		syncQaSubmitState();
+	}
+}
+
+/** Fetch a window of heavy configuration rows for the visible device tree. */
+async function qaMatrixLoadWindow(offset, signal) {
+	const matrix = qaUi.matrix;
+	if (!matrix.devices) return;
+	if (offset === 0) {
+		qaMatrixState.windowRows = [];
+		matrix.devices.textContent = '';
+		const progress = document.createElement('p');
+		progress.className = 'qa-matrix-empty';
+		progress.dataset.role = 'window-loading';
+		progress.textContent = 'Loading device rows…';
+		matrix.devices.append(progress);
+	}
+	qaMatrixState.windowLoading = true;
+	try {
+		const page = await fetchConfigurationWindow(
+			{
+				search: qaMatrixState.filters.search,
+				platform: qaMatrixState.filters.platform || undefined,
+				manufacturer: qaMatrixState.filters.manufacturer || undefined,
+				osVersion: qaMatrixState.filters.osVersion || undefined,
+				orientation: qaMatrixState.filters.orientation || undefined
+			},
+			{ signal, limit: 200, offset }
+		);
+		if (signal?.aborted) return;
+		qaMatrixState.windowRows = offset === 0
+			? page.configurations
+			: [...qaMatrixState.windowRows, ...page.configurations];
+		qaMatrixState.windowTotal = page.total;
+		qaMatrixRender();
+		if (page.hasMore && matrix.devices) {
+			const more = document.createElement('button');
+			more.type = 'button';
+			more.className = 'qa-matrix-load-more';
+			more.dataset.role = 'load-more';
+			more.textContent = `Load more (${(qaMatrixState.windowRows.length).toLocaleString()} of ${(page.total).toLocaleString()} shown)`;
+			more.addEventListener('click', () => {
+				more.remove();
+				void qaMatrixLoadWindow(qaMatrixState.windowRows.length, qaMatrixState.abort?.signal);
+			});
+			matrix.devices.append(more);
+		}
+	} catch (error) {
+		// #15123: a failed window fetch (e.g. session expiry 401) previously
+		// left the "Loading device rows…" placeholder stuck forever — the
+		// outer catalog loader had already finished, so nothing retried or
+		// surfaced the error. Render an honest error row with retry.
+		if (signal?.aborted || error?.name === 'AbortError') return;
+		qaMatrixState.windowRows = [];
+		if (matrix.devices) {
+			matrix.devices.textContent = '';
+			const errorRow = document.createElement('div');
+			errorRow.className = 'qa-matrix-empty';
+			errorRow.dataset.role = 'window-error';
+			const message = document.createElement('p');
+			message.textContent = `Device rows could not be loaded (${error instanceof Error ? error.message : String(error)}).`;
+			const retry = document.createElement('button');
+			retry.type = 'button';
+			retry.className = 'qa-matrix-load-more';
+			retry.textContent = 'Retry';
+			retry.addEventListener('click', () => {
+				void qaMatrixLoadWindow(offset, qaMatrixState.abort?.signal);
+			});
+			errorRow.append(message, retry);
+			matrix.devices.append(errorRow);
+		}
+	} finally {
+		qaMatrixState.windowLoading = false;
+	}
+}
+
+function qaMatrixFillFilters() {
+	const matrix = qaUi.matrix;
+	if (!matrix.filterPlatform || !matrix.filterManufacturer || !matrix.filterOs || !matrix.filterOrientation) return;
+	const facets = facetValues(qaMatrixState.index);
+	const fill = (select, entries, labelAll, current) => {
+		select.textContent = '';
+		const all = document.createElement('option');
+		all.value = '';
+		all.textContent = labelAll;
+		select.append(all);
+		for (const entry of entries) {
+			const option = document.createElement('option');
+			option.value = String(entry.value);
+			option.textContent = `${entry.value} (${entry.count})`;
+			select.append(option);
+		}
+		select.value = current || '';
+	};
+	fill(matrix.filterPlatform, facets.platform, 'All platforms', qaMatrixState.filters.platform);
+	fill(matrix.filterManufacturer, facets.manufacturer, 'All manufacturers', qaMatrixState.filters.manufacturer);
+	fill(matrix.filterOs, facets.osVersion, 'All OS versions', qaMatrixState.filters.osVersion);
+	fill(matrix.filterOrientation, facets.orientation, 'Any orientation', qaMatrixState.filters.orientation);
+}
+
+function qaMatrixConfigurationKey(configuration) {
+	return `${configuration.envId}`;
+}
+
+/**
+ * #15163: effective selection = device-scope auto-select-all minus in-session
+ * deselections when scoped; catalog selection minus persisted deselections
+ * otherwise. Single source of truth for selectedEnvIds.
+ */
+function qaMatrixEffectiveSelection() {
+	if (!qaMatrixState.deviceScope) {
+		return computeSelection(qaMatrixState.index, qaMatrixStore);
+	}
+	const deviceConfigurations = configurationsForDevice(qaMatrixState.index, qaMatrixState.deviceScope);
+	return defaultSelectionForDevice(deviceConfigurations)
+		.filter((envId) => !qaMatrixState.deviceScopeSessionDeselections.has(envId));
+}
+
+/**
+ * #15163: activate a device scope (or clear it with null). Any stale session
+ * deselections from the PREVIOUS device are discarded — switching devices
+ * always yields a clean auto-select-all of the new device's browsers.
+ */
+function qaMatrixSetDeviceScope(scope) {
+	const previous = qaMatrixState.deviceScope;
+	const nextKey = scope ? `${scope.manufacturer ?? ''}|${scope.platform}|${scope.device}` : null;
+	const previousKey = previous ? `${previous.manufacturer ?? ''}|${previous.platform}|${previous.device}` : null;
+	if (nextKey !== previousKey) {
+		qaMatrixState.deviceScopeSessionDeselections = new Set();
+	}
+	qaMatrixState.deviceScope = scope;
+	qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
+}
+
+/** #15163: readable scope label for the summary — null when unscoped. */
+function qaMatrixScopeLabel() {
+	if (!qaMatrixState.deviceScope) return null;
+	const scope = qaMatrixState.deviceScope;
+	const deviceConfigurations = configurationsForDevice(qaMatrixState.index, scope);
+	const first = deviceConfigurations[0];
+	if (!first) return null;
+	const families = compatibleBrowserFamilies(deviceConfigurations);
+	const selectedCount = qaMatrixState.selectedEnvIds.length;
+	const osLabel = scope.osVersion ? `${first.os} ${scope.osVersion}` : `${first.os} (all versions)`;
+	const orientation = scope.orientation ?? (first.deviceType === 'desktop' ? 'landscape' : 'portrait');
+	return `${first.manufacturer ? `${first.manufacturer} ` : ''}${scope.device} · ${osLabel} · ${orientation} · ${families.length} browser${families.length === 1 ? '' : 's'} · ${selectedCount.toLocaleString()} config${selectedCount === 1 ? '' : 's'}`;
+}
+
+function qaMatrixRender() {
+	const matrix = qaUi.matrix;
+	if (!matrix.browsers || !matrix.devices || !matrix.summary) return;
+	const filtered = qaMatrixFiltered();
+	// #15163: in device scope, family counts and checkbox states reflect the
+	// scoped device only — never the whole catalog.
+	const scopeRows = qaMatrixState.deviceScope
+		? configurationsForDevice(qaMatrixState.index, qaMatrixState.deviceScope)
+		: null;
+	const selectionScope = scopeRows ?? filtered;
+	const selected = new Set(qaMatrixState.selectedEnvIds);
+
+	// Browser checklist: seven families, always visible — counts come from the
+	// full-catalog index, so they stay correct even though the tree renders
+	// only a server-windowed slice.
+	const families = familyRows(selectionScope, qaMatrixState.browserFamilies);
+	matrix.browsers.textContent = '';
+	for (const family of families) {
+		const row = document.createElement('label');
+		row.className = `qa-matrix-family${family.available ? '' : ' is-unavailable'}`;
+		const selectedInFamily = selectionScope.filter(
+			configuration => configuration.browserCode === family.code && selected.has(configuration.envId)
+		).length;
+		const input = document.createElement('input');
+		input.type = 'checkbox';
+		input.dataset.family = family.code;
+		if (family.available) {
+			input.checked = selectedInFamily > 0;
+			input.indeterminate = selectedInFamily > 0 && selectedInFamily < family.selectableCount;
+			input.addEventListener('change', () => {
+				const rows = selectionScope.filter(configuration => configuration.browserCode === family.code && isSelectable(configuration));
+				// Single bulk store write + single re-render: the per-envId
+				// loop below previously persisted once per row (~8k localStorage
+				// writes per family toggle) and crashed the tab (#15092).
+				if (input.checked) {
+					if (scopeRows) {
+						for (const configuration of rows) qaMatrixState.deviceScopeSessionDeselections.delete(configuration.envId);
+					} else {
+						qaMatrixStore.reselectMany(rows.map((configuration) => configuration.envId));
+					}
+				} else if (scopeRows) {
+					for (const configuration of rows) qaMatrixState.deviceScopeSessionDeselections.add(configuration.envId);
+				} else {
+					qaMatrixStore.deselectMany(rows.map((configuration) => configuration.envId));
+				}
+				qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
+				qaMatrixRender();
+				syncQaSubmitState();
+			});
+		} else {
+			input.disabled = true;
+			input.setAttribute('aria-disabled', 'true');
+			row.title = family.reason ?? 'Not available';
+		}
+		const labelSpan = document.createElement('span');
+		labelSpan.className = 'qa-matrix-family-label';
+		labelSpan.textContent = family.label;
+		const counts = document.createElement('small');
+		counts.className = 'qa-matrix-family-count';
+		counts.textContent = family.available
+			? `${selectedInFamily}/${family.selectableCount} selected`
+			: (family.reason ?? 'Unavailable');
+		row.append(input, labelSpan, counts);
+		matrix.browsers.append(row);
+	}
+
+	// Device panel: platform → device → OS → browsers (scrollable tree).
+	// Device panel renders the WINDOWED rows only (server applies the same
+	// filters); grouping them never builds a 38k-row DOM tree.
+	const tree = groupDeviceTree(qaMatrixState.windowRows);
+	matrix.devices.textContent = '';
+	if (tree.length === 0) {
+		const empty = document.createElement('p');
+		empty.className = 'qa-matrix-empty';
+		empty.textContent = 'No configurations match the current filters.';
+		matrix.devices.append(empty);
+	} else {
+		for (const platformGroup of tree) {
+			const platformLabel = PLATFORM_GROUPS.find(group => group.id === platformGroup.platform)?.label ?? platformGroup.platform;
+			const group = document.createElement('section');
+			group.className = 'qa-matrix-platform';
+			const heading = document.createElement('h5');
+			heading.textContent = platformLabel;
+			group.append(heading);
+			for (const device of platformGroup.devices) {
+				const deviceRow = document.createElement('div');
+				deviceRow.className = 'qa-matrix-device';
+				const deviceKey = `${device.manufacturer ?? ''}|${device.platform}|${device.device}`;
+				const activeScopeKey = qaMatrixState.deviceScope
+					? `${qaMatrixState.deviceScope.manufacturer ?? ''}|${qaMatrixState.deviceScope.platform}|${qaMatrixState.deviceScope.device}`
+					: null;
+				if (deviceKey === activeScopeKey) deviceRow.classList.add('is-scoped');
+				// #15163: clicking a device row scopes the whole run
+				// configuration to that device and auto-selects ALL its
+				// compatible browsers — no manual ticking required.
+				deviceRow.classList.add('is-clickable');
+				deviceRow.setAttribute('role', 'button');
+				deviceRow.tabIndex = 0;
+				const activateScope = () => {
+					qaMatrixSetDeviceScope({
+						platform: device.platform,
+						device: device.device,
+						manufacturer: device.manufacturer ?? ''
+					});
+					qaMatrixRender();
+					syncQaSubmitState();
+				};
+				deviceRow.addEventListener('click', (event) => {
+					// Version-checkbox clicks keep their own semantics.
+					if (event.target.closest('label')) return;
+					activateScope();
+				});
+				deviceRow.addEventListener('keydown', (event) => {
+					if (event.key === 'Enter' || event.key === ' ') {
+						event.preventDefault();
+						activateScope();
+					}
+				});
+				const badges = document.createElement('span');
+				badges.className = 'qa-matrix-badges';
+				for (const executionType of device.executionTypes) {
+					const badge = document.createElement('span');
+					badge.className = `qa-matrix-badge badge-${executionType}`;
+					badge.textContent = executionTypeLabel(executionType);
+					badges.append(badge);
+				}
+				const deviceLine = document.createElement('div');
+				deviceLine.className = 'qa-matrix-device-line';
+				const deviceName = document.createElement('span');
+				deviceName.textContent = `${device.manufacturer ? `${device.manufacturer} ` : ''}${device.device}`;
+				deviceLine.append(deviceName, badges);
+				deviceRow.append(deviceLine);
+				for (const os of device.osVersions) {
+					const osRow = document.createElement('div');
+					osRow.className = 'qa-matrix-os';
+					const osLabel = document.createElement('span');
+					osLabel.className = 'qa-matrix-os-label';
+					osLabel.textContent = `${device.os === 'Windows' ? 'Windows' : (device.platform === 'macos' ? 'macOS' : (device.os ?? device.platform))} ${os.osVersion}`;
+					osRow.append(osLabel);
+					const versionList = document.createElement('div');
+					versionList.className = 'qa-matrix-versions';
+					for (const browser of os.browsers) {
+						for (const version of browser.versions) {
+							const key = qaMatrixConfigurationKey(version);
+							const versionChip = document.createElement('label');
+							versionChip.className = 'qa-matrix-version';
+							const versionInput = document.createElement('input');
+							versionInput.type = 'checkbox';
+							versionInput.value = key;
+							if (isSelectable(version)) {
+								versionInput.checked = selected.has(key);
+								versionInput.addEventListener('change', () => {
+									if (versionInput.checked) qaMatrixStore.reselect(key);
+									else qaMatrixStore.deselect(key);
+									qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
+									qaMatrixRender();
+									syncQaSubmitState();
+								});
+							} else {
+								versionInput.disabled = true;
+								versionChip.classList.add('is-unavailable');
+								versionChip.title = version.availabilityReason ?? 'Unavailable';
+							}
+							const versionText = document.createElement('span');
+							versionText.textContent = `${browser.browser} ${version.browserVersion}`;
+							versionChip.append(versionInput, versionText);
+							versionList.append(versionChip);
+						}
+					}
+					osRow.append(versionList);
+					deviceRow.append(osRow);
+				}
+				group.append(deviceRow);
+			}
+			matrix.devices.append(group);
+		}
+	}
+
+	// Summary: planned total + per-family + provider honesty.
+	const summary = buildSummary(qaMatrixState.index, qaMatrixState.selectedEnvIds);
+	const providerNotes = (qaMatrixState.providers ?? [])
+		.filter(provider => !provider.connected)
+		.map(provider => `${provider.name}: not configured`);
+	const scopeLabel = qaMatrixScopeLabel();
+	matrix.summary.textContent = scopeLabel
+		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} of this device's configurations selected`
+		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
+			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
+			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '');
+	matrix.summary.title = Object.entries(summary.byFamily)
+		.filter(([, count]) => count > 0)
+		.map(([code, count]) => `${code}: ${count}`)
+		.join(', ');
+	// #15164: keep the TEST ON block in lockstep with the matrix selection —
+	// one configuration, never stale or divergent.
+	renderTestOn('qa-test-on');
+}
+
+function qaMatrixWiring() {
+	const matrix = qaUi.matrix;
+	if (!matrix.fieldset) return;
+	matrix.retry?.addEventListener('click', () => { void loadQaMatrixCatalog(); });
+	let searchTimer = null;
+	matrix.search?.addEventListener('input', () => {
+		window.clearTimeout(searchTimer);
+		searchTimer = window.setTimeout(() => {
+			qaMatrixState.filters.search = matrix.search.value;
+			qaMatrixRender();
+			void qaMatrixLoadWindow(0, qaMatrixState.abort?.signal);
+		}, 150);
+	});
+	const bindFilter = (select, key) => {
+		select?.addEventListener('change', () => {
+			qaMatrixState.filters[key] = select.value;
+			qaMatrixRender();
+			void qaMatrixLoadWindow(0, qaMatrixState.abort?.signal);
+		});
+	};
+	bindFilter(matrix.filterPlatform, 'platform');
+	bindFilter(matrix.filterManufacturer, 'manufacturer');
+	bindFilter(matrix.filterOs, 'osVersion');
+	bindFilter(matrix.filterOrientation, 'orientation');
 }
 
 function setQaFormError(message = '') {
@@ -4872,7 +5371,11 @@ function syncQaCategoryToggles() {
 function syncQaSubmitState() {
 	if (!qaUi.submit) return;
 	const selected = qaUi.selectedTests.size;
-	qaUi.submit.disabled = selected === 0 || qaUi.submit.dataset.busy === 'true';
+	// QA matrix (#15013): Start also requires a valid URL and ≥1 selected
+	// configuration while the dialog is open (fetch error → 0 selected → held).
+	const urlValid = !qaUi.dialog?.open || isValidTargetUrl(qaUi.targetUrl?.value);
+	const matrixReady = !qaUi.dialog?.open || qaMatrixState.selectedEnvIds.length > 0;
+	qaUi.submit.disabled = selected === 0 || !urlValid || !matrixReady || qaUi.submit.dataset.busy === 'true';
 	if (qaUi.testsCount) {
 		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
 	}
@@ -5129,10 +5632,8 @@ function openQaStart() {
 	qaUi._testCaseId = undefined;
 	qaUi._testCaseSnapshot = undefined;
 	if (qaUi.deviceLandscape) qaUi.deviceLandscape.checked = pendingLandscape();
-	qaUi.testsFieldset.disabled = true;
 	qaUi.testsState.hidden = false;
 	qaUi.testsState.textContent = 'Loading standard tests…';
-	void syncEngineAvailability();
 	qaUi.submit.dataset.busy = 'false';
 	qaUi.submit.disabled = true;
 	qaUi.submit.textContent = 'Start test';
@@ -5142,11 +5643,29 @@ function openQaStart() {
 	syncQaSecurityGate();
 	qaUi.submit.disabled = false;
 	qaUi.submit.textContent = 'Start QA run';
-	if (qaUi.testOnChange) qaUi.testOnChange.onclick = () => devicePicker?.open?.();
+	// #15164: 'Change device' stays INSIDE the Start QA run modal — it scrolls
+	// to and focuses the in-modal device matrix (single source of truth)
+	// instead of opening the separate #device-picker dialog.
+	if (qaUi.testOnChange) qaUi.testOnChange.onclick = () => {
+		const matrix = qaUi.matrix;
+		const target = matrix.fieldset ?? matrix.root;
+		if (!target) return;
+		target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		target.classList.remove('qa-matrix-flash');
+		// restart the highlight animation
+		void target.offsetWidth;
+		target.classList.add('qa-matrix-flash');
+		matrix.search?.focus({ preventScroll: true });
+	};
 	qaUi.securityAuthorized?.setCustomValidity('');
 	syncQaSecurityGate();
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	setTimeout(() => qaUi.targetUrl?.focus(), 0);
+	// QA matrix (#15013): reload the device & browser catalog on every open —
+	// honest loading/empty/error states, defaults re-applied minus the user's
+	// persisted deselections. Start stays disabled until it resolves.
+	void loadQaMatrixCatalog();
+	qaMatrixWiring();
 	void loadQaTestCatalog()
 		.then(paintQaTestCatalog)
 		.catch(error => {
@@ -5161,6 +5680,8 @@ function closeQaStart() {
 }
 
 if (qaUi.dialog) {
+	// URL typing re-evaluates Start gating live (#15013).
+	qaUi.targetUrl?.addEventListener('input', () => syncQaSubmitState());
 	qaUi.close.onclick = closeQaStart;
 	qaUi.cancel.onclick = closeQaStart;
 	$('qa-demo-fill')?.addEventListener('click', () => {
@@ -5193,11 +5714,10 @@ if (qaUi.dialog) {
 			if (!uiuxParent || uiuxChildren().length === 0) return;
 			const boxes = uiuxChildren();
 			uiuxParent.checked = boxes.length > 0 && boxes.every(box => box.checked);
-			uiuxParent.indeterminate = !uiuxParent.checked && boxes.some(box => box.checked);
-			// Browser compatibility rides the engines selection (≥1 engine).
+			uiuxParent.indeterminate = !uiuxParent.checked && uiuxParent.checked !== undefined && boxes.some(box => box.checked);
+			// Browser compatibility rides the configuration matrix (≥1 selected).
 			if (browserInline) {
-				const engines = [...(qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? [])];
-				browserInline.checked = engines.length > 0 && engines.some(box => box.checked);
+				browserInline.checked = qaMatrixState.selectedEnvIds.length > 0;
 			}
 		};
 		uiuxParent?.addEventListener('change', () => {
@@ -5205,9 +5725,6 @@ if (qaUi.dialog) {
 		});
 		for (const box of uiuxChildren()) {
 			box.addEventListener('change', syncUiuxParent);
-		}
-		for (const engine of qaUi.engineOptions?.querySelectorAll('.qa-engine') ?? []) {
-			engine.addEventListener('change', syncUiuxParent);
 		}
 		syncUiuxParent();
 	}
@@ -5226,8 +5743,7 @@ if (qaUi.dialog) {
 		refreshQaSelection();
 	};
 
-	qaUi.form.onsubmit = async event => {
-		event.preventDefault();
+	qaUi.form.onsubmit = async event => {		event.preventDefault();
 		setQaFormError();
 		if (!qaUi.form.reportValidity()) return;
 		if (!ensureModelConfigured('QA launcher')) return;
@@ -5261,35 +5777,45 @@ if (qaUi.dialog) {
 			return;
 		}
 		const kickoffText = scopeMessage ? `${targetUrl}\n${scopeMessage}` : targetUrl;
-		const engines = selectedQaEngines();
-		if (engines.length === 0) {
-			setQaFormError('Check at least one browser engine.');
+		// QA matrix (#15013): the run set is the selected device–OS–browser–version
+		// configurations. Phase 3 wires these to the matrix orchestrator; until
+		// then, at least one configuration must be selected and validated.
+		if (qaMatrixState.selectedEnvIds.length === 0) {
+			setQaFormError('Select at least one browser configuration.');
 			return;
 		}
-		// AC14: the run uses exactly the environment shown in the TEST ON block,
-		// read from the store at submit time (falls back to the QA form's
-		// advanced remote-environment picker when no TEST ON device is set).
-		const environmentId = selectedEnvironmentForRun() || (qaUi.environmentSelect?.value) || '';
-		const testCaseId = qaUi._testCaseId || qaUi.environmentSelect?._testCaseId || undefined;
+		const selectedEnvIds = sanitizeSelection(qaMatrixState.index, qaMatrixState.selectedEnvIds);
+		if (selectedEnvIds.length === 0) {
+			setQaFormError('The selected configurations are no longer available. Reload the catalog and pick again.');
+			return;
+		}
+		// AC14 context is carried by the launcher's matrix run itself; the
+		// legacy single-environment/test-case path applies to non-matrix runs.
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
-		qaUi.submit.textContent = engines.length > 1 ? `Starting ${engines.length} runs…` : 'Starting run…';
+		qaUi.submit.textContent = selectedEnvIds.length > 1 ? `Starting ${selectedEnvIds.length.toLocaleString()} configurations…` : 'Starting run…';
 		try {
-			for (const engine of engines) {
-				await createQaRun({
+			// Phase 3 (#14937): one matrix run carries EVERY selected
+			// configuration as an item — queued with controlled concurrency,
+			// progress/cancel/retry on the server. No silent reduction to a
+			// representative subset, no client-side per-engine fan-out.
+			const matrixRun = await api('/qa-matrix-runs', {
+				method: 'POST',
+				body: JSON.stringify({
 					targetUrl,
-					device,
-					deviceLandscape,
+					configurationEnvIds: selectedEnvIds,
+					kickoffText,
 					selectedTests,
 					securityAuthorization,
-					kickoffText,
-					engine,
-					coreFlowsOnly: engines.length > 1,
 					scopeSelection: scopeValues
-				});
-			}
-			await createQaRunWithCase({ targetUrl, device, deviceLandscape, environmentId, testCaseId });
+				})
+			});
 			closeQaStart();
+			toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configurations queued.`);
+			// #14942 Phase 4: the results board IS the live view — per-configuration
+			// statuses, totals, coverage gaps and evidence update while the
+			// orchestrator works; each row drills into its producing session.
+			openQaMatrixRunDialog(matrixRun?.id);
 			// Optional follow-on flows: the QA run is already underway; each
 			// checked option opens the existing dialog prefilled with the same
 			// target for the user to confirm — nothing starts automatically.
@@ -6249,6 +6775,38 @@ if (bulkRunView) {
 	// Phase D6 (#13782): step-3 availability rows read the runtime board.
 	bulkRunView.setRuntimeBoardFetch(fetchRuntimeBoard);
 }
+
+/* ── QA matrix run results board (#14942 Phase 4) ──────────────────── */
+
+const qaMatrixResultsView = $('qa-matrix-run-dialog') ? createQaMatrixResultsView({
+	container: $('qa-matrix-run-body'),
+	api,
+	selectSession: async (sessionId) => {
+		closeQaMatrixRunDialog();
+		await selectSession(sessionId).catch(fail);
+	},
+	toast,
+	onRunFinished: () => {}
+}) : null;
+
+/** Open the results board for a QA matrix run (live updates until terminal). */
+function openQaMatrixRunDialog(matrixRunId) {
+	const dialog = $('qa-matrix-run-dialog');
+	if (!dialog || !qaMatrixResultsView || !matrixRunId) return;
+	dialog.showModal();
+	void qaMatrixResultsView.load(matrixRunId);
+}
+
+function closeQaMatrixRunDialog() {
+	const dialog = $('qa-matrix-run-dialog');
+	if (dialog?.open) dialog.close();
+	qaMatrixResultsView?.stop();
+}
+
+if ($('qa-matrix-run-close')) {
+	$('qa-matrix-run-close').onclick = closeQaMatrixRunDialog;
+}
+// The view renders its own Cancel-run button (it knows live run status).
 
 /* ── Phase 11: run-target dialog + quick actions + presets ────────── */
 

@@ -76,6 +76,7 @@ function rowToItem(row) {
 		artifactRefs: row.artifact_refs ?? [],
 		fixtureVerdicts: row.fixture_verdicts ?? [],
 		runtimeFacts: row.runtime_facts ?? null,
+		retryCount: row.retry_count ?? 0,
 		updatedAt: row.updated_at?.toISOString?.() ?? row.updated_at
 	};
 }
@@ -221,9 +222,12 @@ export function createPostgresMatrixRepository(pool, { tenantContext } = {}) {
 					error: 'error', findings: 'findings', startedAt: 'started_at',
 					finishedAt: 'finished_at', durationMs: 'duration_ms',
 					// #14650 (NI02 Phase 2): per-profile evidence columns.
-					executionLevel: 'execution_level', executionProvider: 'execution_provider',
-					artifactRefs: 'artifact_refs', fixtureVerdicts: 'fixture_verdicts',
-					runtimeFacts: 'runtime_facts'
+				executionLevel: 'execution_level', executionProvider: 'execution_provider',
+				artifactRefs: 'artifact_refs', fixtureVerdicts: 'fixture_verdicts',
+				runtimeFacts: 'runtime_facts',
+				// Bounded per-item retry ledger (#15043/#14937): must survive the
+				// orchestrator restart, so it is a persisted column, not memory.
+				retryCount: 'retry_count'
 				};
 				const sets = ['updated_at = now()'];
 				const params = [];

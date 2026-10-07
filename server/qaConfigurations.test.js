@@ -199,3 +199,45 @@ test('generated catalog: Apple rows carry manufacturer=Apple', () => {
 	assert.ok(appleRows.length > 100, 'expected a substantial Apple set');
 	assert.ok(appleRows.every((env) => env.manufacturer === 'Apple'), 'all Apple rows must carry manufacturer');
 });
+
+// #15123 regression: withExecutionMetadata stamps a blanket
+// executionType='VIRTUAL_DEVICE' on every catalog row; executionTypeFor must
+// ignore that default stamp and derive honestly per platform + support.
+test('#15123 blanket VIRTUAL_DEVICE stamp does not collapse all rows to virtual_machine', () => {
+	const environments = generateEnvironments().map((env) => ({
+		...env,
+		executionType: 'VIRTUAL_DEVICE'
+	}));
+	const counts = {};
+	for (const env of environments) {
+		const configuration = toConfiguration(env, { providers: [] });
+		counts[configuration.executionType] = (counts[configuration.executionType] ?? 0) + 1;
+	}
+	assert.ok(counts.simulator > 0, 'expected simulator rows (engine-equivalent mobile)');
+	assert.ok(counts.emulator > 0, 'expected emulator rows (mobile)');
+	assert.ok(counts.browser_emulation > 0, 'expected browser_emulation rows (desktop)');
+	assert.equal(counts.virtual_machine ?? 0, 0, 'no row may default to virtual_machine');
+});
+
+test('#15123 explicit REAL_DEVICE request still maps to physical_device', () => {
+	const [env] = generateEnvironments().slice(0, 1);
+	const configuration = toConfiguration(
+		{ ...env, executionLevelRequested: 'REAL_DEVICE', executionType: 'VIRTUAL_DEVICE' },
+		{ providers: [] }
+	);
+	assert.equal(configuration.executionType, 'physical_device');
+});
+
+test('#15123 execution-type badge labels cover all five vocabulary entries', () => {
+	// Label map lives in the client module (qaConfigMatrix.js) — assert the
+	// server vocabulary itself and the mapping contract through
+	// toConfiguration output values.
+	const seen = new Set(generateEnvironments().map((env) => toConfiguration(env, { providers: [] }).executionType));
+	for (const type of [EXECUTION_TYPES.PHYSICAL_DEVICE, EXECUTION_TYPES.VIRTUAL_MACHINE,
+		EXECUTION_TYPES.EMULATOR, EXECUTION_TYPES.SIMULATOR, EXECUTION_TYPES.BROWSER_EMULATION]) {
+		assert.ok(typeof type === 'string' && type.length > 0, `vocabulary entry ${type}`);
+		assert.ok(['physical_device', 'virtual_machine', 'emulator', 'simulator', 'browser_emulation'].includes(type));
+	}
+	assert.ok(seen.has('simulator') && seen.has('emulator') && seen.has('browser_emulation'),
+		`catalog must expose multiple honest execution types, saw ${[...seen].join(',')}`);
+});

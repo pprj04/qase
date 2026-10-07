@@ -224,6 +224,7 @@ export function rowToEnvironment(row) {
 		screenResolution: row.screen_resolution ?? row.screenResolution,
 		orientation: row.orientation,
 		deviceModelSlug: row.device_model_slug ?? row.deviceModelSlug,
+		manufacturer: row.manufacturer,
 		description: row.description,
 		executionProvider: row.execution_provider ?? row.executionProvider,
 		isRealDevice: row.is_real_device ?? row.isRealDevice,
@@ -292,9 +293,14 @@ export function withExecutionMetadata(env) {
 		executionType: level,
 		browserSupport,
 		deviceId: env.deviceModelSlug ?? env.envId,
-		deviceManufacturer: env.platform === 'ios' || env.platform === 'macos'
-			? 'Apple'
-			: env.platform === 'android' ? env.device?.split(' ')[0] ?? 'Android' : 'Microsoft',
+		// #15123: prefer the catalog's real manufacturer (Samsung, Google, …);
+		// the previous first-word-of-device fallback produced "Galaxy Galaxy
+		// S24" / "Pixel Pixel Tablet" in the launcher matrix.
+		deviceManufacturer: env.manufacturer
+			?? env.deviceManufacturer
+			?? (env.platform === 'ios' || env.platform === 'ipados' || env.platform === 'macos'
+				? 'Apple'
+				: env.platform === 'android' ? (env.device?.split(' ')[0] ?? 'Android') : 'Microsoft'),
 		deviceModel: env.device,
 		hardwareIdentifier: env.hardwareIdentifier ?? env.deviceModelSlug ?? null,
 		os: env.os,

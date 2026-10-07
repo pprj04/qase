@@ -314,16 +314,19 @@ test('resume recovery: dangling running run + RUNNING items become ERROR interru
 test('statusCounts tallies the full honest vocabulary', () => {
 	const counts = statusCounts([
 		{ status: 'PASSED' }, { status: 'PASSED' }, { status: 'FAILED' },
-		{ status: 'NOT_RUN' }, { status: 'NOT_SUPPORTED' }, { status: 'BLOCKED' }
+		{ status: 'NOT_RUN' }, { status: 'NOT_SUPPORTED' }, { status: 'BLOCKED' },
+		{ status: 'QUEUED' }, { status: 'CANCELLED' }
 	]);
 	assert.equal(counts.PASSED, 2);
 	assert.equal(counts.FAILED, 1);
 	assert.equal(counts.NOT_RUN, 1);
 	assert.equal(counts.NOT_SUPPORTED, 1);
 	assert.equal(counts.BLOCKED, 1);
+	assert.equal(counts.QUEUED, 1);
+	assert.equal(counts.CANCELLED, 1);
 	assert.equal(counts.PENDING, 0);
 	assert.deepEqual(Object.keys(counts).sort(), [
-		'BLOCKED', 'ERROR', 'FAILED', 'NOT_RUN', 'NOT_SUPPORTED', 'PASSED', 'PENDING', 'RUNNING', 'UNAVAILABLE'
+		'BLOCKED', 'CANCELLED', 'ERROR', 'FAILED', 'NOT_RUN', 'NOT_SUPPORTED', 'PASSED', 'PENDING', 'QUEUED', 'RUNNING', 'UNAVAILABLE'
 	]);
 });
 
@@ -332,4 +335,88 @@ test('referenced environments exist in the generated catalog (smoke)', () => {
 	const all = generateEnvironments();
 	const envIds = new Set(all.map((env) => env.envId));
 	assert.ok(envIds.has('ENV-IOS-IP17PRO-26.0-CHR-140'), 'iPhone 17 Pro Chrome env missing');
+});
+
+/* ── Phase 3 (#14937): cancel + retry at the ORCHESTRATOR level ──── */
+
+test('cancel(): QUEUED items → CANCELLED, worker stops claiming, run cancelled', async () => {
+	const runs = runsFixture();
+	const items = [{}].concat(Array.from({ length: 3 }, (_, i) => ({ id: `item-q${i}` })));
+	const { service, stored } = matrixFixture({ items });
+	// matrix.cancel support for the fixture service: flip QUEUED/PENDING → CANCELLED.
+	service.cancel = async (runId) => {
+		assert.equal(runId, stored.id);
+		let cancelled = 0;
+		for (const it of stored.items) {
+			if (it.status === 'QUEUED' || it.status === 'PENDING') {
+				it.status = 'CANCELLED';
+				it.finishedAt = new Date().toISOString();
+				cancelled += 1;
+			}
+		}
+		stored.status = 'cancelled';
+		return { run: stored, cancelled };
+	};
+	// First item hangs mid-run (never finishes) so the pool stays busy.
+	const hooks = hooksFor(runs, null);
+	hooks.startSession = async (matrixRun, item) => {
+		const session = await runs.create(`${matrixRun.title} — ${item.device}`, {
+			matrixRunId: matrixRun.id,
+			environmentId: item.environmentId,
+			status: 'running'
+		});
+		return session;
+	};
+	const orchestrator = createMatrixOrchestrator({ runs, matrix: service }, { ...hooks, emit: () => {} });
+	assert.equal(orchestrator.start('matrix-test').ok, true);
+	// Let item 1 go RUNNING.
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	await orchestrator.cancel('matrix-test');
+	await new Promise((resolve) => setTimeout(resolve, 150));
+	const finalRun = await service.get();
+	assert.equal(finalRun.status, 'cancelled');
+	const queued = finalRun.items.filter((i) => i.status === 'CANCELLED');
+	assert.ok(queued.length >= 1, `expected CANCELLED items, got ${finalRun.items.map((i) => i.status).join(',')}`);
+	// No further sessions beyond the one in-flight item.
+	assert.ok(runs.sessionCount() <= 2, `workers kept claiming after cancel: ${runs.sessionCount()} sessions`);
+	// Settle the deliberately-hanging in-flight session so no promise stays
+	// open (waitForSession would otherwise poll until MAX_ITEM_MS).
+	for (const [id, session] of runs.sessionsRef) {
+		if (session.status === 'running') runs.finish(id, { status: 'interrupted', detail: 'cancelled mid-run' });
+	}
+	await new Promise((resolve) => setTimeout(resolve, 250));
+});
+
+test('retryItem(): re-queues a FAILED item, enforces MAX 2, refuses terminal-success', async () => {
+	const runs = runsFixture();
+	const { service, stored } = matrixFixture({ items: [{}] });
+	const hooks = hooksFor(runs, null);
+	hooks.startSession = async (matrixRun, item) => {
+		const session = await runs.create(`${matrixRun.title} — ${item.device}`, { matrixRunId: matrixRun.id });
+		runs.finish(session.id, { status: 'done', report: { verdict: 'fail' }, findings: [] });
+		return session;
+	};
+	const orchestrator = createMatrixOrchestrator({ runs, matrix: service }, { ...hooks, emit: () => {} });
+	assert.equal(orchestrator.start('matrix-test').ok, true);
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	let run = await service.get();
+	const theItem = run.items[0];
+	assert.equal(theItem.status, 'FAILED');
+	// Retry 1 + 2 allowed.
+	assert.equal((await orchestrator.retryItem('matrix-test', theItem.id)).ok, true);
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	run = await service.get();
+	assert.equal(run.items[0].retryCount, 1);
+	assert.equal((await orchestrator.retryItem('matrix-test', theItem.id)).ok, true);
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	// Retry 3 refused — bound reached.
+	const refused = await orchestrator.retryItem('matrix-test', theItem.id);
+	assert.equal(refused.ok, false);
+	assert.match(refused.error ?? '', /retry/i);
+	// PASSED items can never be retried (never fabricate a rerun).
+	const runNow = await service.get();
+	const passedItem = { ...runNow.items[0], status: 'PASSED', sessionId: 'session-x' };
+	stored.items[0] = passedItem;
+	const refusePassed = await orchestrator.retryItem('matrix-test', passedItem.id);
+	assert.equal(refusePassed.ok, false);
 });

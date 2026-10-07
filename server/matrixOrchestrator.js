@@ -24,6 +24,7 @@ import { fixtureExpectation } from './defectFixtures.js';
  */
 export function createMatrixOrchestrator(services, hooks) {
 	const running = new Map(); // matrixRunId -> in-flight execution promise
+	const cancelledRuns = new Set(); // #15043 (B1): cancel flags per run
 	const MAX_MATRIX_CONCURRENT = 2; // a second run may prepare while one executes
 	// Stale-run sweep: any run left `running` by a dead process (container
 	// restart, crash) is transitioned to error before this orchestrator runs.
@@ -67,6 +68,8 @@ export function createMatrixOrchestrator(services, hooks) {
 	async function resumeRecovery() {
 		const runs = await services.matrix.list();
 		for (const run of runs ?? []) {
+			// #15043 (B1): a cancelled run keeps its cancelled state across
+			// restarts — never flipped to error.
 			if (run.status === 'running') {
 				await services.matrix._setStatus(run.id, 'error', {});
 			}
@@ -87,6 +90,62 @@ export function createMatrixOrchestrator(services, hooks) {
 		return running.has(matrixRunId);
 	}
 
+	/**
+	 * #15043 (B1): cancel a running (or pending) run. Queued/pending items are
+	 * immediately CANCELLED; an in-flight item finishes its current turn and
+	 * keeps its honest outcome. Safe to call when not running.
+	 */
+	async function cancel(matrixRunId) {
+		cancelledRuns.add(matrixRunId);
+		try {
+			const result = await services.matrix.cancel(matrixRunId, {});
+			hooks.emit?.(matrixRunId, { type: 'matrix_run_cancelled', matrixRunId, cancelled: result.cancelled });
+			return result;
+		} catch (error) {
+			console.error('[matrix] cancel failed', matrixRunId, error);
+			return { run: null, cancelled: 0 };
+		}
+	}
+
+	/**
+	 * #15043 (B1): retry a single terminal item (FAILED/ERROR/BLOCKED/CANCELLED).
+	 * Bounded at MAX_ITEM_RETRIES; the previous verdict is cleared so a fresh
+	 * outcome must arrive from a real execution.
+	 */
+	async function retryItem(matrixRunId, itemId) {
+		const run = await services.matrix.get(matrixRunId);
+		if (!run) return { ok: false, error: `Unknown matrix run "${matrixRunId}".` };
+		const item = (run.items ?? []).find((candidate) => candidate.id === itemId);
+		if (!item) return { ok: false, error: `Unknown matrix item "${itemId}".` };
+		if (!['FAILED', 'ERROR', 'BLOCKED', 'CANCELLED'].includes(item.status)) {
+			return { ok: false, error: `Item is ${item.status}; only failed/error/blocked/cancelled items can be retried.` };
+		}
+		if ((item.retryCount ?? 0) >= MAX_ITEM_RETRIES) {
+			return { ok: false, error: `Retry limit reached (${MAX_ITEM_RETRIES}).` };
+		}
+		await services.matrix.updateItem(matrixRunId, itemId, {
+			status: 'QUEUED',
+			reason: null,
+			error: null,
+			sessionId: null,
+			verdict: null,
+			findings: [],
+			artifactRefs: [],
+			startedAt: null,
+			finishedAt: null,
+			durationMs: null,
+			retryCount: (item.retryCount ?? 0) + 1
+		});
+		// Re-kick execution if the run is not already running; if it is, the
+		// worker pool picks the queued item up on its next loop.
+		if (!running.has(matrixRunId) && run.status !== 'running') {
+			cancelledRuns.delete(matrixRunId);
+			start(matrixRunId);
+		}
+		hooks.emit?.(matrixRunId, { type: 'matrix_item', itemId, ordinal: item.ordinal, status: 'QUEUED' });
+		return { ok: true };
+	}
+
 	async function executeRun(matrixRunId) {
 		// #14649: sweep runs a previous process left `running` (container
 		// restart mid-flight) so this run cannot collide with zombie state.
@@ -96,26 +155,56 @@ export function createMatrixOrchestrator(services, hooks) {
 		if (run.status === 'running') {
 			throw new Error(`Matrix run ${matrixRunId} is already running.`);
 		}
-		await services.matrix._setStatus(matrixRunId, 'running', { startedAt: new Date().toISOString() });
+		await services.matrix._setStatus(matrixRunId, 'running', { startedAt: run.startedAt ?? new Date().toISOString() });
 		hooks.emit?.(matrixRunId, { type: 'matrix_run_started', matrixRunId });
 
-		const executable = run.items.filter((item) => item.status === 'PENDING');
-		const skipped = run.items.filter((item) => item.status !== 'PENDING');
-
-		let cursor = 0;
-		const worker = async () => {
-			while (cursor < executable.length) {
-				const item = executable[cursor++];
-				await executeItem(run, item);
+		// #15043 (B1): PENDING items become QUEUED (explicitly scheduled); the
+		// worker pool then claims QUEUED items. Honest pre-terminal states
+		// (NOT_RUN / NOT_SUPPORTED / UNAVAILABLE / BLOCKED / CANCELLED / ERROR)
+		// NEVER launch.
+		const schedulable = run.items.filter((item) => item.status === 'PENDING' || item.status === 'QUEUED');
+		for (const item of schedulable) {
+			if (item.status === 'PENDING') {
+				await services.matrix.updateItem(matrixRunId, item.id, { status: 'QUEUED' });
 			}
-		};
-		const workers = Array.from({ length: Math.min(configuredParallelism(), executable.length) }, () => worker());
-		await Promise.all(workers);
+		}
+		await drainQueued(matrixRunId, run);
 
 		const finalRun = await services.matrix.get(matrixRunId);
 		const counts = statusCounts(finalRun.items);
+		if (cancelledRuns.has(matrixRunId) || finalRun.status === 'cancelled') {
+			// cancel() already set status/timing; just announce completion.
+			// (Keep the cancellation marker until the run fully settles.)
+			hooks.emit?.(matrixRunId, { type: 'matrix_run_done', matrixRunId, counts, cancelled: true });
+			return;
+		}
 		await services.matrix._setStatus(matrixRunId, 'done', { finishedAt: new Date().toISOString(), counts });
 		hooks.emit?.(matrixRunId, { type: 'matrix_run_done', matrixRunId, counts });
+	}
+
+	/** Worker pool over QUEUED items; cancellation stops claiming new work. */
+	async function drainQueued(matrixRunId, run) {
+		const claim = async () => {
+			const current = await services.matrix.get(matrixRunId);
+			const next = (current.items ?? []).find(
+				(item) => item.status === 'QUEUED' && !claimed.has(item.id)
+			);
+			if (!next) return null;
+			claimed.add(next.id);
+			return next;
+		};
+		const claimed = new Set();
+		const worker = async () => {
+			for (;;) {
+				if (cancelledRuns.has(matrixRunId)) return;
+				const item = await claim();
+				if (!item) return;
+				await executeItem(run, item);
+			}
+		};
+		await Promise.all(
+			Array.from({ length: Math.max(1, Math.min(configuredParallelism(), 16)) }, () => worker())
+		);
 	}
 
 	async function executeItem(run, item) {
@@ -302,8 +391,10 @@ export function createMatrixOrchestrator(services, hooks) {
 		}
 	}
 
-	return { start, isActive, resumeRecovery: startResumeRecovery };
+	return { start, cancel, retryItem, isActive, resumeRecovery: startResumeRecovery };
 }
+
+const MAX_ITEM_RETRIES = 2;
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_ITEM_MS = 8 * 60 * 1000;
@@ -322,7 +413,7 @@ function sleep(ms) {
 }
 
 export function statusCounts(items) {
-	const counts = { PASSED: 0, FAILED: 0, NOT_RUN: 0, UNAVAILABLE: 0, NOT_SUPPORTED: 0, BLOCKED: 0, ERROR: 0, PENDING: 0, RUNNING: 0 };
+	const counts = { PASSED: 0, FAILED: 0, NOT_RUN: 0, UNAVAILABLE: 0, NOT_SUPPORTED: 0, BLOCKED: 0, ERROR: 0, PENDING: 0, RUNNING: 0, QUEUED: 0, CANCELLED: 0 };
 	for (const item of items ?? []) {
 		if (counts[item.status] !== undefined) counts[item.status] += 1;
 	}

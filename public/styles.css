@@ -12089,3 +12089,300 @@ select:focus {
 	opacity: 0.8;
 }
 
+
+/* ── QA launcher device & browser matrix (Phase 2 #15013) ────────── */
+
+.qa-matrix-fieldset {
+  display: grid;
+  gap: 9px;
+}
+
+.qa-matrix-state {
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.qa-matrix-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #c0392b66;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.qa-matrix-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) repeat(4, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.qa-matrix-filters select,
+.qa-matrix-filters input {
+  min-width: 0;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated, #16181d);
+  color: var(--text, #e6e6e6);
+  font-size: 12px;
+}
+
+.qa-matrix-body {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(260px, 2fr);
+  gap: 10px;
+  min-height: 0;
+}
+
+.qa-matrix-browsers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.qa-matrix-family {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.qa-matrix-family:hover { background: rgba(255, 255, 255, 0.03); }
+
+.qa-matrix-family.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.qa-matrix-family-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.qa-matrix-devices {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.qa-matrix-platform { margin-bottom: 10px; }
+
+.qa-matrix-platform h5 {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  position: sticky;
+  top: -8px;
+  background: var(--bg-elevated, #16181d);
+  padding: 3px 0;
+}
+
+.qa-matrix-device { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.qa-matrix-device:last-child { border-bottom: none; }
+
+/* #15163: device rows are scope activators — subtle affordance, existing
+   design language (accent used sparingly; no layout/styling overhaul). */
+.qa-matrix-device.is-clickable { cursor: pointer; border-radius: 6px; }
+.qa-matrix-device.is-clickable:hover { background: color-mix(in srgb, var(--accent, #4c8dff) 8%, transparent); }
+.qa-matrix-device.is-clickable:focus-visible { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; }
+.qa-matrix-device.is-scoped { box-shadow: inset 2px 0 0 var(--accent, #4c8dff); background: color-mix(in srgb, var(--accent, #4c8dff) 6%, transparent); }
+
+/* #15164: brief highlight when 'Change device' jumps to the in-modal matrix. */
+.qa-matrix-flash { animation: qa-matrix-flash 1.2s ease-out; }
+@keyframes qa-matrix-flash {
+	0% { outline: 2px solid var(--accent, #4c8dff); outline-offset: 2px; }
+	100% { outline: 2px solid transparent; outline-offset: 2px; }
+}
+
+.qa-matrix-device-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.qa-matrix-badges {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.qa-matrix-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.badge-physical_device { border-color: #2ecc7166; color: #2ecc71; }
+.badge-virtual_machine { border-color: #3498db66; color: #5dade2; }
+.badge-emulator { border-color: #f39c1266; color: #f5b041; }
+.badge-simulator { border-color: #af7ac566; color: #c39bd3; }
+.badge-browser_emulation { border-color: var(--border); }
+
+.qa-matrix-os { margin: 5px 0 0 10px; }
+
+.qa-matrix-os-label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+.qa-matrix-versions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.qa-matrix-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.qa-matrix-version.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.qa-matrix-empty {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.qa-matrix-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-top: 2px;
+}
+
+@media (max-width: 980px) {
+  .qa-matrix-filters { grid-template-columns: 1fr 1fr; }
+  .qa-matrix-body { grid-template-columns: 1fr; }
+}
+
+/* QA matrix windowing (Phase 2 #15013) */
+.qa-matrix-load-more {
+	display: block;
+	margin: 8px auto 4px;
+	padding: 6px 14px;
+	font-size: 0.85rem;
+	border: 1px solid rgba(255, 255, 255, 0.25);
+	border-radius: 6px;
+	background: transparent;
+	color: inherit;
+	cursor: pointer;
+}
+.qa-matrix-load-more:hover { background: rgba(255, 255, 255, 0.08); }
+
+/* ── QA matrix run results board (#14942 Phase 4) ─────────────────────── */
+
+.qmr-modal-inner { max-width: 900px; }
+.qmr-modal-inner .modal-body { max-height: 72vh; overflow-y: auto; }
+.qmr-subtitle { margin: 0; color: var(--text-dim, #9aa3b2); font-size: 0.85rem; }
+
+.qmr .qmr-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.qmr .qmr-title { font-size: 1.05rem; margin: 0; }
+.qmr .qmr-sub { margin: 0; color: var(--text-dim, #9aa3b2); font-size: 0.85rem; }
+.qmr .qmr-cancel { margin-left: auto; }
+
+.qmr .qmr-totals { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.qmr .qmr-chip {
+	display: inline-flex; align-items: center; gap: 6px;
+	padding: 4px 10px; border-radius: 999px;
+	background: rgba(127, 127, 127, 0.14); font-size: 0.8rem;
+}
+.qmr .qmr-chip-label { color: var(--text-dim, #9aa3b2); }
+.qmr .qmr-chip-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.qmr .qmr-t-done .qmr-chip-value { color: #8fd18f; }
+.qmr .qmr-t-pass .qmr-chip-value { color: #7ddb8a; }
+.qmr .qmr-t-fail .qmr-chip-value { color: #ff7d7d; }
+.qmr .qmr-t-block .qmr-chip-value { color: #e0a54a; }
+.qmr .qmr-t-skip .qmr-chip-value { color: #b9c2d0; }
+.qmr .qmr-t-cancel .qmr-chip-value { color: #b08bd0; }
+.qmr .qmr-t-live .qmr-chip-value { color: #6cc3ff; }
+
+.qmr .qmr-gaps {
+	margin: 10px 0; padding: 10px 12px; border-radius: 8px;
+	background: rgba(224, 165, 74, 0.10); border: 1px solid rgba(224, 165, 74, 0.35);
+}
+.qmr .qmr-gaps-title { margin: 0 0 6px; font-size: 0.85rem; color: #e0a54a; }
+.qmr .qmr-gaps-list { margin: 0; padding-left: 18px; font-size: 0.8rem; color: var(--text-dim, #9aa3b2); }
+.qmr .qmr-gap + .qmr-gap { margin-top: 2px; }
+
+.qmr .qmr-filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+.qmr .qmr-search { flex: 1 1 200px; min-width: 160px; }
+.qmr .qmr-filters select { flex: 0 1 auto; }
+
+.qmr .qmr-board { display: flex; flex-direction: column; gap: 14px; }
+.qmr .qmr-group { display: flex; flex-direction: column; gap: 6px; }
+.qmr .qmr-group-title {
+	margin: 0; font-size: 0.75rem; text-transform: uppercase;
+	letter-spacing: 0.06em; color: var(--text-dim, #9aa3b2);
+	border-bottom: 1px solid rgba(127, 127, 127, 0.25); padding-bottom: 4px;
+}
+.qmr .qmr-device-title { margin: 6px 0 0; font-size: 0.85rem; font-weight: 600; }
+
+.qmr .qmr-row {
+	display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+	padding: 6px 10px; border-radius: 6px; background: rgba(127, 127, 127, 0.08);
+	font-size: 0.82rem;
+}
+.qmr .qmr-ident { font-weight: 600; }
+.qmr .qmr-os { color: var(--text-dim, #9aa3b2); }
+.qmr .qmr-exec { color: var(--text-dim, #9aa3b2); font-style: italic; }
+.qmr .qmr-status { margin-left: auto; font-weight: 600; font-size: 0.78rem; }
+.qmr .qmr-st-pending { color: #9aa3b2; }
+.qmr .qmr-st-queued { color: #6cc3ff; }
+.qmr .qmr-st-running { color: #6cc3ff; }
+.qmr .qmr-st-passed { color: #7ddb8a; }
+.qmr .qmr-st-failed { color: #ff7d7d; }
+.qmr .qmr-st-blocked { color: #e0a54a; }
+.qmr .qmr-st-skipped { color: #b9c2d0; }
+.qmr .qmr-st-cancelled { color: #b08bd0; }
+.qmr .qmr-st-not_run { color: #9aa3b2; }
+.qmr .qmr-st-unavailable { color: #e0a54a; }
+.qmr .qmr-st-not_supported { color: #e0a54a; }
+.qmr .qmr-st-error { color: #ff7d7d; }
+.qmr .qmr-facts { color: var(--text-dim, #9aa3b2); font-size: 0.75rem; }
+.qmr .qmr-meta { color: var(--text-dim, #9aa3b2); font-size: 0.75rem; flex-basis: 100%; }
+.qmr .qmr-evidence { display: inline-flex; gap: 8px; }
+.qmr .qmr-open, .qmr .qmr-retry { padding: 2px 8px; font-size: 0.72rem; }
+
+.qmr .qmr-empty { color: var(--text-dim, #9aa3b2); padding: 12px 0; }
+.qmr .qmr-state { color: var(--text-dim, #9aa3b2); padding: 8px 0; }
+.qmr .qmr-retry-load { margin-top: 6px; }
+.qmr .qmr-more { display: block; margin: 12px auto 0; }

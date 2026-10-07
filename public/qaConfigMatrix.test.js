@@ -14,7 +14,13 @@ import {
 	isValidTargetUrl,
 	canStartRun,
 	fetchQaConfigurations,
-	executionTypeLabel
+	fetchConfigurationIndex,
+	fetchConfigurationWindow,
+	executionTypeLabel,
+	configurationsForDevice,
+	compatibleBrowserFamilies,
+	defaultSelectionForDevice,
+	deviceScopeSelection
 } from './qaConfigMatrix.js';
 
 /** Minimal in-memory localStorage. */
@@ -224,4 +230,135 @@ test('executionTypeLabel maps all five execution types', () => {
 	assert.equal(executionTypeLabel('emulator'), 'Emulator');
 	assert.equal(executionTypeLabel('simulator'), 'Simulator');
 	assert.equal(executionTypeLabel('browser_emulation'), 'Browser emulation');
+});
+
+/* ── Windowed catalog model (30MB-payload fix, #15013) ─────────────── */
+
+test('fetchConfigurationIndex requests the compact index and returns it', async () => {
+	const calls = [];
+	const fetcher = async (url) => {
+		calls.push(url);
+		assert.match(url, /\/api\/qa-configurations\?index=1&limit=1/);
+		return { ok: true, json: async () => ({ index: [configuration()], configurations: [], totals: {} }) };
+	};
+	const index = await fetchConfigurationIndex({ fetcher });
+	assert.equal(index.length, 1);
+	assert.equal(index[0].envId, 'ENV-IOS-IP15-18.0-CHR-140');
+});
+
+test('fetchConfigurationIndex surfaces server errors with status', async () => {
+	const fetcher = async () => ({ ok: false, status: 500, json: async () => ({ error: 'catalog exploded' }) });
+	await assert.rejects(
+		() => fetchConfigurationIndex({ fetcher }),
+		(error) => error.status === 500 && /catalog exploded/.test(error.message)
+	);
+});
+
+test('fetchConfigurationWindow passes filters + pagination and reports hasMore', async () => {
+	const seen = [];
+	const fetcher = async (url) => {
+		seen.push(url);
+		return { ok: true, json: async () => ({ configurations: [configuration()], totals: { configurations: 12 } }) };
+	};
+	const result = await fetchConfigurationWindow({ platform: 'ios', search: 'iphone 15' }, { fetcher, limit: 50, offset: 100 });
+	assert.match(seen[0], /platform=ios/);
+	assert.match(seen[0], /search=iphone(%2015|\+15)/);
+	assert.match(seen[0], /limit=50/);
+	assert.match(seen[0], /offset=100/);
+	assert.equal(result.configurations.length, 1);
+	assert.equal(result.total, 12);
+	assert.equal(result.hasMore, false); // 100 + 1 < 12 is false
+});
+
+test('fetchConfigurationWindow hasMore is true when window is partial', async () => {
+	const fetcher = async () => ({ ok: true, json: async () => ({ configurations: Array.from({ length: 50 }, (_, i) => configuration({ envId: `E${i}` })), totals: { configurations: 500 } }) });
+	const result = await fetchConfigurationWindow({}, { fetcher, limit: 50, offset: 0 });
+	assert.equal(result.hasMore, true);
+});
+
+test('fetchConfigurationWindow rejects malformed payloads', async () => {
+	const fetcher = async () => ({ ok: true, json: async () => ({ nonsense: true }) });
+	await assert.rejects(() => fetchConfigurationWindow({}, { fetcher }), /malformed/);
+});
+
+test('default selection over an index honors deselections across the full catalog', () => {
+	const storage = memoryStorage();
+	const store = createDeselectionStore(storage);
+	store.deselect('ENV-AND-SGS24-15-BRV-138');
+	const selected = computeSelection(CATALOG, store);
+	assert.ok(!selected.includes('ENV-AND-SGS24-15-BRV-138'));
+	assert.ok(!selected.includes('PROV-BS-IP15-REAL')); // NOT_CONFIGURED never selected
+	assert.equal(selected.length, 3);
+});
+
+test('buildSummary over the index reports full-catalog totals', () => {
+	const selected = computeSelection(CATALOG, createDeselectionStore(memoryStorage()));
+	const summary = buildSummary(CATALOG, selected);
+	assert.equal(summary.total, 4); // 6 rows − 1 NOT_SUPPORTED − 1 NOT_CONFIGURED
+	assert.equal(summary.availableTotal, 4);
+	assert.equal(summary.unavailable, 2);
+	assert.equal(summary.byFamily.chrome, 2);
+	assert.equal(summary.byFamily.edge, 1);
+	assert.equal(summary.byFamily.brave, 1);
+});
+
+test('#15092 family-toggle bulk store writes persist once and survive reopen', () => {
+	const storage = memoryStorage();
+	let writes = 0;
+	const counting = {
+		getItem: storage.getItem,
+		setItem: (key, value) => { writes += 1; storage.setItem(key, value); },
+		removeItem: storage.removeItem
+	};
+	const store = createDeselectionStore(counting);
+	// Family toggle deselecting ~8k rows must be ONE store write, not one
+	// per envId (the per-row persist crashed the renderer tab).
+	const ids = Array.from({ length: 8000 }, (_, index) => `ENV-BULK-${index}`);
+	store.deselectMany(ids);
+	assert.equal(writes, 1);
+	assert.equal(store.get().size, 8000);
+	// Persistence survives a "reopen" (new store over the same storage).
+	const reopened = createDeselectionStore(storage);
+	assert.equal(reopened.get().size, 8000);
+	reopened.reselectMany(ids.slice(0, 4000));
+	assert.equal(reopened.get().size, 4000);
+	const reopened2 = createDeselectionStore(storage);
+	assert.equal(reopened2.get().size, 4000);
+});
+
+// ---------------------------------------------------------------------------
+// #15163 device scope: picking a device auto-selects ALL its compatible
+// browsers; switching devices never leaks the previous scope.
+// ---------------------------------------------------------------------------
+test('#15163 configurationsForDevice scopes by platform+device+manufacturer', () => {
+	const galaxy = configurationsForDevice(CATALOG, { platform: 'android', device: 'Galaxy S24', manufacturer: 'Samsung' });
+	assert.equal(galaxy.length, 1);
+	assert.ok(galaxy.every((row) => row.device === 'Galaxy S24' && row.platform === 'android'));
+	const other = configurationsForDevice(CATALOG, { platform: 'android', device: 'Galaxy S24', manufacturer: 'Other' });
+	assert.equal(other.length, 0);
+});
+
+test('#15163 compatibleBrowserFamilies lists only families with an available row', () => {
+	const galaxy = configurationsForDevice(CATALOG, { platform: 'android', device: 'Galaxy S24', manufacturer: 'Samsung' });
+	const families = compatibleBrowserFamilies(galaxy);
+	assert.ok(families.includes('brave'));
+	assert.ok(!families.includes('duckduckgo'), 'statically unsupported family must never appear');
+	const pixel = configurationsForDevice(CATALOG, { platform: 'android', device: 'Pixel 9', manufacturer: 'Google' });
+	assert.deepEqual(compatibleBrowserFamilies(pixel), []);
+});
+
+test('#15163 defaultSelectionForDevice returns exactly the available envIds', () => {
+	const galaxy = configurationsForDevice(CATALOG, { platform: 'android', device: 'Galaxy S24', manufacturer: 'Samsung' });
+	assert.deepEqual([...defaultSelectionForDevice(galaxy)], ['ENV-AND-SGS24-15-BRV-138']);
+	const pixel = configurationsForDevice(CATALOG, { platform: 'android', device: 'Pixel 9', manufacturer: 'Google' });
+	assert.deepEqual([...defaultSelectionForDevice(pixel)], []);
+});
+
+test('#15163 deviceScopeSelection derives scope + selection + families in one call', () => {
+	const result = deviceScopeSelection(CATALOG, { platform: 'android', device: 'Galaxy S24', manufacturer: 'Samsung' });
+	assert.equal(result.scope.platform, 'android');
+	assert.deepEqual(result.selectedEnvIds, ['ENV-AND-SGS24-15-BRV-138']);
+	assert.ok(result.browserFamilies.includes('brave'));
+	assert.equal(result.configurationCount, 1);
+	assert.equal(deviceScopeSelection(CATALOG, null), null);
 });

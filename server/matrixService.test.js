@@ -160,7 +160,8 @@ test('create validates testCaseId and targetUrl', async () => {
 	const { backend, dir } = tempBackend();
 	try {
 		const matrix = createMatrixService(backend, testServices());
-		await assert.rejects(() => matrix.create({ targetUrl: 'https://example.com' }), MatrixValidationError);
+		// #15043 (B1): targetUrl-only QA runs are now valid; BOTH missing still rejects.
+		await assert.rejects(() => matrix.create({}), MatrixValidationError);
 		await assert.rejects(() => matrix.create({ testCaseId: 'TC-1', targetUrl: 'ftp://nope' }), MatrixValidationError);
 		await assert.rejects(() => matrix.create({ testCaseId: 'TC-X', targetUrl: 'https://example.com' }),
 			(error) => error instanceof Error && /Unknown test case/.test(error.message));
@@ -247,6 +248,81 @@ test('_setStatus accepts only the run status vocabulary', async () => {
 		await assert.rejects(() => matrix._setStatus(run.id, 'finished'), MatrixValidationError);
 		await matrix._setStatus(run.id, 'running', { startedAt: new Date().toISOString() });
 		assert.equal((await matrix.get(run.id)).status, 'running');
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/* ── Phase 3 (#14937): launcher configurationEnvIds mode ──────────── */
+
+test('create with configurationEnvIds pins EXACT configurations (no silent newest-version swap)', async () => {
+	const { backend, dir } = tempBackend();
+	try {
+		const matrix = createMatrixService(backend, testServices());
+		const chromeRows = fixtureEnvironments()
+			.filter((env) => env.device === 'iPhone 17 Pro' && env.browserCode === 'chrome')
+			.sort((a, b) => Number(b.browserVersion) - Number(a.browserVersion));
+		assert.ok(chromeRows.length >= 2, 'expected multiple chrome versions on iPhone 17 Pro');
+		const older = chromeRows[chromeRows.length - 1]; // deliberately NOT the newest
+		const run = await matrix.create({
+			targetUrl: 'https://example.com',
+			kickoffText: 'https://example.com\nCoverage: core flows',
+			configurationEnvIds: [older.envId]
+		});
+		assert.equal(run.itemCount, 1);
+		const item = run.items[0];
+		assert.equal(item.environmentId, older.envId, 'exact requested envId pinned');
+		assert.equal(item.browserVersion, older.browserVersion, 'exact requested version pinned');
+		assert.equal(item.status, 'PENDING');
+		assert.equal(item.testCaseId, '');
+		assert.equal(run.kickoffText, 'https://example.com\nCoverage: core flows');
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('configurationEnvIds: vanished envId → honest BLOCKED item, never dropped', async () => {
+	const { backend, dir } = tempBackend();
+	try {
+		const matrix = createMatrixService(backend, testServices());
+		const run = await matrix.create({
+			targetUrl: 'https://example.com',
+			configurationEnvIds: ['ENV-GONE-FOREVER-CHR-1']
+		});
+		assert.equal(run.itemCount, 1);
+		assert.equal(run.items[0].status, 'BLOCKED');
+		assert.match(run.items[0].reason ?? '', /no longer in the catalog/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('configurationEnvIds: DuckDuckGo row → NOT_SUPPORTED with provider reason, never executes', async () => {
+	const { backend, dir } = tempBackend();
+	try {
+		const matrix = createMatrixService(backend, testServices());
+		const ddg = fixtureEnvironments().find((env) => env.browserCode === 'duckduckgo');
+		if (!ddg) return; // catalog without DDG rows: nothing to assert
+		const run = await matrix.create({
+			targetUrl: 'https://example.com',
+			configurationEnvIds: [ddg.envId]
+		});
+		const item = run.items[0];
+		assert.equal(item.status, 'NOT_SUPPORTED');
+		assert.ok(item.reason, 'reason expected');
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test('configurationEnvIds: empty array rejects (422 contract)', async () => {
+	const { backend, dir } = tempBackend();
+	try {
+		const matrix = createMatrixService(backend, testServices());
+		await assert.rejects(
+			() => matrix.create({ targetUrl: 'https://example.com', configurationEnvIds: [] }),
+			MatrixValidationError
+		);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}

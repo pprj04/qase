@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Qase \u2014 an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
+  "description": "Qase — an autonomous QA agent that tests live websites in a real browser, built on @cleanslate/sdk.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@cleanslate/sdk": "^0.1.0",
+    "compression": "^1.8.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.22.0",

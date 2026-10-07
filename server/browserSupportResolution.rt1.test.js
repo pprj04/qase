@@ -69,13 +69,20 @@ test('duckduckgo is NOT_SUPPORTED with the truthful reason regardless of registr
 	setLocalRegistrySnapshot(null);
 });
 
-test('a present-but-broken binary downgrades to NOT_SUPPORTED with the launch error', async () => {
+// #15162: a failed launch probe is one probe attempt, not proof of
+// unsupportability — the family stays SUPPORTED pre-run with
+// launchVerified:false; the failure must surface in run results only.
+test('a present-but-broken binary stays SUPPORTED (launchVerified:false) with the probe note', async () => {
 	setLocalRegistrySnapshot(snapshotWith([
 		{ code: 'chrome', status: 'present', executablePath: '/usr/bin/google-chrome-stable', version: '151', launchVerified: false, reason: 'Binary present but failed to launch: sandbox denied' }
 	]));
 	const chrome = resolveBrowserSupportSync('windows', 'chrome');
-	assert.equal(chrome.status, BROWSER_SUPPORT_STATUS.NOT_SUPPORTED);
-	assert.match(chrome.reason, /failed to launch: sandbox denied/);
+	assert.equal(chrome.status, BROWSER_SUPPORT_STATUS.SUPPORTED);
+	assert.equal(chrome.launchVerified, false);
+	assert.match(chrome.probeNote, /failed to launch: sandbox denied/);
+	const chromeAsync = await resolveBrowserSupport('windows', 'chrome');
+	assert.equal(chromeAsync.status, BROWSER_SUPPORT_STATUS.SUPPORTED);
+	assert.equal(chromeAsync.launchVerified, false);
 	setLocalRegistrySnapshot(null);
 });
 

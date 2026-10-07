@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
+import compression from 'compression';
 import { createInstanceAccess, securityHeaders } from './instanceAccess.js';
 import { isDeviceId, DEFAULT_DEVICE_ID, publicDeviceProfile, DEVICE_PROFILES } from './deviceProfiles.js';
 import { engineRegistryResolved, isEngineId } from './browserEngines.js';
@@ -204,6 +205,10 @@ export function createApplication(options = {}) {
 		app.set('trust proxy', 1);
 	}
 	app.use(operations.middleware);
+	app.use(securityHeaders);
+	// Gzip the big catalog payloads (the full-catalog index is ~13MB raw,
+	// ~300KB gzipped) — keeps the launcher's first load off the SSE limit.
+	app.use(compression());
 	app.use(securityHeaders);
 
 	app.get('/healthz', (_request, response) => {
@@ -597,7 +602,7 @@ export function createApplication(options = {}) {
 		app.get('/api/qa-configurations', async (request, response) => {
 			try {
 				const query = request.query ?? {};
-				const limit = query.limit === undefined ? undefined : Number(query.limit);
+				const limit = query.limit === undefined ? 200 : Number(query.limit);
 				if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 80000)) {
 					response.status(400).json({ error: 'limit must be an integer from 1 through 80000.' });
 					return;
@@ -624,8 +629,22 @@ export function createApplication(options = {}) {
 					? services.deviceRuntime.deviceBoard()
 					: [];
 				const result = await buildQaConfigurations(
-					{ environmentsService: services.environments, providers, board },
-					query
+					{
+						environmentsService: services.environments,
+						providers,
+						board,
+						limit,
+						offset,
+						index: query.index === '1' || query.index === 'true'
+					},
+					{
+						platform: query.platform,
+						manufacturer: query.manufacturer,
+						osVersion: query.osVersion,
+						orientation: query.orientation,
+						browserCode: query.browserCode,
+						search: query.search
+					}
 				);
 				response.set('Cache-Control', 'no-store');
 				response.json(result);
@@ -752,17 +771,24 @@ export function createApplication(options = {}) {
 							ownerUserId: matrixRun.ownerUserId ?? undefined,
 							environmentId: environment.envId,
 							environmentSnapshot: environment,
-							testCaseId: matrixRun.items?.[0]?.testCaseId ?? item.testCaseId,
+							testCaseId: item.testCaseId ?? matrixRun.items?.[0]?.testCaseId ?? undefined,
+							selectedTests: matrixRun.selectedTests ?? undefined,
+							securityAuthorization: matrixRun.securityAuthorization ?? undefined,
+							scopeSelection: matrixRun.scopeSelection ?? undefined,
 							matrixRunId: matrixRun.id
 						}
 					);
 					return session;
 				},
 				sendTask: async (session, matrixRun) => {
-					await services.runs.addMessage(session, { role: 'user', text: matrixRun.targetUrl });
+					// #15043 (B1): QA-start runs carry their own kickoff text
+					// (target URL + coverage message); test-case runs send the
+					// raw target as before.
+					const text = matrixRun.kickoffText ?? matrixRun.targetUrl;
+					await services.runs.addMessage(session, { role: 'user', text });
 					session.targetUrl = matrixRun.targetUrl;
 					await services.agent.ensureRuntime(session);
-					startTurn(session, { task: matrixRun.targetUrl });
+					startTurn(session, { task: text });
 				},
 				// #14650 (NI02 Phase 2): per-profile evidence — list the
 				// artifacts the session ACTUALLY produced (screenshots/video
@@ -832,9 +858,84 @@ export function createApplication(options = {}) {
 		// #14633 (NI02 Phase 1): clean up any matrix run a previous container
 		// died mid-flight — dangling RUNNING items become ERROR "interrupted".
 		orchestrator.resumeRecovery();
+		// #15043 (B1): QA-start path — Start QA submits its selected
+		// device–browser configurations here; one matrix run, one item per
+		// configuration, honest statuses for everything not executable.
+		app.post('/api/qa-matrix-runs', async (request, response) => {
+			try {
+				const body = request.body ?? {};
+				const targetUrl = String(body.targetUrl ?? '').trim();
+				if (!/^https?:\/\//i.test(targetUrl)) {
+					response.status(400).json({ error: 'targetUrl must be an http(s) URL.' });
+					return;
+				}
+				const envIds = Array.isArray(body.configurationEnvIds)
+					? body.configurationEnvIds.map(String).filter(Boolean)
+					: [];
+				if (envIds.length === 0) {
+					response.status(400).json({ error: 'At least one configuration is required.' });
+					return;
+				}
+				// Robustness cap (review #14937): a full-default launcher
+				// selection is ~37k rows — one item each is a months-long queue
+				// and a very heavy state file. The UI narrows selection before
+				// Start; a request larger than this is a client bug, refuse it
+				// honestly rather than self-inflicting the load.
+				const MAX_MATRIX_CONFIGURATIONS = 2000;
+				if (envIds.length > MAX_MATRIX_CONFIGURATIONS) {
+					response.status(422).json({
+						error: `Too many configurations selected (${envIds.length}). The maximum per run is ${MAX_MATRIX_CONFIGURATIONS} — narrow the selection (platform, manufacturer, browser, or OS filters) and start again.`
+					});
+					return;
+				}
+				// Validate the QA context exactly as POST /api/sessions does —
+				// the same tests/scope/security rules apply to every item.
+				let selectedTests;
+				let securityAuthorization;
+				try {
+					selectedTests = validateQaSelectedTests(body.selectedTests);
+					securityAuthorization = validateSecurityAuthorization(body.securityAuthorization, selectedTests);
+				} catch (error) {
+					response.status(422).json({ error: error instanceof Error ? error.message : String(error) });
+					return;
+				}
+				let scopeSelection = null;
+				if (body.scopeSelection !== undefined && body.scopeSelection !== null) {
+					const { normalizeQaScopeSelection } = await import('../public/qaScopeCatalog.js');
+					try {
+						scopeSelection = normalizeQaScopeSelection(body.scopeSelection);
+					} catch (error) {
+						response.status(422).json({ error: error instanceof Error ? error.message : String(error) });
+						return;
+					}
+				}
+				// Unknown envIds are NOT rejected here — the matrix service
+				// records them as honest BLOCKED items ("no longer in the
+				// catalog") so every selected configuration gets a result.
+				const record = await services.matrix.create({
+					title: String(body.title ?? `QA run — ${targetUrl}`).slice(0, 120),
+					targetUrl,
+					testCaseId: body.testCaseId,
+					configurationEnvIds: envIds,
+					kickoffText: body.kickoffText,
+					selectedTests,
+					securityAuthorization,
+					scopeSelection
+				}, { ownerUserId: request.auth?.userId ?? null });
+				const started = orchestrator.start(record.id);
+				if (!started.ok) {
+					response.status(409).json({ error: started.error });
+					return;
+				}
+				response.status(201).json(await services.matrix.get(record.id));
+			} catch (error) {
+				safeErrorResponse(request, response, error);
+			}
+		});
 		createMatrixRoutes({
 			matrix: services.matrix,
 			orchestrator,
+			bugs: services.bugs,
 			onError: safeErrorResponse
 		})(app);
 	}

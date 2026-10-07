@@ -63,8 +63,20 @@ export function createDeselectionStore(storage) {
 			deselected.add(envId);
 			persist();
 		},
+		/** Bulk deselect (family toggle). Writes storage ONCE — one persist per
+		 *  call instead of one per envId, which serialized ~8k localStorage
+		 *  writes on a family click and crashed the renderer tab (#15092). */
+		deselectMany(envIds) {
+			for (const envId of envIds) deselected.add(envId);
+			persist();
+		},
 		reselect(envId) {
 			deselected.delete(envId);
+			persist();
+		},
+		/** Bulk reselect (family toggle) — single persist, same rationale. */
+		reselectMany(envIds) {
+			for (const envId of envIds) deselected.delete(envId);
 			persist();
 		},
 		/** Explicitly reselect everything (Select-all affordance). */
@@ -102,6 +114,63 @@ export function computeSelection(configurations, deselectionStore) {
 export function sanitizeSelection(configurations, selectedEnvIds) {
 	const selectable = new Set(configurations.filter(isSelectable).map((c) => c.envId));
 	return [...new Set(selectedEnvIds)].filter((envId) => selectable.has(envId));
+}
+
+// ---------------------------------------------------------------------------
+// Device scope (#15163): picking one device in the Start QA modal narrows the
+// run to that device's configurations and auto-selects ALL its compatible
+// (available) browsers. Switching devices never leaks the previous scope.
+// ---------------------------------------------------------------------------
+
+/** All AVAILABLE configurations of one device (any OS version / browser). */
+export function configurationsForDevice(configurations, { platform, device, manufacturer = '' }) {
+	return configurations.filter((configuration) =>
+		configuration.platform === platform
+		&& configuration.device === device
+		&& (configuration.manufacturer ?? '') === manufacturer);
+}
+
+/**
+ * Browser families compatible with one device — a family counts when at
+ * least one of the device's configurations for it is AVAILABLE.
+ * DuckDuckGo (and any other statically-unsupported family) never appears.
+ */
+export function compatibleBrowserFamilies(deviceConfigurations) {
+	const families = [];
+	for (const code of FAMILY_ORDER) {
+		if (deviceConfigurations.some((configuration) =>
+			configuration.browserCode === code && isSelectable(configuration))) {
+			families.push(code);
+		}
+	}
+	return families;
+}
+
+/**
+ * Default selection for a device scope: EVERY AVAILABLE envId of the device
+ * (all compatible families, all OS versions, both orientations the device
+ * supports). Nothing unavailable is ever selected.
+ */
+export function defaultSelectionForDevice(deviceConfigurations) {
+	return deviceConfigurations
+		.filter((configuration) => isSelectable(configuration))
+		.map((configuration) => configuration.envId);
+}
+
+/**
+ * Set / replace the device scope. Returns the new selection (auto-select-all)
+ * — callers assign it; session deselections from the PREVIOUS device are
+ * discarded because the scope key changed.
+ */
+export function deviceScopeSelection(configurations, scope) {
+	if (!scope) return null;
+	const deviceConfigurations = configurationsForDevice(configurations, scope);
+	return {
+		scope,
+		selectedEnvIds: defaultSelectionForDevice(deviceConfigurations),
+		browserFamilies: compatibleBrowserFamilies(deviceConfigurations),
+		configurationCount: deviceConfigurations.length
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +412,10 @@ export const FETCH_STATES = {
  * injected so tests can stub; abortSignal supported for dialog-reopen races.
  */
 export async function fetchQaConfigurations({ fetcher = globalThis.fetch, signal = null } = {}) {
-	const response = await fetcher('/api/qa-configurations?limit=80000', { signal, headers: { accept: 'application/json' } });
+	// Catalog summary only: families/providers/facet counts. The full
+	// configuration list is fetched lazily in windows (see fetchConfigurationWindow)
+	// so a 38k-row catalog never renders as one giant DOM tree or payload.
+	const response = await fetcher('/api/qa-configurations', { signal, headers: { accept: 'application/json' } });
 	if (!response.ok) {
 		const detail = await response.json().catch(() => null);
 		const error = new Error(detail?.error ?? `Catalog request failed (${response.status}).`);
@@ -356,4 +428,56 @@ export async function fetchQaConfigurations({ fetcher = globalThis.fetch, signal
 		throw new Error('Catalog response was malformed.');
 	}
 	return payload;
+}
+
+/**
+ * Fetch the full-catalog COMPACT INDEX: one small object per configuration
+ * (envId, platform, manufacturer, device, os, osVersion, browser, browserCode,
+ * browserVersion, availability, availabilityReason, executionType). The index
+ * drives selection math, family checklist counts, facets and the summary; the
+ * heavy tree renders only windowed slices (fetchConfigurationWindow).
+ */
+export async function fetchConfigurationIndex({ fetcher = globalThis.fetch, signal = null } = {}) {
+	const response = await fetcher('/api/qa-configurations?index=1&limit=1', { signal, headers: { accept: 'application/json' } });
+	if (!response.ok) {
+		const detail = await response.json().catch(() => null);
+		const error = new Error(detail?.error ?? `Catalog request failed (${response.status}).`);
+		error.status = response.status;
+		throw error;
+	}
+	const payload = await response.json();
+	if (!Array.isArray(payload?.index)) {
+		throw new Error('Catalog response was malformed.');
+	}
+	return payload.index;
+}
+
+/**
+ * Fetch one window of configurations from the server-side catalog (which
+ * already applies filters + pagination). Returns {configurations, total,
+ * hasMore} so the UI can render incrementally with a "Load more" affordance.
+ */
+export async function fetchConfigurationWindow(filters = {}, { fetcher = globalThis.fetch, signal = null, limit = 200, offset = 0 } = {}) {
+	const params = new URLSearchParams();
+	for (const key of ['platform', 'manufacturer', 'osVersion', 'orientation', 'browserCode', 'search']) {
+		if (filters[key]) params.set(key, filters[key]);
+	}
+	params.set('limit', String(limit));
+	params.set('offset', String(offset));
+	const response = await fetcher(`/api/qa-configurations?${params}`, { signal, headers: { accept: 'application/json' } });
+	if (!response.ok) {
+		const detail = await response.json().catch(() => null);
+		const error = new Error(detail?.error ?? `Catalog request failed (${response.status}).`);
+		error.status = response.status;
+		throw error;
+	}
+	const payload = await response.json();
+	if (!Array.isArray(payload?.configurations)) {
+		throw new Error('Catalog response was malformed.');
+	}
+	return {
+		configurations: payload.configurations,
+		total: payload.totals?.configurations ?? payload.configurations.length,
+		hasMore: (offset + payload.configurations.length) < (payload.totals?.configurations ?? payload.configurations.length)
+	};
 }

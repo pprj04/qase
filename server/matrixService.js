@@ -21,10 +21,12 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveBrowserSupport, BROWSER_SUPPORT_STATUS } from './browserSupportResolution.js';
 
-/** Per-item status vocabulary — the honest set, persisted per item. */
+/** Per-item status vocabulary — the honest set, persisted per item.
+ * #15043 (B1): QUEUED = scheduled-for-execution (between PENDING and RUNNING);
+ * CANCELLED = was queued but the run was cancelled before launch. */
 export const MATRIX_ITEM_STATUSES = Object.freeze([
-	'PENDING', 'RUNNING', 'PASSED', 'FAILED',
-	'NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'BLOCKED', 'ERROR'
+	'PENDING', 'QUEUED', 'RUNNING', 'PASSED', 'FAILED',
+	'NOT_RUN', 'UNAVAILABLE', 'NOT_SUPPORTED', 'BLOCKED', 'ERROR', 'CANCELLED'
 ]);
 
 export class MatrixValidationError extends Error {
@@ -257,25 +259,43 @@ export function createMatrixService(backend, { environments, runs, testCases } =
 	async function create(input, { defaultsUsed = false, ownerUserId = null } = {}) {
 		requireServices();
 		const testCaseId = String(input?.testCaseId ?? '').trim();
-		if (!testCaseId) throw new MatrixValidationError('testCaseId is required.');
+		// #15043 (B1): QA-start runs carry no test case — the shared workflow
+		// is the QA kickoff text itself (targetUrl + coverage message), which
+		// travels on the run record; the item execution path reads it there.
 		const targetUrl = String(input?.targetUrl ?? '').trim();
+		if (!testCaseId && !targetUrl) throw new MatrixValidationError('testCaseId or targetUrl is required.');
 		if (!/^https?:\/\//i.test(targetUrl)) throw new MatrixValidationError('targetUrl must be an http(s) URL.');
-		// #14651 (NI03): default = the FULL agreed matrix including DuckDuckGo —
-		// unsupported browsers are part of the default run so their honest
-		// NOT_SUPPORTED status + reason appear in results and coverage; they
-		// never execute (capability gate) and can never become PASSED.
-		const selectedBrowsers = (input?.selectedBrowsers ?? ['chrome', 'edge', 'firefox', 'safari', 'opera', 'brave', 'duckduckgo'])
-			.map(String);
+		const list = await environments.list({ limit: 80000 });
+		// Phase 3 (#14937): the QA launcher sends EXACT configurations — the
+		// device–OS–browser–version envIds the user kept selected. Every
+		// selected configuration becomes an item; unknown/unavailable ids are
+		// recorded honestly (BLOCKED), never silently dropped, so "every
+		// selected configuration gets a result" holds even when the catalog
+		// changed between selection and submit.
+		const configurationEnvIds = Array.isArray(input?.configurationEnvIds)
+			? input.configurationEnvIds.map(String).filter(Boolean)
+			: null;
+		if (configurationEnvIds !== null && configurationEnvIds.length === 0) {
+			throw new MatrixValidationError('At least one configuration must be selected.');
+		}
+		const selectedBrowsers = configurationEnvIds
+			? [...new Set(configurationEnvIds.map((envId) => {
+				const env = list.find((candidate) => candidate.envId === envId);
+				return env?.browserCode;
+			}).filter(Boolean))]
+			: (input?.selectedBrowsers ?? ['chrome', 'edge', 'firefox', 'safari', 'opera', 'brave', 'duckduckgo'])
+				.map(String);
 		// #14649: run-level deselection — `browsers` names the subset the user
 		// kept; browsers present in selectedBrowsers but absent from it are
 		// recorded per item as NOT_RUN ("Deselected by user."), never dropped.
 		const deselectedBrowsers = Array.isArray(input?.browsers)
 			? selectedBrowsers.filter((code) => !input.browsers.map(String).includes(code))
 			: [];
-		const list = await environments.list({ limit: 80000 });
 		let profileRequests = Array.isArray(input?.profiles) ? input.profiles : null;
 		let defaultsSnapshot = null;
-		if (!profileRequests) {
+		if (!profileRequests && configurationEnvIds) {
+			profileRequests = [...new Set(configurationEnvIds)].map((envId) => ({ envId }));
+		} else if (!profileRequests) {
 			profileRequests = resolveDefaultProfiles(list).map((entry) => ({ envId: entry.envId }));
 			defaultsSnapshot = { rules: DEFAULT_PROFILE_RULES, resolved: profileRequests };
 			defaultsUsed = true;
@@ -284,22 +304,58 @@ export function createMatrixService(backend, { environments, runs, testCases } =
 		// Note: environment membership is NOT enforced per item here — the matrix
 		// intentionally crosses profiles beyond a case's assigned environments
 		// (the assignment UI remains for single runs).
-		const testCase = await testCases.resolveForRun(testCaseId, null);
-		const items = (await expandMatrixItems(list, profileRequests, selectedBrowsers, { deselectedBrowsers }))
-			.map((spec, ordinal) => ({
-				id: randomUUID(),
-				ordinal,
-				testCaseId,
-				environmentId: spec.env.envId,
-				profileId: spec.env.profileId,
-				platform: spec.env.platform,
-				device: spec.env.device,
-				os: spec.env.os,
-				osVersion: spec.env.osVersion,
-				browser: spec.browserCode,
-				browserCode: spec.browserCode,
-				browserVersion: spec.browserVersion ?? spec.env.browserVersion,
-				deviceType: spec.env.deviceType ?? null,
+		// #15043 (B1): QA-start runs (no testCaseId) skip the case lookup —
+		// the workflow is the kickoff text travelling on the run record.
+		const testCase = testCaseId
+			? await testCases.resolveForRun(testCaseId, null)
+			: { caseNumber: null, title: 'QA run' };
+		let items;
+		if (configurationEnvIds) {
+			// Launcher mode: pin each item to the EXACT requested configuration.
+			// The profile×browser expansion is skipped — every requested envId
+			// becomes exactly one item, honestly BLOCKED when it vanished from
+			// the catalog (so "every selected configuration gets a result" holds
+			// even if the catalog changed between selection and submit).
+			const byEnvId = new Map(list.map((env) => [env.envId, env]));
+			const seen = new Set();
+			const pinned = [];
+			for (const envId of configurationEnvIds) {
+				if (seen.has(envId)) continue;
+				seen.add(envId);
+				const env = byEnvId.get(envId);
+				if (!env) {
+					pinned.push({
+						env: { envId, platform: 'unknown', device: 'Unknown configuration', os: 'unknown', osVersion: 'unknown', browserVersion: null },
+						browserCode: 'unknown',
+						browserVersion: null,
+						status: 'BLOCKED',
+						reason: `Configuration "${envId}" is no longer in the catalog.`
+					});
+					continue;
+				}
+				const support = await resolveBrowserSupport(env.platform, env.browserCode, {});
+				pinned.push(support.status === BROWSER_SUPPORT_STATUS.NOT_SUPPORTED
+					? { env, browserCode: env.browserCode, browserVersion: env.browserVersion, status: 'NOT_SUPPORTED', reason: support.reason, browserSupport: support }
+					: { env, browserCode: env.browserCode, browserVersion: env.browserVersion, status: 'PENDING', reason: null, browserSupport: support, envTarget: env });
+			}
+			items = pinned;
+		} else {
+			items = await expandMatrixItems(list, profileRequests, selectedBrowsers, { deselectedBrowsers });
+		}
+		items = items.map((spec, ordinal) => ({
+			id: randomUUID(),
+			ordinal,
+			testCaseId,
+			environmentId: spec.env.envId,
+			profileId: spec.env.profileId,
+			platform: spec.env.platform,
+			device: spec.env.device,
+			os: spec.env.os,
+			osVersion: spec.env.osVersion,
+			browser: spec.browserCode,
+			browserCode: spec.browserCode,
+			browserVersion: spec.browserVersion ?? spec.env.browserVersion,
+			deviceType: spec.env.deviceType ?? null,
 			status: spec.status,
 			reason: spec.reason ?? null,
 			// #14633: browser capability snapshot travels with the item so the
@@ -307,25 +363,34 @@ export function createMatrixService(backend, { environments, runs, testCases } =
 			// changed since creation — re-resolved there; this is the frozen
 			// creation-time verdict for auditability).
 			browserSupport: spec.browserSupport ?? null,
+			// Bounded retry ledger (#14937): persisted per item, survives
+			// orchestrator restarts; 0 until a retry is actually taken.
+			retryCount: 0,
 			sessionId: null,
-				verdict: null,
-				error: null,
-				findings: [],
-				startedAt: null,
-				finishedAt: null,
-				durationMs: null,
-				// #14650 (NI02 Phase 2): per-profile evidence — filled at
-				// execution; stays null/[] until a real session produced them.
-				executionLevel: null,
-				executionProvider: null,
-				artifactRefs: [],
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString()
-			}));
+			verdict: null,
+			error: null,
+			findings: [],
+			startedAt: null,
+			finishedAt: null,
+			durationMs: null,
+			// #14650 (NI02 Phase 2): per-profile evidence — filled at
+			// execution; stays null/[] until a real session produced them.
+			executionLevel: null,
+			executionProvider: null,
+			artifactRefs: [],
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString()
+		}));
 		const record = {
 			id: `matrix-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
 			title: String(input?.title ?? `Matrix — ${testCase.title ?? testCaseId}`),
 			targetUrl,
+			// #15043 (B1): QA-start context — the kickoff workflow for items to
+			// execute when no test case drives the run.
+			kickoffText: input?.kickoffText ?? null,
+			selectedTests: input?.selectedTests ?? null,
+			securityAuthorization: input?.securityAuthorization ?? null,
+			scopeSelection: input?.scopeSelection ?? null,
 			status: 'pending',
 			defaultsUsed,
 			defaultsSnapshot,
@@ -376,10 +441,36 @@ export function createMatrixService(backend, { environments, runs, testCases } =
 		list: () => backend.list(null),
 		/** Orchestrator-internal: set run status + timing fields. */
 		async _setStatus(id, status, timing = {}) {
-			if (!['pending', 'running', 'done', 'error', 'interrupted'].includes(status)) {
+			if (!['pending', 'running', 'done', 'error', 'interrupted', 'cancelled'].includes(status)) {
 				throw new MatrixValidationError(`Invalid matrix run status "${status}".`);
 			}
 			return backend.update(null, id, { status, ...timing });
+		},
+		/**
+		 * #15043 (B1): cancel a run — every QUEUED item becomes CANCELLED
+		 * (never launched, never PASSED). RUNNING items finish their current
+		 * turn and keep their honest outcome. Idempotent.
+		 */
+		async cancel(id, { reason = 'Cancelled by user.' } = {}) {
+			const run = await backend.get(null, id);
+			if (!run) throw new MatrixValidationError(`Unknown matrix run "${id}".`);
+			let cancelled = 0;
+			for (const item of run.items ?? []) {
+				if (item.status === 'QUEUED' || item.status === 'PENDING') {
+					await backend.updateItem(null, id, item.id, {
+						status: 'CANCELLED',
+						reason,
+						finishedAt: new Date().toISOString()
+					});
+					cancelled += 1;
+				}
+			}
+			const updated = await backend.update(null, id, {
+				status: 'cancelled',
+				cancelReason: reason,
+				finishedAt: new Date().toISOString()
+			});
+			return { run: updated, cancelled };
 		},
 		backend
 	};

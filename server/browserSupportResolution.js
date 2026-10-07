@@ -144,13 +144,20 @@ export async function resolveBrowserSupport(platformId, browserCode, providers =
 			engineEquivalent: false
 		};
 	}
-	// Broken-binary honesty: present but launch failed → NOT executable.
+	// #15162: a failed launch probe is NOT proof of unsupportability — it is
+	// one probe attempt on one host at one moment. The binary is present, so
+	// the family stays AVAILABLE pre-run; launchVerified:false and the probe
+	// note travel along, and a real launch failure surfaces during the run in
+	// results/evidence — never as a pre-run availability status.
 	if (entry && entry.status === 'present' && String(entry.reason ?? '').startsWith('Binary present but failed')) {
 		return {
-			status: BROWSER_SUPPORT_STATUS.NOT_SUPPORTED,
-			reason: entry.reason,
+			status: BROWSER_SUPPORT_STATUS.SUPPORTED,
+			reason: brandedResolution(entry).reason,
 			provider: 'local-playwright',
-			engine: browser.fallback.engine ?? null,
+			engine: 'chromium',
+			branded: true,
+			launchVerified: false,
+			probeNote: entry.reason,
 			engineEquivalent: false
 		};
 	}
@@ -188,12 +195,16 @@ export function resolveBrowserSupportSync(platformId, browserCode, providers = {
 	if (entry && isExecutableLocalBrand(entry)) {
 		return { ...brandedResolution(entry), provider: 'local-playwright', engineEquivalent: false };
 	}
+	// #15162: failed launch probe → still AVAILABLE pre-run (see async variant).
 	if (entry && entry.status === 'present' && String(entry.reason ?? '').startsWith('Binary present but failed')) {
 		return {
-			status: BROWSER_SUPPORT_STATUS.NOT_SUPPORTED,
-			reason: entry.reason,
+			status: BROWSER_SUPPORT_STATUS.SUPPORTED,
+			reason: brandedResolution(entry).reason,
 			provider: 'local-playwright',
-			engine: browser.fallback.engine ?? null,
+			engine: 'chromium',
+			branded: true,
+			launchVerified: false,
+			probeNote: entry.reason,
 			engineEquivalent: false
 		};
 	}

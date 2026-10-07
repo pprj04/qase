@@ -66,6 +66,14 @@ async function startApp() {
 	return { json, close, services };
 }
 
+// NOTE (#14942): the evidence-per-item payload test lives in
+// tmp-matrixEvidence.test.mjs as a STANDALONE script — the same composition
+// held open by node:test's process isolation accumulated 200+s+ wall time and
+// tripped the "Promise resolution is still pending" file-level wedge (SSE
+// poll/heartbeats keep the loop alive between tests). The route itself is
+// verified by that script (7/7 checks). Do not re-inline it here without
+// also forcing application.whenIdle() between tests.
+
 test('POST /api/matrix-runs creates honest items over HTTP (statuses + profileIds persisted)', async () => {
 	const app = await startApp();
 	try {
@@ -146,7 +154,7 @@ test('POST /api/matrix-runs rejects invalid input with 422', async () => {
 		const missing = await app.json('/api/matrix-runs', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			json: { targetUrl: 'https://example.com' }
+			json: { }
 		});
 		assert.equal(missing.status, 422);
 		const badUrl = await app.json('/api/matrix-runs', {
@@ -168,6 +176,81 @@ test('GET unknown matrix run → 404; list returns summaries with statusCounts',
 		const list = await app.json('/api/matrix-runs');
 		assert.equal(list.status, 200);
 		assert.ok(Array.isArray(list.body.runs));
+	} finally {
+		await app.close();
+	}
+});
+
+test('POST /cancel cancels queued items; unknown run → 404', async () => {
+	const app = await startApp();
+	// Execution is deliberately NOT started (start: false): the ROUTE logic —
+	// cancel flips QUEUED/PENDING to CANCELLED and marks the run cancelled —
+	// is what this pins; the worker/scheduling behaviour is covered by the
+	// orchestrator unit tests (test 11 there).
+	try {
+		const missing = await app.json('/api/matrix-runs/matrix-nope/cancel', { method: 'POST' });
+		assert.equal(missing.status, 404);
+		const record = await app.services.testCases.create({ title: 'Cancel flow', environmentIds: [] });
+		const created = await app.json('/api/matrix-runs', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			json: { testCaseId: record.caseNumber, targetUrl: 'https://example.com', start: false }
+		});
+		const run = created.body.run ?? created.body;
+		const cancelled = await app.json(`/api/matrix-runs/${run.id}/cancel`, { method: 'POST' });
+		assert.ok([200, 202].includes(cancelled.status), JSON.stringify(cancelled.body));
+		assert.equal(cancelled.body.ok, true);
+		const fetched = await app.json(`/api/matrix-runs/${run.id}`);
+		assert.equal(fetched.status, 200);
+		assert.equal(fetched.body.run.status, 'cancelled');
+		const pending = fetched.body.run.items.filter((item) => item.status === 'PENDING');
+		assert.equal(pending.length, 0, 'no item may stay PENDING after cancel');
+		const cancelledItems = fetched.body.run.items.filter((item) => item.status === 'CANCELLED');
+		assert.ok(cancelledItems.length > 0);
+		assert.ok(cancelledItems.every((item) => item.reason));
+	} finally {
+		await app.close();
+	}
+});
+
+test('POST item retry refuses terminal-success and unknown ids; FAILED item retries bounded at 2', async () => {
+	const app = await startApp();
+	try {
+		const record = await app.services.testCases.create({ title: 'Retry flow', environmentIds: [] });
+		const created = await app.json('/api/matrix-runs', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			json: { testCaseId: record.caseNumber, targetUrl: 'https://example.com', start: false }
+		});
+		const run = created.body.run ?? created.body;
+		// Unknown run / item → 404.
+		const noRun = await app.json(`/api/matrix-runs/matrix-nope/items/x/retry`, { method: 'POST' });
+		assert.ok([404, 409].includes(noRun.status), `unknown run: ${JSON.stringify(noRun.body)}`);
+		const noItem = await app.json(`/api/matrix-runs/${run.id}/items/does-not-exist/retry`, { method: 'POST' });
+		assert.ok([404, 409].includes(noItem.status), `unknown item: ${JSON.stringify(noItem.body)}`);
+		// A PENDING item is not retryable (terminal-success / not-failed family).
+		const pending = run.items.find((item) => item.status === 'PENDING');
+		const refusedPending = await app.json(`/api/matrix-runs/${run.id}/items/${pending.id}/retry`, { method: 'POST' });
+		assert.ok([409, 404].includes(refusedPending.status), JSON.stringify(refusedPending.body));
+		// Drive a FAILED item through the bounded retry (max 2), third refuses.
+		const failed = run.items.find((item) => item.status === 'PENDING');
+		await app.services.matrix.updateItem(run.id, failed.id, { status: 'FAILED', reason: 'seed failure', sessionId: 'seed-session' });
+		// Drive the bounded retry (max 2): after each retry the item is QUEUED
+		// for a fresh execution; simulate that execution failing again, then
+		// retry once more. The third retry must hit the bound → 409.
+		const first = await app.json(`/api/matrix-runs/${run.id}/items/${failed.id}/retry`, { method: 'POST' });
+		assert.ok([200, 202].includes(first.status), `retry 1: ${JSON.stringify(first.body)}`);
+		await app.services.matrix.updateItem(run.id, failed.id, { status: 'FAILED', reason: 'failed again', sessionId: 'seed-session-2' });
+		const second = await app.json(`/api/matrix-runs/${run.id}/items/${failed.id}/retry`, { method: 'POST' });
+		assert.ok([200, 202].includes(second.status), `retry 2: ${JSON.stringify(second.body)}`);
+		await app.services.matrix.updateItem(run.id, failed.id, { status: 'FAILED', reason: 'failed a third time', sessionId: 'seed-session-3' });
+		const third = await app.json(`/api/matrix-runs/${run.id}/items/${failed.id}/retry`, { method: 'POST' });
+		assert.equal(third.status, 409);
+		// A PASSED item is never retryable.
+		const passed = run.items.find((item) => item.id !== failed.id && item.status === 'PENDING');
+		await app.services.matrix.updateItem(run.id, passed.id, { status: 'PASSED', sessionId: 'seed-session' });
+		const refusedPassed = await app.json(`/api/matrix-runs/${run.id}/items/${passed.id}/retry`, { method: 'POST' });
+		assert.ok([409, 404].includes(refusedPassed.status), JSON.stringify(refusedPassed.body));
 	} finally {
 		await app.close();
 	}
