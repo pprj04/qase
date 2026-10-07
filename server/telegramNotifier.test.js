@@ -126,6 +126,11 @@ test('parseTelegramConfig applies defaults and freezes', () => {
 	assert.equal(config.apiOrigin, 'https://api.telegram.org');
 	assert.equal(config.timeoutMs, 15_000);
 	assert.deepEqual(config.chatIds, ['-1001110001111', '-1002220002222', '-1003330003333', '123456789']);
+	// A present-but-empty API_ORIGIN (as materialized for unset optional
+	// keys) must fall back to the default origin, never a blank one.
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_API_ORIGIN: '' }).apiOrigin, 'https://api.telegram.org');
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_API_ORIGIN: '   ' }).apiOrigin, 'https://api.telegram.org');
+	assert.equal(parseTelegramConfig({ ...VALID_ENV, QASE_TELEGRAM_API_ORIGIN: 'https://bot.example/hood' }).apiOrigin, 'https://bot.example/hood');
 	assert.ok(Object.isFrozen(config));
 	assert.throws(() => parseChatIds('123,+456/789'), /Invalid Telegram chat id/);
 });
