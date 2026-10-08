@@ -195,6 +195,32 @@ test('improvement field travels end-to-end: POST body → stored record → disp
 	}
 });
 
+test('dispatch metadata is authoritative: stored submittedAt + authenticated displayName, no Date.now()', async () => {
+	const harness = makeNotifierHarness();
+	const app = await buildApp(harness.notifier);
+	try {
+		const session = await finishedRun(app.services, { title: 'Metadata source run' });
+		const before = Date.now();
+		const response = await fetch(`${app.origin}/api/feedback`, {
+			method: 'POST', headers: app.headers,
+			body: JSON.stringify({ runId: session.id, rating: 4, comments: 'metadata check' })
+		});
+		assert.equal(response.status, 201);
+		const record = await response.json();
+		const after = Date.now();
+		const { context } = harness.dispatches[0];
+		// Timestamp: exactly the stored record's — never a fresh clock read.
+		assert.equal(context.submittedAt, record.submittedAt);
+		assert.ok(context.submittedAt >= before - 5 && context.submittedAt <= after + 5,
+			'and it equals the real submission moment');
+		// Identity: the authenticated session's user record, not a request-body
+		// name and not undefined (which used to collapse to 'QASE user').
+		assert.equal(context.submittedByName, TENANT.actorName);
+	} finally {
+		await app.close();
+	}
+});
+
 test('improvement-only submissions dispatch with the improvement intact', async () => {
 	const harness = makeNotifierHarness();
 	const app = await buildApp(harness.notifier);

@@ -8,6 +8,7 @@ import {
 	parseTelegramConfig,
 	parseChatIds,
 	buildFeedbackMessage,
+	formatSubmittedOn,
 	notificationIdFor,
 	TelegramNotificationError
 } from './telegramNotifier.js';
@@ -227,6 +228,42 @@ test('buildFeedbackMessage truncates to 4096 chars', () => {
 
 test('notificationIdFor produces the TELEGRAM-FB-<id> pattern', () => {
 	assert.equal(notificationIdFor('123'), 'TELEGRAM-123');
+});
+
+/* ── Authoritative metadata (Submitted On / Submitted By) ────────── */
+
+test('formatSubmittedOn honors the submitting user timezone (IST boundary)', () => {
+	const ts = Date.UTC(2026, 9, 8, 20, 45); // 08-Oct-2026 20:45 UTC
+	// UTC rendering (default)
+	assert.equal(formatSubmittedOn(ts), '08-Oct-2026 08:45 PM');
+	// Asia/Kolkata (+05:30) — next calendar day, matching QASE UI display
+	assert.equal(formatSubmittedOn(ts, 'Asia/Kolkata'), '09-Oct-2026 02:15 AM');
+	// QASE's example pair: 02:15 PM IST === 08:45 AM UTC
+	assert.equal(formatSubmittedOn(Date.UTC(2026, 9, 9, 8, 45), 'Asia/Kolkata'), '09-Oct-2026 02:15 PM');
+	// Invalid zone falls back to UTC instead of throwing
+	assert.equal(formatSubmittedOn(ts, 'Not/AZone'), '08-Oct-2026 08:45 PM');
+});
+
+test('buildFeedbackMessage uses context.submittedAt + timezone, never a fresh clock read', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 4, comments: 'ok' },
+		{ mode: 'qa', submittedAt: Date.UTC(2026, 9, 8, 20, 45), submittedAtTimeZone: 'Asia/Kolkata' }
+	);
+	assert.match(message, /🕒 Submitted On: 09-Oct-2026 02:15 AM/, 'rendered in the user profile timezone');
+	assert.doesNotMatch(message, /Date\.now/, 'no clock generation');
+});
+
+test('submittedByName comes from the context only — no default when the backend supplies it', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 4, comments: 'ok' },
+		{ mode: 'qa', submittedByName: 'Manoj Kumar', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.match(message, /👤 Submitted By: Manoj Kumar/);
+	const fallback = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 4, comments: 'ok' },
+		{ mode: 'qa', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.match(fallback, /👤 Submitted By: QASE user/, 'fallback only when no authenticated name is available');
 });
 
 /* ── Construction visibility ────────────────────────────────────── */
