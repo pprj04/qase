@@ -48,6 +48,9 @@ function demoSession(status) {
 		createdAt: Date.now() - 185_000,
 		updatedAt: Date.now(),
 		runStartedAt: Date.now() - 180_000,
+		environmentId: 'desktop-chrome',
+		environmentSnapshot: { device: 'Desktop', os: 'Windows', osVersion: '11', browser: 'Chrome', browserVersion: 'Current', executionProvider: 'local' },
+		runtimeFacts: { executionLevel: 'SIMULATED', executionProvider: 'local' },
 		...(done ? { completedAt: Date.now() - 5_000 } : {}),
 		messages: [{ id: 'message-1', ts: Date.now() - 170_000, role: 'agent', text: running ? 'Testing the checkout flow and collecting evidence.' : 'Testing finished. Two issues need attention.' }],
 		activities: [
@@ -65,7 +68,7 @@ function demoSession(status) {
 			{ id: 'finding-2', title: 'Order summary clips at narrow widths', severity: 'medium', category: 'responsive', url: 'https://preview.example.test/checkout', impact: 'Mobile customers cannot read the full total.', expected: 'Keep the summary within the viewport.', actual: 'The total extends beyond the card at 360 px.', steps: ['Open checkout at 360 px', 'Review the order summary'], evidence: 'The total is cut off on the right edge.' }
 		],
 		frame: { mimeType: 'image/svg+xml', base64: previewSvg, viewport: { width: 1200, height: 760 }, url: 'https://preview.example.test/checkout', title: 'Checkout' },
-		...(done ? { report: { verdict: 'pass_with_issues', summary: 'Checkout works, but payment recovery and the mobile order summary need attention.', bySeverity: { high: 1, medium: 1 }, covered: ['Checkout navigation', 'Customer details', 'Payment validation', 'Responsive layout'], notCovered: ['Production payment settlement'], recommendations: ['Fix the selected issues, then retest checkout.'] } } : {})
+		...(done ? { report: { verdict: 'pass_with_issues', findings: 2, ts: Date.now() - 5_000, summary: 'Checkout works, but payment recovery and the mobile order summary need attention.', bySeverity: { high: 1, medium: 1 }, covered: ['Checkout navigation', 'Customer details', 'Payment validation', 'Responsive layout'], notCovered: ['Production payment settlement'], recommendations: ['Fix the selected issues, then retest checkout.'] } } : {})
 	};
 }
 
@@ -85,6 +88,11 @@ const server = http.createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://127.0.0.1');
 	if (url.pathname.startsWith('/api/')) {
 		if (url.pathname === '/api/qa-configurations') return json(response, launcherCatalog());
+		if (request.method === 'POST' && url.pathname === `/api/sessions/${fixtureRunId}/stop`) {
+			fixturePosts.push(url.pathname);
+			fixtureSession = { ...fixtureSession, status: 'interrupted', statusDetail: 'Stopped by user.', updatedAt: Date.now() };
+			return json(response, { acknowledged: true });
+		}
 		if (request.method !== 'GET') {
 			fixturePosts.push(url.pathname);
 			return json(response, { error: 'Read-only Studio fixture.' }, 405);
@@ -158,7 +166,7 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 		await page.waitForFunction(() => document.querySelector('#qa-selection-summary').textContent.includes('3 browser configurations selected'));
 	} else {
 		try {
-			await page.locator('#chat-title').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
+			await page.locator('#chat-target').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
 		} catch (error) {
 			console.error(JSON.stringify({
 				scenario,
@@ -235,6 +243,20 @@ try {
 	assert.ok(toolWidth > contextWidth * 3, 'Qase receives most of the Studio workspace');
 	await desktop.screenshot({ path: path.join(output, 'studio-launcher-1440.png'), animations: 'disabled' });
 	await desktop.locator('#qa-cancel').click();
+	assert.equal(await desktop.getByRole('button', { name: 'Start testing', exact: true }).count(), 1, 'Empty Studio view has one visible primary Start testing action');
+	assert.equal(await desktop.locator('#empty-start').isVisible(), false, 'Duplicate empty-state primary action stays hidden in Studio');
+	assert.equal(await desktop.locator('#empty-demo').isVisible(), true, 'Demo remains a secondary action');
+	await desktop.screenshot({ path: path.join(output, 'studio-empty-final-1440.png'), animations: 'disabled' });
+	await desktop.locator('#empty-demo').click();
+	await desktop.locator('#qa-start[open]').waitFor();
+	assert.match(await desktop.locator('#qa-target-url').inputValue(), /\/demo$/);
+	await desktop.locator('#qa-cancel').click();
+	await desktop.locator('#composer-input').fill('https://preview.example.test/checkout');
+	await desktop.locator('#composer-input').press('Enter');
+	await desktop.locator('#qa-start[open]').waitFor();
+	assert.equal(await desktop.locator('#qa-target-url').inputValue(), 'https://preview.example.test/checkout');
+	await desktop.locator('#qa-cancel').click();
+	await desktop.locator('#composer-input').fill('');
 	const expandedSidebarWidth = await desktop.locator('#workspace-runs').evaluate(node => node.getBoundingClientRect().width);
 	await desktop.screenshot({ path: path.join(output, 'studio-sidebar-expanded-1440.png'), animations: 'disabled' });
 	await desktop.locator('#sidebar-tools > summary').click();
@@ -353,6 +375,7 @@ try {
 	checks.push('Sidebar expands and collapses by keyboard, persists semantics, and returns meaningful workspace width');
 	checks.push('Context resizes by pointer and keyboard, clamps to 220–340 px, persists, collapses without a gutter, and restores its previous width');
 	checks.push('Test, Quality, Ideas and Bugs mode controls open and close their working surfaces');
+	checks.push('Empty Studio view keeps one primary Start testing action while demo and URL composer remain functional');
 	await desktop.close();
 
 	const tabletSidebar = await open({ width: 768, height: 900 });
@@ -369,21 +392,45 @@ try {
 	await tabletSidebar.close();
 
 	const running = await open({ width: 1440, height: 1000 }, true, 'running');
-	assert.equal(await running.locator('#status-chip').textContent(), 'running');
+	assert.equal(await running.locator('#status-chip').textContent(), 'Running');
+	assert.equal(await running.locator('#chat-title').textContent(), 'Testing preview.example.test');
 	assert.equal(await running.locator('#stop-run').isVisible(), true);
-	assert.equal(await running.locator('#current-activity-state').textContent(), '◌ Checking payment validation');
+	assert.equal(await running.locator('#current-activity-state').textContent(), 'Checking payment validation');
+	assert.equal(await running.locator('#current-activity .ca-label').textContent(), 'Current activity');
 	assert.equal(await running.locator('#progress-steps').textContent(), '2/4');
 	assert.equal(await running.locator('#count-findings').textContent(), '2');
+	assert.equal(await running.locator('#progress-findings').isVisible(), true);
 	assert.equal(await running.locator('#stage-inner').isVisible(), true);
+	assert.equal(await running.locator('#tab-plan').getAttribute('aria-selected'), 'true', 'Running QA opens with the supporting plan visible');
+	assert.equal(await running.locator('#pane-plan').isVisible(), true);
+	assert.equal(await running.locator('#plan-list .todo.in_progress').isVisible(), true, 'Current plan step is visible');
+	assert.equal(await running.locator('#execution-details').isVisible(), true);
+	assert.equal(await running.locator('#execution-details').evaluate(node => node.open), false, 'Technical execution metadata starts closed');
+	assert.equal(await running.locator('#execution-target-block').isVisible(), false, 'Legacy execution metadata card does not duplicate Run details in Studio');
+	assert.equal(await running.locator('#live-pill').isVisible(), false, 'Header status is not duplicated by a second live pill');
 	assert.equal(await running.locator('#composer-input').isDisabled(), true);
 	assert.equal(await running.locator('#composer-running-hint').isVisible(), true);
 	assert.equal(await running.locator('#composer').evaluate(node => node.scrollWidth <= node.clientWidth), true);
+	const [heroChatWidth, heroViewerWidth] = await running.locator('.chat, .viewer')
+		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+	assert.ok(heroViewerWidth > heroChatWidth * 1.7, 'Live browser is the clear running-state hero');
+	await running.screenshot({ path: path.join(output, 'studio-running-final-1440.png'), animations: 'disabled' });
+	await running.locator('#execution-details > summary').click();
+	assert.equal(await running.locator('#execution-details').evaluate(node => node.open), true);
+	for (const detailId of ['run-env-current', 'run-env-execution', 'run-env-session', 'run-env-usage']) {
+		assert.equal(await running.locator(`#${detailId}`).isVisible(), true, `${detailId} is available on intentional disclosure`);
+	}
+	await running.screenshot({ path: path.join(output, 'studio-running-details-open-1440.png'), animations: 'disabled' });
+	await running.locator('#execution-details > summary').click();
+	await running.locator('#progress-findings').click();
+	assert.equal(await running.locator('#tab-findings').getAttribute('aria-selected'), 'true', 'Findings count opens findings without closing the browser');
+	await running.locator('#tab-plan').click();
 	await running.locator('#studio-context-resizer').focus();
 	await running.keyboard.press('Home');
 	assert.equal(await running.locator('#studio-context-resizer').getAttribute('aria-valuenow'), '220');
 	const [runningChatWidth, runningViewerWidth] = await running.locator('.chat, .viewer')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-	assert.ok(runningViewerWidth > runningChatWidth * 1.45, 'Live browser receives substantially more width than conversation');
+	assert.ok(runningViewerWidth > runningChatWidth * 1.7, 'Live browser receives substantially more width than conversation');
 	const modeDock = await running.locator('.feature-dock').boundingBox();
 	assert.ok(modeDock && modeDock.width <= 76, 'Mode rail remains narrow');
 	for (const modeId of ['new-run', 'new-sqa', 'new-founder', 'open-bugs']) {
@@ -416,21 +463,47 @@ try {
 	await running.waitForFunction(()=>document.documentElement.dataset.theme === 'dark');
 	await running.emulateMedia({ colorScheme: 'light' });
 	await running.waitForFunction(()=>document.documentElement.dataset.theme === 'light');
+	await running.locator('#stop-run').click();
+	await running.locator('#status-chip').filter({ hasText: 'Stopped' }).waitFor();
+	assert.equal(fixturePosts.includes(`/api/sessions/${fixtureRunId}/stop`), true, 'Stop reaches the real stop action and reconciles saved state');
 	checks.push('Light, dark and System stay synchronized across all theme controls and reloads');
-	checks.push('Running fixture exposes progress and evidence while the message composer presents a clean paused state');
+	checks.push('Running fixture makes the live browser primary, reveals Plan by default, keeps current activity and findings accessible, and hides execution metadata until requested');
+	checks.push('Stop invokes the run lifecycle action and reconciles the authoritative stopped state');
 	await running.close();
 
 	const completed = await open({ width: 1440, height: 1000 }, true, 'done');
 	await completed.locator('.viewer.stage-collapsed').waitFor();
-	await completed.locator('#studio-context-resizer').focus();
-	await completed.keyboard.press('Home');
+	assert.equal(await completed.locator('#chat-title').textContent(), 'Testing complete');
 	assert.equal(await completed.locator('#tab-findings').getAttribute('aria-selected'), 'true');
 	assert.equal(await completed.locator('.findings-selection-count').textContent(), '2 of 2 selected');
+	assert.equal(await completed.locator('.finding.is-fixed').count(), 0, 'Selected findings are not presented as fixed');
 	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
 	assert.equal(await completed.locator('#sidebar-view-report').isVisible(), true);
 	assert.equal(await completed.locator('#sidebar-retest').isVisible(), true);
+	await completed.screenshot({ path: path.join(output, 'studio-completed-findings-1440.png'), animations: 'disabled' });
+	const firstFinding = completed.locator('.finding-select-input').first();
+	await firstFinding.uncheck();
+	assert.equal(await completed.locator('.findings-selection-count').textContent(), '1 of 2 selected');
+	await completed.locator('.findings-selection-all input').check();
+	assert.equal(await completed.locator('.findings-selection-count').textContent(), '2 of 2 selected');
+	await completed.getByRole('button', { name: 'Copy selected fixes' }).click();
+	const copyToast = completed.locator('.toast').last();
+	await copyToast.waitFor({ state: 'visible' });
+	await copyToast.evaluate((node) => node.remove());
 	await completed.locator('#sidebar-view-report').click();
 	assert.equal(await completed.locator('#tab-report').getAttribute('aria-selected'), 'true');
+	const reportHeadings = await completed.locator('#report-view .report-section h3').allTextContents();
+	assert.deepEqual(reportHeadings.slice(0, 2), ['Summary', 'Recommended next action'], 'Report leads with result context and next action');
+	await completed.screenshot({ path: path.join(output, 'studio-completed-report-1440.png'), animations: 'disabled' });
+	const feedbackButton = completed.getByRole('button', { name: 'Provide Feedback' });
+	if (await feedbackButton.isVisible()) {
+		await feedbackButton.click();
+		await completed.locator('#feedback-modal[open]').waitFor();
+		await completed.locator('#feedback-cancel').click();
+	}
+	await completed.locator('#sidebar-retest').click();
+	await completed.locator('#qa-start[open]').waitFor();
+	await completed.locator('#qa-cancel').click();
 	await completed.locator('#tab-findings').click();
 	await completed.locator('#conn-label').filter({ hasText: 'results ready' }).waitFor();
 	const [stageRight, previewRight] = await completed.locator('#stage, #stage-inner')
@@ -439,16 +512,43 @@ try {
 	await completed.locator('#stage-toggle').click();
 	assert.equal(await completed.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), false, 'Show preview expands the saved browser image');
 	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Minimize live preview');
+	await completed.screenshot({ path: path.join(output, 'studio-completed-preview-expanded-1440.png'), animations: 'disabled' });
 	await completed.locator('#stage-toggle').click();
 	assert.equal(await completed.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), true, 'Minimize preview restores the accepted thumbnail state');
 	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
 	const [chatWidth, viewerWidth] = await completed.locator('.chat, .viewer')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
-	assert.ok(viewerWidth > chatWidth * 1.45, 'Results receive substantially more width than conversation');
+	assert.ok(viewerWidth > chatWidth * 1.75, 'Results receive substantially more width than conversation');
+	for (const tabId of ['tab-activity', 'tab-plan', 'tab-report', 'tab-findings']) {
+		await completed.locator(`#${tabId}`).click();
+		assert.equal(await completed.locator(`#${tabId}`).getAttribute('aria-selected'), 'true', `${tabId} remains functional after completion`);
+	}
+	await completed.locator('#studio-context-resizer').focus();
+	await completed.keyboard.press('Home');
 	await completed.screenshot({ path: path.join(output, 'studio-completed-context-narrow-1440.png'), animations: 'disabled' });
 	await completed.screenshot({ path: path.join(output, 'studio-completed-1440.png'), animations: 'disabled' });
-	checks.push('Completed fixture prioritizes selected findings and moves the saved preview to the upper-right edge');
+	checks.push('Completed fixture automatically prioritizes findings, preserves exact selection, leads the report with product-owner information, and keeps preview and retest controls functional');
 	await completed.close();
+
+	const tabletRunning = await open({ width: 768, height: 900 }, true, 'running');
+	const tabletViewerTop = await tabletRunning.locator('.viewer').evaluate(node => node.getBoundingClientRect().top);
+	const tabletChatTop = await tabletRunning.locator('.chat').evaluate(node => node.getBoundingClientRect().top);
+	assert.ok(tabletViewerTop < tabletChatTop, 'Tablet puts the live browser before conversation while running');
+	assert.equal(await tabletRunning.locator('#studio-context-resizer').isVisible(), false);
+	assert.equal(await tabletRunning.locator('#tabs .tab').evaluateAll(nodes => nodes
+		.filter(node => node.getClientRects().length > 0)
+		.every((node, index, visibleNodes) => {
+		if (index === 0) return true;
+		return node.getBoundingClientRect().left >= visibleNodes[index - 1].getBoundingClientRect().right - 1;
+	})), true, 'Tablet tabs remain separated and horizontally reachable');
+	await tabletRunning.screenshot({ path: path.join(output, 'studio-running-768.png'), animations: 'disabled', fullPage: true });
+	await tabletRunning.close();
+
+	const mobileRunning = await open({ width: 390, height: 844 }, true, 'running');
+	assert.equal(await mobileRunning.locator('body').getAttribute('data-workspace-view'), 'browser', 'Mobile running state opens the browser-first flow');
+	assert.equal(await mobileRunning.locator('.viewer').isVisible(), true);
+	await mobileRunning.close();
+	checks.push('Tablet and mobile running states put the live browser before supporting conversation content');
 
 	for (const width of [1280, 768, 390, 360]) {
 		const page = await open({ width, height: width <= 390 ? 844 : 900 });
@@ -484,6 +584,9 @@ try {
 			if (view === 'browser') assert.ok((await mobile.locator('#stage-inner').boundingBox()).width > 200, 'Browser panel expands the saved preview');
 			const layout = await mobile.evaluate(()=>({width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, viewport: [innerWidth,innerHeight], overflowing: [...document.querySelectorAll('.app, .app > *, .panel > *')].filter(node=>node.getBoundingClientRect().bottom > innerHeight+1 || node.getBoundingClientRect().right > innerWidth+1).map(node=>({id:node.id, class:node.className, bottom:node.getBoundingClientRect().bottom, right:node.getBoundingClientRect().right}))}));
 			await mobile.screenshot({ path: path.join(output, `mobile-${studio ? 'studio' : 'standalone'}-${view}.png`), animations: 'disabled' });
+			if (studio && view === 'results') {
+				await mobile.screenshot({ path: path.join(output, 'studio-completed-390.png'), animations: 'disabled' });
+			}
 			assert.ok(layout.width <= 390 && layout.height <= 845, `Mobile ${view} fits: ${JSON.stringify(layout)}`);
 		}
 		await mobile.setViewportSize({ width: 1440, height: 1000 });
@@ -492,7 +595,10 @@ try {
 	}
 	checks.push('Mobile panel navigation, automatic results focus and desktop resize work in both layouts');
 	for (const status of ['awaiting_input', 'interrupted', 'error', 'done']) {
-		const page = await open({ width: 1280, height: 900 }, true, status, status === 'done' ? { findings: [], frame: undefined } : {});
+		const cleanOverrides = status === 'done'
+			? { findings: [], frame: undefined, report: { ...demoSession('done').report, verdict: 'pass', findings: 0, bySeverity: {}, summary: 'Checkout completed without recorded findings.' } }
+			: {};
+		const page = await open({ width: 1280, height: 900 }, true, status, cleanOverrides);
 		if (status === 'interrupted' || status === 'error') {
 			assert.equal(await page.locator('#resume-run').isVisible(), true);
 			await page.locator('#conn-label').filter({hasText: 'updates paused'}).waitFor();
@@ -506,6 +612,7 @@ try {
 		}
 		if (status === 'done') {
 			await page.locator('#stage-note').filter({hasText: 'No saved browser image'}).waitFor();
+			assert.equal(await page.locator('#tab-report').getAttribute('aria-selected'), 'true', 'Clean completed runs default to Report');
 			await page.locator('#tab-findings').click();
 			await page.getByText('No findings recorded for this run.', {exact:false}).waitFor();
 		}

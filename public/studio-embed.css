@@ -413,13 +413,24 @@ html[data-qase-layout="studio-mock"] .feature-dock > .feature-device {
 /* The customer header keeps the active device and status. Execution level,
    session identifiers and environment changes remain in Advanced setup. */
 html[data-qase-layout="studio-mock"] #ldv-exec,
-html[data-qase-layout="studio-mock"] #ldv-change-device {
+html[data-qase-layout="studio-mock"] #ldv-change-device,
+html[data-qase-layout="studio-mock"] #token-chip,
+html[data-qase-layout="studio-mock"] #live-pill,
+html[data-qase-layout="studio-mock"] #execution-target-block {
 	display: none;
 }
 
 html[data-qase-layout="studio-mock"] .empty-actions #empty-start,
 html[data-qase-layout="studio-mock"] .welcome-checklist {
 	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .empty-state {
+	max-width: 46ch;
+}
+
+html[data-qase-layout="studio-mock"] .empty-state h2 {
+	font-size: 22px;
 }
 
 html[data-qase-layout="studio-mock"] .ldv-title {
@@ -716,6 +727,26 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
   body.studio-workspace .tabs .tab { min-height: 44px; }
   body.studio-workspace .finding-head { padding-left: 42px; flex-wrap: wrap; }
   body.studio-workspace .finding-title { min-width: 0; flex: 1 1 140px; white-space: normal; overflow-wrap: anywhere; }
+}
+
+@media (min-width: 1281px) {
+	html[data-qase-layout="studio-mock"] body[data-run-status="running"] .app {
+		grid-template-columns: minmax(184px, 0.45fr) minmax(250px, 0.65fr) minmax(480px, 1.75fr) 66px;
+	}
+
+	html[data-qase-layout="studio-mock"] body[data-run-status="done"] .app {
+		grid-template-columns: minmax(184px, 0.45fr) minmax(240px, 0.6fr) minmax(500px, 1.8fr) 66px;
+	}
+}
+
+@media (min-width: 1101px) and (max-width: 1280px) {
+	html[data-qase-layout="studio-mock"] body[data-run-status="running"] .app {
+		grid-template-columns: minmax(168px, 0.45fr) minmax(230px, 0.65fr) minmax(400px, 1.7fr) 62px;
+	}
+
+	html[data-qase-layout="studio-mock"] body[data-run-status="done"] .app {
+		grid-template-columns: minmax(168px, 0.45fr) minmax(210px, 0.58fr) minmax(420px, 1.8fr) 62px;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {

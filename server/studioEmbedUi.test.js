@@ -23,7 +23,8 @@ test('Studio shell communicates host, context, and center tool ownership', () =>
 	assert.match(html, /id="studio-project-name"/);
 	assert.match(html, /id="studio-project-target"/);
 	assert.match(html, /class="studio-demo-badge">Studio demo/);
-	assert.match(styles, /grid-template-columns: 64px minmax\(196px, 232px\) minmax\(0, 1fr\)/);
+	assert.match(styles, /--studio-context-width: 280px/);
+	assert.match(styles, /grid-template-columns: 64px var\(--studio-context-width\) 7px minmax\(0, 1fr\)/);
 	assert.match(styles, /\.feature-dock > \.feature-device \{\s*display: none/);
 });
 

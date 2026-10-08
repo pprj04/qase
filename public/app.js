@@ -228,6 +228,8 @@ const state = {
 	stageExpanded: new Set(),
 	/** Run whose completed QA results were automatically revealed. */
 	shownQaResults: undefined,
+	/** Run whose live Plan was revealed once without overriding later tab choices. */
+	shownRunningPlan: undefined,
 	/** True once the welcome checklist was replaced by real content. */
 	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
@@ -1000,6 +1002,7 @@ async function selectSession(id) {
 	if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 	state.shownFounderReport = undefined;
 	state.shownQaResults = undefined;
+	state.shownRunningPlan = undefined;
 	state.sessionId = id;
 	state.bubbles.clear();
 	// Feedback submitted-state is per run: drop any cached record when the
@@ -1241,6 +1244,7 @@ function applySessionSnapshot(session) {
 	renderSqa();
 	renderFounder();
 	showCompletedFounderReport();
+	showRunningQaPlan();
 	showCompletedQaResults();
 	renderStageCollapse();
 	updateRunTimer();
@@ -1579,7 +1583,11 @@ function renderHeader() {
 	// Token row: dedicated region below the header.
 	const hasRun = Boolean(session.targetUrl || session.title);
 	el.runSummary.hidden = !hasRun;
-	if (usageIsPending(session)) {
+	if (window.qaseStudioContext) {
+		el.tokenText.classList.remove('is-pending');
+		el.tokenText.textContent = 'Run progress';
+		el.tokenText.title = '';
+	} else if (usageIsPending(session)) {
 		// Live run, first model call still in flight. "Pending" is honest;
 		// "0 in · 0 out" would suggest calls were counted and came back empty.
 		el.tokenText.classList.add('is-pending');
@@ -1624,7 +1632,10 @@ function renderHeader() {
 		setStatus(session.status);
 		return;
 	}
-	el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title;
+	const targetName = (session.targetUrl ? hostOf(session.targetUrl) : session.title) || 'this website';
+	el.chatTitle.textContent = session.status === 'running'
+		? `Testing ${targetName}`
+		: session.status === 'done' ? 'Testing complete' : targetName;
 	// Keep the engine visible in the header for non-chromium runs (the run
 	// list already carries an engine pill in its meta row).
 	if (session.engine && session.engine !== 'chromium') {
@@ -1669,6 +1680,10 @@ function renderProgressCard() {
 	}
 	const findings = session?.findings ?? [];
 	el.progressFindings.textContent = findings.length > 0 ? `Findings ${findings.length}` : '';
+	el.progressFindings.hidden = findings.length === 0;
+	el.progressFindings.setAttribute('aria-label', findings.length > 0
+		? `Open ${findings.length} finding${findings.length === 1 ? '' : 's'}`
+		: 'No findings yet');
 	renderMiniSummary();
 	renderCurrentActivity();
 }
@@ -1684,10 +1699,10 @@ function renderCurrentActivity() {
 		const savedAction = runningActivity?.label || runningActivity?.title
 			|| activePlanItem?.text || activePlanItem?.title || '';
 		const label = action || (text ? tailOf(text) : '') || savedAction;
-		el.currentActivityState.textContent = label ? `◌ ${label}` : '◌ Working…';
+		el.currentActivityState.textContent = label || 'Working…';
 		el.currentActivity.hidden = false;
 	} else if (session?.status === 'done') {
-		el.currentActivityState.textContent = '✓ Run completed';
+		el.currentActivityState.textContent = 'Testing complete';
 		el.currentActivity.hidden = false;
 	} else {
 		el.currentActivityState.textContent = '';
@@ -1696,16 +1711,24 @@ function renderCurrentActivity() {
 }
 
 function setStatus(status) {
+	const previousStatus = document.body.dataset.runStatus;
 	const justCompleted = status === 'done' && document.body.dataset.runStatus !== 'done';
+	const justStarted = status === 'running' && previousStatus !== 'running';
 	if (state.session) state.session.status = status;
 	document.body.dataset.runStatus = status;
 	if (justCompleted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	if (justStarted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('browser');
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
 	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = stopping ? 'stopping…' : status === 'awaiting_input'
+	el.statusChip.textContent = stopping ? 'Stopping…' : status === 'awaiting_input'
 		? 'waiting for you'
-		: status === 'done' ? 'done ✓' : stoppedByUser ? 'stopped' : status;
+		: status === 'running' ? 'Running'
+			: status === 'done' ? 'Complete'
+				: stoppedByUser ? 'Stopped'
+					: status === 'interrupted' ? 'Paused'
+						: status === 'error' ? 'Needs attention'
+							: status;
 	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
@@ -1862,6 +1885,14 @@ function renderStageCollapse() {
 		el.stage.removeAttribute('aria-label');
 	}
 	fitStageFrame();
+}
+
+function showRunningQaPlan() {
+	const session = state.session;
+	if (!session || session.mode === 'sqa' || session.mode === 'founder' || session.status !== 'running') return;
+	if (state.shownRunningPlan === session.id) return;
+	state.shownRunningPlan = session.id;
+	activateDetailTab($('tab-plan'));
 }
 
 function showCompletedQaResults() {
@@ -3277,6 +3308,7 @@ function renderFinding(finding, selection, syncSelection) {
 	// runtime-detected identity (profile, device, OS, browser+version, the
 	// engine that actually launched, execution level/provider) plus its
 	// session linkage. Structure unchanged; one compact env line added.
+	let environmentLine;
 	if (finding.environment) {
 		const env = finding.environment;
 		const parts = [
@@ -3289,21 +3321,22 @@ function renderFinding(finding, selection, syncSelection) {
 			env.sessionId ? `session ${String(env.sessionId).slice(0, 8)}` : null
 		].filter(Boolean);
 		if (parts.length) {
-			const envLine = document.createElement('div');
-			envLine.className = 'finding-env';
-			envLine.textContent = parts.join(' — ');
-			body.append(envLine);
+			environmentLine = document.createElement('div');
+			environmentLine.className = 'finding-env';
+			environmentLine.textContent = parts.join(' — ');
 		}
 	}
 
 	if (finding.steps?.length) {
+		const stepsTitle = document.createElement('h4');
+		stepsTitle.textContent = 'Reproduction';
 		const steps = document.createElement('ol');
 		for (const step of finding.steps) {
 			const item = document.createElement('li');
 			item.textContent = step;
 			steps.append(item);
 		}
-		body.append(steps);
+		body.append(stepsTitle, steps);
 	}
 
 	const list = document.createElement('dl');
@@ -3317,10 +3350,13 @@ function renderFinding(finding, selection, syncSelection) {
 	body.append(list);
 
 	if (finding.evidence) {
+		const evidenceTitle = document.createElement('h4');
+		evidenceTitle.textContent = 'Evidence';
 		const pre = document.createElement('pre');
 		pre.textContent = finding.evidence;
-		body.append(pre);
+		body.append(evidenceTitle, pre);
 	}
+	if (environmentLine) body.append(environmentLine);
 
 	const fixPrompt = buildFindingFixPrompt(finding, {
 		targetUrl: state.session?.targetUrl,
@@ -3734,7 +3770,6 @@ function renderReport() {
 		URL.revokeObjectURL(url);
 	};
 	exportBar.append(exportBtn);
-	el.reportView.append(exportBar);
 
 	const verdict = VERDICTS[report.verdict] ?? { mark: '•', label: report.verdict, tone: 'dim' };
 	const banner = document.createElement('div');
@@ -3748,7 +3783,10 @@ function renderReport() {
 	label.textContent = verdict.label;
 	const sub = document.createElement('div');
 	sub.className = 'verdict-sub';
-	sub.textContent = `${report.findings} finding${report.findings === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}`;
+	const reportFindingCount = Number.isFinite(report.findings) ? report.findings : state.session?.findings?.length ?? 0;
+	const reportTime = report.ts ?? state.session?.completedAt ?? state.session?.updatedAt;
+	sub.textContent = `${reportFindingCount} finding${reportFindingCount === 1 ? '' : 's'}`
+		+ (reportTime ? ` · ${new Date(reportTime).toLocaleString()}` : '');
 	text.append(label, sub);
 	banner.append(mark, text);
 	el.reportView.append(banner);
@@ -3766,13 +3804,13 @@ function renderReport() {
 		stat.append(value, name);
 		stats.append(stat);
 	}
-	el.reportView.append(stats);
-
 	el.reportView.append(section('Summary', paragraph(report.summary)));
+	if (report.recommendations?.length) el.reportView.append(section('Recommended next action', list(report.recommendations)));
+	el.reportView.append(stats);
 	el.reportView.append(renderCoverageSelection(state.session));
 	if (report.covered?.length) el.reportView.append(section('Covered', list(report.covered)));
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
-	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
+	el.reportView.append(exportBar);
 	void renderEvidenceSection(state.sessionId);
 
 	const suggestions = followUpSuggestions(report);
@@ -7377,13 +7415,21 @@ if (batchTracker) {
 
 function renderRunEnvBlock(session) {
 	const block = $('run-env-block');
-	if (!block) return;
+	const details = $('execution-details');
+	if (!block || !details) return;
 	const testcaseLine = $('run-env-testcase');
 	const currentLine = $('run-env-current');
+	const executionLine = $('run-env-execution');
+	const sessionLine = $('run-env-session');
+	const usageLine = $('run-env-usage');
 	const countLine = $('run-env-count');
 	const snap = session?.environmentSnapshot;
 	const hasEnv = Boolean(snap || session?.environmentId);
-	block.hidden = !hasEnv && !session?.testCaseId;
+	details.hidden = !session?.id;
+	if (details.dataset.sessionId !== session?.id) {
+		details.open = false;
+		details.dataset.sessionId = session?.id ?? '';
+	}
 	if (testcaseLine) {
 		const title = session?.testCaseSnapshot?.title ?? session?.testCaseId;
 		testcaseLine.textContent = title ? `Test case: ${title}` : '';
@@ -7393,14 +7439,27 @@ function renderRunEnvBlock(session) {
 		const deviceText = snap
 			? [snap.device, [snap.os, snap.osVersion].filter(Boolean).join(' '), [snap.browser, snap.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
 			: session?.environmentId ?? '';
-		// Phase D2: execution type + live runtime state, always visible.
-		const execType = session?.runtimeFacts?.executionLevel
-			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : 'VIRTUAL_DEVICE');
-		const state = session?.status === 'running'
-			? '● RUNNING'
-			: session?.status === 'done' ? '● COMPLETED' : '● CONNECTED';
-		currentLine.textContent = deviceText ? `TARGET DEVICE: ${deviceText} — ${execType} ${state}` : '';
-		currentLine.hidden = !currentLine.textContent;
+		currentLine.textContent = `Browser and device: ${deviceText || 'Not recorded'}`;
+		currentLine.hidden = false;
+	}
+	if (executionLine) {
+		const rawLevel = session?.runtimeFacts?.executionLevel
+			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : hasEnv ? 'VIRTUAL_DEVICE' : 'Not recorded');
+		const level = String(rawLevel).toLowerCase().replaceAll('_', ' ').replace(/^./, value => value.toUpperCase());
+		const runState = session?.status === 'done' ? 'Complete'
+			: session?.status === 'running' ? 'Running'
+				: session?.status === 'interrupted' ? 'Paused' : String(session?.status ?? 'Unknown');
+		executionLine.textContent = `Execution: ${level} · ${runState}`;
+		executionLine.hidden = false;
+	}
+	if (sessionLine) {
+		sessionLine.textContent = `Session: ${session?.id ?? 'Not recorded'}`;
+		sessionLine.hidden = false;
+	}
+	if (usageLine) {
+		const usage = tokenSummaryText(session?.tokenUsage);
+		usageLine.textContent = usage ? `Model usage: ${usage}` : 'Model usage: Not recorded';
+		usageLine.hidden = false;
 	}
 	if (countLine) {
 		const batch = batchTracker?.current;
@@ -7706,7 +7765,17 @@ cfg.saveBtn.onclick = async () => {
 el.composer.onsubmit = async event => {
 	event.preventDefault();
 	const text = el.composerInput.value.trim();
-	if (!text || !state.sessionId) {
+	if (!text) return;
+	if (!state.sessionId) {
+		openQaStart();
+		try {
+			const target = new URL(text);
+			if (!['http:', 'https:'].includes(target.protocol)) throw new TypeError('Unsupported target protocol');
+			qaUi.targetUrl.value = target.href;
+			syncQaSubmitState();
+		} catch {
+			setQaFormError('Choose the website first. You can send testing instructions after the run starts.');
+		}
 		return;
 	}
 	if (!state.config?.ready) {
@@ -7761,6 +7830,11 @@ el.stage.addEventListener('keydown', event => {
 
 $('empty-start')?.addEventListener('click', () => { void startRun(); });
 $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
+el.progressFindings?.addEventListener('click', () => {
+	activateDetailTab($('tab-findings'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
 
 el.newRun.onclick = openQaStart;
 $('sidebar-new-run').onclick = openQaStart;

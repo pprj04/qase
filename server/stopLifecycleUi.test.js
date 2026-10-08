@@ -14,6 +14,7 @@ test('user Stop persists an authoritative resumable interrupted state', () => {
 
 test('frontend labels only the confirmed user interruption as stopped', () => {
 	assert.match(app, /status === 'interrupted' && state\.session\?\.statusDetail === 'Stopped by user\.'/);
-	assert.match(app, /stoppedByUser \? 'stopped' : status/);
+	assert.match(app, /stoppedByUser \? 'Stopped'/);
+	assert.match(app, /status === 'interrupted' \? 'Paused'/);
 	assert.match(app, /session\.statusDetail = event\.detail \|\| undefined/);
 });

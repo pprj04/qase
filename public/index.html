@@ -310,18 +310,24 @@
           <div class="progress-top">
             <span class="progress-steps" id="progress-steps"></span>
             <span class="progress-pct" id="progress-pct"></span>
-            <span class="progress-findings" id="progress-findings"></span>
+            <button class="progress-findings" id="progress-findings" type="button" hidden></button>
           </div>
           <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Run progress"><i></i></div>
           <div class="current-activity" id="current-activity">
             <span class="ca-label">Current activity</span>
             <span class="ca-state" id="current-activity-state"></span>
           </div>
-          <div class="run-env-block" id="run-env-block" hidden>
-            <span class="re-line" id="run-env-testcase"></span>
-            <span class="re-line" id="run-env-current"></span>
-            <span class="re-line" id="run-env-count"></span>
-          </div>
+          <details class="execution-details" id="execution-details" hidden>
+            <summary>Run details</summary>
+            <div class="run-env-block" id="run-env-block">
+              <span class="re-line" id="run-env-testcase"></span>
+              <span class="re-line" id="run-env-current"></span>
+              <span class="re-line" id="run-env-execution"></span>
+              <span class="re-line" id="run-env-session"></span>
+              <span class="re-line" id="run-env-usage"></span>
+              <span class="re-line" id="run-env-count"></span>
+            </div>
+          </details>
           <div class="run-queue-panel" id="run-queue-panel" hidden>
             <span class="rq-dot" aria-hidden="true"></span>
             <span class="rq-label" id="run-queue-label">Queued for device</span>

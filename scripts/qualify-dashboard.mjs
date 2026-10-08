@@ -54,9 +54,15 @@ const browser = await chromium.launch({executablePath:chromium.executablePath()}
 const errors = [];
 const checks = [];
 const reportSources = {};
+const settleTeardown = promise => Promise.race([
+	promise,
+	new Promise(resolve => {
+		const timer = setTimeout(resolve, 2_000);
+		timer.unref();
+	})
+]);
 const screenshot = async (page, name) => {
-	await page.locator('dialog[open]').evaluateAll(async dialogs=>Promise.all(dialogs.flatMap(dialog=>dialog.getAnimations().map(animation=>animation.finished.catch(()=>{})))));
-	await page.screenshot({path:path.join(output,name)});
+	await page.screenshot({path:path.join(output,name), animations:'disabled'});
 };
 try {
 	const page = await browser.newPage({viewport:{width:1440,height:1000}});
@@ -169,4 +175,12 @@ try {
 	assert.deepEqual(errors,[]);assert.deepEqual([...new Set(turns.map(t=>t.mode))].sort(),['founder','qa','sqa']);
 	console.log(JSON.stringify({passed:true,checks,pageErrors:errors,reportSources},null,2));
 	fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({passed:true,checks,pageErrors:errors,reportSources},null,2));
-} finally {await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
+} finally {
+	for (const response of streams.values()) {
+		if (!response.writableEnded) response.end();
+	}
+	await settleTeardown(browser.close());
+	server.closeAllConnections();
+	await settleTeardown(new Promise(resolve=>server.close(resolve)));
+}
+process.exit(0);
