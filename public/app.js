@@ -67,6 +67,8 @@ const el = {
 	perfClose: $('perf-close'),
 	perfRestore: $('perf-restore'),
 	perfBody: $('perf-body'),
+	themeSwitch: $('theme-switch'),
+	themeSwitchLabel: $('theme-switch-label'),
 	feedbackModal: $('feedback-modal'),
 	feedbackForm: $('feedback-form'),
 	feedbackClose: $('feedback-close'),
@@ -731,6 +733,61 @@ function usageIsPending(session) {
 	const usage = session.tokenUsage;
 	const hasUsage = usage && Number.isFinite(usage.totalTokens) && usage.totalTokens > 0;
 	return !hasUsage && session.status === 'running';
+}
+
+/**
+ * Light/Dark theme preference. The inline <head> script in index.html already
+ * applied the stored theme before first paint (no flash), so this module only
+ * needs to sync the Stateful Switch with the live document state, persist
+ * changes, and update the theme-color meta so the browser chrome matches.
+ */
+const THEME_KEY = 'qase.theme';
+
+function readStoredTheme() {
+	try {
+		return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+	} catch {
+		return 'dark';
+	}
+}
+
+function applyTheme(theme, { animate = true } = {}) {
+	const light = theme === 'light';
+	document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+	try {
+		localStorage.setItem(THEME_KEY, light ? 'light' : 'dark');
+	} catch {
+		/* storage unavailable: theme still applies for this page load */
+	}
+	const meta = document.querySelector('meta[name="theme-color"]');
+	if (meta) meta.setAttribute('content', light ? '#ffffff' : '#05080d');
+	if (el.themeSwitch) {
+		el.themeSwitch.checked = light;
+		el.themeSwitch.setAttribute('aria-checked', String(light));
+		const label = el.themeSwitchLabel || el.themeSwitch.closest('label');
+		if (label) {
+			label.title = light ? 'Switch to Dark Mode' : 'Switch to Light Mode';
+		}
+	}
+	const stateText = document.getElementById('theme-switch-state');
+	if (stateText) stateText.textContent = light ? 'Light Mode' : 'Dark Mode';
+	const thumb = document.querySelector('.theme-switch-thumb');
+	if (thumb) thumb.textContent = light ? '☀️' : '🌙';
+}
+
+function toggleTheme() {
+	applyTheme(readStoredTheme() === 'light' ? 'dark' : 'light');
+}
+
+/**
+ * After a re-render, make sure the switch reflects whatever the boot script
+ * set on <html> — the data-theme attribute is the single source of truth.
+ */
+function syncThemeFromProfile() {
+	applyTheme(
+		document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+		{ animate: false }
+	);
 }
 
 /**
@@ -5047,6 +5104,13 @@ async function bootWorkspace() {
 
 (async function boot() {
 	await window.qaseEntryReady;
+	// Theme switch: restore from localStorage (the head script already
+	// painted the right theme), then sync the switch state.
+	applyTheme(readStoredTheme(), { animate: false });
+	el.themeSwitch?.addEventListener('change', () => {
+		toggleTheme();
+	});
+	syncThemeFromProfile();
 	// Test Execution Timer: one shared second-hand for every live timer view.
 	startTimerInterval();
 	// Performance panel controls: minimize/restore/close are visibility-only.
