@@ -24,10 +24,12 @@ test('run list title carries an engine chip for non-chromium runs', () => {
 });
 
 test('chat header shows the engine tag for non-chromium runs', () => {
+	const renderHeaderStart = appJs.indexOf('function renderHeader()');
 	const headerTitle = appJs.slice(
-		appJs.indexOf("el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title"),
-		appJs.indexOf("el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title") + 600
+		renderHeaderStart,
+		appJs.indexOf('function runProgress()', renderHeaderStart)
 	);
+	assert.ok(renderHeaderStart >= 0, 'renderHeader exists');
 	assert.match(headerTitle, /session\.engine && session\.engine !== 'chromium'/, 'non-chromium gate');
 	assert.match(headerTitle, /run-engine-pill/, 'chip class reused');
 });

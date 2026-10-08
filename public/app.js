@@ -1032,15 +1032,18 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	const exec = ldv.querySelector('#ldv-exec');
 	const live = ldv.querySelector('#ldv-live');
 	if (!dev || !exec || !live) return;
+	const completed = session?.status === 'done';
+	const hasSavedPreview = completed && Boolean(session?.frame);
 
 	const view = are ?? resolveActiveRuntimeEnvironment({ session, environments: deviceState.list });
 	if (!view) {
-		dev.textContent = activeTestEnvStore?.get?.()?.device ?? '—';
+		dev.textContent = hasSavedPreview ? 'Saved' : (activeTestEnvStore?.get?.()?.device ?? '—');
 		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = 'Idle';
+		live.hidden = !session;
+		live.textContent = completed ? 'Complete' : 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Preview — no active browser';
+		ldv.title = hasSavedPreview ? 'Saved preview from the completed run' : 'Preview — no active browser';
 		return;
 	}
 
@@ -1053,12 +1056,13 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	if (!activeRun && !selView) {
 		// Idle with NO store selection (e.g. after Clear): empty state — never
 		// resurrect the stale session device on the header/frame.
-		dev.textContent = '—';
+		dev.textContent = hasSavedPreview ? 'Saved' : '—';
 		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = 'Idle';
+		live.hidden = !session;
+		live.textContent = completed ? 'Complete' : 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Preview — no browser selected';
+		ldv.title = hasSavedPreview ? 'Saved preview from the completed run' : 'Preview — no browser selected';
 		renderBrowserChrome(null);
 		applyDeviceFrame(null);
 		renderUnavailableState(null, 'NO DEVICE');
@@ -1089,6 +1093,7 @@ function renderLiveDeviceViewHeader(session, are = null) {
 
 	exec.dataset.exec = view.executionType;
 	exec.textContent = execLabel;
+	live.hidden = false;
 	live.textContent = liveLabel;
 	live.dataset.live = String(['running', 'connected'].includes(view.runtimeStatus));
 	dev.textContent = deviceLabel;
@@ -1577,7 +1582,9 @@ function renderMiniSummary() {
 function renderHeader() {
 	const session = state.session;
 	// Customer-facing progress stays simple. Model usage remains in Run details.
-	const hasRun = Boolean(session.targetUrl || session.title);
+	const hasRun = Boolean(state.sessionId && (session.targetUrl || session.title));
+	document.body.dataset.hasRun = String(hasRun);
+	el.statusChip.hidden = !hasRun;
 	el.runSummary.hidden = !hasRun;
 	el.tokenText.classList.remove('is-pending');
 	el.tokenText.textContent = 'Run progress';

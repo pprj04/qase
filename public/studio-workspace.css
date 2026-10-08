@@ -236,6 +236,7 @@ body.studio-workspace .panel-foot #conn-label {
 }
 body.studio-workspace .panel-foot .foot-btn {
   grid-column: 1 / -1;
+  width: 100%;
   text-align: left;
   justify-content: flex-start;
   text-transform: none;
@@ -507,6 +508,15 @@ body.studio-workspace .empty-state p { font-size: 14px; line-height: 1.6; }
 body.studio-workspace .empty-state .empty-note,
 body.studio-workspace .welcome-checklist { display: none; }
 body.studio-workspace .empty-actions #empty-start { display: none; }
+body.studio-workspace[data-has-run="false"] .viewer {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+body.studio-workspace[data-has-run="false"] :is(#status-chip, #ldv-live) {
+  display: none;
+}
+body.studio-workspace[data-has-run="false"] .viewer :is(#tabs, .tab-body) {
+  display: none;
+}
 /* Model usage and execution identity remain available in Run details. */
 body.studio-workspace :is(#token-chip, #live-pill, #execution-target-block, #ldv-exec, #ldv-change-device) {
   display: none;
@@ -920,6 +930,9 @@ body.studio-workspace .skip-link { background: var(--surface-1); color: var(--te
     grid-template-columns: 200px minmax(0, 1fr);
     grid-template-rows: minmax(540px, 70dvh) minmax(560px, 70dvh) 76px;
   }
+  body.studio-workspace:is([data-run-status="running"], [data-run-status="done"]) .app {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
   body.studio-workspace .runs { grid-column: 1; grid-row: 1 / 3; }
   body.studio-workspace .chat { grid-column: 2; grid-row: 1; }
   body.studio-workspace .viewer { grid-column: 2; grid-row: 2; border-top: 1px solid var(--border); }
@@ -951,6 +964,9 @@ body.studio-workspace .skip-link { background: var(--surface-1); color: var(--te
   body.studio-workspace .app {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto 76px minmax(620px, 80dvh) minmax(560px, 75dvh);
+  }
+  body.studio-workspace:is([data-run-status="running"], [data-run-status="done"]) .app {
+    grid-template-columns: minmax(0, 1fr);
   }
   body.studio-workspace .runs { grid-column: 1; grid-row: 1; max-height: 440px; }
   body.studio-workspace .runs .panel-head { gap: 12px; }

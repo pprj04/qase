@@ -208,6 +208,13 @@ async function dragContextTo(page, requestedWidth) {
 	await page.mouse.up();
 }
 
+async function assertVisibleControlsNamed(page, context) {
+	const unnamed = await page.locator('button:visible').evaluateAll(buttons => buttons
+		.filter(button => !(button.getAttribute('aria-label') || button.textContent.trim() || button.getAttribute('title')))
+		.map(button => button.id || button.outerHTML.slice(0, 120)));
+	assert.deepEqual(unnamed, [], `${context} has no unnamed visible buttons`);
+}
+
 try {
 	const standalone = await open({ width: 1440, height: 1000 }, false);
 	assert.equal(await standalone.locator('html').getAttribute('data-qase-layout'), 'standalone');
@@ -221,14 +228,55 @@ try {
 	assert.equal(await standalone.locator('#empty-start').isVisible(), false);
 	assert.equal(await standalone.locator('#welcome-checklist').count(), 0, 'Default Qase omits the duplicate onboarding card');
 	assert.equal(await standalone.locator('#execution-target-block').isVisible(), false);
+	assert.equal(await standalone.locator('#status-chip').isVisible(), false, 'Empty Qase omits the redundant idle status');
+	assert.equal(await standalone.locator('#ldv-live').isVisible(), false, 'Empty Qase omits the redundant preview idle status');
+	assert.equal(await standalone.locator('#tabs').isVisible(), false, 'Run tabs stay out of the empty state');
 	await standalone.screenshot({ path: path.join(output, 'qase-default-empty-1440.png'), animations: 'disabled' });
+	await standalone.screenshot({ path: path.join(output, 'product-empty-1440.png'), animations: 'disabled' });
 	const standaloneExpandedWidth = await standalone.locator('#workspace-runs').evaluate(node => node.getBoundingClientRect().width);
 	await standalone.locator('#sidebar-collapse-toggle').click();
 	const standaloneCollapsedWidth = await standalone.locator('#workspace-runs').evaluate(node => node.getBoundingClientRect().width);
 	assert.ok(standaloneCollapsedWidth <= 56.5 && standaloneExpandedWidth - standaloneCollapsedWidth >= 100, 'Default Qase uses the shared collapsible customer navigation');
+	assert.equal(await standalone.locator('#sidebar-collapse-toggle').getAttribute('aria-label'), 'Expand recent tests sidebar');
+	assert.equal(await standalone.locator('#sidebar-new-run').getAttribute('title'), 'Start testing');
+	await standalone.screenshot({ path: path.join(output, 'product-sidebar-collapsed-1440.png'), animations: 'disabled' });
 	await standalone.locator('#sidebar-collapse-toggle').click();
 	await standalone.screenshot({ path: path.join(output, 'standalone-sidebar-regression-1440.png'), animations: 'disabled' });
+	await standalone.locator('#empty-demo').click();
+	await standalone.locator('#qa-start[open]').waitFor();
+	assert.match(await standalone.locator('#qa-target-url').inputValue(), /\/demo$/);
+	await standalone.locator('#qa-cancel').click();
+	await standalone.locator('#sidebar-new-run').click();
+	await standalone.locator('#qa-start[open]').waitFor();
+	await standalone.locator('#qa-cancel').click();
+	await standalone.locator('#sidebar-tools > summary').click();
+	for (const [buttonId, dialogId] of [
+		['nav-test-cases', 'test-cases'],
+		['nav-device-matrix', 'device-matrix'],
+		['nav-bulk-runs', 'bulk-run'],
+		['nav-environments', 'environments'],
+		['nav-analytics', 'analytics'],
+		['nav-settings', 'settings']
+	]) {
+		await standalone.locator(`#${buttonId}`).click();
+		await standalone.waitForFunction(id => document.getElementById(id)?.open === true, dialogId);
+		await standalone.keyboard.press('Escape');
+	}
+	await standalone.locator('#sidebar-tools > summary').click();
+	for (const [buttonId, surfaceId, closeId] of [
+		['new-sqa', 'sqa-start', 'sqa-cancel'],
+		['new-founder', 'founder-start', 'founder-cancel']
+	]) {
+		await standalone.locator(`#${buttonId}`).click();
+		await standalone.locator(`#${surfaceId}[open]`).waitFor();
+		await standalone.locator(`#${closeId}`).click();
+	}
+	await standalone.locator('#open-bugs').click();
+	assert.equal(await standalone.locator('#bugs-view').isVisible(), true);
+	await standalone.locator('#bugs-close').click();
+	await assertVisibleControlsNamed(standalone, 'Empty default Qase');
 	checks.push('Default Qase uses the simplified shared product UI without rendering Studio host chrome');
+	checks.push('Default Qase Advanced, Quality, Founder, Bugs and demo controls open their existing surfaces');
 	await standalone.close();
 
 	const standaloneRunning = await open({ width: 1440, height: 1000 }, false, 'running');
@@ -239,28 +287,135 @@ try {
 	assert.equal(await standaloneRunning.locator('#live-pill').isVisible(), false);
 	assert.equal(await standaloneRunning.locator('#ldv-exec').isVisible(), false);
 	assert.equal(await standaloneRunning.locator('#ldv-change-device').isVisible(), false);
+	const [standaloneChatWidth, standaloneViewerWidth] = await standaloneRunning.locator('.chat, .viewer')
+		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+	assert.ok(standaloneViewerWidth > standaloneChatWidth * 1.7, 'Default Qase makes the live browser the running-state hero');
 	await standaloneRunning.screenshot({ path: path.join(output, 'qase-default-running-1440.png'), animations: 'disabled' });
+	await standaloneRunning.screenshot({ path: path.join(output, 'product-running-1440.png'), animations: 'disabled' });
+	await standaloneRunning.locator('#execution-details > summary').click();
+	assert.equal(await standaloneRunning.locator('#execution-details').evaluate(node => node.open), true);
+	for (const detailId of ['run-env-current', 'run-env-execution', 'run-env-session', 'run-env-usage']) {
+		assert.equal(await standaloneRunning.locator(`#${detailId}`).isVisible(), true, `${detailId} remains available in Run details`);
+	}
+	await standaloneRunning.screenshot({ path: path.join(output, 'product-run-details-open-1440.png'), animations: 'disabled' });
+	await standaloneRunning.locator('#execution-details > summary').click();
+	for (const tabId of ['tab-activity', 'tab-findings', 'tab-plan']) {
+		await standaloneRunning.locator(`#${tabId}`).click();
+		assert.equal(await standaloneRunning.locator(`#${tabId}`).getAttribute('aria-selected'), 'true');
+	}
+	await assertVisibleControlsNamed(standaloneRunning, 'Running default Qase');
 	await standaloneRunning.locator('#theme-select').selectOption('dark');
 	await standaloneRunning.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
 	await standaloneRunning.screenshot({ path: path.join(output, 'qase-default-running-dark-1440.png'), animations: 'disabled' });
+	await standaloneRunning.locator('#stop-run').click();
+	await standaloneRunning.locator('#status-chip').filter({ hasText: 'Stopped' }).waitFor();
+	assert.equal(fixturePosts.includes(`/api/sessions/${fixtureRunId}/stop`), true, 'Default Qase Stop reaches the existing lifecycle action');
 	await standaloneRunning.close();
 
 	const standaloneCompleted = await open({ width: 1440, height: 1000 }, false, 'done');
 	assert.equal(await standaloneCompleted.locator('#tab-findings').getAttribute('aria-selected'), 'true');
 	assert.equal(await standaloneCompleted.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), true);
+	assert.equal(await standaloneCompleted.locator('#ldv-device').textContent(), 'Saved');
+	assert.equal(await standaloneCompleted.locator('#ldv-live').textContent(), 'Complete');
+	assert.equal(await standaloneCompleted.locator('.findings-selection-count').textContent(), '2 of 2 selected');
+	assert.equal(await standaloneCompleted.locator('.finding.is-fixed').count(), 0);
 	await standaloneCompleted.screenshot({ path: path.join(output, 'qase-default-completed-1440.png'), animations: 'disabled' });
+	await standaloneCompleted.screenshot({ path: path.join(output, 'product-completed-findings-1440.png'), animations: 'disabled' });
+	const standaloneFirstFinding = standaloneCompleted.locator('.finding-select-input').first();
+	await standaloneFirstFinding.uncheck();
+	assert.equal(await standaloneCompleted.locator('.findings-selection-count').textContent(), '1 of 2 selected');
+	await standaloneCompleted.locator('.findings-selection-all input').check();
+	assert.equal(await standaloneCompleted.locator('.findings-selection-count').textContent(), '2 of 2 selected');
+	await standaloneCompleted.getByRole('button', { name: 'Copy selected fixes' }).click();
+	await standaloneCompleted.locator('.toast').last().waitFor();
+	await standaloneCompleted.locator('#stage-toggle').click();
+	assert.equal(await standaloneCompleted.locator('#stage-toggle').getAttribute('aria-label'), 'Minimize live preview');
+	await standaloneCompleted.locator('#stage-toggle').click();
+	assert.equal(await standaloneCompleted.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
+	await standaloneCompleted.locator('#sidebar-view-report').click();
+	assert.equal(await standaloneCompleted.locator('#tab-report').getAttribute('aria-selected'), 'true');
+	const standaloneFeedback = standaloneCompleted.getByRole('button', { name: 'Provide Feedback' });
+	if (await standaloneFeedback.isVisible()) {
+		await standaloneFeedback.click();
+		await standaloneCompleted.locator('#feedback-modal[open]').waitFor();
+		await standaloneCompleted.locator('#feedback-cancel').click();
+	}
+	await standaloneCompleted.locator('#sidebar-retest').click();
+	await standaloneCompleted.locator('#qa-start[open]').waitFor();
+	await standaloneCompleted.locator('#qa-cancel').click();
+	await assertVisibleControlsNamed(standaloneCompleted, 'Completed default Qase');
 	await standaloneCompleted.close();
+
+	const standaloneClean = await open({ width: 1440, height: 1000 }, false, 'done', {
+		findings: [],
+		frame: undefined,
+		report: {
+			...demoSession('done').report,
+			verdict: 'pass',
+			findings: 0,
+			bySeverity: {},
+			summary: 'Checkout completed without recorded findings.',
+			recommendations: ['Keep this checkout flow in focused regression coverage.']
+		}
+	});
+	assert.equal(await standaloneClean.locator('#tab-report').getAttribute('aria-selected'), 'true', 'A clean default-Qase run opens Report');
+	assert.equal(await standaloneClean.locator('#pane-report').isVisible(), true);
+	assert.match(await standaloneClean.locator('#stage-note').textContent(), /No saved browser image was captured/);
+	await standaloneClean.screenshot({ path: path.join(output, 'product-completed-report-1440.png'), animations: 'disabled' });
+	await standaloneClean.close();
 	checks.push('Running and completed hierarchy is shared by default Qase and the Studio wrapper');
 
-	for (const width of [390, 360]) {
+	for (const width of [1280, 768, 390, 360]) {
 		const standaloneMobile = await open({ width, height: 844 }, false);
 		await standaloneMobile.locator('#qa-cancel').click();
 		assert.equal(await standaloneMobile.getByRole('button', { name: 'Start testing', exact: true }).count(), 1, `Default Qase has one visible mobile Start testing action at ${width}px`);
-		assert.equal(await standaloneMobile.locator('#sidebar-collapse-toggle').isVisible(), false, 'Desktop sidebar collapse does not interfere with mobile navigation');
+		assert.equal(await standaloneMobile.locator('#sidebar-collapse-toggle').isVisible(), width > 720, 'Sidebar collapse adapts to the mobile breakpoint');
 		assert.equal(await standaloneMobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Default Qase has no horizontal overflow at ${width}px`);
 		await standaloneMobile.screenshot({ path: path.join(output, `qase-default-empty-${width}.png`), animations: 'disabled' });
 		await standaloneMobile.close();
 	}
+
+	for (const width of [1280, 768, 390, 360]) {
+		const productRunning = await open({ width, height: width <= 390 ? 844 : 900 }, false, 'running');
+		const runningLayout = await productRunning.evaluate(() => ({
+			fits: document.documentElement.scrollWidth <= innerWidth,
+			pageWidth: document.documentElement.scrollWidth,
+			viewportWidth: innerWidth,
+			boxes: Object.fromEntries(['.app', '.runs', '.chat', '.viewer', '.feature-dock'].map(selector => {
+				const rect = document.querySelector(selector).getBoundingClientRect();
+				return [selector, { left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) }];
+			})),
+			appStyle: (() => { const style = getComputedStyle(document.querySelector('.app')); return { width: style.width, minWidth: style.minWidth, columns: style.gridTemplateColumns, padding: style.padding }; })(),
+			offenders: [...document.querySelectorAll('body *')]
+				.filter(node => node.getClientRects().length > 0 && node.getBoundingClientRect().right > innerWidth + 1)
+				.slice(0, 12)
+				.map(node => ({ id: node.id, className: String(node.className), right: Math.round(node.getBoundingClientRect().right), width: Math.round(node.getBoundingClientRect().width) }))
+		}));
+		assert.equal(runningLayout.fits, true, `Running Qase has no horizontal overflow at ${width}px: ${JSON.stringify(runningLayout)}`);
+		if (width <= 720) {
+			assert.equal(await productRunning.locator('body').getAttribute('data-workspace-view'), 'browser');
+			assert.equal(await productRunning.locator('.app > .panel:visible').count(), 1);
+		} else {
+			const viewerTop = await productRunning.locator('.viewer').evaluate(node => node.getBoundingClientRect().top);
+			const chatTop = await productRunning.locator('.chat').evaluate(node => node.getBoundingClientRect().top);
+			if (width === 768) assert.ok(viewerTop < chatTop, 'Default Qase puts the browser first at tablet width');
+		}
+		if (width === 768) await productRunning.screenshot({ path: path.join(output, 'product-running-768.png'), animations: 'disabled', fullPage: true });
+		await productRunning.close();
+	}
+
+	for (const width of [1280, 390, 360]) {
+		const productCompleted = await open({ width, height: width <= 390 ? 844 : 900 }, false, 'done');
+		assert.equal(await productCompleted.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Completed Qase has no horizontal overflow at ${width}px`);
+		assert.equal(await productCompleted.locator('#tab-findings').getAttribute('aria-selected'), 'true');
+		if (width <= 720) {
+			assert.equal(await productCompleted.locator('body').getAttribute('data-workspace-view'), 'results');
+			assert.equal(await productCompleted.locator('.app > .panel:visible').count(), 1);
+		}
+		if (width === 390) await productCompleted.screenshot({ path: path.join(output, 'product-completed-390.png'), animations: 'disabled' });
+		await productCompleted.close();
+	}
+	checks.push('Default Qase passes empty, running, and completed responsive checks at 1440, 1280, 768, 390, and 360 px');
 
 	const desktop = await open({ width: 1440, height: 1000 });
 	assert.equal(await desktop.locator('html').getAttribute('data-qase-layout'), 'studio-mock');
@@ -456,6 +611,7 @@ try {
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(heroViewerWidth > heroChatWidth * 1.7, 'Live browser is the clear running-state hero');
 	await running.screenshot({ path: path.join(output, 'studio-running-final-1440.png'), animations: 'disabled' });
+	await running.screenshot({ path: path.join(output, 'studio-wrapper-running-1440.png'), animations: 'disabled' });
 	await running.locator('#execution-details > summary').click();
 	assert.equal(await running.locator('#execution-details').evaluate(node => node.open), true);
 	for (const detailId of ['run-env-current', 'run-env-execution', 'run-env-session', 'run-env-usage']) {
@@ -637,7 +793,7 @@ try {
 	checks.push('Mobile panel navigation, automatic results focus and desktop resize work in both layouts');
 	for (const status of ['awaiting_input', 'interrupted', 'error', 'done']) {
 		const cleanOverrides = status === 'done'
-			? { findings: [], frame: undefined, report: { ...demoSession('done').report, verdict: 'pass', findings: 0, bySeverity: {}, summary: 'Checkout completed without recorded findings.' } }
+			? { findings: [], frame: undefined, report: { ...demoSession('done').report, verdict: 'pass', findings: 0, bySeverity: {}, summary: 'Checkout completed without recorded findings.', recommendations: ['Keep this checkout flow in focused regression coverage.'] } }
 			: {};
 		const page = await open({ width: 1280, height: 900 }, true, status, cleanOverrides);
 		if (status === 'interrupted' || status === 'error') {

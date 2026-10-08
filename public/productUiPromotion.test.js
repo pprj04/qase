@@ -11,9 +11,10 @@ const [markup, app, mode, workspaceStyles, embedStyles] = await Promise.all([
 ]);
 
 test('default Qase owns the shared product workspace', () => {
-	assert.match(markup, /<body class="cli-theme studio-workspace">/);
+	assert.match(markup, /<body class="cli-theme studio-workspace" data-has-run="false">/);
 	assert.match(workspaceStyles, /body\.studio-workspace\[data-run-status="running"\] \.app/);
 	assert.match(workspaceStyles, /body\.studio-workspace\[data-run-status="done"\] \.app/);
+	assert.match(workspaceStyles, /body\.studio-workspace:is\(\[data-run-status="running"\], \[data-run-status="done"\]\) \.app/);
 });
 
 test('customer navigation collapse works outside the Studio wrapper', () => {
@@ -35,6 +36,10 @@ test('default empty state is concise and has one desktop primary launcher', () =
 	assert.match(markup, /<h2>Test a website<\/h2>/);
 	assert.doesNotMatch(markup, /class="empty-note"/);
 	assert.match(workspaceStyles, /\.empty-actions #empty-start \{ display: none/);
+	assert.match(workspaceStyles, /data-has-run="false"\] \.viewer :is\(#tabs, \.tab-body\)/);
+	assert.match(app, /state\.sessionId && \(session\.targetUrl \|\| session\.title\)/);
+	assert.match(app, /dataset\.hasRun = String\(hasRun\)/);
+	assert.match(app, /statusChip\.hidden = !hasRun/);
 	assert.doesNotMatch(app, /checklist\.append/);
 });
 
@@ -49,5 +54,7 @@ test('the Studio stylesheet remains a host wrapper', () => {
 test('customer preview and statuses use plain language', () => {
 	assert.match(markup, /id="ldv-title">Preview<\/span>/);
 	for (const label of ['Running', 'Complete', 'Needs attention']) assert.match(app, new RegExp(`'${label}'`));
+	assert.match(app, /hasSavedPreview \? 'Saved'/);
+	assert.match(app, /completed \? 'Complete' : 'Idle'/);
 	assert.doesNotMatch(app.slice(app.indexOf('const statusMap = {'), app.indexOf('const liveLabel =')), /●|◆|✕/);
 });
