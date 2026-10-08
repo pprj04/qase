@@ -46,8 +46,9 @@ test('switch: served markup has accessible Stateful Switch', async () => {
 
 test('switch: boot() syncs switch from the head-script attribute', async () => {
 	const app = await readAsset('app.js');
-	assert.match(app, /syncThemeFromProfile\(\)/, 'boot calls syncThemeFromProfile');
+	assert.match(app, /syncThemeFromDocument\(\)/, 'boot calls syncThemeFromDocument');
 	assert.match(app, /el\.themeSwitch\?\.addEventListener\('change'/, 'change listener wired');
+	assert.match(app, /classList\.add\('theme-transition'\)/, 'swap animates via theme-transition class');
 });
 
 test('switch: applyTheme contract — attribute, storage, aria, title, glyph', async () => {

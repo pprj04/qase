@@ -736,7 +736,7 @@ function usageIsPending(session) {
 }
 
 /**
- * Light/Dark theme preference. The inline <head> script in index.html already
+ * Light/Dark theme preference. The external theme-boot.js in <head> already
  * applied the stored theme before first paint (no flash), so this module only
  * needs to sync the Stateful Switch with the live document state, persist
  * changes, and update the theme-color meta so the browser chrome matches.
@@ -753,6 +753,12 @@ function readStoredTheme() {
 
 function applyTheme(theme, { animate = true } = {}) {
 	const light = theme === 'light';
+	if (animate) {
+		// Drive the global color swap with the .theme-transition class for
+		// ~200ms so only the theme change animates (not page load).
+		document.documentElement.classList.add('theme-transition');
+		setTimeout(() => document.documentElement.classList.remove('theme-transition'), 220);
+	}
 	document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
 	try {
 		localStorage.setItem(THEME_KEY, light ? 'light' : 'dark');
@@ -782,8 +788,10 @@ function toggleTheme() {
 /**
  * After a re-render, make sure the switch reflects whatever the boot script
  * set on <html> — the data-theme attribute is the single source of truth.
+ * (No server-side profile sync: the theme is a device-level preference, kept
+ * in localStorage alongside the other qase.* UI prefs.)
  */
-function syncThemeFromProfile() {
+function syncThemeFromDocument() {
 	applyTheme(
 		document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
 		{ animate: false }
@@ -5110,7 +5118,7 @@ async function bootWorkspace() {
 	el.themeSwitch?.addEventListener('change', () => {
 		toggleTheme();
 	});
-	syncThemeFromProfile();
+	syncThemeFromDocument();
 	// Test Execution Timer: one shared second-hand for every live timer view.
 	startTimerInterval();
 	// Performance panel controls: minimize/restore/close are visibility-only.
