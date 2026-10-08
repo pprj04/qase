@@ -22,6 +22,7 @@ import {
 	configurationsForDevice,
 	compatibleBrowserFamilies,
 	defaultSelectionForDevice,
+	recommendedDeviceScope,
 	fetchQaConfigurations,
 	fetchConfigurationIndex,
 	fetchConfigurationWindow
@@ -5220,13 +5221,18 @@ async function loadQaMatrixCatalog() {
 		const index = await fetchConfigurationIndex({ signal: controller.signal });
 		if (controller.signal.aborted) return;
 		qaMatrixState.index = index;
-		// Selection: default = every available configuration minus the user's
-		// explicit deselections (persisted across dialog reopens). An active
-		// device scope survives reopen and re-derives from the fresh index
-		// (#15163); a device that vanished from the catalog drops the scope.
+		// Selection: keep an active device scope when it is still available. On
+		// first open, choose one practical device (respecting the user's saved
+		// picker choice) and all compatible browsers for it. Selecting the whole
+		// catalog can exceed the server's 2,000-configuration cap and used to
+		// disable Start testing before the customer made any choice.
 		if (qaMatrixState.deviceScope) {
 			const stillThere = configurationsForDevice(index, qaMatrixState.deviceScope).length > 0;
 			if (!stillThere) qaMatrixState.deviceScope = null;
+		}
+		if (!qaMatrixState.deviceScope) {
+			qaMatrixState.deviceScope = recommendedDeviceScope(index, activeTestEnvStore?.get?.());
+			qaMatrixState.deviceScopeSessionDeselections = new Set();
 		}
 		qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
 		qaMatrixFillFilters();
@@ -5732,9 +5738,11 @@ function qaTestOption(test) {
 	input.name = 'qa-test';
 	input.value = test.id;
 	if (isAvailable) {
-		// Available checks default to selected — standard and security alike.
-		input.checked = true;
-		input.defaultChecked = true;
+		// A normal run starts with the recommended standard checks. Security is
+		// opt-in because it requires explicit authorization and a safe target.
+		const selectedByDefault = (test.category ?? 'standard') !== 'security';
+		input.checked = selectedByDefault;
+		input.defaultChecked = selectedByDefault;
 	} else {
 		// Unavailable checks are never selectable and never counted.
 		input.disabled = true;

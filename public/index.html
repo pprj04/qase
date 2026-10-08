@@ -946,11 +946,11 @@
               <label class="check"><input class="qa-scope" type="checkbox" value="console-errors" checked title="console errors and failed network requests while browsing"><span>Console &amp; Network Health</span></label>
               <label class="check"><input class="qa-scope" type="checkbox" value="navigation" checked title="navigation and internal links (broken links, dead ends, back-navigation)"><span>Navigation &amp; Links</span></label>
               <label class="check"><input class="qa-scope" type="checkbox" value="accessibility" checked title="accessibility basics (labels, contrast, keyboard reachability, focus visibility)"><span>Accessibility Testing</span></label>
-              <label class="check"><input class="qa-scope" type="checkbox" value="security" checked title="security basics (header presence, cookie flags, XSS reflection, SQL injection error signatures) using the security_check tool"><span>Security Testing</span></label>
+              <label class="check"><input class="qa-scope" type="checkbox" value="security" title="security basics (header presence, cookie flags, XSS reflection, SQL injection error signatures) using the security_check tool"><span>Security Testing</span></label>
             </div>
           </div>
         </div>
-        <small>Everything is preselected so the agent tests the whole site. Uncheck what you don't want — developers only.</small>
+        <small>Recommended standard coverage is preselected. Enable security testing only for an authorized test environment.</small>
       </fieldset>
       <fieldset class="qa-optional-fieldset">
         <legend>Optional choices</legend>
@@ -982,7 +982,7 @@
         <section class="qa-category" id="qa-category-security" hidden>
           <h4 class="qa-category-heading">
             <label class="check qa-category-toggle">
-              <input type="checkbox" id="qa-category-security-toggle" checked>
+              <input type="checkbox" id="qa-category-security-toggle">
               <span>Security testing</span>
             </label>
           </h4>
