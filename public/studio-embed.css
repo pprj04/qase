@@ -330,13 +330,153 @@ html[data-qase-layout="studio-mock"] .workspace-chrome {
 	display: none;
 }
 
+html[data-qase-layout="studio-mock"] .runs .brand-lockup,
+html[data-qase-layout="studio-mock"] .runs #model-badge {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .runs .brand {
+	justify-content: flex-end;
+}
+
+html[data-qase-layout="studio-mock"] .sidebar-collapse-toggle {
+	display: grid;
+}
+
 html[data-qase-layout="studio-mock"] .panel-foot #open-profile,
-html[data-qase-layout="studio-mock"] .panel-foot #sign-out {
+html[data-qase-layout="studio-mock"] .panel-foot #sign-out,
+html[data-qase-layout="studio-mock"] .panel-foot .theme-control {
 	display: none;
 }
 
 html[data-qase-layout="studio-mock"] .feature-dock > .feature-device {
 	display: none;
+}
+
+/* The customer header keeps the active device and status. Execution level,
+   session identifiers and environment changes remain in Advanced setup. */
+html[data-qase-layout="studio-mock"] #ldv-exec,
+html[data-qase-layout="studio-mock"] #ldv-change-device {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .empty-actions #empty-start,
+html[data-qase-layout="studio-mock"] .welcome-checklist {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .ldv-title {
+	font-size: 0;
+}
+
+html[data-qase-layout="studio-mock"] .ldv-title::after {
+	content: "Preview";
+	font-size: 11px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+	grid-template-columns: 56px minmax(280px, 0.82fr) minmax(420px, 1.4fr) 66px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .runs .panel-head {
+	gap: 10px;
+	padding: 14px 7px 10px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .runs .brand {
+	justify-content: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-collapse-toggle svg {
+	transform: scaleX(-1);
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-start {
+	width: 40px;
+	min-width: 40px;
+	height: 40px;
+	margin: 0 auto;
+	padding: 0;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-control-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-explorer-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-title,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta > :not(.dot),
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-progress,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-del,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot #conn-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot > :not(.dot),
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools .sidebar-nav {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-list {
+	padding: 8px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-list > .feed-empty {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-row {
+	display: block;
+	margin-bottom: 6px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run {
+	display: grid;
+	width: 40px;
+	min-height: 40px;
+	margin: 0 auto;
+	padding: 0;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run::before {
+	inset-block: 8px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta {
+	display: grid;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta > .dot {
+	width: 9px;
+	height: 9px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-context-actions {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools {
+	padding: 8px;
+	overflow: visible;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools > summary {
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	padding: 0;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools > summary::after {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot {
+	display: grid;
+	min-height: 48px;
+	padding: 10px;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot .dot {
+	display: block;
+	grid-column: 1;
 }
 
 html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
@@ -356,6 +496,10 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		grid-template-columns: minmax(168px, 0.5fr) minmax(250px, 0.8fr) minmax(360px, 1.35fr) 62px;
 		gap: 4px;
 		padding: 5px;
+	}
+
+	html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+		grid-template-columns: 56px minmax(250px, 0.8fr) minmax(360px, 1.35fr) 62px;
 	}
 }
 
@@ -382,6 +526,10 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		height: auto;
 		min-height: calc(100dvh - 48px);
 		padding-top: 5px;
+	}
+
+	html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+		grid-template-columns: 56px minmax(0, 1fr);
 	}
 }
 

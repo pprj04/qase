@@ -535,12 +535,7 @@ function renderRunsEmptyState() {
 	empty.className = 'feed-empty';
 	const line = document.createElement('p');
 	line.textContent = 'No runs yet';
-	const cta = document.createElement('button');
-	cta.type = 'button';
-	cta.className = 'empty-cta';
-	cta.textContent = 'Start your first run';
-	cta.addEventListener('click', () => { void startRun(); });
-	empty.append(line, cta);
+	empty.append(line);
 	el.runList.append(empty);
 }
 
@@ -617,6 +612,10 @@ function renderRun(run) {
 		chip.title = `Run executed on ${run.engine}`;
 		title.append(' ', chip);
 	}
+	const accessibleTitle = title.textContent || 'Untitled test';
+	const accessibleStatus = run.status === 'done' ? 'Completed' : run.status === 'running' ? 'Running' : String(run.status || 'Idle');
+	node.title = `${accessibleTitle} · ${accessibleStatus}`;
+	node.setAttribute('aria-label', `${accessibleTitle}, ${accessibleStatus}`);
 
 	const meta = document.createElement('div');
 	meta.className = 'run-meta';
@@ -6838,7 +6837,8 @@ el.authForm?.addEventListener('submit', async event => {
 	}
 });
 
-$('open-settings').onclick = openSettings;
+const openSettingsButton = $('nav-settings');
+if (openSettingsButton) openSettingsButton.onclick = openSettings;
 
 const openDeviceMatrixButton = $('open-device-matrix');
 
@@ -7332,38 +7332,8 @@ async function createBugReport() {
 	URL.revokeObjectURL(url);
 }
 
-const quickActions = $('quick-actions') ? {
-	strip: $('quick-actions'),
-	runAll: $('qa-run-all'),
-	runFailed: $('qa-run-failed'),
-	createCase: $('qa-create-case'),
-	chooseDevices: $('qa-choose-devices'),
-	viewResults: $('qa-view-results'),
-	createBug: $('qa-create-bug'),
-	preset: $('qa-preset')
-} : null;
-
-if (quickActions) {
-	quickActions.runAll?.addEventListener('click', () => void runAllTests());
-	quickActions.runFailed?.addEventListener('click', () => void runFailedTests());
-	quickActions.createCase?.addEventListener('click', () => testCaseView?.open?.());
-	quickActions.chooseDevices?.addEventListener('click', () => deviceDrawer?.open?.());
-	quickActions.viewResults?.addEventListener('click', () => { activateDetailTab($('tab-report'), true); el.viewer.scrollIntoView({ block: 'nearest' }); });
-	quickActions.createBug?.addEventListener('click', () => void createBugReport());
-	quickActions.preset?.addEventListener('change', async () => {
-		const presetId = quickActions.preset.value;
-		if (!presetId || !bulkRunView) return;
-		const environments = (await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []));
-		if (bulkRunView.runPreset(presetId, { environmentsFor: (id) => environmentsForPreset(id, environments) })) {
-			toast(`${quickActions.preset.selectedOptions[0]?.textContent ?? 'Preset'} ready — review the summary and run.`);
-		}
-		quickActions.preset.value = '';
-	});
-}
-
-/* Quick actions strip removed (#14102) — run/test-case/results entry points
-   live in the sidebar and dialogs; device selection via the CURRENT TEST
-   DEVICE card's [Change Device] → devicePicker. */
+/* Permanent quick actions were removed. Start testing stays primary; the
+   current run exposes only the actions that make sense for its state. */
 
 if (runTarget) {
 	runTarget.close?.addEventListener('click', () => runTarget.dialog.close());
@@ -7794,6 +7764,17 @@ $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
 
 el.newRun.onclick = openQaStart;
 $('sidebar-new-run').onclick = openQaStart;
+$('sidebar-view-findings')?.addEventListener('click', () => {
+	activateDetailTab($('tab-findings'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
+$('sidebar-view-report')?.addEventListener('click', () => {
+	activateDetailTab($('tab-report'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
+$('sidebar-retest')?.addEventListener('click', openQaStart);
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
 el.stopRun.onclick = async () => {

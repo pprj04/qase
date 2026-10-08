@@ -137,51 +137,58 @@
           <span class="brand-mark">Qase</span>
         </span>
         <button class="brand-sub" id="model-badge" title="Model settings">…</button>
+        <button class="sidebar-collapse-toggle" id="sidebar-collapse-toggle" type="button"
+                aria-controls="workspace-runs" aria-expanded="true"
+                aria-label="Collapse recent tests sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
+            <path d="M7 3v14M12.5 7.25 9.75 10l2.75 2.75"></path>
+          </svg>
+        </button>
       </div>
-      <button class="btn btn-primary" id="sidebar-new-run" type="button">Start testing</button>
-      <p class="run-explorer-label">Recent tests</p>
+      <button class="btn btn-primary sidebar-start" id="sidebar-new-run" type="button" title="Start testing">
+        <span class="sidebar-control-icon" aria-hidden="true">+</span>
+        <span class="sidebar-control-label">Start testing</span>
+      </button>
+      <p class="run-explorer-label"><span class="sidebar-control-label">Recent tests</span></p>
     </header>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
-    <details class="sidebar-tools">
-      <summary>Workspace tools</summary>
-    <nav class="sidebar-nav" aria-label="Workspace">
+    <div class="sidebar-context-actions" aria-label="Current run actions">
+      <button class="sidebar-context-action" id="sidebar-view-findings" type="button" title="View findings">
+        <span class="sidebar-control-icon" aria-hidden="true">◇</span><span class="sidebar-control-label">View findings</span>
+      </button>
+      <button class="sidebar-context-action" id="sidebar-view-report" type="button" title="View report">
+        <span class="sidebar-control-icon" aria-hidden="true">▤</span><span class="sidebar-control-label">View report</span>
+      </button>
+      <button class="sidebar-context-action" id="sidebar-retest" type="button" title="Retest">
+        <span class="sidebar-control-icon" aria-hidden="true">↻</span><span class="sidebar-control-label">Retest</span>
+      </button>
+    </div>
+    <details class="sidebar-tools" id="sidebar-tools">
+      <summary title="Advanced tools">
+        <span class="sidebar-control-icon" aria-hidden="true">•••</span>
+        <span class="sidebar-control-label">Advanced</span>
+      </summary>
+    <nav class="sidebar-nav" aria-label="Advanced tools">
       <button class="sidebar-nav-btn" id="nav-test-cases" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">▤</span> Test cases
+        <span class="sidebar-nav-icon" aria-hidden="true">▤</span><span class="sidebar-control-label">Test cases</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-device-matrix" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">◧</span> Device matrix
+        <span class="sidebar-nav-icon" aria-hidden="true">◧</span><span class="sidebar-control-label">Device matrix</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-bulk-runs" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span> Bulk runs
+        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span><span class="sidebar-control-label">Bulk runs</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-environments" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
+        <span class="sidebar-nav-icon" aria-hidden="true">✳</span><span class="sidebar-control-label">Environments</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-analytics" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">◔</span> Analytics
+        <span class="sidebar-nav-icon" aria-hidden="true">◔</span><span class="sidebar-control-label">Analytics</span>
+      </button>
+      <button class="sidebar-nav-btn" id="nav-settings" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">⚙</span><span class="sidebar-control-label">Settings</span>
       </button>
     </nav>
-<!-- Quick Actions strip (Phase 11). -->
-<div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
-  <span class="qa-strip-title">Quick actions</span>
-  <button type="button" class="qa-chip" id="qa-run-all">▶ Run all tests</button>
-  <button type="button" class="qa-chip" id="qa-run-failed">↻ Run failed tests</button>
-  <button type="button" class="qa-chip" id="qa-create-case">＋ Create test case</button>
-  <button type="button" class="qa-chip" id="qa-choose-devices">☰ Choose devices</button>
-  <button type="button" class="qa-chip" id="qa-view-results">◧ View results</button>
-  <button type="button" class="qa-chip" id="qa-create-bug">⚑ Create bug</button>
-  <label class="qa-preset-wrap">Presets
-    <select id="qa-preset" aria-label="Environment presets">
-      <option value="">Choose…</option>
-      <option value="apple-mobile">Apple Mobile</option>
-      <option value="android-mobile">Android Mobile</option>
-      <option value="windows-desktop">Windows Desktop</option>
-      <option value="all-mobile">All Mobile</option>
-      <option value="all-browsers">All Browsers</option>
-      <option value="full-regression">Full Regression</option>
-    </select>
-  </label>
-</div>
     <section class="perf-panel" id="feedback-panel" aria-label="Feedback Inbox" hidden>      <header class="perf-head">
         <h2 class="perf-title">💬 Feedback Inbox</h2>
         <div class="perf-actions">
@@ -240,9 +247,6 @@
       <label class="theme-control" for="theme-select"><span>Theme</span><select id="theme-select" name="theme" data-theme-control><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-test-cases" title="Reusable QA scenarios with multi-environment assignment">Test cases</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-bulk-run" title="Launch one run per test case &times; environment">Bulk runs</button>
     </footer>
   </aside>
 

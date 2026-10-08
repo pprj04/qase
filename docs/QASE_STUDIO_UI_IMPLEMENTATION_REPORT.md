@@ -35,6 +35,24 @@ No changes in this implementation were pushed to a remote.
 - Founder results place product decisions before sales, marketing, and pricing detail.
 - Light, Dark, and System themes continue to use native `color-scheme` and persistent user preference.
 
+## Phase 13A navigation and right-side classification
+
+The embedded customer path now leads with **Start testing**, recent tests, and contextual result actions. Test cases, bulk runs, device and environment administration, analytics, and model settings remain available under one closed **Advanced** disclosure. The sidebar can become a 56 px icon rail and remembers that choice locally; opening Advanced from the rail expands it so every tool remains readable and keyboard accessible. Standalone mode keeps its product identity and account controls.
+
+| Right-side control | Classification | Embedded presentation |
+| --- | --- | --- |
+| Device | Customer essential during a run | Shown in the preview header when resolved. |
+| OS | Customer essential during a run | Included in the resolved device description rather than repeated as a separate row. |
+| Browser | Customer essential during a run | Included in the resolved device description and preview chrome. |
+| Status | Contextual only | Shown while it explains idle, running, completed, failed, or unavailable state. |
+| Change | Contextual only | Available in launcher setup and unavailable-state recovery; removed from the default embedded preview header. |
+| Execution type | Advanced | Hidden from the default embedded header; retained in device and run details. |
+| Session | Advanced | Retained in run details and technical diagnostics. |
+| Device details | Advanced | Available through Settings → Device Management. |
+| Landscape | Advanced | Retained in device setup; not shown in the embedded mode rail. |
+
+The right panel itself was not redesigned in this phase. This classification only removes duplicated technical chrome from the default embedded view and preserves the underlying controls in their existing advanced or contextual surfaces.
+
 ## Validation evidence
 
 | Check | Result |
