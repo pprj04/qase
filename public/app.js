@@ -5094,10 +5094,16 @@ function qaMatrixConfigurationKey(configuration) {
  * #15163: effective selection = device-scope auto-select-all minus in-session
  * deselections when scoped; catalog selection minus persisted deselections
  * otherwise. Single source of truth for selectedEnvIds.
+ * #15323: the default (non-scoped) catalog selection is capped at
+ * MAX_RUN_CONFIGURATIONS so Start is enabled out of the box — the full
+ * 37k-row default used to exceed the run cap and leave Start permanently
+ * disabled until the user narrowed it by hand. Deselections are applied
+ * BEFORE the cap so explicitly opted-out configurations never occupy slots.
  */
 function qaMatrixEffectiveSelection() {
 	if (!qaMatrixState.deviceScope) {
-		return computeSelection(qaMatrixState.index, qaMatrixStore);
+		return computeSelection(qaMatrixState.index, qaMatrixStore)
+			.slice(0, MAX_RUN_CONFIGURATIONS);
 	}
 	const deviceConfigurations = configurationsForDevice(qaMatrixState.index, qaMatrixState.deviceScope);
 	return defaultSelectionForDevice(deviceConfigurations)
@@ -5319,11 +5325,19 @@ function qaMatrixRender() {
 		.map(provider => `${provider.name}: not configured`);
 	const scopeLabel = qaMatrixScopeLabel();
 	const overCap = summary.total > MAX_RUN_CONFIGURATIONS;
+	// #15323: with the default selection now capped, say so honestly instead
+	// of silently presenting 2,000 as if it were the whole catalog.
+	const cappedNote = !scopeLabel
+		&& summary.availableTotal > MAX_RUN_CONFIGURATIONS
+		&& summary.total === MAX_RUN_CONFIGURATIONS
+		? ` · capped at the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — ${(summary.availableTotal - MAX_RUN_CONFIGURATIONS).toLocaleString()} more available via filters`
+		: '';
 	matrix.summary.textContent = scopeLabel
 		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} of this device's configurations selected`
 		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
 			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
 			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '')
+			+ cappedNote
 			+ (overCap ? ` · over the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — narrow the selection to start` : '');
 	matrix.summary.title = Object.entries(summary.byFamily)
 		.filter(([, count]) => count > 0)
