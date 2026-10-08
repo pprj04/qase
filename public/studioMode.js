@@ -9,7 +9,8 @@
 	const params = new URLSearchParams(window.location.search);
 	const enabled = params.get('studio') === 'mock';
 	document.documentElement.dataset.qaseLayout = enabled ? 'studio-mock' : 'standalone';
-	const sidebarPreferenceKey = 'qase.studio.sidebar';
+	const sidebarPreferenceKey = 'qase.sidebar';
+	const legacySidebarPreferenceKey = 'qase.studio.sidebar';
 	const contextStateKey = 'qase.studio.contextState';
 	const contextWidthKey = 'qase.studio.contextWidth';
 	const contextWidth = Object.freeze({ minimum: 220, default: 280, maximum: 340 });
@@ -22,11 +23,14 @@
 	const readPreference = (key, fallback) => {
 		try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 	};
+	const sidebarPreference = readPreference(
+		sidebarPreferenceKey,
+		readPreference(legacySidebarPreferenceKey, 'expanded')
+	) === 'collapsed' ? 'collapsed' : 'expanded';
+	document.documentElement.dataset.qaseSidebar = sidebarPreference;
 	if (enabled) {
-		const sidebarPreference = readPreference(sidebarPreferenceKey, 'expanded') === 'collapsed' ? 'collapsed' : 'expanded';
 		const contextPreference = readPreference(contextStateKey, 'expanded') === 'collapsed' ? 'collapsed' : 'expanded';
 		const savedContextWidth = normalizedContextWidth(readPreference(contextWidthKey, contextWidth.default));
-		document.documentElement.dataset.qaseSidebar = sidebarPreference;
 		document.documentElement.dataset.studioContext = contextPreference;
 		document.documentElement.style.setProperty('--studio-context-width', `${savedContextWidth}px`);
 	}
@@ -51,34 +55,11 @@
 	}) : undefined;
 	window.qaseStudioContext = context;
 
-	if (!enabled) return;
 	window.addEventListener('DOMContentLoaded', () => {
-		const project = document.getElementById('studio-project-name');
-		const target = document.getElementById('studio-project-target');
-		const contextPanel = document.getElementById('studio-context');
-		const toggle = document.getElementById('studio-context-toggle');
-		const resizer = document.getElementById('studio-context-resizer');
 		const sidebarToggle = document.getElementById('sidebar-collapse-toggle');
 		const advancedTools = document.getElementById('sidebar-tools');
-		let currentContextWidth = normalizedContextWidth(readPreference(contextWidthKey, contextWidth.default));
 		const persistPreference = (key, value) => {
 			try { localStorage.setItem(key, String(value)); } catch {}
-		};
-		const setContextWidth = (nextWidth, persist = false) => {
-			currentContextWidth = Math.min(contextWidth.maximum, Math.max(contextWidth.minimum, Math.round(nextWidth)));
-			document.documentElement.style.setProperty('--studio-context-width', `${currentContextWidth}px`);
-			resizer?.setAttribute('aria-valuenow', String(currentContextWidth));
-			if (persist) persistPreference(contextWidthKey, currentContextWidth);
-		};
-		const setContextState = (nextState, persist = true) => {
-			const collapsed = nextState === 'collapsed';
-			document.documentElement.dataset.studioContext = collapsed ? 'collapsed' : 'expanded';
-			if (toggle) {
-				toggle.setAttribute('aria-expanded', String(!collapsed));
-				toggle.setAttribute('aria-label', collapsed ? 'Show project context' : 'Hide project context');
-				toggle.title = collapsed ? 'Show project context' : 'Hide project context';
-			}
-			if (persist) persistPreference(contextStateKey, collapsed ? 'collapsed' : 'expanded');
 		};
 		const setSidebarState = (nextState, persist = true) => {
 			const collapsed = nextState === 'collapsed';
@@ -102,6 +83,30 @@
 				setSidebarState('expanded');
 			}
 		});
+
+		if (!enabled) return;
+		const project = document.getElementById('studio-project-name');
+		const target = document.getElementById('studio-project-target');
+		const contextPanel = document.getElementById('studio-context');
+		const toggle = document.getElementById('studio-context-toggle');
+		const resizer = document.getElementById('studio-context-resizer');
+		let currentContextWidth = normalizedContextWidth(readPreference(contextWidthKey, contextWidth.default));
+		const setContextWidth = (nextWidth, persist = false) => {
+			currentContextWidth = Math.min(contextWidth.maximum, Math.max(contextWidth.minimum, Math.round(nextWidth)));
+			document.documentElement.style.setProperty('--studio-context-width', `${currentContextWidth}px`);
+			resizer?.setAttribute('aria-valuenow', String(currentContextWidth));
+			if (persist) persistPreference(contextWidthKey, currentContextWidth);
+		};
+		const setContextState = (nextState, persist = true) => {
+			const collapsed = nextState === 'collapsed';
+			document.documentElement.dataset.studioContext = collapsed ? 'collapsed' : 'expanded';
+			if (toggle) {
+				toggle.setAttribute('aria-expanded', String(!collapsed));
+				toggle.setAttribute('aria-label', collapsed ? 'Show project context' : 'Hide project context');
+				toggle.title = collapsed ? 'Show project context' : 'Hide project context';
+			}
+			if (persist) persistPreference(contextStateKey, collapsed ? 'collapsed' : 'expanded');
+		};
 		if (project) project.textContent = context.project;
 		if (target) {
 			target.href = context.targetUrl;

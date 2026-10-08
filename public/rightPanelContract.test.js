@@ -100,17 +100,17 @@ test('quick actions strip is removed (#14102); results live in run history via s
 	assert.ok(!app.includes('quickActions.'), 'dead quick-actions controller must be gone');
 });
 
-test('Phase 13A sidebar collapse control is Studio-only, accessible and persistent', async () => {
+test('Phase 13A sidebar collapse control is shared, accessible and persistent', async () => {
 	const html = await readFile('public/index.html', 'utf8');
 	assert.match(html, /id="sidebar-collapse-toggle"[^>]*aria-controls="workspace-runs"[^>]*aria-expanded="true"/);
 	assert.match(html, /aria-label="Collapse recent tests sidebar"/);
 	const mode = await readFile('public/studioMode.js', 'utf8');
-	assert.match(mode, /qase\.studio\.sidebar/);
+	assert.match(mode, /sidebarPreferenceKey = 'qase\.sidebar'/);
 	assert.match(mode, /localStorage\.setItem\(sidebarPreferenceKey/);
 	assert.match(mode, /advancedTools\.open && document\.documentElement\.dataset\.qaseSidebar === 'collapsed'/);
-	const embedded = await readFile('public/studio-embed.css', 'utf8');
-	assert.match(embedded, /data-qase-sidebar="collapsed"/);
-	assert.match(embedded, /grid-template-columns:\s*56px/);
+	const workspace = await readFile('public/studio-workspace.css', 'utf8');
+	assert.match(workspace, /data-qase-sidebar="collapsed"/);
+	assert.match(workspace, /grid-template-columns:\s*56px/);
 });
 
 test('runtime status vocabulary covers the agreed states via one map', async () => {
@@ -122,7 +122,7 @@ test('runtime status vocabulary covers the agreed states via one map', async () 
 	// The right-panel renderer reads only this vocabulary.
 	const app = await readFile('public/app.js', 'utf8');
 	const header = app.slice(app.indexOf('function renderLiveDeviceViewHeader'), app.indexOf('/* Environment card'));
-	for (const word of ['RESERVING', 'CONNECTING', 'CONNECTED', 'RUNNING', 'COMPLETED', 'FAILED', 'DEVICE UNAVAILABLE']) {
+	for (const word of ['Preparing…', 'Connecting…', 'Connected', 'Running', 'Complete', 'Failed', 'Unavailable']) {
 		assert.ok(header.includes(word), `live header must render '${word}'`);
 	}
 });

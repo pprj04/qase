@@ -15,7 +15,7 @@ test('technical execution metadata is preserved behind a closed semantic disclos
 		assert.match(markup, new RegExp(`id="${id}"`));
 	}
 	assert.match(app, /details\.open = false/);
-	assert.match(embedStyles, /#execution-target-block[\s\S]*display: none/);
+	assert.match(workspaceStyles, /#execution-target-block[\s\S]*display: none/);
 });
 
 test('running QA makes the browser primary and initially reveals the supporting plan', () => {
@@ -45,8 +45,8 @@ test('finding and report hierarchy lead with user-facing evidence and action', (
 	assert.doesNotMatch(app, /finding\.classList\.toggle\('is-fixed'/);
 });
 
-test('empty Studio view keeps one primary launcher and routes composer URLs into setup', () => {
-	assert.match(embedStyles, /\.empty-actions #empty-start,[\s\S]*display: none/);
+test('empty Qase view keeps one primary launcher and routes composer URLs into setup', () => {
+	assert.match(workspaceStyles, /\.empty-actions #empty-start \{ display: none/);
 	assert.match(app, /if \(!state\.sessionId\) \{\s*openQaStart\(\)/);
 	assert.match(app, /qaUi\.targetUrl\.value = target\.href/);
 });

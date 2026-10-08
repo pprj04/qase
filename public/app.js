@@ -230,8 +230,6 @@ const state = {
 	shownQaResults: undefined,
 	/** Run whose live Plan was revealed once without overriding later tab choices. */
 	shownRunningPlan: undefined,
-	/** True once the welcome checklist was replaced by real content. */
-	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
 	pilotMode: false,
 	user: undefined,
@@ -1034,15 +1032,18 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	const exec = ldv.querySelector('#ldv-exec');
 	const live = ldv.querySelector('#ldv-live');
 	if (!dev || !exec || !live) return;
+	const completed = session?.status === 'done';
+	const hasSavedPreview = completed && Boolean(session?.frame);
 
 	const view = are ?? resolveActiveRuntimeEnvironment({ session, environments: deviceState.list });
 	if (!view) {
-		dev.textContent = activeTestEnvStore?.get?.()?.device ?? '—';
-		exec.textContent = '○ NO DEVICE';
+		dev.textContent = hasSavedPreview ? 'Saved' : (activeTestEnvStore?.get?.()?.device ?? '—');
+		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = '○ IDLE';
+		live.hidden = !session;
+		live.textContent = completed ? 'Complete' : 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Live device view — no active environment';
+		ldv.title = hasSavedPreview ? 'Saved preview from the completed run' : 'Preview — no active browser';
 		return;
 	}
 
@@ -1055,12 +1056,13 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	if (!activeRun && !selView) {
 		// Idle with NO store selection (e.g. after Clear): empty state — never
 		// resurrect the stale session device on the header/frame.
-		dev.textContent = '—';
-		exec.textContent = '○ NO DEVICE';
+		dev.textContent = hasSavedPreview ? 'Saved' : '—';
+		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = '○ IDLE';
+		live.hidden = !session;
+		live.textContent = completed ? 'Complete' : 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Live device view — no device selected';
+		ldv.title = hasSavedPreview ? 'Saved preview from the completed run' : 'Preview — no browser selected';
 		renderBrowserChrome(null);
 		applyDeviceFrame(null);
 		renderUnavailableState(null, 'NO DEVICE');
@@ -1076,25 +1078,26 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	};
 	const execLabel = execMap[headerView.executionType] ?? headerView.executionType.toUpperCase();
 	const statusMap = {
-		queued: '○ QUEUED',
-		reserving: '○ RESERVING…',
-		connecting: '◌ CONNECTING…',
-		connected: '● CONNECTED',
-		running: '● RUNNING',
-		blocked: '◆ BLOCKED',
-		completed: '○ COMPLETED',
-		failed: '✕ FAILED',
-		device_unavailable: '✕ DEVICE UNAVAILABLE',
-		released: '○ RELEASED'
+		queued: 'Queued',
+		reserving: 'Preparing…',
+		connecting: 'Connecting…',
+		connected: 'Connected',
+		running: 'Running',
+		blocked: 'Needs attention',
+		completed: 'Complete',
+		failed: 'Failed',
+		device_unavailable: 'Unavailable',
+		released: 'Released'
 	};
-	const liveLabel = statusMap[view.runtimeStatus] ?? `○ ${view.runtimeStatus.toUpperCase()}`;
+	const liveLabel = statusMap[view.runtimeStatus] ?? String(view.runtimeStatus).replaceAll('_', ' ');
 
 	exec.dataset.exec = view.executionType;
 	exec.textContent = execLabel;
+	live.hidden = false;
 	live.textContent = liveLabel;
 	live.dataset.live = String(['running', 'connected'].includes(view.runtimeStatus));
 	dev.textContent = deviceLabel;
-	ldv.title = `Live device view — ${headerView.device} · ${[headerView.os, headerView.osVersion].filter(Boolean).join(' ') || 'unknown OS'} · ${[headerView.browser, headerView.browserVersion].filter(Boolean).join(' ') || 'unknown browser'} · ${execLabel}`;
+	ldv.title = `Preview — ${headerView.device} · ${[headerView.os, headerView.osVersion].filter(Boolean).join(' ') || 'unknown OS'} · ${[headerView.browser, headerView.browserVersion].filter(Boolean).join(' ') || 'unknown browser'} · ${execLabel}`;
 
 	// Chrome + frame + unavailable state follow the same source split: the
 	// active run when executing, otherwise the store selection.
@@ -1285,7 +1288,6 @@ async function createQaRun({
 	targetUrl, device, deviceLandscape, selectedTests, securityAuthorization,
 	kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId, scopeSelection
 }) {
-	state.welcomeDismissed = true;
 	void markOnboarded();
 	const session = await api('/sessions', {
 		method: 'POST',
@@ -1551,6 +1553,7 @@ function setRunSummaryCollapsed(collapsed) {
 	el.runSummary.classList.toggle('is-collapsed', collapsed);
 	el.runSummaryMini.hidden = !collapsed;
 	el.runSummaryToggle.setAttribute('aria-expanded', String(!collapsed));
+	el.runSummaryToggle.setAttribute('aria-label', collapsed ? 'Expand run summary' : 'Collapse run summary');
 	el.runSummaryToggle.textContent = collapsed ? '⌄' : '⌃';
 	el.runSummaryToggle.title = collapsed ? 'Expand run summary' : 'Collapse run summary';
 }
@@ -1578,39 +1581,14 @@ function renderMiniSummary() {
 
 function renderHeader() {
 	const session = state.session;
-	const usage = session.tokenUsage;
-	const context = session.contextUsage;
-	// Token row: dedicated region below the header.
-	const hasRun = Boolean(session.targetUrl || session.title);
+	// Customer-facing progress stays simple. Model usage remains in Run details.
+	const hasRun = Boolean(state.sessionId && (session.targetUrl || session.title));
+	document.body.dataset.hasRun = String(hasRun);
+	el.statusChip.hidden = !hasRun;
 	el.runSummary.hidden = !hasRun;
-	if (window.qaseStudioContext) {
-		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = 'Run progress';
-		el.tokenText.title = '';
-	} else if (usageIsPending(session)) {
-		// Live run, first model call still in flight. "Pending" is honest;
-		// "0 in · 0 out" would suggest calls were counted and came back empty.
-		el.tokenText.classList.add('is-pending');
-		el.tokenText.textContent = '-- in · -- out';
-		el.tokenText.title = 'Token usage pending — waiting for the first model call to complete.';
-	} else {
-		const text = tokenSummaryText(usage)
-			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
-				? `${Math.round(context.percentage)}% ctx` : undefined);
-		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = text ?? 'Run overview';
-		if (usage && text) {
-			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
-				? Math.round(context.percentage) : undefined;
-			el.tokenText.title = `${(usage.inputTokens ?? 0).toLocaleString()} prompt / ${(usage.outputTokens ?? 0).toLocaleString()} completion tokens`
-				+ (usage.estimated === true ? ' (estimated)' : '')
-				+ (percentage !== undefined ? ` · context ${percentage}% of window` : '');
-		} else if (text) {
-			el.tokenText.title = `model context window ${text.replace(' ctx', '')} used`;
-		} else {
-			el.tokenText.title = '';
-		}
-	}
+	el.tokenText.classList.remove('is-pending');
+	el.tokenText.textContent = 'Run progress';
+	el.tokenText.title = '';
 	// LIVE pill: only while the run is actively working.
 	el.livePill.hidden = session.status !== 'running';
 	renderMiniSummary();
@@ -2689,10 +2667,8 @@ function renderTranscript() {
 	if (messages.length === 0) {
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		return;
 	}
-	state.welcomeDismissed = true;
 	el.chatEmpty.hidden = true;
 	// Reasoning is live-only; anything stored by an earlier version is dropped.
 	for (const message of messages.filter(entry => entry.role !== 'thinking')) {
@@ -3907,7 +3883,15 @@ function renderReport() {
 		: 'Rate this QASE testing run and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
-	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	actions.append(pdf, provideFeedback);
+	const developerActions = document.createElement('details');
+	developerActions.className = 'report-developer-actions';
+	const developerSummary = document.createElement('summary');
+	developerSummary.textContent = 'Advanced / developer tools';
+	const developerButtons = document.createElement('div');
+	developerButtons.className = 'report-developer-buttons';
+	developerButtons.append(download, copy, copyFixes, downloadFixes);
+	developerActions.append(developerSummary, developerButtons);
 	// The re-run control only applies to runs launched from a saved environment
 	// snapshot (environmentSnapshot carries envId for createQaRun); runs without
 	// one keep the standard download/copy actions only.
@@ -3965,10 +3949,10 @@ function renderReport() {
 				generate.textContent = 'Generate test cases';
 			}
 		};
-		actions.append(generate);
+		developerButtons.append(generate);
 	}
 
-	el.reportView.append(actions);
+	el.reportView.append(actions, developerActions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
 	el.reportView.append(renderFilesSection(findings));
@@ -4397,9 +4381,19 @@ function renderSqaReportActions() {
 		: 'Rate this SQA assessment experience and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
-	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
-	el.reportView.append(actions);
-	return actions;
+	actions.append(pdf, provideFeedback);
+	const developerActions = document.createElement('details');
+	developerActions.className = 'report-developer-actions';
+	const developerSummary = document.createElement('summary');
+	developerSummary.textContent = 'Advanced / developer tools';
+	const developerButtons = document.createElement('div');
+	developerButtons.className = 'report-developer-buttons';
+	developerButtons.append(download, copy, copyFixes, downloadFixes);
+	developerActions.append(developerSummary, developerButtons);
+	const actionGroup = document.createElement('div');
+	actionGroup.className = 'report-action-group';
+	actionGroup.append(actions, developerActions);
+	return actionGroup;
 }
 
 function renderSqaVerdict(assessment, lifecycle) {
@@ -5674,12 +5668,37 @@ function syncQaSubmitState() {
 	const selectedCount = qaMatrixState.selectedEnvIds.length;
 	const matrixReady = !qaUi.dialog?.open || selectedCount > 0;
 	const withinCap = !qaUi.dialog?.open || selectedCount <= MAX_RUN_CONFIGURATIONS;
-	qaUi.submit.disabled = selected === 0 || !urlValid || !matrixReady || !withinCap || qaUi.submit.dataset.busy === 'true';
+	const authorizationReady = !qaUi.dialog?.open || !qaSecuritySelected() || Boolean(qaUi.securityAuthorized?.checked);
+	qaUi.submit.disabled = selected === 0 || !urlValid || !authorizationReady || !matrixReady || !withinCap || qaUi.submit.dataset.busy === 'true';
+	const blockedReason = qaLaunchBlockedReason();
+	qaUi.submit.title = blockedReason ?? '';
 	if (qaUi.testsCount) {
 		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
 	}
 	syncQaCategoryToggles();
 	syncQaSelectionSummary();
+}
+
+/** Plain-language reason the primary action cannot run yet. This is also the
+ * source for the button tooltip, so disabled never means unexplained. */
+function qaLaunchBlockedReason() {
+	if (!qaUi.dialog?.open || qaUi.submit?.dataset.busy === 'true') return null;
+	const target = qaUi.targetUrl?.value?.trim() ?? '';
+	if (!target) return 'Enter a website URL to start.';
+	if (!isValidTargetUrl(target)) return 'Enter a valid http(s) website URL.';
+	if (!state.qaTestCatalog) return 'Loading recommended checks…';
+	if (qaUi.selectedTests.size === 0) return 'Select at least one check.';
+	if (qaSecuritySelected() && !qaUi.securityAuthorized?.checked) {
+		return 'Confirm that you are authorized to test this site.';
+	}
+	if (qaMatrixState.fetchState === 'loading') return 'Loading browsers and devices…';
+	if (qaMatrixState.fetchState === 'error') return 'Browsers and devices could not be loaded. Open Customize and retry.';
+	const configurations = qaMatrixState.selectedEnvIds.length;
+	if (configurations === 0) return 'Select at least one available browser and device.';
+	if (configurations > MAX_RUN_CONFIGURATIONS) {
+		return `Narrow the browser and device selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`;
+	}
+	return null;
 }
 
 /** Keep the compact launcher honest when availability or selection changes. */
@@ -5693,11 +5712,14 @@ function syncQaSelectionSummary() {
 	const checks = qaUi.selectedTests.size;
 	const configurations = qaMatrixState.selectedEnvIds.length;
 	const loading = qaMatrixState.fetchState === 'loading';
+	const blockedReason = qaLaunchBlockedReason();
 	const detail = loading ? 'Loading browsers and devices…'
 		: configurations === 0 ? 'Choose an available browser and device to start.'
 		: configurations > MAX_RUN_CONFIGURATIONS ? `${configurations.toLocaleString()} configurations selected. Narrow your selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`
 		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected`;
-	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
+	summary.textContent = blockedReason
+		? `${checks} check${checks === 1 ? '' : 's'} selected · ${blockedReason}`
+		: `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
 	if (!loading && (configurations === 0 || configurations > MAX_RUN_CONFIGURATIONS)) $('qa-customize').open = true;
 }
 
@@ -5754,15 +5776,15 @@ function paintQaTestCatalog(catalog) {
 	qaUi.selectedTests.catalogSize = qaCatalogSize();
 	qaUi.testsState.hidden = true;
 	qaUi.testsFieldset.disabled = false;
-	syncQaSubmitState();
 	syncQaSecurityGate();
+	syncQaSubmitState();
 }
 
 function refreshQaSelection() {
 	qaUi.selectedTests = new Set(qaCheckedTests());
 	qaUi.selectedTests.catalogSize = qaCatalogSize();
-	syncQaSubmitState();
 	syncQaSecurityGate();
+	syncQaSubmitState();
 }
 
 /** True when the current selection includes at least one security check. */
@@ -5811,6 +5833,7 @@ if (qaUi.securityAuthorized) {
 	qaUi.securityAuthorized.addEventListener('change', () => {
 		syncQaSecurityGate();
 		setQaFormError('');
+		syncQaSubmitState();
 	});
 }
 
@@ -5912,59 +5935,7 @@ async function markOnboarded() {
 			method: 'PUT',
 			body: JSON.stringify({ profile: { onboardingComplete: true } })
 		});
-	} catch { /* cosmetic — the checklist is advisory, not blocking */ }
-}
-
-function renderWelcomeChecklist() {
-	const host = el.chatEmpty;
-	if (!host || state.session?.id || state.welcomeDismissed) return;
-	document.getElementById('welcome-checklist')?.remove();
-	const checklist = document.createElement('div');
-	checklist.className = 'welcome-checklist';
-	checklist.id = 'welcome-checklist';
-
-	const title = document.createElement('h3');
-	title.textContent = 'Get started';
-	checklist.append(title);
-
-	const ready = state.config?.ready === true;
-	const steps = [
-		{
-			done: ready,
-			label: ready ? 'Model endpoint configured' : 'Model endpoint — configure it in Settings',
-			action: ready ? undefined : { label: 'Open Settings', run: () => { void openSettings(); } }
-		},
-		{
-			done: false,
-			label: 'Start your first run',
-			action: { label: 'Start a QA run', run: () => { void startRun(); } }
-		},
-		{
-			done: false,
-			label: '…or practice on the demo site',
-			action: { label: 'Try demo', run: openQaStartWithDemo }
-		}
-	];
-	for (const step of steps) {
-		const row = document.createElement('div');
-		row.className = 'welcome-step';
-		const mark = document.createElement('span');
-		mark.className = `welcome-mark${step.done ? ' is-done' : ''}`;
-		mark.textContent = step.done ? '✓' : '·';
-		const text = document.createElement('span');
-		text.textContent = step.label;
-		row.append(mark, text);
-		if (!step.done && step.action) {
-			const button = document.createElement('button');
-			button.type = 'button';
-			button.className = 'btn btn-ghost btn-sm';
-			button.textContent = step.action.label;
-			button.onclick = () => step.action.run();
-			row.append(button);
-		}
-		checklist.append(row);
-	}
-	host.append(checklist);
+	} catch { /* cosmetic — onboarding state does not block a run */ }
 }
 
 function openQaStart() {
@@ -6002,7 +5973,7 @@ function openQaStart() {
 	}
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	if (matchMedia('(pointer: fine)').matches) setTimeout(() => qaUi.targetUrl?.focus(), 0);
-	qaUi.submit.disabled = false;
+	syncQaSubmitState();
 	// #15164: 'Change device' stays INSIDE the Start QA run modal — it scrolls
 	// to and focuses the in-modal device matrix (single source of truth)
 	// instead of opening the separate #device-picker dialog.
@@ -6030,11 +6001,41 @@ function openQaStart() {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 			$('qa-customize').open = true;
 			$('qa-selection-summary').textContent = 'Checks could not be loaded. Close this window and try again.';
+			syncQaSubmitState();
 		});
 }
 
 function closeQaStart() {
 	if (qaUi.dialog?.open) qaUi.dialog.close();
+}
+
+function firstMatrixSessionId(run) {
+	const items = Array.isArray(run?.items) ? run.items : [];
+	return items.find(item => item?.sessionId && item.status === 'RUNNING')?.sessionId
+		?? items.find(item => item?.sessionId)?.sessionId
+		?? null;
+}
+
+/** A matrix run is created before its first underlying QA session. Wait for
+ * that real session so the product can select it and enter the shared running
+ * workspace. A bounded fallback leaves slow/blocked matrices on their honest
+ * status board instead of inventing a run. */
+async function waitForFirstMatrixSession(createdRun, { timeoutMs = 15_000, pollMs = 250 } = {}) {
+	let run = createdRun;
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const sessionId = firstMatrixSessionId(run);
+		if (sessionId) return sessionId;
+		if (!run?.id || Date.now() >= deadline || ['done', 'error', 'cancelled'].includes(run?.status)) return null;
+		await new Promise(resolve => window.setTimeout(resolve, pollMs));
+		try {
+			const payload = await api(`/matrix-runs/${encodeURIComponent(run.id)}`);
+			run = payload?.run ?? payload;
+		} catch {
+			// Creation already succeeded. A transient status-read failure should
+			// not misreport the create request as failed or allow a duplicate.
+		}
+	}
 }
 
 if (qaUi.dialog) {
@@ -6108,7 +6109,9 @@ if (qaUi.dialog) {
 		refreshQaSelection();
 	};
 
-	qaUi.form.onsubmit = async event => {		event.preventDefault();
+	qaUi.form.onsubmit = async event => {
+		event.preventDefault();
+		if (qaUi.submit.dataset.busy === 'true') return;
 		setQaFormError();
 		if (!qaUi.form.reportValidity()) return;
 		if (!ensureModelConfigured('QA launcher')) return;
@@ -6166,7 +6169,7 @@ if (qaUi.dialog) {
 		// legacy single-environment/test-case path applies to non-matrix runs.
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
-		qaUi.submit.textContent = selectedEnvIds.length > 1 ? `Starting ${selectedEnvIds.length.toLocaleString()} configurations…` : 'Starting run…';
+		qaUi.submit.textContent = 'Starting…';
 		try {
 			// Phase 3 (#14937): one matrix run carries EVERY selected
 			// configuration as an item — queued with controlled concurrency,
@@ -6185,11 +6188,18 @@ if (qaUi.dialog) {
 				})
 			});
 			closeQaStart();
-			toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configurations queued.`);
-			// #14942 Phase 4: the results board IS the live view — per-configuration
-			// statuses, totals, coverage gaps and evidence update while the
-			// orchestrator works; each row drills into its producing session.
-			openQaMatrixRunDialog(matrixRun?.id);
+			void markOnboarded();
+			const createdSessionId = await waitForFirstMatrixSession(matrixRun);
+			if (createdSessionId) {
+				await selectSession(createdSessionId);
+				toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configuration${selectedEnvIds.length === 1 ? '' : 's'} queued.`);
+			} else {
+				// The matrix run is authoritative even when an execution provider
+				// cannot produce a session promptly. Keep its honest status visible;
+				// never fabricate a selected/running session.
+				toast('QA run created. Review browser and device status for details.');
+				openQaMatrixRunDialog(matrixRun?.id);
+			}
 			// Optional follow-on flows: the QA run is already underway; each
 			// checked option opens the existing dialog prefilled with the same
 			// target for the user to confirm — nothing starts automatically.
@@ -6204,7 +6214,6 @@ if (qaUi.dialog) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 		} finally {
 			qaUi.submit.dataset.busy = 'false';
-			qaUi.submit.disabled = false;
 			qaUi.submit.textContent = 'Start testing';
 			syncQaSubmitState();
 		}
@@ -8012,10 +8021,9 @@ async function bootWorkspace() {
 	if (target) {
 		await selectSession(target.id);
 	} else {
-		// Fresh account: show the welcome checklist behind the launcher dialog.
+		// Fresh account: show the concise empty state behind the launcher dialog.
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		renderRunsEmptyState();
 		await startRun();
 	}

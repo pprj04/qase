@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * Static contract tests for the Phase-5 customer-journey affordances: config
- * gating, demo-site discovery, welcome checklist, resume affordance, and SQA
+ * gating, demo-site discovery, concise empty state, resume affordance, and SQA
  * export parity. These read the dashboard sources as text so regressions in
  * markup or wiring fail the suite without a browser.
  */
@@ -27,8 +27,10 @@ test('demo site is discoverable from the launcher and the empty state', () => {
 	assert.match(appJs, /demo@qase\.dev \/ demo1234/, 'demo credentials surfaced');
 });
 
-test('first-run welcome checklist renders and onboarding flag is persisted', () => {
-	assert.match(appJs, /function renderWelcomeChecklist/, 'checklist renderer');
+test('first-run journey stays concise while onboarding state is persisted', () => {
+	assert.match(html, /<h2>Test a website<\/h2>/, 'concise empty-state heading');
+	assert.doesNotMatch(html, /class="empty-note"/, 'technical credential copy is not permanent empty-state content');
+	assert.doesNotMatch(appJs, /checklist\.append/, 'duplicate onboarding action card is not rendered');
 	assert.match(appJs, /markOnboarded/, 'onboarding flag writer');
 	assert.match(appJs, /onboardingComplete: true/, 'flag set to true on first run');
 });
