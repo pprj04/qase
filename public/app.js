@@ -230,8 +230,6 @@ const state = {
 	shownQaResults: undefined,
 	/** Run whose live Plan was revealed once without overriding later tab choices. */
 	shownRunningPlan: undefined,
-	/** True once the welcome checklist was replaced by real content. */
-	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
 	pilotMode: false,
 	user: undefined,
@@ -1038,11 +1036,11 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	const view = are ?? resolveActiveRuntimeEnvironment({ session, environments: deviceState.list });
 	if (!view) {
 		dev.textContent = activeTestEnvStore?.get?.()?.device ?? '—';
-		exec.textContent = '○ NO DEVICE';
+		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = '○ IDLE';
+		live.textContent = 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Live device view — no active environment';
+		ldv.title = 'Preview — no active browser';
 		return;
 	}
 
@@ -1056,11 +1054,11 @@ function renderLiveDeviceViewHeader(session, are = null) {
 		// Idle with NO store selection (e.g. after Clear): empty state — never
 		// resurrect the stale session device on the header/frame.
 		dev.textContent = '—';
-		exec.textContent = '○ NO DEVICE';
+		exec.textContent = 'No device';
 		exec.dataset.exec = 'none';
-		live.textContent = '○ IDLE';
+		live.textContent = 'Idle';
 		live.dataset.live = 'false';
-		ldv.title = 'Live device view — no device selected';
+		ldv.title = 'Preview — no browser selected';
 		renderBrowserChrome(null);
 		applyDeviceFrame(null);
 		renderUnavailableState(null, 'NO DEVICE');
@@ -1076,25 +1074,25 @@ function renderLiveDeviceViewHeader(session, are = null) {
 	};
 	const execLabel = execMap[headerView.executionType] ?? headerView.executionType.toUpperCase();
 	const statusMap = {
-		queued: '○ QUEUED',
-		reserving: '○ RESERVING…',
-		connecting: '◌ CONNECTING…',
-		connected: '● CONNECTED',
-		running: '● RUNNING',
-		blocked: '◆ BLOCKED',
-		completed: '○ COMPLETED',
-		failed: '✕ FAILED',
-		device_unavailable: '✕ DEVICE UNAVAILABLE',
-		released: '○ RELEASED'
+		queued: 'Queued',
+		reserving: 'Preparing…',
+		connecting: 'Connecting…',
+		connected: 'Connected',
+		running: 'Running',
+		blocked: 'Needs attention',
+		completed: 'Complete',
+		failed: 'Failed',
+		device_unavailable: 'Unavailable',
+		released: 'Released'
 	};
-	const liveLabel = statusMap[view.runtimeStatus] ?? `○ ${view.runtimeStatus.toUpperCase()}`;
+	const liveLabel = statusMap[view.runtimeStatus] ?? String(view.runtimeStatus).replaceAll('_', ' ');
 
 	exec.dataset.exec = view.executionType;
 	exec.textContent = execLabel;
 	live.textContent = liveLabel;
 	live.dataset.live = String(['running', 'connected'].includes(view.runtimeStatus));
 	dev.textContent = deviceLabel;
-	ldv.title = `Live device view — ${headerView.device} · ${[headerView.os, headerView.osVersion].filter(Boolean).join(' ') || 'unknown OS'} · ${[headerView.browser, headerView.browserVersion].filter(Boolean).join(' ') || 'unknown browser'} · ${execLabel}`;
+	ldv.title = `Preview — ${headerView.device} · ${[headerView.os, headerView.osVersion].filter(Boolean).join(' ') || 'unknown OS'} · ${[headerView.browser, headerView.browserVersion].filter(Boolean).join(' ') || 'unknown browser'} · ${execLabel}`;
 
 	// Chrome + frame + unavailable state follow the same source split: the
 	// active run when executing, otherwise the store selection.
@@ -1285,7 +1283,6 @@ async function createQaRun({
 	targetUrl, device, deviceLandscape, selectedTests, securityAuthorization,
 	kickoffText, engine = 'chromium', coreFlowsOnly = false, environmentId, scopeSelection
 }) {
-	state.welcomeDismissed = true;
 	void markOnboarded();
 	const session = await api('/sessions', {
 		method: 'POST',
@@ -1551,6 +1548,7 @@ function setRunSummaryCollapsed(collapsed) {
 	el.runSummary.classList.toggle('is-collapsed', collapsed);
 	el.runSummaryMini.hidden = !collapsed;
 	el.runSummaryToggle.setAttribute('aria-expanded', String(!collapsed));
+	el.runSummaryToggle.setAttribute('aria-label', collapsed ? 'Expand run summary' : 'Collapse run summary');
 	el.runSummaryToggle.textContent = collapsed ? '⌄' : '⌃';
 	el.runSummaryToggle.title = collapsed ? 'Expand run summary' : 'Collapse run summary';
 }
@@ -1578,39 +1576,12 @@ function renderMiniSummary() {
 
 function renderHeader() {
 	const session = state.session;
-	const usage = session.tokenUsage;
-	const context = session.contextUsage;
-	// Token row: dedicated region below the header.
+	// Customer-facing progress stays simple. Model usage remains in Run details.
 	const hasRun = Boolean(session.targetUrl || session.title);
 	el.runSummary.hidden = !hasRun;
-	if (window.qaseStudioContext) {
-		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = 'Run progress';
-		el.tokenText.title = '';
-	} else if (usageIsPending(session)) {
-		// Live run, first model call still in flight. "Pending" is honest;
-		// "0 in · 0 out" would suggest calls were counted and came back empty.
-		el.tokenText.classList.add('is-pending');
-		el.tokenText.textContent = '-- in · -- out';
-		el.tokenText.title = 'Token usage pending — waiting for the first model call to complete.';
-	} else {
-		const text = tokenSummaryText(usage)
-			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
-				? `${Math.round(context.percentage)}% ctx` : undefined);
-		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = text ?? 'Run overview';
-		if (usage && text) {
-			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
-				? Math.round(context.percentage) : undefined;
-			el.tokenText.title = `${(usage.inputTokens ?? 0).toLocaleString()} prompt / ${(usage.outputTokens ?? 0).toLocaleString()} completion tokens`
-				+ (usage.estimated === true ? ' (estimated)' : '')
-				+ (percentage !== undefined ? ` · context ${percentage}% of window` : '');
-		} else if (text) {
-			el.tokenText.title = `model context window ${text.replace(' ctx', '')} used`;
-		} else {
-			el.tokenText.title = '';
-		}
-	}
+	el.tokenText.classList.remove('is-pending');
+	el.tokenText.textContent = 'Run progress';
+	el.tokenText.title = '';
 	// LIVE pill: only while the run is actively working.
 	el.livePill.hidden = session.status !== 'running';
 	renderMiniSummary();
@@ -2689,10 +2660,8 @@ function renderTranscript() {
 	if (messages.length === 0) {
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		return;
 	}
-	state.welcomeDismissed = true;
 	el.chatEmpty.hidden = true;
 	// Reasoning is live-only; anything stored by an earlier version is dropped.
 	for (const message of messages.filter(entry => entry.role !== 'thinking')) {
@@ -5912,59 +5881,7 @@ async function markOnboarded() {
 			method: 'PUT',
 			body: JSON.stringify({ profile: { onboardingComplete: true } })
 		});
-	} catch { /* cosmetic — the checklist is advisory, not blocking */ }
-}
-
-function renderWelcomeChecklist() {
-	const host = el.chatEmpty;
-	if (!host || state.session?.id || state.welcomeDismissed) return;
-	document.getElementById('welcome-checklist')?.remove();
-	const checklist = document.createElement('div');
-	checklist.className = 'welcome-checklist';
-	checklist.id = 'welcome-checklist';
-
-	const title = document.createElement('h3');
-	title.textContent = 'Get started';
-	checklist.append(title);
-
-	const ready = state.config?.ready === true;
-	const steps = [
-		{
-			done: ready,
-			label: ready ? 'Model endpoint configured' : 'Model endpoint — configure it in Settings',
-			action: ready ? undefined : { label: 'Open Settings', run: () => { void openSettings(); } }
-		},
-		{
-			done: false,
-			label: 'Start your first run',
-			action: { label: 'Start a QA run', run: () => { void startRun(); } }
-		},
-		{
-			done: false,
-			label: '…or practice on the demo site',
-			action: { label: 'Try demo', run: openQaStartWithDemo }
-		}
-	];
-	for (const step of steps) {
-		const row = document.createElement('div');
-		row.className = 'welcome-step';
-		const mark = document.createElement('span');
-		mark.className = `welcome-mark${step.done ? ' is-done' : ''}`;
-		mark.textContent = step.done ? '✓' : '·';
-		const text = document.createElement('span');
-		text.textContent = step.label;
-		row.append(mark, text);
-		if (!step.done && step.action) {
-			const button = document.createElement('button');
-			button.type = 'button';
-			button.className = 'btn btn-ghost btn-sm';
-			button.textContent = step.action.label;
-			button.onclick = () => step.action.run();
-			row.append(button);
-		}
-		checklist.append(row);
-	}
-	host.append(checklist);
+	} catch { /* cosmetic — onboarding state does not block a run */ }
 }
 
 function openQaStart() {
@@ -8012,10 +7929,9 @@ async function bootWorkspace() {
 	if (target) {
 		await selectSession(target.id);
 	} else {
-		// Fresh account: show the welcome checklist behind the launcher dialog.
+		// Fresh account: show the concise empty state behind the launcher dialog.
 		el.transcript.append(el.chatEmpty);
 		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		renderRunsEmptyState();
 		await startRun();
 	}

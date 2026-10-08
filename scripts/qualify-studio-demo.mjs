@@ -215,11 +215,52 @@ try {
 	assert.equal(await standalone.locator('#studio-context-resizer').isVisible(), false);
 	assert.equal(await standalone.locator('#studio-context-toggle').isVisible(), false);
 	assert.equal(await standalone.locator('html').evaluate(node => node.style.getPropertyValue('--studio-context-width')), '');
-	assert.equal(await standalone.locator('#sidebar-collapse-toggle').isVisible(), false);
+	assert.equal(await standalone.locator('#sidebar-collapse-toggle').isVisible(), true, 'Default Qase exposes the shared customer navigation collapse control');
 	await standalone.locator('#qa-cancel').click();
+	assert.equal(await standalone.getByRole('button', { name: 'Start testing', exact: true }).count(), 1, 'Default Qase has one visible Start testing action');
+	assert.equal(await standalone.locator('#empty-start').isVisible(), false);
+	assert.equal(await standalone.locator('#welcome-checklist').count(), 0, 'Default Qase omits the duplicate onboarding card');
+	assert.equal(await standalone.locator('#execution-target-block').isVisible(), false);
+	await standalone.screenshot({ path: path.join(output, 'qase-default-empty-1440.png'), animations: 'disabled' });
+	const standaloneExpandedWidth = await standalone.locator('#workspace-runs').evaluate(node => node.getBoundingClientRect().width);
+	await standalone.locator('#sidebar-collapse-toggle').click();
+	const standaloneCollapsedWidth = await standalone.locator('#workspace-runs').evaluate(node => node.getBoundingClientRect().width);
+	assert.ok(standaloneCollapsedWidth <= 56.5 && standaloneExpandedWidth - standaloneCollapsedWidth >= 100, 'Default Qase uses the shared collapsible customer navigation');
+	await standalone.locator('#sidebar-collapse-toggle').click();
 	await standalone.screenshot({ path: path.join(output, 'standalone-sidebar-regression-1440.png'), animations: 'disabled' });
-	checks.push('Standalone remains the default and does not render host chrome');
+	checks.push('Default Qase uses the simplified shared product UI without rendering Studio host chrome');
 	await standalone.close();
+
+	const standaloneRunning = await open({ width: 1440, height: 1000 }, false, 'running');
+	assert.equal(await standaloneRunning.locator('#tab-plan').getAttribute('aria-selected'), 'true');
+	assert.equal(await standaloneRunning.locator('#execution-details').evaluate(node => node.open), false);
+	assert.equal(await standaloneRunning.locator('#execution-target-block').isVisible(), false);
+	assert.equal(await standaloneRunning.locator('#token-chip').isVisible(), false);
+	assert.equal(await standaloneRunning.locator('#live-pill').isVisible(), false);
+	assert.equal(await standaloneRunning.locator('#ldv-exec').isVisible(), false);
+	assert.equal(await standaloneRunning.locator('#ldv-change-device').isVisible(), false);
+	await standaloneRunning.screenshot({ path: path.join(output, 'qase-default-running-1440.png'), animations: 'disabled' });
+	await standaloneRunning.locator('#theme-select').selectOption('dark');
+	await standaloneRunning.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+	await standaloneRunning.screenshot({ path: path.join(output, 'qase-default-running-dark-1440.png'), animations: 'disabled' });
+	await standaloneRunning.close();
+
+	const standaloneCompleted = await open({ width: 1440, height: 1000 }, false, 'done');
+	assert.equal(await standaloneCompleted.locator('#tab-findings').getAttribute('aria-selected'), 'true');
+	assert.equal(await standaloneCompleted.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), true);
+	await standaloneCompleted.screenshot({ path: path.join(output, 'qase-default-completed-1440.png'), animations: 'disabled' });
+	await standaloneCompleted.close();
+	checks.push('Running and completed hierarchy is shared by default Qase and the Studio wrapper');
+
+	for (const width of [390, 360]) {
+		const standaloneMobile = await open({ width, height: 844 }, false);
+		await standaloneMobile.locator('#qa-cancel').click();
+		assert.equal(await standaloneMobile.getByRole('button', { name: 'Start testing', exact: true }).count(), 1, `Default Qase has one visible mobile Start testing action at ${width}px`);
+		assert.equal(await standaloneMobile.locator('#sidebar-collapse-toggle').isVisible(), false, 'Desktop sidebar collapse does not interfere with mobile navigation');
+		assert.equal(await standaloneMobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Default Qase has no horizontal overflow at ${width}px`);
+		await standaloneMobile.screenshot({ path: path.join(output, `qase-default-empty-${width}.png`), animations: 'disabled' });
+		await standaloneMobile.close();
+	}
 
 	const desktop = await open({ width: 1440, height: 1000 });
 	assert.equal(await desktop.locator('html').getAttribute('data-qase-layout'), 'studio-mock');
