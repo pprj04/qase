@@ -822,6 +822,18 @@ function pendingDeviceId() {
 	return (el.deviceSelect && el.deviceSelect.value) || localStorage.getItem(DEVICE_PREF_KEY) || deviceState.defaultId;
 }
 
+function populateDeviceSelect(select, initialId) {
+	if (!select) return;
+	select.innerHTML = '';
+	for (const profile of deviceState.list) {
+		const option = document.createElement('option');
+		option.value = profile.id;
+		option.textContent = profile.label;
+		select.append(option);
+	}
+	if (initialId && deviceState.list.some(p => p.id === initialId)) select.value = initialId;
+}
+
 /* ── Cross-platform environments ──────────────────────────────── */
 
 const ENV_PREF_KEY = 'qase.environmentId';
