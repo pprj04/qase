@@ -650,13 +650,18 @@ export function createApplication(options = {}) {
 			// never fails this request.
 			let telegram;
 			if (telegramNotifier && record?.id) {
+				// Authoritative metadata only — no second timestamp read, no
+				// frontend-supplied or default identity: the name comes from
+				// the authenticated session's user record (same source QASE's
+				// UI renders), the timestamp from the stored feedback record.
 				const dispatched = Promise.resolve(telegramNotifier.dispatchFeedbackNotification(record, {
 					mode: session.mode,
 					title: session.title,
 					targetUrl: session.targetUrl,
 					qaseUrl: telegramQaseUrl,
-					submittedByName: request.auth?.userName ?? request.auth?.name,
-					submittedAt: record.submittedAt ?? Date.now()
+					submittedByName: request.auth?.displayName ?? request.auth?.email,
+					submittedAt: record.submittedAt,
+					submittedAtTimeZone: request.auth?.profile?.timezone
 				}));
 				// Await with a strict timeout (default 10s): PENDING result on
 				// expiry, feedback still saved, dispatch continues detached.
