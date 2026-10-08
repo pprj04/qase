@@ -10,9 +10,6 @@
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="bugsView.css">
 <link rel="stylesheet" href="entry-terminal.css">
-<!-- Synchronous, CSP-clean (script-src 'self'): applies the stored theme
-     before first paint so light mode never flashes dark. -->
-<script src="theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
@@ -160,13 +157,6 @@
         </span>
         <button id="resume-run" class="btn btn-ghost btn-sm" hidden>Resume</button>
         <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
-        <label class="theme-switch" id="theme-switch-label" for="theme-switch" title="Switch to Light Mode">
-          <input type="checkbox" id="theme-switch" role="switch" aria-checked="false" aria-label="Switch to Light Mode" aria-describedby="theme-switch-state">
-          <span class="theme-switch-track" aria-hidden="true">
-            <span class="theme-switch-thumb">🌙</span>
-          </span>
-          <span class="sr-only" id="theme-switch-state">Dark Mode</span>
-        </label>
       </div>
     </header>
 
