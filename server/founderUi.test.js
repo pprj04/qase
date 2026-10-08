@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+const serverApp = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 const founderView = readFileSync(new URL('../public/founderView.js', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../public/styles.css', import.meta.url), 'utf8');
 
@@ -111,4 +112,47 @@ test('feature dock reserves a fourth desktop column and becomes a bottom dock re
 	assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.feature-tooltip/);
 	assert.match(styles, /\.founder-evidence-grid/);
 	assert.match(styles, /\.founder-boundary/);
+});
+
+test('Phase 4 — selection controls gate an explicit send; selection alone never delivers', () => {
+	assert.match(founderView, /send\.dataset\.role = 'send-to-studio'/);
+	assert.match(founderView, /send\.disabled = selections\.size === 0 \|\| pending/);
+	assert.match(founderView, /const pending = handoff\?\.status === 'pending'/);
+	assert.match(founderView, /send\.onclick = \(\) => onSendToStudio\?\.\(\[\.\.\.selections\]\)/);
+	// checkbox toggle only persists selections — no send on change
+	assert.match(founderView, /box\.onchange = \(\) => onToggleSelection\?\.\(item\.id, box\.checked\)/);
+	assert.match(app, /onToggleSelection: founderToggleSelection/);
+	assert.match(app, /onSendToStudio: founderSendToStudio/);
+	assert.match(app, /body: JSON\.stringify\(\{ selectedRecommendationIds: ids \}\)/);
+	assert.match(app, /if \(state\.founderProjectState\?\.handoff\?\.status === 'pending'\) return;/);
+});
+
+test('Phase 4 — honest handoff states: pending, succeeded with reference, failed keeps selections, unavailable fallback', () => {
+	assert.match(founderView, /function renderHandoffStatus\(\)/);
+	assert.match(founderView, /founder-handoff-\$\{handoff\.status\}/);
+	assert.match(founderView, /handoff\.status === 'pending'/);
+	assert.match(founderView, /handoff\.status === 'succeeded'/);
+	assert.match(founderView, /handoff\.status === 'failed'/);
+	assert.match(founderView, /handoff\.status === 'unavailable'/);
+	assert.match(founderView, /Reference: \$\{handoff\.reference\}/);
+	assert.match(founderView, /'Copy handoff payload'/);
+	assert.match(founderView, /'Download payload'/);
+	assert.match(app, /onExportHandoff: founderExportHandoff/);
+	assert.match(app, /No build was started/);
+});
+
+test('Phase 5 — no supported recommendations renders a distinct actionable empty state', () => {
+	assert.match(founderView, /No supported recommendations yet/);
+	assert.match(founderView, /only recommends what the observed evidence supports/);
+	assert.match(founderView, /Re-run the review with more product surface covered/);
+	// It must NOT read as an error.
+	assert.doesNotMatch(founderView, /No prioritized recommendations were returned/);
+});
+
+test('Phase 4 — handoff payload is built server-side and scrubbed of secret-looking keys', () => {
+	assert.match(serverApp, /app\.locals\.qaseFounderHandoff/);
+	assert.match(serverApp, /FounderHandoffError/);
+	assert.match(serverApp, /app\.post\('\/api\/founder\/handoff'/);
+	// QA ticket push route untouched
+	assert.match(serverApp, /app\.post\('\/api\/sessions\/:id\/drytis\/push'/);
 });

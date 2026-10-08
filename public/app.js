@@ -219,6 +219,8 @@ const state = {
 	sqaCatalog: undefined,
 	sqaCatalogPromise: undefined,
 	founderCatalog: undefined,
+	founderProjectState: null,
+	founderHandoffPayload: null,
 	founderCatalogPromise: undefined,
 	qaTestCatalog: undefined,
 	qaTestCatalogPromise: undefined,
@@ -393,6 +395,12 @@ const founderView = createFounderView({
 	getSession: () => state.session,
 	getCatalog: () => state.founderCatalog,
 	getSessionId: () => state.sessionId,
+	getProjectState: () => state.founderProjectState,
+	onToggleSelection: founderToggleSelection,
+	onSelectAll: ids => founderSaveSelections(ids),
+	onClearSelection: () => founderSaveSelections([]),
+	onSendToStudio: founderSendToStudio,
+	onExportHandoff: founderExportHandoff,
 	elements: {
 		founderView: el.founderView,
 		countFounder: el.countFounder,
@@ -405,6 +413,102 @@ const founderView = createFounderView({
 	exportError,
 	humanizeId: humanizeSqaId
 });
+
+/** Founder project-state persistence (Phase 3): load once per founder view,
+ *  selections are saved immediately and restore on reopen. */
+async function founderLoadProjectState() {
+	try {
+		const result = await api('/founder/state');
+		state.founderProjectState = result?.state ?? null;
+	} catch {
+		state.founderProjectState = null;
+	}
+}
+
+function founderToggleSelection(id, checked) {
+	const saved = state.founderProjectState;
+	if (!saved?.recommendationSet?.recommendations) return;
+	const current = new Set(saved.selections ?? []);
+	if (checked) current.add(id); else current.delete(id);
+	founderSaveSelections([...current]);
+}
+
+async function founderSaveSelections(ids) {
+	if (!state.founderProjectState?.recommendationSet?.recommendations) return;
+	try {
+		const result = await api('/founder/state/selections', {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ selectedRecommendationIds: ids })
+		});
+		state.founderProjectState = result?.state ?? state.founderProjectState;
+		renderFounder();
+	} catch (error) {
+		fail(error instanceof Error ? error.message : String(error));
+	}
+}
+
+/** Explicit Founder → Studio handoff (Phase 4). Selection alone never
+ *  triggers a delivery; only this explicit send does. */
+async function founderSendToStudio(ids) {
+	if (!Array.isArray(ids) || ids.length === 0) return;
+	if (state.founderProjectState?.handoff?.status === 'pending') return; // duplicate-submit guard (server also enforces 409)
+	try {
+		const result = await api('/founder/handoff', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ selectedRecommendationIds: ids })
+		});
+		if (result?.state) state.founderProjectState = result.state;
+		if (result?.unavailable) {
+			state.founderHandoffPayload = result.payload ?? null;
+			toast('Studio delivery is not configured — the handoff payload is ready to copy or export. No build was started.');
+		} else {
+			toast(result?.handoff?.status === 'succeeded'
+				? `Sent to Studio ✓ ${result.handoff.selectedRecommendationIds?.length ?? 0} recommendation(s) delivered.`
+				: 'Handoff recorded.');
+		}
+	} catch (error) {
+		toast(error instanceof Error ? error.message : String(error));
+		// Re-read state: a failed send keeps selections; status may be 'failed'.
+		await founderLoadProjectState();
+	}
+	renderFounder();
+}
+
+/** Copy/export fallback when Studio delivery is not configured. */
+async function founderExportHandoff(mode) {
+	const ids = state.founderProjectState?.handoff?.selectedRecommendationIds
+		?? state.founderProjectState?.selections ?? [];
+	if (!ids.length) return;
+	try {
+		const result = await api('/founder/handoff', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ selectedRecommendationIds: ids, export: true })
+		});
+		const payload = result?.payload;
+		if (!payload) throw new Error('No payload returned.');
+		const text = JSON.stringify(payload, null, 2);
+		if (mode === 'copy') {
+			await navigator.clipboard.writeText(text);
+			toast('Handoff payload copied to clipboard.');
+		} else {
+			const blob = new Blob([text], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const save = document.createElement('a');
+			save.href = url;
+			save.download = `founder-handoff-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+			document.body.append(save);
+			save.click();
+			save.remove();
+			window.setTimeout(() => URL.revokeObjectURL(url), 0);
+			toast('Handoff payload downloaded. No build was started.');
+		}
+	} catch (error) {
+		fail(error instanceof Error ? error.message : String(error));
+	}
+}
 const renderFounder = founderView.render;
 const renderFounderReportTab = founderView.renderReportTab;
 
@@ -1016,7 +1120,11 @@ async function selectSession(id) {
 	if (state.sessionId !== id) return;
 	applySessionSnapshot(session);
 	if (session.status === 'done' && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
-	await connect(id);
+	if (session.mode === 'founder') {
+		void founderLoadProjectState().then(() => renderFounder());
+	} else {
+		state.founderProjectState = null;
+	}	await connect(id);
 	await refreshRuns();
 	void refreshPerformance();
 }
@@ -6503,6 +6611,8 @@ const founderUi = {
 	primaryGoal: $('founder-primary-goal'),
 	constraints: $('founder-constraints'),
 	authorization: $('founder-authorization'),
+	advanced: $('founder-advanced'),
+	detectedContext: $('founder-detected-context'),
 	error: $('founder-form-error')
 };
 
@@ -6547,6 +6657,8 @@ async function openFounderStart() {
 	$('founder-customize').open = false;
 	const studioContext = applyStudioTarget(founderUi.targetUrl);
 	if (studioContext && founderUi.targetName) founderUi.targetName.value = studioContext.project;
+	founderUi.detectedContext && (founderUi.detectedContext.hidden = true);
+	if (founderUi.detectedContext) founderUi.detectedContext.textContent = '';
 	populateDeviceSelect(founderUi.deviceSelect, pendingDeviceId());
 	founderUi.environmentSelect && populateEnvironmentSelect(founderUi.environmentSelect);
 	renderTestOn('founder-test-on');
@@ -6556,11 +6668,42 @@ async function openFounderStart() {
 	founderUi.catalogMeta.textContent = 'Loading review catalog…';
 	syncFounderSubmitState();
 	if (!founderUi.dialog.open) founderUi.dialog.showModal();
+	// Prefill from detected project context (trusted server-side records).
+	// Missing context is not an error here — the fields stay editable.
+	try {
+		const context = await api('/founder/context');
+		if (context && typeof context === 'object') applyFounderDetectedContext(context);
+	} catch { /* detection is best-effort; the form remains fully usable */ }
 	try {
 		paintFounderCatalog(await loadFounderCatalog());
 	} catch (error) {
 		founderUi.catalogMeta.textContent = 'Review catalog unavailable.';
 		setFounderFormError(error instanceof Error ? error.message : String(error));
+	}
+}
+
+/** Show detected context and prefill target fields without overwriting user input. */
+function applyFounderDetectedContext(context) {
+	const chips = [];
+	if (context.targetUrl) chips.push(`Target: ${context.targetUrl}`);
+	if (context.studio?.project?.name) chips.push(`Studio project: ${context.studio.project.name}`);
+	if (context.previousFindings) chips.push(`${context.previousFindings.count} prior QA finding(s)`);
+	if (context.previousFounder) chips.push('Prior Founder review found');
+	if (chips.length > 0) {
+		founderUi.detectedContext.textContent = `Detected project context — ${chips.join(' · ')}. Advanced options below are optional.`;
+	} else {
+		// Distinct missing-context state: no prior Qase context exists for this
+		// project, so only the essential target fields are needed.
+		founderUi.detectedContext.textContent = 'No prior project context was found for this workspace yet — just enter the target URL and product name below to get started. Everything else is optional.';
+	}
+	founderUi.detectedContext.hidden = false;
+	if (context.targetUrl && !founderUi.targetUrl.value.trim()) founderUi.targetUrl.value = context.targetUrl;
+	if (context.targetName && !founderUi.targetName.value.trim()) founderUi.targetName.value = context.targetName;
+	if (context.previousFounder?.productContext?.primaryGoal && !founderUi.primaryGoal.value.trim()) {
+		founderUi.primaryGoal.value = context.previousFounder.productContext.primaryGoal;
+	}
+	if (context.previousFounder?.productContext?.constraints && !founderUi.constraints.value.trim()) {
+		founderUi.constraints.value = context.previousFounder.productContext.constraints;
 	}
 }
 
@@ -6817,9 +6960,11 @@ async function probeModelEndpoint({ announce = true } = {}) {
 	}
 	fillModelOptions(result.models ?? [], requestedModel);
 	cfg.test.className = 'test-result ok';
-	cfg.test.textContent = result.matched === false
-		? `${result.message} But "${requestedModel}" is not in the list — choose another model or keep it as a custom ID.`
-		: result.message;
+	cfg.test.textContent = result.completionVerified === false
+		? result.message
+		: result.matched === false
+			? `${result.message} But "${requestedModel}" is not in the list — choose another model or keep it as a custom ID.`
+			: result.message;
 	return result;
 }
 

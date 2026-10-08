@@ -29,6 +29,9 @@ import {
 	FOUNDER_PUBLIC_ONLY_ANSWER,
 	recordFounderPublicOnlyDecision
 } from './founderService.js';
+import { detectFounderProjectContext } from './founderContext.js';
+import { projectStateFromSession, reconcileSelections } from './founderProjectState.js';
+import { createFounderHandoffService, FounderHandoffError } from './founderHandoff.js';
 import { buildSqaReportMarkdown } from './sqaAssessment.js';
 import { computeMatrixCoverage } from './matrixCoverage.js';
 import { createCatalogRoutes } from './catalogApi.js';
@@ -200,6 +203,36 @@ export function createApplication(options = {}) {
 
 	const app = express();
 	app.disable('x-powered-by');
+
+	// Project-level Founder Mode persistence (Phase 3): on every successful
+	// founder finalization, mirror the validated report into the per-project
+	// founder state store. Failures are logged and never break the run —
+	// the run-level report remains the source of truth for recovery.
+	const founderProjectState = typeof services.runs.getFounderProjectState === 'function'
+		? {
+			get: services.runs.getFounderProjectState.bind(services.runs),
+			save: services.runs.saveFounderProjectState.bind(services.runs)
+		}
+		: undefined;
+	if (typeof services.events.subscribeGlobal === 'function' && founderProjectState) {
+		services.events.subscribeGlobal(async (sessionId, event) => {
+			if (event?.type !== 'founder.finalized') return;
+			try {
+				const session = await services.runs.getAny?.(sessionId);
+				const state = projectStateFromSession(session);
+				if (!state) return;
+				// Regeneration replaces the set; selections that still name a
+				// live recommendation id survive into the new state.
+				const previous = await founderProjectState.get();
+				const previousSelections = previous?.recommendationSet?.recommendations && Array.isArray(previous.selections)
+					? previous.selections
+					: [];
+				await founderProjectState.save(reconcileSelections({ ...state, selections: previousSelections }));
+			} catch (error) {
+				logger?.error?.(`[Founder project state] Could not persist after finalization: ${error?.message ?? error}`);
+			}
+		});
+	}
 	// Telegram feedback notifications: built once, disabled/invalid → undefined.
 	// Delivery is fire-and-forget AFTER the record is persisted; feedback
 	// storage and reports never depend on it.
@@ -492,6 +525,35 @@ export function createApplication(options = {}) {
 	}
 
 	/**
+	 * Resolve the detected Founder project context for the requesting owner
+	 * from trusted run records (QA + Founder modes only). Shared by
+	 * GET /api/founder/context and POST /api/founder/sessions enrichment.
+	 * Returns undefined when nothing usable is found — never throws on empty
+	 * history so a first launch stays frictionless.
+	 */
+	async function founderDetectedContext(request) {
+		const ownerUserId = request.auth?.userId;
+		const listAll = services.runs.listAll ?? services.runs.list.bind(services.runs);
+		const summaries = await listAll({ limit: 100, ownerUserId });
+		const getAny = services.runs.getAny?.bind(services.runs) ?? services.runs.get.bind(services.runs);
+		const runs = [];
+		for (const summary of summaries) {
+			if (summary.mode !== 'qa' && summary.mode !== 'founder') continue;
+			const session = await getAny(summary.id);
+			if (session && (!ownerUserId || session.ownerUserId === ownerUserId)) runs.push(session);
+		}
+		const detected = detectFounderProjectContext({ runs });
+		// Only enrich the founder scope with the facts the schema accepts;
+		// drop transport-only fields (detectedAt, targetName) at this boundary.
+		return {
+			targetUrl: detected.targetUrl,
+			studio: detected.studio,
+			previousFindings: detected.previousFindings,
+			previousFounder: detected.previousFounder
+		};
+	}
+
+	/**
 	 * Attaches the requesting user's feedback for this run (reports embed the
 	 * submitter's own record; nothing from other runs or users leaks in).
 	 */
@@ -602,6 +664,146 @@ export function createApplication(options = {}) {
 			confidenceLevels: FOUNDER_LEVELS,
 			caveat: FOUNDER_CAVEAT
 		});
+	});
+
+	// Detected project context for the Founder launcher: target URL candidates,
+	// Studio project metadata availability, prior findings and prior Founder
+	// context. Computed from trusted server-side run records for the
+	// requesting owner; never accepts request-body input.
+	app.get('/api/founder/context', async (request, response) => {
+		try {
+			const ownerUserId = request.auth?.userId;
+			const listAll = services.runs.listAll ?? services.runs.list.bind(services.runs);
+			const summaries = await listAll({ limit: 100, ownerUserId });
+			const getAny = services.runs.getAny?.bind(services.runs) ?? services.runs.get.bind(services.runs);
+			const runs = [];
+			for (const summary of summaries) {
+				if (summary.mode !== 'qa' && summary.mode !== 'founder') continue;
+				const session = await getAny(summary.id);
+				if (session && (!ownerUserId || session.ownerUserId === ownerUserId)) runs.push(session);
+			}
+			response.set('Cache-Control', 'no-store');
+			response.json(detectFounderProjectContext({ runs }));
+		} catch (error) {
+			safeErrorResponse(request, response, error, 500);
+		}
+	});
+
+	// Saved Founder Mode project state (Phase 3): last successful
+	// recommendation set, selections and handoff status. The state is shared
+	// at the trusted tenant-project scope; writes additionally require a
+	// non-pilot actor (pilots may read, never mutate).
+	app.get('/api/founder/state', async (request, response) => {
+		if (!founderProjectState) {
+			response.status(501).json({ error: 'Founder project state persistence is not available in this mode.' });
+			return;
+		}
+		try {
+			const state = reconcileSelections(await founderProjectState.get());
+			response.set('Cache-Control', 'no-store');
+			response.json({ state: state ?? null });
+		} catch (error) {
+			safeErrorResponse(request, response, error, 500);
+		}
+	});
+
+	// Persist user selections (and only selections — the recommendation set
+	// itself is only written at finalization time from a validated report).
+	app.patch('/api/founder/state/selections', async (request, response) => {
+		if (!founderProjectState) {
+			response.status(501).json({ error: 'Founder project state persistence is not available in this mode.' });
+			return;
+		}
+		if (request.auth?.role === 'pilot') {
+			response.status(403).json({ error: 'Pilot accounts cannot modify Founder Mode selections.' });
+			return;
+		}
+		try {
+			const raw = request.body?.selectedRecommendationIds;
+			if (!Array.isArray(raw) || raw.length > 50 || !raw.every(id => typeof id === 'string' && id.length <= 128)) {
+				response.status(400).json({ error: 'selectedRecommendationIds must be an array of up to 50 recommendation ids.' });
+				return;
+			}
+			const current = await founderProjectState.get();
+			if (!current?.recommendationSet?.recommendations) {
+				response.status(409).json({ error: 'No saved recommendation set exists yet. Finalize a Founder review first.' });
+				return;
+			}
+			const known = new Set(current.recommendationSet.recommendations.map(item => item.id));
+			const unknown = raw.filter(id => !known.has(id));
+			if (unknown.length > 0) {
+				response.status(400).json({ error: `Unknown recommendation ids: ${unknown.join(', ')}.` });
+				return;
+			}
+			const next = reconcileSelections({ ...current, selections: [...new Set(raw)] });
+			await founderProjectState.save(next);
+			response.json({ state: next });
+		} catch (error) {
+			safeErrorResponse(request, response, error, 500);
+		}
+	});
+
+	// The signed delivery client is reused only when a founder-specific target
+	// is configured; otherwise the handoff stays export-only rather than
+	// silently delivering founder payloads to the QA tickets endpoint.
+	const founderDeliveryTarget = drytisDelivery?.founderHandoffTarget;
+	const founderHandoff = founderProjectState
+		? createFounderHandoffService({
+			deliveryClient: founderDeliveryTarget ? drytisDelivery.deliveryClient : undefined,
+			target: founderDeliveryTarget,
+			get: async () => reconcileSelections(await founderProjectState.get()),
+			save: state => founderProjectState.save(state),
+			tenantProjectId: services.tenantContext?.projectId
+		})
+		: undefined;
+	app.locals.qaseFounderHandoff = founderHandoff;
+
+	// Explicit Founder → Studio handoff (Phase 4): selection alone never
+	// triggers a delivery; the client must POST the selected ids here.
+	app.post('/api/founder/handoff', async (request, response) => {
+		if (!founderProjectState) {
+			response.status(501).json({ error: 'Founder project state persistence is not available in this mode.' });
+			return;
+		}
+		if (request.auth?.role === 'pilot') {
+			response.status(403).json({ error: 'Pilot accounts cannot send Founder recommendations to Studio.' });
+			return;
+		}
+		let payloadOnly = false;
+		try {
+			const raw = request.body?.selectedRecommendationIds;
+			if (!Array.isArray(raw) || raw.length === 0 || raw.length > 50
+				|| !raw.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+				response.status(400).json({ error: 'selectedRecommendationIds must be a non-empty array of up to 50 recommendation ids.' });
+				return;
+			}
+			// Fallback path: export requests NEVER deliver — the payload is
+			// returned ready for copy/download without claiming a build started.
+			payloadOnly = request.body?.export === true;
+			const handoffService = request.app.locals.qaseFounderHandoff;
+			if (!handoffService) {
+				response.status(501).json({ error: 'Founder handoff is not configured on this instance.' });
+				return;
+			}
+			if (payloadOnly) {
+				const payload = await handoffService.build(raw);
+				response.json({ ok: false, unavailable: true, payload });
+				return;
+			}
+			const result = await handoffService.send(raw);
+			response.json({
+				ok: result.ok,
+				...(result.unavailable ? { unavailable: true, payload: result.payload } : {}),
+				handoff: result.handoff,
+				state: await founderProjectState.get()
+			});
+		} catch (error) {
+			if (error instanceof FounderHandoffError) {
+				response.status(error.status).json({ error: error.message, code: error.code });
+				return;
+			}
+			safeErrorResponse(request, response, error, 500);
+		}
 	});
 
 	app.put('/api/config', async (request, response) => {
@@ -1651,10 +1853,14 @@ export function createApplication(options = {}) {
 		try {
 			// Tenant and actor identity always come from trusted per-instance
 			// context. Only the explicit Founder review scope crosses this boundary.
+			// Detected project context is resolved server-side (never from the body)
+			// so the launcher cannot inject untrusted Studio or findings data.
+			const detectedContext = await founderDetectedContext(request);
 			const founder = publicInput(() => createFounderState({
 				authorizationConfirmed: request.body?.authorizationConfirmed,
 				target: request.body?.target,
-				productContext: request.body?.productContext
+				productContext: request.body?.productContext,
+				projectContext: detectedContext
 			}));
 			const device = isDeviceId(request.body?.device) ? request.body.device : DEFAULT_DEVICE_ID;
 			const deviceLandscape = request.body?.deviceLandscape === true;

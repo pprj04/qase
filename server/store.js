@@ -28,6 +28,14 @@ function statePaths() {
 	return { stateDir, stateFile: path.join(stateDir, 'sessions.json') };
 }
 
+/** Project-level Founder Mode state (Phase 3): one file per instance,
+ *  matching the trusted single-tenant project context of local mode.
+ *  Resolved lazily alongside statePaths() for the same chdir reasons. */
+function founderProjectStatePaths() {
+	const { stateDir } = statePaths();
+	return { founderProjectStateFile: path.join(stateDir, 'founder-project-state.json') };
+}
+
 /** Live, non-serialisable per-session handles, keyed by session id. */
 const live = new Map();
 
@@ -118,6 +126,8 @@ export function flushSessions() {
 
 export function loadSessions() {
 	const { stateFile } = statePaths();
+	// Founder project-level state loads lazily via the founderProjectState
+	// accessors below; sessions first.
 	try {
 		const raw = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 		for (const session of Array.isArray(raw) ? raw : []) {
@@ -724,4 +734,26 @@ export function activeDurationSeconds(session, now = Date.now()) {
 	}
 	const end = session.completedAt ?? now;
 	return Math.max(0, Math.floor((end - session.startedAt) / 1000 - pausedSeconds));
+}
+
+/**
+ * Project-level Founder Mode state (Phase 3), local-mode mirror of the
+ * Postgres founder_project_state table: one record for the trusted
+ * single-tenant project context of this instance.
+ */
+export function loadFounderProjectState() {
+	try {
+		const { founderProjectStateFile } = founderProjectStatePaths();
+		const raw = JSON.parse(fs.readFileSync(founderProjectStateFile, 'utf8'));
+		return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function writeFounderProjectState(state) {
+	const { stateDir, founderProjectStateFile } = founderProjectStatePaths();
+	fs.mkdirSync(stateDir, { recursive: true });
+	fs.writeFileSync(founderProjectStateFile, JSON.stringify(state));
+	return state;
 }
