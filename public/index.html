@@ -97,6 +97,13 @@
     <p class="studio-context-note">Context stays available while Qase uses the center workspace.</p>
   </aside>
 
+  <div class="studio-context-resizer" id="studio-context-resizer" role="separator" tabindex="0"
+       aria-label="Resize project context" aria-controls="studio-context"
+       aria-orientation="vertical" aria-valuemin="220" aria-valuemax="340" aria-valuenow="280"
+       title="Drag or use arrow keys to resize project context">
+    <span aria-hidden="true"></span>
+  </div>
+
   <section class="studio-tool-workspace" aria-label="Qase in Drytis Studio">
     <header class="studio-tool-header">
       <div class="studio-tool-identity">
@@ -112,17 +119,31 @@
           <option value="dark">Dark</option>
         </select>
       </label>
-      <button class="studio-context-toggle" id="studio-context-toggle" type="button" aria-controls="studio-context" aria-expanded="true">Hide context</button>
+      <button class="studio-context-toggle" id="studio-context-toggle" type="button"
+              aria-controls="studio-context" aria-expanded="true"
+              aria-label="Hide project context" title="Hide project context">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+          <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
+          <path d="M7 3v14M12.5 7.25 9.75 10l2.75 2.75"></path>
+        </svg>
+      </button>
     </header>
 
 <div class="app" inert aria-hidden="true">
+
+  <nav class="workspace-mobile-nav" aria-label="Workspace panels">
+    <button type="button" data-workspace-view="runs" aria-controls="workspace-runs" aria-pressed="false">Runs</button>
+    <button type="button" data-workspace-view="agent" aria-controls="workspace-agent" aria-pressed="true">Agent</button>
+    <button type="button" data-workspace-view="browser" aria-controls="workspace-viewer" aria-pressed="false">Browser</button>
+    <button type="button" data-workspace-view="results" aria-controls="workspace-viewer" aria-pressed="false">Results</button>
+  </nav>
 
   <div class="workspace-chrome" aria-hidden="true">
     <span class="workspace-lights"><i></i><i></i><i></i></span>
   </div>
 
   <!-- ── Left: runs ─────────────────────────────────────────────── -->
-  <aside class="panel runs" aria-label="QA runs">
+  <aside class="panel runs" id="workspace-runs" aria-label="QA runs">
     <header class="panel-head" data-path="~/qase/runs">
       <div class="brand">
         <span class="brand-lockup">
@@ -130,51 +151,58 @@
           <span class="brand-mark">Qase</span>
         </span>
         <button class="brand-sub" id="model-badge" title="Model settings">…</button>
+        <button class="sidebar-collapse-toggle" id="sidebar-collapse-toggle" type="button"
+                aria-controls="workspace-runs" aria-expanded="true"
+                aria-label="Collapse recent tests sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
+            <path d="M7 3v14M12.5 7.25 9.75 10l2.75 2.75"></path>
+          </svg>
+        </button>
       </div>
-      <button class="btn btn-primary" id="sidebar-new-run" type="button">Start testing</button>
-      <p class="run-explorer-label">Recent tests</p>
+      <button class="btn btn-primary sidebar-start" id="sidebar-new-run" type="button" title="Start testing">
+        <span class="sidebar-control-icon" aria-hidden="true">+</span>
+        <span class="sidebar-control-label">Start testing</span>
+      </button>
+      <p class="run-explorer-label"><span class="sidebar-control-label">Recent tests</span></p>
     </header>
     <div class="run-list" id="run-list" role="list" aria-label="Recent runs"></div>
-    <details class="sidebar-tools">
-      <summary>Workspace tools</summary>
-    <nav class="sidebar-nav" aria-label="Workspace">
+    <div class="sidebar-context-actions" aria-label="Current run actions">
+      <button class="sidebar-context-action" id="sidebar-view-findings" type="button" title="View findings">
+        <span class="sidebar-control-icon" aria-hidden="true">◇</span><span class="sidebar-control-label">View findings</span>
+      </button>
+      <button class="sidebar-context-action" id="sidebar-view-report" type="button" title="View report">
+        <span class="sidebar-control-icon" aria-hidden="true">▤</span><span class="sidebar-control-label">View report</span>
+      </button>
+      <button class="sidebar-context-action" id="sidebar-retest" type="button" title="Retest">
+        <span class="sidebar-control-icon" aria-hidden="true">↻</span><span class="sidebar-control-label">Retest</span>
+      </button>
+    </div>
+    <details class="sidebar-tools" id="sidebar-tools">
+      <summary title="Advanced tools">
+        <span class="sidebar-control-icon" aria-hidden="true">•••</span>
+        <span class="sidebar-control-label">Advanced</span>
+      </summary>
+    <nav class="sidebar-nav" aria-label="Advanced tools">
       <button class="sidebar-nav-btn" id="nav-test-cases" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">▤</span> Test cases
+        <span class="sidebar-nav-icon" aria-hidden="true">▤</span><span class="sidebar-control-label">Test cases</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-device-matrix" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">◧</span> Device matrix
+        <span class="sidebar-nav-icon" aria-hidden="true">◧</span><span class="sidebar-control-label">Device matrix</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-bulk-runs" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span> Bulk runs
+        <span class="sidebar-nav-icon" aria-hidden="true">⠿</span><span class="sidebar-control-label">Bulk runs</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-environments" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">✳</span> Environments
+        <span class="sidebar-nav-icon" aria-hidden="true">✳</span><span class="sidebar-control-label">Environments</span>
       </button>
       <button class="sidebar-nav-btn" id="nav-analytics" type="button">
-        <span class="sidebar-nav-icon" aria-hidden="true">◔</span> Analytics
+        <span class="sidebar-nav-icon" aria-hidden="true">◔</span><span class="sidebar-control-label">Analytics</span>
+      </button>
+      <button class="sidebar-nav-btn" id="nav-settings" type="button">
+        <span class="sidebar-nav-icon" aria-hidden="true">⚙</span><span class="sidebar-control-label">Settings</span>
       </button>
     </nav>
-<!-- Quick Actions strip (Phase 11). -->
-<div class="quick-actions" id="quick-actions" role="toolbar" aria-label="Quick actions">
-  <span class="qa-strip-title">Quick actions</span>
-  <button type="button" class="qa-chip" id="qa-run-all">▶ Run all tests</button>
-  <button type="button" class="qa-chip" id="qa-run-failed">↻ Run failed tests</button>
-  <button type="button" class="qa-chip" id="qa-create-case">＋ Create test case</button>
-  <button type="button" class="qa-chip" id="qa-choose-devices">☰ Choose devices</button>
-  <button type="button" class="qa-chip" id="qa-view-results">◧ View results</button>
-  <button type="button" class="qa-chip" id="qa-create-bug">⚑ Create bug</button>
-  <label class="qa-preset-wrap">Presets
-    <select id="qa-preset" aria-label="Environment presets">
-      <option value="">Choose…</option>
-      <option value="apple-mobile">Apple Mobile</option>
-      <option value="android-mobile">Android Mobile</option>
-      <option value="windows-desktop">Windows Desktop</option>
-      <option value="all-mobile">All Mobile</option>
-      <option value="all-browsers">All Browsers</option>
-      <option value="full-regression">Full Regression</option>
-    </select>
-  </label>
-</div>
     <section class="perf-panel" id="feedback-panel" aria-label="Feedback Inbox" hidden>      <header class="perf-head">
         <h2 class="perf-title">💬 Feedback Inbox</h2>
         <div class="perf-actions">
@@ -233,14 +261,11 @@
       <label class="theme-control" for="theme-select"><span>Theme</span><select id="theme-select" name="theme" data-theme-control><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-settings" title="Model and endpoint settings">Settings</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-test-cases" title="Reusable QA scenarios with multi-environment assignment">Test cases</button>
-      <button class="btn btn-ghost btn-sm foot-btn" id="open-bulk-run" title="Launch one run per test case &times; environment">Bulk runs</button>
     </footer>
   </aside>
 
   <!-- ── Middle: agent chat ─────────────────────────────────────── -->
-  <main class="panel chat" aria-label="Agent conversation">
+  <main class="panel chat" id="workspace-agent" aria-label="Agent conversation">
     <header class="panel-head" data-path="~/qase/agent.log">
       <div class="chat-id">
         <h1 id="chat-title">No run selected</h1>
@@ -285,18 +310,24 @@
           <div class="progress-top">
             <span class="progress-steps" id="progress-steps"></span>
             <span class="progress-pct" id="progress-pct"></span>
-            <span class="progress-findings" id="progress-findings"></span>
+            <button class="progress-findings" id="progress-findings" type="button" hidden></button>
           </div>
           <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Run progress"><i></i></div>
           <div class="current-activity" id="current-activity">
             <span class="ca-label">Current activity</span>
             <span class="ca-state" id="current-activity-state"></span>
           </div>
-          <div class="run-env-block" id="run-env-block" hidden>
-            <span class="re-line" id="run-env-testcase"></span>
-            <span class="re-line" id="run-env-current"></span>
-            <span class="re-line" id="run-env-count"></span>
-          </div>
+          <details class="execution-details" id="execution-details" hidden>
+            <summary>Run details</summary>
+            <div class="run-env-block" id="run-env-block">
+              <span class="re-line" id="run-env-testcase"></span>
+              <span class="re-line" id="run-env-current"></span>
+              <span class="re-line" id="run-env-execution"></span>
+              <span class="re-line" id="run-env-session"></span>
+              <span class="re-line" id="run-env-usage"></span>
+              <span class="re-line" id="run-env-count"></span>
+            </div>
+          </details>
           <div class="run-queue-panel" id="run-queue-panel" hidden>
             <span class="rq-dot" aria-hidden="true"></span>
             <span class="rq-label" id="run-queue-label">Queued for device</span>
@@ -362,7 +393,7 @@
   </main>
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
-  <aside class="panel viewer" aria-label="Live browser and test results">
+  <aside class="panel viewer" id="workspace-viewer" aria-label="Live browser and test results">
     <header class="panel-head" data-path="~/qase/browser.preview">
       <div class="live-device-view-head" id="live-device-view-head">
         <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
@@ -782,7 +813,7 @@
 
       <label class="field">
         <span>Theme</span>
-        <select id="cfg-theme" aria-describedby="cfg-theme-note">
+        <select id="cfg-theme" name="settingsTheme" data-theme-control aria-describedby="cfg-theme-note">
           <option value="dark">Dark Mode</option>
           <option value="light">Light Mode</option>
           <option value="system">System Default</option>
@@ -856,27 +887,14 @@
         <summary>Customize devices, browsers and checks</summary>
         <div class="qa-customize-body">
       <fieldset class="qa-device-fieldset test-on-fieldset">
-        <legend>TEST ON</legend>
+        <legend>Test on</legend>
         <div class="test-on-summary" id="qa-test-on" data-empty="true">
-          <span class="test-on-prompt">SELECT A DEVICE</span>
+          <span class="test-on-prompt">Choose a device</span>
         </div>
         <div class="field-row test-on-actions">
           <button type="button" class="btn btn-primary btn-sm test-on-change" data-test-on-change>Change device</button>
-          <label class="check qa-landscape">
-            <input id="qa-device-landscape" type="checkbox">
-            <span>Landscape orientation</span>
-          </label>
         </div>
-        <details class="qa-advanced">
-          <summary>Advanced device options</summary>
-          <div class="qa-advanced-body">
-            <label class="field">
-              <span>Apple environment <small>(remote runtime matrix — overrides the device profile when selected)</small></span>
-              <select id="qa-environment-select"><option value="">Emulate locally (no remote environment)</option></select>
-            </label>
-            <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere. Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
-          </div>
-        </details>
+        <small>Choose browsers, devices and orientation below. Each selected configuration runs separately.</small>
       </fieldset>
       <fieldset class="qa-engine-fieldset qa-matrix-fieldset" id="qa-matrix-fieldset">
         <legend>Browsers &amp; devices</legend>

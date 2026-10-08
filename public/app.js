@@ -228,6 +228,8 @@ const state = {
 	stageExpanded: new Set(),
 	/** Run whose completed QA results were automatically revealed. */
 	shownQaResults: undefined,
+	/** Run whose live Plan was revealed once without overriding later tab choices. */
+	shownRunningPlan: undefined,
 	/** True once the welcome checklist was replaced by real content. */
 	welcomeDismissed: false,
 	/** Instance is in pilot mode (invite-only registration, beta notice). */
@@ -535,12 +537,7 @@ function renderRunsEmptyState() {
 	empty.className = 'feed-empty';
 	const line = document.createElement('p');
 	line.textContent = 'No runs yet';
-	const cta = document.createElement('button');
-	cta.type = 'button';
-	cta.className = 'empty-cta';
-	cta.textContent = 'Start your first run';
-	cta.addEventListener('click', () => { void startRun(); });
-	empty.append(line, cta);
+	empty.append(line);
 	el.runList.append(empty);
 }
 
@@ -617,6 +614,10 @@ function renderRun(run) {
 		chip.title = `Run executed on ${run.engine}`;
 		title.append(' ', chip);
 	}
+	const accessibleTitle = title.textContent || 'Untitled test';
+	const accessibleStatus = run.status === 'done' ? 'Completed' : run.status === 'running' ? 'Running' : String(run.status || 'Idle');
+	node.title = `${accessibleTitle} · ${accessibleStatus}`;
+	node.setAttribute('aria-label', `${accessibleTitle}, ${accessibleStatus}`);
 
 	const meta = document.createElement('div');
 	meta.className = 'run-meta';
@@ -839,6 +840,28 @@ function populateDeviceSelect(select, initialId) {
 const ENV_PREF_KEY = 'qase.environmentId';
 const envState = { list: [], loaded: false };
 
+function populateEnvironmentSelect(select) {
+	if (!select) return;
+	select.replaceChildren(new Option('Emulate locally (no remote environment)', ''));
+	const saved = pendingEnvironmentId();
+	for (const group of envOptionGroups(envState.list)) {
+		const optgroup = document.createElement('optgroup');
+		optgroup.label = group.platform;
+		for (const { device, envs } of group.devices) {
+			for (const env of envs) {
+				optgroup.append(new Option(`${device} · ${env.osVersion} — ${env.browser} ${env.browserVersion}`, env.envId));
+			}
+		}
+		select.append(optgroup);
+	}
+	select.value = envState.list.some(env => env.envId === saved) ? saved : '';
+	// Dialogs are reopened repeatedly; keep one preference handler per select.
+	select.onchange = () => {
+		if (select.value) localStorage.setItem(ENV_PREF_KEY, select.value);
+		else localStorage.removeItem(ENV_PREF_KEY);
+	};
+}
+
 function envLabel(env) {
 	return `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
 }
@@ -924,7 +947,7 @@ function renderTestOn(containerId) {
 		box.dataset.empty = 'true';
 		const prompt = document.createElement('span');
 		prompt.className = 'test-on-prompt';
-		prompt.textContent = 'SELECT A DEVICE';
+		prompt.textContent = 'Choose a device';
 		box.append(prompt);
 		return;
 	}
@@ -976,8 +999,10 @@ function applyStageDevice(session) {
 
 
 async function selectSession(id) {
+	if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 	state.shownFounderReport = undefined;
 	state.shownQaResults = undefined;
+	state.shownRunningPlan = undefined;
 	state.sessionId = id;
 	state.bubbles.clear();
 	// Feedback submitted-state is per run: drop any cached record when the
@@ -991,6 +1016,7 @@ async function selectSession(id) {
 	const session = await api(`/sessions/${id}`);
 	if (state.sessionId !== id) return;
 	applySessionSnapshot(session);
+	if (session.status === 'done' && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	await connect(id);
 	await refreshRuns();
 	void refreshPerformance();
@@ -1218,6 +1244,7 @@ function applySessionSnapshot(session) {
 	renderSqa();
 	renderFounder();
 	showCompletedFounderReport();
+	showRunningQaPlan();
 	showCompletedQaResults();
 	renderStageCollapse();
 	updateRunTimer();
@@ -1556,7 +1583,11 @@ function renderHeader() {
 	// Token row: dedicated region below the header.
 	const hasRun = Boolean(session.targetUrl || session.title);
 	el.runSummary.hidden = !hasRun;
-	if (usageIsPending(session)) {
+	if (window.qaseStudioContext) {
+		el.tokenText.classList.remove('is-pending');
+		el.tokenText.textContent = 'Run progress';
+		el.tokenText.title = '';
+	} else if (usageIsPending(session)) {
 		// Live run, first model call still in flight. "Pending" is honest;
 		// "0 in · 0 out" would suggest calls were counted and came back empty.
 		el.tokenText.classList.add('is-pending');
@@ -1567,7 +1598,7 @@ function renderHeader() {
 			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
 				? `${Math.round(context.percentage)}% ctx` : undefined);
 		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = text ?? '';
+		el.tokenText.textContent = text ?? 'Run overview';
 		if (usage && text) {
 			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
 				? Math.round(context.percentage) : undefined;
@@ -1601,7 +1632,10 @@ function renderHeader() {
 		setStatus(session.status);
 		return;
 	}
-	el.chatTitle.textContent = session.targetUrl ? hostOf(session.targetUrl) : session.title;
+	const targetName = (session.targetUrl ? hostOf(session.targetUrl) : session.title) || 'this website';
+	el.chatTitle.textContent = session.status === 'running'
+		? `Testing ${targetName}`
+		: session.status === 'done' ? 'Testing complete' : targetName;
 	// Keep the engine visible in the header for non-chromium runs (the run
 	// list already carries an engine pill in its meta row).
 	if (session.engine && session.engine !== 'chromium') {
@@ -1646,6 +1680,10 @@ function renderProgressCard() {
 	}
 	const findings = session?.findings ?? [];
 	el.progressFindings.textContent = findings.length > 0 ? `Findings ${findings.length}` : '';
+	el.progressFindings.hidden = findings.length === 0;
+	el.progressFindings.setAttribute('aria-label', findings.length > 0
+		? `Open ${findings.length} finding${findings.length === 1 ? '' : 's'}`
+		: 'No findings yet');
 	renderMiniSummary();
 	renderCurrentActivity();
 }
@@ -1661,10 +1699,10 @@ function renderCurrentActivity() {
 		const savedAction = runningActivity?.label || runningActivity?.title
 			|| activePlanItem?.text || activePlanItem?.title || '';
 		const label = action || (text ? tailOf(text) : '') || savedAction;
-		el.currentActivityState.textContent = label ? `◌ ${label}` : '◌ Working…';
+		el.currentActivityState.textContent = label || 'Working…';
 		el.currentActivity.hidden = false;
 	} else if (session?.status === 'done') {
-		el.currentActivityState.textContent = '✓ Run completed';
+		el.currentActivityState.textContent = 'Testing complete';
 		el.currentActivity.hidden = false;
 	} else {
 		el.currentActivityState.textContent = '';
@@ -1673,14 +1711,24 @@ function renderCurrentActivity() {
 }
 
 function setStatus(status) {
+	const previousStatus = document.body.dataset.runStatus;
+	const justCompleted = status === 'done' && document.body.dataset.runStatus !== 'done';
+	const justStarted = status === 'running' && previousStatus !== 'running';
 	if (state.session) state.session.status = status;
 	document.body.dataset.runStatus = status;
+	if (justCompleted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	if (justStarted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('browser');
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
 	el.statusChip.dataset.status = status;
-	el.statusChip.textContent = stopping ? 'stopping…' : status === 'awaiting_input'
+	el.statusChip.textContent = stopping ? 'Stopping…' : status === 'awaiting_input'
 		? 'waiting for you'
-		: status === 'done' ? 'done ✓' : stoppedByUser ? 'stopped' : status;
+		: status === 'running' ? 'Running'
+			: status === 'done' ? 'Complete'
+				: stoppedByUser ? 'Stopped'
+					: status === 'interrupted' ? 'Paused'
+						: status === 'error' ? 'Needs attention'
+							: status;
 	renderMiniSummary();
 	const running = status === 'running';
 	el.stopRun.hidden = !running;
@@ -1839,6 +1887,14 @@ function renderStageCollapse() {
 	fitStageFrame();
 }
 
+function showRunningQaPlan() {
+	const session = state.session;
+	if (!session || session.mode === 'sqa' || session.mode === 'founder' || session.status !== 'running') return;
+	if (state.shownRunningPlan === session.id) return;
+	state.shownRunningPlan = session.id;
+	activateDetailTab($('tab-plan'));
+}
+
 function showCompletedQaResults() {
 	const session = state.session;
 	if (!session || session.mode === 'sqa' || session.mode === 'founder' || session.status !== 'done') return;
@@ -1856,6 +1912,10 @@ function syncStageCollapse(status) {
 }
 
 function toggleStageCollapse() {
+	if (matchMedia('(max-width: 720px)').matches && document.body.dataset.workspaceView === 'results') {
+		setWorkspaceView('browser');
+		return;
+	}
 	if (el.viewer.classList.contains('stage-collapsed')) {
 		state.stageExpanded.add(state.sessionId);
 	} else {
@@ -3096,7 +3156,12 @@ function renderFindings() {
 
 	el.findingsList.replaceChildren();
 	if (findings.length === 0) {
-		el.findingsList.innerHTML = '<div class="feed-empty">No findings yet — they appear here as the agent tests your target.</div>';
+		const empty = document.createElement('div');
+		empty.className = 'feed-empty';
+		empty.textContent = state.session.status === 'done'
+			? 'No findings recorded for this run. Open Report to review completed checks and coverage limits.'
+			: 'No findings yet. They appear here as the agent tests your website.';
+		el.findingsList.append(empty);
 		return;
 	}
 	const sorted = [...findings].sort(
@@ -3243,6 +3308,7 @@ function renderFinding(finding, selection, syncSelection) {
 	// runtime-detected identity (profile, device, OS, browser+version, the
 	// engine that actually launched, execution level/provider) plus its
 	// session linkage. Structure unchanged; one compact env line added.
+	let environmentLine;
 	if (finding.environment) {
 		const env = finding.environment;
 		const parts = [
@@ -3255,21 +3321,22 @@ function renderFinding(finding, selection, syncSelection) {
 			env.sessionId ? `session ${String(env.sessionId).slice(0, 8)}` : null
 		].filter(Boolean);
 		if (parts.length) {
-			const envLine = document.createElement('div');
-			envLine.className = 'finding-env';
-			envLine.textContent = parts.join(' — ');
-			body.append(envLine);
+			environmentLine = document.createElement('div');
+			environmentLine.className = 'finding-env';
+			environmentLine.textContent = parts.join(' — ');
 		}
 	}
 
 	if (finding.steps?.length) {
+		const stepsTitle = document.createElement('h4');
+		stepsTitle.textContent = 'Reproduction';
 		const steps = document.createElement('ol');
 		for (const step of finding.steps) {
 			const item = document.createElement('li');
 			item.textContent = step;
 			steps.append(item);
 		}
-		body.append(steps);
+		body.append(stepsTitle, steps);
 	}
 
 	const list = document.createElement('dl');
@@ -3283,10 +3350,13 @@ function renderFinding(finding, selection, syncSelection) {
 	body.append(list);
 
 	if (finding.evidence) {
+		const evidenceTitle = document.createElement('h4');
+		evidenceTitle.textContent = 'Evidence';
 		const pre = document.createElement('pre');
 		pre.textContent = finding.evidence;
-		body.append(pre);
+		body.append(evidenceTitle, pre);
 	}
+	if (environmentLine) body.append(environmentLine);
 
 	const fixPrompt = buildFindingFixPrompt(finding, {
 		targetUrl: state.session?.targetUrl,
@@ -3700,7 +3770,6 @@ function renderReport() {
 		URL.revokeObjectURL(url);
 	};
 	exportBar.append(exportBtn);
-	el.reportView.append(exportBar);
 
 	const verdict = VERDICTS[report.verdict] ?? { mark: '•', label: report.verdict, tone: 'dim' };
 	const banner = document.createElement('div');
@@ -3714,7 +3783,10 @@ function renderReport() {
 	label.textContent = verdict.label;
 	const sub = document.createElement('div');
 	sub.className = 'verdict-sub';
-	sub.textContent = `${report.findings} finding${report.findings === 1 ? '' : 's'} · ${new Date(report.ts).toLocaleString()}`;
+	const reportFindingCount = Number.isFinite(report.findings) ? report.findings : state.session?.findings?.length ?? 0;
+	const reportTime = report.ts ?? state.session?.completedAt ?? state.session?.updatedAt;
+	sub.textContent = `${reportFindingCount} finding${reportFindingCount === 1 ? '' : 's'}`
+		+ (reportTime ? ` · ${new Date(reportTime).toLocaleString()}` : '');
 	text.append(label, sub);
 	banner.append(mark, text);
 	el.reportView.append(banner);
@@ -3732,13 +3804,13 @@ function renderReport() {
 		stat.append(value, name);
 		stats.append(stat);
 	}
-	el.reportView.append(stats);
-
 	el.reportView.append(section('Summary', paragraph(report.summary)));
+	if (report.recommendations?.length) el.reportView.append(section('Recommended next action', list(report.recommendations)));
+	el.reportView.append(stats);
 	el.reportView.append(renderCoverageSelection(state.session));
 	if (report.covered?.length) el.reportView.append(section('Covered', list(report.covered)));
 	if (report.notCovered?.length) el.reportView.append(section('Not covered', list(report.notCovered)));
-	if (report.recommendations?.length) el.reportView.append(section('Recommendations', list(report.recommendations)));
+	el.reportView.append(exportBar);
 	void renderEvidenceSection(state.sessionId);
 
 	const suggestions = followUpSuggestions(report);
@@ -5129,7 +5201,7 @@ function qaMatrixSetState(fetchState, message) {
 	qaMatrixState.fetchState = fetchState;
 	const matrix = qaUi.matrix;
 	if (!matrix.state) return;
-	matrix.state.hidden = fetchState === 'ready';
+	matrix.state.hidden = fetchState === 'ready' || fetchState === 'error';
 	matrix.state.textContent = message ?? '';
 	matrix.state.dataset.state = fetchState;
 	if (matrix.root) matrix.root.hidden = fetchState !== 'ready';
@@ -5619,9 +5691,14 @@ function syncQaSelectionSummary() {
 		return;
 	}
 	const checks = qaUi.selectedTests.size;
-	const browsers = selectedQaEngines().length;
-	const device = qaUi.deviceSelect.selectedOptions[0]?.textContent ?? 'Selected device';
-	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${browsers} browser${browsers === 1 ? '' : 's'} · ${device}`;
+	const configurations = qaMatrixState.selectedEnvIds.length;
+	const loading = qaMatrixState.fetchState === 'loading';
+	const detail = loading ? 'Loading browsers and devices…'
+		: configurations === 0 ? 'Choose an available browser and device to start.'
+		: configurations > MAX_RUN_CONFIGURATIONS ? `${configurations.toLocaleString()} configurations selected. Narrow your selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`
+		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected`;
+	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
+	if (!loading && (configurations === 0 || configurations > MAX_RUN_CONFIGURATIONS)) $('qa-customize').open = true;
 }
 
 function qaTestOption(test) {
@@ -5974,6 +6051,7 @@ if (qaUi.dialog) {
 	$('qa-demo-fill')?.addEventListener('click', () => {
 		if (qaUi.targetUrl) {
 			qaUi.targetUrl.value = demoSiteUrl();
+			syncQaSubmitState();
 			setQaFormError('Demo site loaded — it plants real bugs on purpose (login demo@qase.dev / demo1234).');
 			qaUi.targetUrl.focus();
 		}
@@ -6103,8 +6181,7 @@ if (qaUi.dialog) {
 					selectedTests,
 					securityAuthorization,
 					scopeSelection: scopeValues,
-					environmentId: environmentId || undefined,
-					testCaseId
+					testCaseId: qaUi._testCaseId
 				})
 			});
 			closeQaStart();
@@ -6798,7 +6875,8 @@ el.authForm?.addEventListener('submit', async event => {
 	}
 });
 
-$('open-settings').onclick = openSettings;
+const openSettingsButton = $('nav-settings');
+if (openSettingsButton) openSettingsButton.onclick = openSettings;
 
 const openDeviceMatrixButton = $('open-device-matrix');
 
@@ -7292,38 +7370,8 @@ async function createBugReport() {
 	URL.revokeObjectURL(url);
 }
 
-const quickActions = $('quick-actions') ? {
-	strip: $('quick-actions'),
-	runAll: $('qa-run-all'),
-	runFailed: $('qa-run-failed'),
-	createCase: $('qa-create-case'),
-	chooseDevices: $('qa-choose-devices'),
-	viewResults: $('qa-view-results'),
-	createBug: $('qa-create-bug'),
-	preset: $('qa-preset')
-} : null;
-
-if (quickActions) {
-	quickActions.runAll?.addEventListener('click', () => void runAllTests());
-	quickActions.runFailed?.addEventListener('click', () => void runFailedTests());
-	quickActions.createCase?.addEventListener('click', () => testCaseView?.open?.());
-	quickActions.chooseDevices?.addEventListener('click', () => deviceDrawer?.open?.());
-	quickActions.viewResults?.addEventListener('click', () => { activateDetailTab($('tab-report'), true); el.viewer.scrollIntoView({ block: 'nearest' }); });
-	quickActions.createBug?.addEventListener('click', () => void createBugReport());
-	quickActions.preset?.addEventListener('change', async () => {
-		const presetId = quickActions.preset.value;
-		if (!presetId || !bulkRunView) return;
-		const environments = (await api('/environments?active=true&limit=1000').then((p) => p.environments ?? []).catch(() => []));
-		if (bulkRunView.runPreset(presetId, { environmentsFor: (id) => environmentsForPreset(id, environments) })) {
-			toast(`${quickActions.preset.selectedOptions[0]?.textContent ?? 'Preset'} ready — review the summary and run.`);
-		}
-		quickActions.preset.value = '';
-	});
-}
-
-/* Quick actions strip removed (#14102) — run/test-case/results entry points
-   live in the sidebar and dialogs; device selection via the CURRENT TEST
-   DEVICE card's [Change Device] → devicePicker. */
+/* Permanent quick actions were removed. Start testing stays primary; the
+   current run exposes only the actions that make sense for its state. */
 
 if (runTarget) {
 	runTarget.close?.addEventListener('click', () => runTarget.dialog.close());
@@ -7367,13 +7415,21 @@ if (batchTracker) {
 
 function renderRunEnvBlock(session) {
 	const block = $('run-env-block');
-	if (!block) return;
+	const details = $('execution-details');
+	if (!block || !details) return;
 	const testcaseLine = $('run-env-testcase');
 	const currentLine = $('run-env-current');
+	const executionLine = $('run-env-execution');
+	const sessionLine = $('run-env-session');
+	const usageLine = $('run-env-usage');
 	const countLine = $('run-env-count');
 	const snap = session?.environmentSnapshot;
 	const hasEnv = Boolean(snap || session?.environmentId);
-	block.hidden = !hasEnv && !session?.testCaseId;
+	details.hidden = !session?.id;
+	if (details.dataset.sessionId !== session?.id) {
+		details.open = false;
+		details.dataset.sessionId = session?.id ?? '';
+	}
 	if (testcaseLine) {
 		const title = session?.testCaseSnapshot?.title ?? session?.testCaseId;
 		testcaseLine.textContent = title ? `Test case: ${title}` : '';
@@ -7383,14 +7439,27 @@ function renderRunEnvBlock(session) {
 		const deviceText = snap
 			? [snap.device, [snap.os, snap.osVersion].filter(Boolean).join(' '), [snap.browser, snap.browserVersion].filter(Boolean).join(' ')].filter(Boolean).join(' · ')
 			: session?.environmentId ?? '';
-		// Phase D2: execution type + live runtime state, always visible.
-		const execType = session?.runtimeFacts?.executionLevel
-			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : 'VIRTUAL_DEVICE');
-		const state = session?.status === 'running'
-			? '● RUNNING'
-			: session?.status === 'done' ? '● COMPLETED' : '● CONNECTED';
-		currentLine.textContent = deviceText ? `TARGET DEVICE: ${deviceText} — ${execType} ${state}` : '';
-		currentLine.hidden = !currentLine.textContent;
+		currentLine.textContent = `Browser and device: ${deviceText || 'Not recorded'}`;
+		currentLine.hidden = false;
+	}
+	if (executionLine) {
+		const rawLevel = session?.runtimeFacts?.executionLevel
+			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : hasEnv ? 'VIRTUAL_DEVICE' : 'Not recorded');
+		const level = String(rawLevel).toLowerCase().replaceAll('_', ' ').replace(/^./, value => value.toUpperCase());
+		const runState = session?.status === 'done' ? 'Complete'
+			: session?.status === 'running' ? 'Running'
+				: session?.status === 'interrupted' ? 'Paused' : String(session?.status ?? 'Unknown');
+		executionLine.textContent = `Execution: ${level} · ${runState}`;
+		executionLine.hidden = false;
+	}
+	if (sessionLine) {
+		sessionLine.textContent = `Session: ${session?.id ?? 'Not recorded'}`;
+		sessionLine.hidden = false;
+	}
+	if (usageLine) {
+		const usage = tokenSummaryText(session?.tokenUsage);
+		usageLine.textContent = usage ? `Model usage: ${usage}` : 'Model usage: Not recorded';
+		usageLine.hidden = false;
 	}
 	if (countLine) {
 		const batch = batchTracker?.current;
@@ -7408,31 +7477,26 @@ function renderRunEnvBlock(session) {
 /* ── ONE Device Picker + activeTestEnvironment store (DX Phase 1) ── */
 const activeTestEnvStore = createActiveTestEnvironmentStore();
 
-/* ── Theme store (#14383) ──
- * theme-bootstrap.js already set data-theme before paint; this store is the
- * runtime source of truth from here on — it re-applies the resolved theme
- * (no-op when bootstrap matched) and keeps the attribute live when the OS
- * preference changes while a 'system' selection is active. */
-const themeStore = createThemeStore({
-	onChange: ({ applied }) => applyThemeToDocument(document, applied)
-});
-applyThemeToDocument(document, themeStore.applied());
-globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
-
-/* ── Theme toggle in Settings (#14384) ──
- * The select reflects the STORED preference (dark/light/system), never the
- * resolved value — "System Default" stays selected even when the OS is dark.
- * Changes apply instantly via the store's onChange; the dialog stays open. */
-if (cfg.theme) {
-	cfg.theme.value = themeStore.preference();
-	cfg.theme.addEventListener('change', () => {
-		themeStore.set(cfg.theme.value);
-		cfg.theme.value = themeStore.preference(); // normalize back (invalid never sticks)
-	});
-	// Re-sync whenever the dialog opens, so edits elsewhere (or a fresh
-	// store) can't desync the select.
-	cfg.dialog?.addEventListener('open', () => { cfg.theme.value = themeStore.preference(); });
+// One live preference for Settings, the sidebar, the entry screen and Studio.
+function syncThemeControls({ preference, applied }) {
+	applyThemeToDocument(document, applied);
+	document.documentElement.style.colorScheme = applied;
+	document.querySelector('meta[name="theme-color"]').content = applied === 'dark' ? '#101012' : '#ffffff';
+	for (const control of document.querySelectorAll('[data-theme-control]')) control.value = preference;
 }
+const themeStore = createThemeStore({
+	onChange: syncThemeControls
+});
+syncThemeControls({ preference: themeStore.preference(), applied: themeStore.applied() });
+globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
+for (const control of document.querySelectorAll('[data-theme-control]')) {
+	control.addEventListener('change', () => themeStore.set(control.value));
+}
+window.addEventListener('storage', event => {
+	if (event.key !== 'qase.theme' && event.key !== null) return;
+	try { if (event.storageArea !== localStorage) return; } catch { return; }
+	themeStore.set(event.newValue);
+});
 /* UI Fix Phase 3: the feature-dock device chip (deviceDrawer.js, non-module
  * script scope boundary) reads the store through this accessor — one source
  * of truth for the selection. */
@@ -7701,7 +7765,17 @@ cfg.saveBtn.onclick = async () => {
 el.composer.onsubmit = async event => {
 	event.preventDefault();
 	const text = el.composerInput.value.trim();
-	if (!text || !state.sessionId) {
+	if (!text) return;
+	if (!state.sessionId) {
+		openQaStart();
+		try {
+			const target = new URL(text);
+			if (!['http:', 'https:'].includes(target.protocol)) throw new TypeError('Unsupported target protocol');
+			qaUi.targetUrl.value = target.href;
+			syncQaSubmitState();
+		} catch {
+			setQaFormError('Choose the website first. You can send testing instructions after the run starts.');
+		}
 		return;
 	}
 	if (!state.config?.ready) {
@@ -7756,9 +7830,25 @@ el.stage.addEventListener('keydown', event => {
 
 $('empty-start')?.addEventListener('click', () => { void startRun(); });
 $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
+el.progressFindings?.addEventListener('click', () => {
+	activateDetailTab($('tab-findings'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
 
 el.newRun.onclick = openQaStart;
 $('sidebar-new-run').onclick = openQaStart;
+$('sidebar-view-findings')?.addEventListener('click', () => {
+	activateDetailTab($('tab-findings'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
+$('sidebar-view-report')?.addEventListener('click', () => {
+	activateDetailTab($('tab-report'), true);
+	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	el.viewer.scrollIntoView({ block: 'nearest' });
+});
+$('sidebar-retest')?.addEventListener('click', openQaStart);
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
 el.stopRun.onclick = async () => {
@@ -7828,6 +7918,29 @@ document.addEventListener('keydown', event => {
 });
 
 const detailTabs = [...document.querySelectorAll('#tabs .tab')];
+
+function setWorkspaceView(view) {
+	if (!['runs', 'agent', 'browser', 'results'].includes(view)) view = 'agent';
+	const nav = document.querySelector('.workspace-mobile-nav');
+	const focusedPanel = document.activeElement?.closest('.panel');
+	document.body.dataset.workspaceView = view;
+	if (view === 'browser' && state.sessionId && matchMedia('(max-width: 720px)').matches) {
+		state.stageExpanded.add(state.sessionId);
+		renderStageCollapse();
+	}
+	for (const button of nav.querySelectorAll('button')) {
+		button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
+	}
+	if (matchMedia('(max-width: 720px)').matches && focusedPanel && getComputedStyle(focusedPanel).display === 'none') {
+		nav.querySelector(`[data-workspace-view="${view}"]`).focus({ preventScroll: true });
+	}
+	requestAnimationFrame(fitStageFrame);
+}
+
+setWorkspaceView('agent');
+for (const button of document.querySelectorAll('.workspace-mobile-nav button')) {
+	button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView));
+}
 
 function activateDetailTab(tab, moveFocus = false) {
 	for (const other of detailTabs) {
@@ -7904,14 +8017,6 @@ async function bootWorkspace() {
 		el.chatEmpty.hidden = false;
 		renderWelcomeChecklist();
 		renderRunsEmptyState();
-		await startRun();
-		// No runs yet: don't ambush a brand-new workspace with a blocking modal.
-		// Point at the composer; the QA dialog is one click (New run) away.
-		toast('Welcome! Paste a URL below or press “QA” to start your first run.');
-		// Fresh account: show the welcome checklist behind the launcher dialog.
-		el.transcript.append(el.chatEmpty);
-		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		await startRun();
 	}
 	void refreshBugs();

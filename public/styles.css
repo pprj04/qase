@@ -5336,11 +5336,6 @@ html.entry-active body {
    intentionally remain unchanged.
    -------------------------------------------------------------------------- */
 
-/* Dr
-ytis Studio tokens — light-first. This layer redefines the shared custom
-   properties (same names as the base layer) so the entire application inherits
-   the Studio palette. Dark users get a zinc dark variant below. */
-:root {
 /* Drytis Studio tokens — light theme. #14383: applied only when the user
    (or the resolved system preference) selects light, via <html
    data-theme="light"> set by theme-bootstrap.js / themePreference.js. Same
@@ -5400,11 +5395,12 @@ ytis Studio tokens — light-first. This layer redefines the shared custom
      present at all (theme bootstrap disabled/failed), OS dark users keep the
      dark appearance. Once data-theme is always set by theme-bootstrap.js this
      block is inert: :root[data-theme] has higher specificity. */
-  .cli-theme .btn-primary {
+  html:not([data-theme]) .cli-theme .btn-primary {
     border-color: #fafafa;
     background: #fafafa;
     color: #171717;
   }
+}
 
 :where([data-theme="dark"]) .cli-theme .btn-primary:hover {
   border-color: #ffffff;
@@ -5446,6 +5442,8 @@ ytis Studio tokens — light-first. This layer redefines the shared custom
   --info-soft: rgba(96, 165, 250, 0.12);
   --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-float: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+@media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
     --bg: #101012;
@@ -5625,11 +5623,6 @@ der-bottom-color: var(--border);
   transition: box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
-  letter-spacing: -0.006em;
-  box-shadow: none;
-  transition: box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
-}
-
 .btn-primary {
   border-color: rgba(47, 91, 234, 0.55);
   background: var(--accent);
@@ -5765,7 +5758,6 @@ der-bottom-color: var(--border);
   letter-spacing: 0.06em;
 }
 
-  text-transform: uppercase;
 .cli-theme .brand-mark {
   color: var(--text);
   font-family: var(--font-ui);
@@ -5945,8 +5937,6 @@ padding: 6px 10px;
      (#14102: quick-actions removed; preview/tabs in right viewer) */
   grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
 background:var(--panel-chat);}
-  background: var(--canvas);
-}
 
 /* Terminal treatment for the run-summary region: token row + progress card. */
 .run-summary {
@@ -6115,8 +6105,6 @@ der-bottom-color:var(--border);
 
 .chat-id h1::before {
   content: "$ "; color:var(--accent);}
-  content: "$ ";
-  color: var(--success);}
 
 .chat-target {
   color: #5f7280;
@@ -6404,11 +6392,6 @@ border-color: rgba(47, 91, 234, 0.16);  border-radius: 3px;
   font-weight: 700;
 }
 
-  content: "❯";
-  color: var(--success);  font-size: 13px;
-  font-weight: 700;
-}
-
 .composer:focus-within {
   border-color: rgba(47, 91, 234, 0.5);
   background: #111113;
@@ -6467,7 +6450,6 @@ background:var(--panel-chat);}
   border-color: var(--border);
   border-radius: 3px;
 background:var(--canvas);}
-  background:var(--canvas);}
 
 .urlbar::before {
   content: "http";
@@ -6586,7 +6568,6 @@ der-bottom-color:var(--border);
 .feed {
   padding: 8px;
 background:var(--panel-chat);}
-  background: var(--panel-sidebar);}
 
 .feed-empty {
   color: #485b67;
@@ -6731,8 +6712,6 @@ background:var(--panel-chat);  box-shadow: 0 28px 100px rgba(0, 0, 0, 0.72);
 
 .modal-head h2::before {
   content: "❯ "; color:var(--accent);}
-  content: "❯ ";
-  color: var(--success);}
 
 .modal-body {
   gap: 13px;
@@ -6905,8 +6884,6 @@ background:var(--panel-sidebar);
   height: 5px;
 background: var(--accent);
   box-shadow: 0 0 10px rgba(47, 91, 234, 0.58);}
-  background: var(--success);
-  box-shadow: 0 0 10px rgba(47, 91, 234, 0.5);}
 
 .entry-stage {
   padding: 74px 18px 56px;
@@ -6968,8 +6945,6 @@ background: var(--accent);
 
 .entry-eyebrow::before {
   content: "$ ./qase --initialize"; color:var(--accent);}
-  content: "$ ./qase --initialize";
-  color: var(--success);}
 
 .entry-eyebrow > span,
 .entry-eyebrow {
@@ -9067,6 +9042,7 @@ dio footer nav (R2): the 4-column grid above stays for the layout
 @media (max-width: 1280px) and (min-width: 1101px) {
 .cli-theme .app {
     grid-template-columns: 210px minmax(360px, 0.9fr) minmax(430px, 1.1fr) 76px;    gap: 4px;
+  }
   .app {
     grid-template-columns: clamp(228px, 15vw, 258px) minmax(400px, 0.92fr) minmax(500px, 1.18fr) 58px;
   }
@@ -9743,7 +9719,7 @@ background:var(--surface-2);}
   color: var(--text-muted);
 }
 
- Apple environments modal ───────────────────────────────────── */
+/* Apple environments modal ───────────────────────────────────── */
 #environments { width:min(960px,calc(100vw - 32px)); max-height:86vh; overflow:auto; box-sizing:border-box; padding:28px; border:1px solid var(--border-strong); border-radius:16px; background:var(--surface-3); color:var(--text); }
 #environments::backdrop { background:rgba(255,255,255,0.8); }
 #environments .modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:16px; }
@@ -10141,11 +10117,6 @@ background:var(--surface-2);}
   border: 1px solid var(--border, #e5e5e5);
   border-radius: 16px;
 }
-/* dark variant */
-:where([data-theme="dark"]) .cli-theme .modal,
-:where([data-theme="dark"]) .modal,
-:where([data-theme="dark"]) .account-dialog,
-:where([data-theme="dark"]) .device-drawer {
 /* dark variant — #14383: applies when data-theme="dark" (explicit or resolved
    from system). Light theme (data-theme="light") never matches. The
    attribute-less OS-dark fallback of the old media query is preserved via the
@@ -10649,10 +10620,6 @@ select:focus {
   border-top: 1px solid var(--border);
 }
 
-/* ════════════════════════════════════════════════════════════════
-   UX U4 · Designed empty states
-   ════════════════════════════════════════════════════════════════ */
-.feed-empty {
 /* Studio control alignment — shared control surface */
 .field input,
 .field select,

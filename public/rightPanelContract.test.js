@@ -42,7 +42,7 @@ test('#13778 contract: queued session auto-launches the run on promotion', async
 	assert.match(fbBody, /trackQueuePanel\(result\.session/, 'queue fallback must track the session for auto-launch');
 });
 
-test('settings dialog hosts Device Management; sidebar foot has no admin entries', async () => {
+test('Phase 13A keeps customer navigation primary and moves admin tools under Advanced', async () => {
 	const html = await readFile('public/index.html', 'utf8');
 	const settingsBlock = html.slice(html.indexOf('id="settings"'), html.indexOf('</dialog>', html.indexOf('id="settings"')));
 	assert.match(settingsBlock, /id="open-device-matrix"/, 'open-device-matrix must live inside #settings');
@@ -50,9 +50,18 @@ test('settings dialog hosts Device Management; sidebar foot has no admin entries
 	const foot = html.slice(footStart, html.indexOf('</footer>', footStart));
 	assert.ok(!foot.includes('open-device-matrix'), 'sidebar foot must not list Device Matrix');
 	assert.ok(!foot.includes('open-environments'), 'sidebar foot must not list Environments');
-	for (const everyday of ['open-profile', 'open-settings', 'open-test-cases', 'open-bulk-run']) {
-		assert.ok(foot.includes(everyday), `foot should keep ${everyday}`);
+	for (const customerAccount of ['open-profile', 'sign-out']) {
+		assert.ok(foot.includes(customerAccount), `standalone foot should keep ${customerAccount}`);
 	}
+	for (const duplicate of ['open-settings', 'open-test-cases', 'open-bulk-run']) {
+		assert.ok(!foot.includes(duplicate), `footer must not duplicate ${duplicate}`);
+	}
+	const advancedStart = html.indexOf('<details class="sidebar-tools"');
+	const advanced = html.slice(advancedStart, html.indexOf('</details>', advancedStart));
+	for (const advancedTool of ['nav-test-cases', 'nav-device-matrix', 'nav-bulk-runs', 'nav-environments', 'nav-analytics', 'nav-settings']) {
+		assert.ok(advanced.includes(advancedTool), `Advanced must keep ${advancedTool}`);
+	}
+	assert.match(advanced, /<summary[^>]*>[\s\S]*Advanced/, 'technical tools must be behind one Advanced disclosure');
 });
 
 test('device details entry targets the Settings-hosted Device Management surface', async () => {
@@ -89,6 +98,19 @@ test('quick actions strip is removed (#14102); results live in run history via s
 	assert.ok(!html.includes('qa-run-all') && !html.includes('qa-preset'), 'quick action chips must not render');
 	const app = await readFile('public/app.js', 'utf8');
 	assert.ok(!app.includes('quickActions.'), 'dead quick-actions controller must be gone');
+});
+
+test('Phase 13A sidebar collapse control is Studio-only, accessible and persistent', async () => {
+	const html = await readFile('public/index.html', 'utf8');
+	assert.match(html, /id="sidebar-collapse-toggle"[^>]*aria-controls="workspace-runs"[^>]*aria-expanded="true"/);
+	assert.match(html, /aria-label="Collapse recent tests sidebar"/);
+	const mode = await readFile('public/studioMode.js', 'utf8');
+	assert.match(mode, /qase\.studio\.sidebar/);
+	assert.match(mode, /localStorage\.setItem\(sidebarPreferenceKey/);
+	assert.match(mode, /advancedTools\.open && document\.documentElement\.dataset\.qaseSidebar === 'collapsed'/);
+	const embedded = await readFile('public/studio-embed.css', 'utf8');
+	assert.match(embedded, /data-qase-sidebar="collapsed"/);
+	assert.match(embedded, /grid-template-columns:\s*56px/);
 });
 
 test('runtime status vocabulary covers the agreed states via one map', async () => {

@@ -7,6 +7,7 @@
 
 .studio-host-rail,
 .studio-context,
+.studio-context-resizer,
 .studio-tool-header {
 	display: none;
 }
@@ -19,6 +20,7 @@ html[data-qase-layout="studio-mock"] {
 	--studio-host-muted: #60646c;
 	--studio-host-border: #e3e5e8;
 	--studio-host-action: #315ee8;
+	--studio-context-width: 280px;
 	color-scheme: light;
 }
 
@@ -42,7 +44,7 @@ html[data-qase-layout="studio-mock"] body {
 
 html[data-qase-layout="studio-mock"] .studio-demo-shell {
 	display: grid;
-	grid-template-columns: 64px minmax(196px, 232px) minmax(0, 1fr);
+	grid-template-columns: 64px var(--studio-context-width) 7px minmax(0, 1fr);
 	width: 100%;
 	height: 100dvh;
 	min-width: 0;
@@ -122,6 +124,49 @@ html[data-qase-layout="studio-mock"] .studio-context {
 	border-right: 1px solid var(--studio-host-border);
 	background: var(--studio-host-surface);
 	color: var(--studio-host-text);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer {
+	position: relative;
+	display: grid;
+	min-width: 7px;
+	min-height: 0;
+	place-items: center;
+	background: var(--studio-host-surface);
+	cursor: col-resize;
+	touch-action: none;
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer::before {
+	content: "";
+	width: 1px;
+	height: 100%;
+	background: var(--studio-host-border);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer > span {
+	position: absolute;
+	width: 3px;
+	height: 42px;
+	border-radius: 999px;
+	background: transparent;
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer:hover > span,
+html[data-qase-layout="studio-mock"] .studio-context-resizer:focus-visible > span,
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"] .studio-context-resizer > span {
+	background: var(--studio-host-action);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer:focus-visible {
+	outline: 2px solid var(--studio-host-action);
+	outline-offset: -2px;
+}
+
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"],
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"] body {
+	cursor: col-resize;
+	user-select: none;
 }
 
 .studio-context-head,
@@ -229,6 +274,7 @@ html[data-qase-layout="studio-mock"] .studio-context {
 
 html[data-qase-layout="studio-mock"] .studio-tool-workspace {
 	display: grid;
+	grid-column: 4;
 	grid-template-rows: 48px minmax(0, 1fr);
 	min-width: 0;
 	min-height: 0;
@@ -295,8 +341,11 @@ html[data-qase-layout="studio-mock"] .studio-tool-header {
 }
 
 .studio-context-toggle {
-	min-height: 32px;
-	padding: 5px 9px;
+	display: grid;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	place-items: center;
 	border: 1px solid var(--studio-host-border);
 	border-radius: 7px;
 	background: var(--studio-host-surface);
@@ -305,6 +354,14 @@ html[data-qase-layout="studio-mock"] .studio-tool-header {
 	font: inherit;
 	font-size: 12px;
 	touch-action: manipulation;
+}
+
+.studio-context-toggle svg {
+	fill: none;
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.5;
 }
 
 .studio-context-toggle:hover {
@@ -330,8 +387,22 @@ html[data-qase-layout="studio-mock"] .workspace-chrome {
 	display: none;
 }
 
+html[data-qase-layout="studio-mock"] .runs .brand-lockup,
+html[data-qase-layout="studio-mock"] .runs #model-badge {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .runs .brand {
+	justify-content: flex-end;
+}
+
+html[data-qase-layout="studio-mock"] .sidebar-collapse-toggle {
+	display: grid;
+}
+
 html[data-qase-layout="studio-mock"] .panel-foot #open-profile,
-html[data-qase-layout="studio-mock"] .panel-foot #sign-out {
+html[data-qase-layout="studio-mock"] .panel-foot #sign-out,
+html[data-qase-layout="studio-mock"] .panel-foot .theme-control {
 	display: none;
 }
 
@@ -339,23 +410,173 @@ html[data-qase-layout="studio-mock"] .feature-dock > .feature-device {
 	display: none;
 }
 
-html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
-	grid-template-columns: 64px 0 minmax(0, 1fr);
+/* The customer header keeps the active device and status. Execution level,
+   session identifiers and environment changes remain in Advanced setup. */
+html[data-qase-layout="studio-mock"] #ldv-exec,
+html[data-qase-layout="studio-mock"] #ldv-change-device,
+html[data-qase-layout="studio-mock"] #token-chip,
+html[data-qase-layout="studio-mock"] #live-pill,
+html[data-qase-layout="studio-mock"] #execution-target-block {
+	display: none;
 }
 
-html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context {
+html[data-qase-layout="studio-mock"] .empty-actions #empty-start,
+html[data-qase-layout="studio-mock"] .welcome-checklist {
 	display: none;
+}
+
+html[data-qase-layout="studio-mock"] .empty-state {
+	max-width: 46ch;
+}
+
+html[data-qase-layout="studio-mock"] .empty-state h2 {
+	font-size: 22px;
+}
+
+html[data-qase-layout="studio-mock"] .ldv-title {
+	font-size: 0;
+}
+
+html[data-qase-layout="studio-mock"] .ldv-title::after {
+	content: "Preview";
+	font-size: 11px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+	grid-template-columns: 56px minmax(280px, 0.82fr) minmax(420px, 1.4fr) 66px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .runs .panel-head {
+	gap: 10px;
+	padding: 14px 7px 10px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .runs .brand {
+	justify-content: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-collapse-toggle svg {
+	transform: scaleX(-1);
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-start {
+	width: 40px;
+	min-width: 40px;
+	height: 40px;
+	margin: 0 auto;
+	padding: 0;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-control-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-explorer-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-title,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta > :not(.dot),
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-progress,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-del,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot #conn-label,
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot > :not(.dot),
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools .sidebar-nav {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-list {
+	padding: 8px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-list > .feed-empty {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-row {
+	display: block;
+	margin-bottom: 6px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run {
+	display: grid;
+	width: 40px;
+	min-height: 40px;
+	margin: 0 auto;
+	padding: 0;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run::before {
+	inset-block: 8px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta {
+	display: grid;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .run-meta > .dot {
+	width: 9px;
+	height: 9px;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-context-actions {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools {
+	padding: 8px;
+	overflow: visible;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools > summary {
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	padding: 0;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .sidebar-tools > summary::after {
+	display: none;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot {
+	display: grid;
+	min-height: 48px;
+	padding: 10px;
+	place-items: center;
+}
+
+html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot .dot {
+	display: block;
+	grid-column: 1;
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
+	grid-template-columns: 64px 0 0 minmax(0, 1fr);
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context,
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context-resizer {
+	display: none;
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context-toggle svg {
+	transform: scaleX(-1);
 }
 
 @media (max-width: 1280px) {
 	html[data-qase-layout="studio-mock"] .studio-demo-shell {
-		grid-template-columns: 56px 190px minmax(0, 1fr);
+		grid-template-columns: 56px var(--studio-context-width) 6px minmax(0, 1fr);
+	}
+
+	html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 56px 0 0 minmax(0, 1fr);
 	}
 
 	html[data-qase-layout="studio-mock"] .app {
 		grid-template-columns: minmax(168px, 0.5fr) minmax(250px, 0.8fr) minmax(360px, 1.35fr) 62px;
 		gap: 4px;
 		padding: 5px;
+	}
+
+	html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+		grid-template-columns: 56px minmax(250px, 0.8fr) minmax(360px, 1.35fr) 62px;
 	}
 }
 
@@ -364,7 +585,12 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		grid-template-columns: 52px minmax(0, 1fr);
 	}
 
-	html[data-qase-layout="studio-mock"] .studio-context {
+	html[data-studio-context][data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 52px minmax(0, 1fr);
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-context,
+	html[data-qase-layout="studio-mock"] .studio-context-resizer {
 		display: none;
 	}
 
@@ -382,6 +608,10 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		height: auto;
 		min-height: calc(100dvh - 48px);
 		padding-top: 5px;
+	}
+
+	html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .app {
+		grid-template-columns: 56px minmax(0, 1fr);
 	}
 }
 
@@ -434,6 +664,88 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		grid-template-columns: minmax(0, 1fr);
 		height: auto;
 		min-height: calc(100dvh - 48px);
+	}
+}
+
+/* Compact panel navigation applies to both standalone and embedded Studio. */
+@media (max-width: 720px) {
+  body.studio-workspace .workspace-mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-row: 1;
+    grid-column: 1;
+    gap: 4px;
+    padding: 6px 10px;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+  }
+  .workspace-mobile-nav button {
+    min-height: 44px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: 500 13px var(--font-ui);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .workspace-mobile-nav button:hover { background: var(--surface-hover); }
+  .workspace-mobile-nav button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+  .workspace-mobile-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  html body.studio-workspace { padding-bottom: 0; }
+  html body.studio-workspace[data-workspace-view] .app {
+    height: 100dvh;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 57px minmax(0, 1fr) 68px;
+    padding: 0;
+    gap: 0;
+  }
+  html[data-qase-layout="studio-mock"] body.studio-workspace[data-workspace-view] .app { height: calc(100dvh - 48px); }
+  html[data-qase-layout="studio-mock"] .studio-tool-workspace { min-height: 0; grid-template-rows: 48px minmax(0, 1fr); }
+  html body.studio-workspace .app > :is(.runs, .chat, .viewer) {
+    display: none;
+    grid-column: 1;
+    grid-row: 2;
+    min-height: 0;
+    max-height: none;
+    height: 100%;
+  }
+  html body.studio-workspace[data-workspace-view="runs"] .app > .runs { display: flex; }
+  html body.studio-workspace[data-workspace-view="agent"] .app > .chat { display: grid; }
+  html body.studio-workspace:is([data-workspace-view="browser"], [data-workspace-view="results"]) .app > .viewer { display: grid; }
+  html body.studio-workspace[data-workspace-view="results"] .viewer { grid-template-rows: auto 44px minmax(0, 1fr); }
+  html body.studio-workspace[data-workspace-view="results"] .viewer > .stage { display: none; }
+  html body.studio-workspace[data-workspace-view="results"] .viewer .preview-toggle { display: none; }
+  html body.studio-workspace[data-workspace-view="results"] .viewer > .tabs { grid-row: 2; }
+  html body.studio-workspace[data-workspace-view="results"] .viewer > .tab-body { grid-row: 3; }
+  html body.studio-workspace[data-workspace-view="browser"] .viewer { grid-template-rows: auto minmax(0, 1fr); }
+  html body.studio-workspace[data-workspace-view="browser"] .viewer > :is(.tabs, .tab-body) { display: none; }
+  html body.studio-workspace .feature-dock { grid-row: 3; grid-column: 1; padding-bottom: max(6px, env(safe-area-inset-bottom)); }
+  body.studio-workspace .feature-dock > .feature-device { display: none; }
+  body.studio-workspace .runs .run-list { max-height: none; }
+  body.studio-workspace .tabs .tab { min-height: 44px; }
+  body.studio-workspace .finding-head { padding-left: 42px; flex-wrap: wrap; }
+  body.studio-workspace .finding-title { min-width: 0; flex: 1 1 140px; white-space: normal; overflow-wrap: anywhere; }
+}
+
+@media (min-width: 1281px) {
+	html[data-qase-layout="studio-mock"] body[data-run-status="running"] .app {
+		grid-template-columns: minmax(184px, 0.45fr) minmax(250px, 0.65fr) minmax(480px, 1.75fr) 66px;
+	}
+
+	html[data-qase-layout="studio-mock"] body[data-run-status="done"] .app {
+		grid-template-columns: minmax(184px, 0.45fr) minmax(240px, 0.6fr) minmax(500px, 1.8fr) 66px;
+	}
+}
+
+@media (min-width: 1101px) and (max-width: 1280px) {
+	html[data-qase-layout="studio-mock"] body[data-run-status="running"] .app {
+		grid-template-columns: minmax(168px, 0.45fr) minmax(230px, 0.65fr) minmax(400px, 1.7fr) 62px;
+	}
+
+	html[data-qase-layout="studio-mock"] body[data-run-status="done"] .app {
+		grid-template-columns: minmax(168px, 0.45fr) minmax(210px, 0.58fr) minmax(420px, 1.8fr) 62px;
 	}
 }
 
