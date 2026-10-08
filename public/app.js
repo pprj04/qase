@@ -3883,7 +3883,15 @@ function renderReport() {
 		: 'Rate this QASE testing run and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
-	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
+	actions.append(pdf, provideFeedback);
+	const developerActions = document.createElement('details');
+	developerActions.className = 'report-developer-actions';
+	const developerSummary = document.createElement('summary');
+	developerSummary.textContent = 'Advanced / developer tools';
+	const developerButtons = document.createElement('div');
+	developerButtons.className = 'report-developer-buttons';
+	developerButtons.append(download, copy, copyFixes, downloadFixes);
+	developerActions.append(developerSummary, developerButtons);
 	// The re-run control only applies to runs launched from a saved environment
 	// snapshot (environmentSnapshot carries envId for createQaRun); runs without
 	// one keep the standard download/copy actions only.
@@ -3941,10 +3949,10 @@ function renderReport() {
 				generate.textContent = 'Generate test cases';
 			}
 		};
-		actions.append(generate);
+		developerButtons.append(generate);
 	}
 
-	el.reportView.append(actions);
+	el.reportView.append(actions, developerActions);
 	el.reportView.append(renderFeedback());
 	renderReportFeedbackSection(rated);
 	el.reportView.append(renderFilesSection(findings));
@@ -4373,9 +4381,19 @@ function renderSqaReportActions() {
 		: 'Rate this SQA assessment experience and tell us how it went.';
 	provideFeedback.onclick = () => openFeedbackModal();
 
-	actions.append(download, copy, copyFixes, downloadFixes, provideFeedback, pdf);
-	el.reportView.append(actions);
-	return actions;
+	actions.append(pdf, provideFeedback);
+	const developerActions = document.createElement('details');
+	developerActions.className = 'report-developer-actions';
+	const developerSummary = document.createElement('summary');
+	developerSummary.textContent = 'Advanced / developer tools';
+	const developerButtons = document.createElement('div');
+	developerButtons.className = 'report-developer-buttons';
+	developerButtons.append(download, copy, copyFixes, downloadFixes);
+	developerActions.append(developerSummary, developerButtons);
+	const actionGroup = document.createElement('div');
+	actionGroup.className = 'report-action-group';
+	actionGroup.append(actions, developerActions);
+	return actionGroup;
 }
 
 function renderSqaVerdict(assessment, lifecycle) {
@@ -5650,12 +5668,37 @@ function syncQaSubmitState() {
 	const selectedCount = qaMatrixState.selectedEnvIds.length;
 	const matrixReady = !qaUi.dialog?.open || selectedCount > 0;
 	const withinCap = !qaUi.dialog?.open || selectedCount <= MAX_RUN_CONFIGURATIONS;
-	qaUi.submit.disabled = selected === 0 || !urlValid || !matrixReady || !withinCap || qaUi.submit.dataset.busy === 'true';
+	const authorizationReady = !qaUi.dialog?.open || !qaSecuritySelected() || Boolean(qaUi.securityAuthorized?.checked);
+	qaUi.submit.disabled = selected === 0 || !urlValid || !authorizationReady || !matrixReady || !withinCap || qaUi.submit.dataset.busy === 'true';
+	const blockedReason = qaLaunchBlockedReason();
+	qaUi.submit.title = blockedReason ?? '';
 	if (qaUi.testsCount) {
 		qaUi.testsCount.textContent = `${selected} of ${qaUi.selectedTests.catalogSize ?? selected} selected`;
 	}
 	syncQaCategoryToggles();
 	syncQaSelectionSummary();
+}
+
+/** Plain-language reason the primary action cannot run yet. This is also the
+ * source for the button tooltip, so disabled never means unexplained. */
+function qaLaunchBlockedReason() {
+	if (!qaUi.dialog?.open || qaUi.submit?.dataset.busy === 'true') return null;
+	const target = qaUi.targetUrl?.value?.trim() ?? '';
+	if (!target) return 'Enter a website URL to start.';
+	if (!isValidTargetUrl(target)) return 'Enter a valid http(s) website URL.';
+	if (!state.qaTestCatalog) return 'Loading recommended checks…';
+	if (qaUi.selectedTests.size === 0) return 'Select at least one check.';
+	if (qaSecuritySelected() && !qaUi.securityAuthorized?.checked) {
+		return 'Confirm that you are authorized to test this site.';
+	}
+	if (qaMatrixState.fetchState === 'loading') return 'Loading browsers and devices…';
+	if (qaMatrixState.fetchState === 'error') return 'Browsers and devices could not be loaded. Open Customize and retry.';
+	const configurations = qaMatrixState.selectedEnvIds.length;
+	if (configurations === 0) return 'Select at least one available browser and device.';
+	if (configurations > MAX_RUN_CONFIGURATIONS) {
+		return `Narrow the browser and device selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`;
+	}
+	return null;
 }
 
 /** Keep the compact launcher honest when availability or selection changes. */
@@ -5669,11 +5712,14 @@ function syncQaSelectionSummary() {
 	const checks = qaUi.selectedTests.size;
 	const configurations = qaMatrixState.selectedEnvIds.length;
 	const loading = qaMatrixState.fetchState === 'loading';
+	const blockedReason = qaLaunchBlockedReason();
 	const detail = loading ? 'Loading browsers and devices…'
 		: configurations === 0 ? 'Choose an available browser and device to start.'
 		: configurations > MAX_RUN_CONFIGURATIONS ? `${configurations.toLocaleString()} configurations selected. Narrow your selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`
 		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected`;
-	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
+	summary.textContent = blockedReason
+		? `${checks} check${checks === 1 ? '' : 's'} selected · ${blockedReason}`
+		: `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
 	if (!loading && (configurations === 0 || configurations > MAX_RUN_CONFIGURATIONS)) $('qa-customize').open = true;
 }
 
@@ -5730,15 +5776,15 @@ function paintQaTestCatalog(catalog) {
 	qaUi.selectedTests.catalogSize = qaCatalogSize();
 	qaUi.testsState.hidden = true;
 	qaUi.testsFieldset.disabled = false;
-	syncQaSubmitState();
 	syncQaSecurityGate();
+	syncQaSubmitState();
 }
 
 function refreshQaSelection() {
 	qaUi.selectedTests = new Set(qaCheckedTests());
 	qaUi.selectedTests.catalogSize = qaCatalogSize();
-	syncQaSubmitState();
 	syncQaSecurityGate();
+	syncQaSubmitState();
 }
 
 /** True when the current selection includes at least one security check. */
@@ -5787,6 +5833,7 @@ if (qaUi.securityAuthorized) {
 	qaUi.securityAuthorized.addEventListener('change', () => {
 		syncQaSecurityGate();
 		setQaFormError('');
+		syncQaSubmitState();
 	});
 }
 
@@ -5926,7 +5973,7 @@ function openQaStart() {
 	}
 	if (!qaUi.dialog.open) qaUi.dialog.showModal();
 	if (matchMedia('(pointer: fine)').matches) setTimeout(() => qaUi.targetUrl?.focus(), 0);
-	qaUi.submit.disabled = false;
+	syncQaSubmitState();
 	// #15164: 'Change device' stays INSIDE the Start QA run modal — it scrolls
 	// to and focuses the in-modal device matrix (single source of truth)
 	// instead of opening the separate #device-picker dialog.
@@ -5954,11 +6001,41 @@ function openQaStart() {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 			$('qa-customize').open = true;
 			$('qa-selection-summary').textContent = 'Checks could not be loaded. Close this window and try again.';
+			syncQaSubmitState();
 		});
 }
 
 function closeQaStart() {
 	if (qaUi.dialog?.open) qaUi.dialog.close();
+}
+
+function firstMatrixSessionId(run) {
+	const items = Array.isArray(run?.items) ? run.items : [];
+	return items.find(item => item?.sessionId && item.status === 'RUNNING')?.sessionId
+		?? items.find(item => item?.sessionId)?.sessionId
+		?? null;
+}
+
+/** A matrix run is created before its first underlying QA session. Wait for
+ * that real session so the product can select it and enter the shared running
+ * workspace. A bounded fallback leaves slow/blocked matrices on their honest
+ * status board instead of inventing a run. */
+async function waitForFirstMatrixSession(createdRun, { timeoutMs = 15_000, pollMs = 250 } = {}) {
+	let run = createdRun;
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const sessionId = firstMatrixSessionId(run);
+		if (sessionId) return sessionId;
+		if (!run?.id || Date.now() >= deadline || ['done', 'error', 'cancelled'].includes(run?.status)) return null;
+		await new Promise(resolve => window.setTimeout(resolve, pollMs));
+		try {
+			const payload = await api(`/matrix-runs/${encodeURIComponent(run.id)}`);
+			run = payload?.run ?? payload;
+		} catch {
+			// Creation already succeeded. A transient status-read failure should
+			// not misreport the create request as failed or allow a duplicate.
+		}
+	}
 }
 
 if (qaUi.dialog) {
@@ -6032,7 +6109,9 @@ if (qaUi.dialog) {
 		refreshQaSelection();
 	};
 
-	qaUi.form.onsubmit = async event => {		event.preventDefault();
+	qaUi.form.onsubmit = async event => {
+		event.preventDefault();
+		if (qaUi.submit.dataset.busy === 'true') return;
 		setQaFormError();
 		if (!qaUi.form.reportValidity()) return;
 		if (!ensureModelConfigured('QA launcher')) return;
@@ -6090,7 +6169,7 @@ if (qaUi.dialog) {
 		// legacy single-environment/test-case path applies to non-matrix runs.
 		qaUi.submit.dataset.busy = 'true';
 		qaUi.submit.disabled = true;
-		qaUi.submit.textContent = selectedEnvIds.length > 1 ? `Starting ${selectedEnvIds.length.toLocaleString()} configurations…` : 'Starting run…';
+		qaUi.submit.textContent = 'Starting…';
 		try {
 			// Phase 3 (#14937): one matrix run carries EVERY selected
 			// configuration as an item — queued with controlled concurrency,
@@ -6109,11 +6188,18 @@ if (qaUi.dialog) {
 				})
 			});
 			closeQaStart();
-			toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configurations queued.`);
-			// #14942 Phase 4: the results board IS the live view — per-configuration
-			// statuses, totals, coverage gaps and evidence update while the
-			// orchestrator works; each row drills into its producing session.
-			openQaMatrixRunDialog(matrixRun?.id);
+			void markOnboarded();
+			const createdSessionId = await waitForFirstMatrixSession(matrixRun);
+			if (createdSessionId) {
+				await selectSession(createdSessionId);
+				toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configuration${selectedEnvIds.length === 1 ? '' : 's'} queued.`);
+			} else {
+				// The matrix run is authoritative even when an execution provider
+				// cannot produce a session promptly. Keep its honest status visible;
+				// never fabricate a selected/running session.
+				toast('QA run created. Review browser and device status for details.');
+				openQaMatrixRunDialog(matrixRun?.id);
+			}
 			// Optional follow-on flows: the QA run is already underway; each
 			// checked option opens the existing dialog prefilled with the same
 			// target for the user to confirm — nothing starts automatically.
@@ -6128,7 +6214,6 @@ if (qaUi.dialog) {
 			setQaFormError(error instanceof Error ? error.message : String(error));
 		} finally {
 			qaUi.submit.dataset.busy = 'false';
-			qaUi.submit.disabled = false;
 			qaUi.submit.textContent = 'Start testing';
 			syncQaSubmitState();
 		}

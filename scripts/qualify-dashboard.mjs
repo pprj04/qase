@@ -70,10 +70,42 @@ try {
 	// Matrix execution is a bounded HTTP fixture; session, SQA and Founder
 	// handlers below still exercise the real application with a stub agent.
 	let matrixRequest;
-	const matrixRun = { id: 'matrix-fixture', status: 'completed', items: [], targetUrl: 'https://example.test/' };
-	await page.route('**/api/qa-configurations*', route => route.fulfill({ json: launcherCatalog() }));
-	await page.route('**/api/qa-matrix-runs', route => {
+	let matrixRequestCount = 0;
+	let rejectNextMatrixRequest = false;
+	let successfulMatrixSessionId;
+	let catalogRequestCount = 0;
+	let failNextCatalogRequest = true;
+	let matrixRun = { id: 'matrix-fixture', status: 'pending', items: [], targetUrl: 'https://example.test/' };
+	await page.route('**/api/qa-configurations*', route => {
+		catalogRequestCount += 1;
+		if (failNextCatalogRequest) {
+			failNextCatalogRequest = false;
+			return route.fulfill({ status: 503, json: { error: 'Device catalog temporarily unavailable.' } });
+		}
+		return route.fulfill({ json: launcherCatalog() });
+	});
+	await page.route('**/api/qa-matrix-runs', async route => {
+		matrixRequestCount += 1;
 		matrixRequest = route.request().postDataJSON();
+		if (rejectNextMatrixRequest) {
+			rejectNextMatrixRequest = false;
+			return route.fulfill({ status: 503, json: { error: 'The run service is temporarily unavailable.' } });
+		}
+		const created = await services.runs.create('QA run — https://example.test/', {
+			targetUrl: matrixRequest.targetUrl,
+			selectedTests: matrixRequest.selectedTests,
+			scopeSelection: matrixRequest.scopeSelection,
+			environmentId: matrixRequest.configurationEnvIds[0],
+			environmentSnapshot: { envId: matrixRequest.configurationEnvIds[0], device: 'Desktop', os: 'Windows', osVersion: '11', browser: 'Edge', browserVersion: '140' }
+		});
+		created.status = 'running';
+		created.runStartedAt = Date.now();
+		created.updatedAt = Date.now();
+		successfulMatrixSessionId = created.id;
+		matrixRun = {
+			id: 'matrix-fixture', status: 'running', targetUrl: matrixRequest.targetUrl,
+			items: [{ id: 'matrix-item-fixture', status: 'RUNNING', sessionId: created.id }]
+		};
 		return route.fulfill({ status: 201, json: matrixRun });
 	});
 	await page.route('**/api/matrix-runs/matrix-fixture', route => route.fulfill({ json: { run: matrixRun } }));
@@ -82,23 +114,56 @@ try {
 	await page.locator('#auth-gate').waitFor({state:'hidden'});
 	if (!await page.locator('#qa-start').evaluate(dialog=>dialog.open)) await page.locator('#new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
-	await page.waitForFunction(()=>document.querySelector('#qa-selection-summary').textContent.includes('3 browser configurations selected'));
+	await page.locator('#qa-matrix-retry').waitFor({ state: 'visible' });
+	assert.equal(await page.locator('#qa-submit').isDisabled(), true, 'Catalog failure cannot launch an invented configuration');
+	assert.match(await page.locator('#qa-matrix-error-text').textContent(), /temporarily unavailable/i);
+	await page.locator('#qa-matrix-retry').click();
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3 of 3 available configurations selected'));
+	assert.ok(catalogRequestCount >= 2, 'The launcher catalog can recover through its visible retry action');
+	await page.locator('#qa-cancel').click();
+	await page.locator('#sidebar-new-run').click();
+	await page.locator('#qa-start[open]').waitFor();
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3 of 3 available configurations selected'));
+	await page.locator('#qa-cancel').click();
+	await page.locator('#new-run').click();
+	await page.locator('#qa-start[open]').waitFor();
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3 of 3 available configurations selected'));
 	assert.equal(await page.locator('#qa-submit').isDisabled(),true,'Empty URL cannot launch QA');
 	await page.locator('#qa-target-url').fill('https://example.test/');
+	await screenshot(page,'start-dialog-invalid.png');
+	assert.equal(await page.locator('#qa-submit').isDisabled(),true,'Authorization is required before QA can start');
+	assert.match(await page.locator('#qa-selection-summary').textContent(), /authorized to test/i);
 	await page.locator('#qa-security-authorized').check();
-	await screenshot(page,'qa-launch.png');
-	await page.locator('#qa-submit').click();await page.locator('#qa-start').waitFor({state:'hidden'});
+	assert.equal(await page.locator('#qa-submit').isEnabled(),true,'Valid URL and authorization enable Start testing');
+	await screenshot(page,'start-dialog-ready.png');
+	rejectNextMatrixRequest = true;
+	await page.locator('#qa-submit').click();
+	await page.locator('#qa-form-error').filter({ hasText: 'temporarily unavailable' }).waitFor();
+	assert.equal(await page.locator('#qa-start').evaluate(dialog=>dialog.open), true, 'Rejected creation keeps the launcher open');
+	assert.equal(await page.locator('#qa-submit').isEnabled(), true, 'Rejected creation restores the primary action');
+	const requestsBeforeRetry = matrixRequestCount;
+	await page.evaluate(() => {
+		const form = document.querySelector('#qa-form');
+		const submitter = document.querySelector('#qa-submit');
+		form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter }));
+		form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter }));
+	});
+	await page.locator('#qa-start').waitFor({state:'hidden'});
+	assert.equal(matrixRequestCount, requestsBeforeRetry + 1, 'Pending guard prevents duplicate create-run requests');
 	assert.deepEqual(matrixRequest.configurationEnvIds, launcherConfigurations.map(row=>row.envId));
 	assert.equal(matrixRequest.targetUrl, 'https://example.test/');
 	assert.ok(matrixRequest.securityAuthorization);
-	await page.locator('#qa-matrix-run-dialog[open]').waitFor();
-	await page.locator('#qa-matrix-run-close').click();
-	checks.push('QA launcher validates URL and sends selected configurations and authorization to the matrix endpoint');
+	await page.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', successfulMatrixSessionId);
+	assert.equal(await page.locator('#status-chip').textContent(), 'Running');
+	await page.locator('#run-list').filter({ hasText: 'example.test' }).waitFor();
+	await screenshot(page,'start-run-success.png');
+	checks.push('QA launcher explains disabled states, recovers catalog and backend failures, prevents duplicate creation, selects the created run, and enters the running workspace from both entry points');
 	const created = await page.request.post(`${base}/api/sessions`, { data: { selectedTests: ['navigation'], scopeSelection: ['navigation'] } });
 	assert.equal(created.status(), 201);
 	const {id: qaId} = await created.json();
 	const qaSession = sessions.get(qaId);
 	await page.request.post(`${base}/api/sessions/${qaId}/message`, { data: { text: targetUrl } });
+	await page.evaluate(id => localStorage.setItem('qase.session', id), qaId);
 	await page.reload();
 	await page.locator('#qa-start').evaluate(dialog=>{ if(dialog.open) dialog.close(); });
 	await page.waitForFunction(()=>document.querySelector('#chat-title')?.textContent?.includes('127.0.0.1'));

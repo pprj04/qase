@@ -3050,6 +3050,39 @@ a {
   padding: 13px 0 4px;
 }
 
+.report-developer-actions {
+  margin: 8px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.report-developer-actions > summary {
+  padding: 9px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.report-developer-actions > summary::-webkit-details-marker { display: none; }
+.report-developer-actions > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 7px;
+  transition: transform 120ms var(--ease);
+}
+.report-developer-actions[open] > summary::before { transform: rotate(90deg); }
+
+.report-developer-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 2px 10px 10px;
+}
+
 /* Settings */
 
 .modal {

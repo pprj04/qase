@@ -88,6 +88,16 @@ const server = http.createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://127.0.0.1');
 	if (url.pathname.startsWith('/api/')) {
 		if (url.pathname === '/api/qa-configurations') return json(response, launcherCatalog());
+		if (request.method === 'POST' && url.pathname === '/api/qa-matrix-runs') {
+			fixturePosts.push(url.pathname);
+			fixtureSession = demoSession('running');
+			return json(response, {
+				id: 'studio-matrix-fixture',
+				status: 'running',
+				targetUrl: fixtureSession.targetUrl,
+				items: [{ id: 'studio-matrix-item', status: 'RUNNING', sessionId: fixtureRunId }]
+			}, 201);
+		}
 		if (request.method === 'POST' && url.pathname === `/api/sessions/${fixtureRunId}/stop`) {
 			fixturePosts.push(url.pathname);
 			fixtureSession = { ...fixtureSession, status: 'interrupted', statusDetail: 'Stopped by user.', updatedAt: Date.now() };
@@ -163,7 +173,7 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 	if (scenario === 'launcher') {
 		await page.locator('#qa-start[open]').waitFor();
 		await page.waitForFunction(() => !document.querySelector('#qa-tests-fieldset').disabled);
-		await page.waitForFunction(() => document.querySelector('#qa-selection-summary').textContent.includes('3 browser configurations selected'));
+		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3 of 3 available configurations selected'));
 	} else {
 		try {
 			await page.locator('#chat-target').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
@@ -334,6 +344,13 @@ try {
 	assert.equal(await standaloneCompleted.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
 	await standaloneCompleted.locator('#sidebar-view-report').click();
 	assert.equal(await standaloneCompleted.locator('#tab-report').getAttribute('aria-selected'), 'true');
+	assert.equal(await standaloneCompleted.getByRole('button', { name: 'Generate test cases' }).isVisible(), false, 'Default Qase keeps developer generation out of primary report actions');
+	assert.equal(await standaloneCompleted.locator('.report-developer-actions').evaluate(node => node.open), false);
+	await standaloneCompleted.screenshot({ path: path.join(output, 'report-customer-actions.png'), animations: 'disabled' });
+	await standaloneCompleted.locator('.report-developer-actions > summary').click();
+	assert.equal(await standaloneCompleted.getByRole('button', { name: 'Generate test cases' }).isVisible(), true, 'Default Qase preserves generation under Advanced');
+	assert.equal(await standaloneCompleted.getByRole('button', { name: 'Copy all fix prompts' }).isVisible(), true, 'Default Qase preserves fix prompts under Advanced');
+	await standaloneCompleted.locator('.report-developer-actions > summary').click();
 	const standaloneFeedback = standaloneCompleted.getByRole('button', { name: 'Provide Feedback' });
 	if (await standaloneFeedback.isVisible()) {
 		await standaloneFeedback.click();
@@ -574,6 +591,20 @@ try {
 	checks.push('Empty Studio view keeps one primary Start testing action while demo and URL composer remain functional');
 	await desktop.close();
 
+	const studioLaunch = await open({ width: 1440, height: 1000 }, true, 'launcher');
+	const studioMatrixPostsBefore = fixturePosts.filter(pathname => pathname === '/api/qa-matrix-runs').length;
+	assert.equal(await studioLaunch.locator('#qa-target-url').inputValue(), 'https://preview.example.test/');
+	assert.equal(await studioLaunch.locator('#qa-submit').isDisabled(), true, 'Studio prefill still requires authorization');
+	await studioLaunch.locator('#qa-security-authorized').check();
+	assert.equal(await studioLaunch.locator('#qa-submit').isEnabled(), true, 'Studio uses the shared launcher enablement');
+	await studioLaunch.locator('#qa-submit').click();
+	await studioLaunch.locator('#qa-start').waitFor({ state: 'hidden' });
+	await studioLaunch.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', fixtureRunId);
+	assert.equal(fixturePosts.filter(pathname => pathname === '/api/qa-matrix-runs').length, studioMatrixPostsBefore + 1, 'Studio submits through the shared matrix-run endpoint exactly once');
+	checks.push('Studio project target prefills the shared launcher, retains authorization gating, creates one run, and enters the running workspace');
+	await studioLaunch.evaluate(() => localStorage.removeItem('qase.session'));
+	await studioLaunch.close();
+
 	const tabletSidebar = await open({ width: 768, height: 900 });
 	await tabletSidebar.locator('#qa-cancel').click();
 	assert.equal(await tabletSidebar.locator('#studio-context').isVisible(), false, 'Project context does not squeeze the tablet workspace');
@@ -691,6 +722,13 @@ try {
 	assert.equal(await completed.locator('#tab-report').getAttribute('aria-selected'), 'true');
 	const reportHeadings = await completed.locator('#report-view .report-section h3').allTextContents();
 	assert.deepEqual(reportHeadings.slice(0, 2), ['Summary', 'Recommended next action'], 'Report leads with result context and next action');
+	assert.equal(await completed.getByRole('button', { name: 'Generate test cases' }).isVisible(), false, 'Developer test generation is not a primary customer action');
+	assert.equal(await completed.locator('.report-developer-actions').evaluate(node => node.open), false, 'Developer report actions start closed');
+	await completed.screenshot({ path: path.join(output, 'studio-report-customer-actions.png'), animations: 'disabled' });
+	await completed.locator('.report-developer-actions > summary').click();
+	assert.equal(await completed.getByRole('button', { name: 'Generate test cases' }).isVisible(), true, 'Developer test generation remains available under Advanced');
+	assert.equal(await completed.getByRole('button', { name: 'Copy all fix prompts' }).isVisible(), true, 'Fix prompt tools remain available under Advanced');
+	await completed.locator('.report-developer-actions > summary').click();
 	await completed.screenshot({ path: path.join(output, 'studio-completed-report-1440.png'), animations: 'disabled' });
 	const feedbackButton = completed.getByRole('button', { name: 'Provide Feedback' });
 	if (await feedbackButton.isVisible()) {
@@ -822,7 +860,7 @@ try {
 		passed: true,
 		checks,
 		pageErrors,
-		limitations: 'Controlled read-only layout fixture. It does not create a run, call a model, or claim exact hosted Studio parity.'
+		limitations: 'Controlled local browser fixture. It verifies run creation UI and lifecycle transitions without calling a model or claiming exact hosted Studio parity.'
 	};
 	await fs.writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
 	console.log(JSON.stringify(result, null, 2));
