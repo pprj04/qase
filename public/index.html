@@ -117,12 +117,19 @@
 
 <div class="app" inert aria-hidden="true">
 
+  <nav class="workspace-mobile-nav" aria-label="Workspace panels">
+    <button type="button" data-workspace-view="runs" aria-controls="workspace-runs" aria-pressed="false">Runs</button>
+    <button type="button" data-workspace-view="agent" aria-controls="workspace-agent" aria-pressed="true">Agent</button>
+    <button type="button" data-workspace-view="browser" aria-controls="workspace-viewer" aria-pressed="false">Browser</button>
+    <button type="button" data-workspace-view="results" aria-controls="workspace-viewer" aria-pressed="false">Results</button>
+  </nav>
+
   <div class="workspace-chrome" aria-hidden="true">
     <span class="workspace-lights"><i></i><i></i><i></i></span>
   </div>
 
   <!-- ── Left: runs ─────────────────────────────────────────────── -->
-  <aside class="panel runs" aria-label="QA runs">
+  <aside class="panel runs" id="workspace-runs" aria-label="QA runs">
     <header class="panel-head" data-path="~/qase/runs">
       <div class="brand">
         <span class="brand-lockup">
@@ -240,7 +247,7 @@
   </aside>
 
   <!-- ── Middle: agent chat ─────────────────────────────────────── -->
-  <main class="panel chat" aria-label="Agent conversation">
+  <main class="panel chat" id="workspace-agent" aria-label="Agent conversation">
     <header class="panel-head" data-path="~/qase/agent.log">
       <div class="chat-id">
         <h1 id="chat-title">No run selected</h1>
@@ -362,7 +369,7 @@
   </main>
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
-  <aside class="panel viewer" aria-label="Live browser and test results">
+  <aside class="panel viewer" id="workspace-viewer" aria-label="Live browser and test results">
     <header class="panel-head" data-path="~/qase/browser.preview">
       <div class="live-device-view-head" id="live-device-view-head">
         <span class="ldv-title" id="ldv-title">LIVE DEVICE VIEW</span>
@@ -782,7 +789,7 @@
 
       <label class="field">
         <span>Theme</span>
-        <select id="cfg-theme" aria-describedby="cfg-theme-note">
+        <select id="cfg-theme" name="settingsTheme" data-theme-control aria-describedby="cfg-theme-note">
           <option value="dark">Dark Mode</option>
           <option value="light">Light Mode</option>
           <option value="system">System Default</option>
@@ -856,27 +863,14 @@
         <summary>Customize devices, browsers and checks</summary>
         <div class="qa-customize-body">
       <fieldset class="qa-device-fieldset test-on-fieldset">
-        <legend>TEST ON</legend>
+        <legend>Test on</legend>
         <div class="test-on-summary" id="qa-test-on" data-empty="true">
-          <span class="test-on-prompt">SELECT A DEVICE</span>
+          <span class="test-on-prompt">Choose a device</span>
         </div>
         <div class="field-row test-on-actions">
           <button type="button" class="btn btn-primary btn-sm test-on-change" data-test-on-change>Change device</button>
-          <label class="check qa-landscape">
-            <input id="qa-device-landscape" type="checkbox">
-            <span>Landscape orientation</span>
-          </label>
         </div>
-        <details class="qa-advanced">
-          <summary>Advanced device options</summary>
-          <div class="qa-advanced-body">
-            <label class="field">
-              <span>Apple environment <small>(remote runtime matrix — overrides the device profile when selected)</small></span>
-              <select id="qa-environment-select"><option value="">Emulate locally (no remote environment)</option></select>
-            </label>
-            <small>The run executes on exactly this device, OS and browser. Changing it here updates everywhere. Mobile and tablet profiles emulate the real device (User-Agent, viewport, touch), not a resized desktop window.</small>
-          </div>
-        </details>
+        <small>Choose browsers, devices and orientation below. Each selected configuration runs separately.</small>
       </fieldset>
       <fieldset class="qa-engine-fieldset qa-matrix-fieldset" id="qa-matrix-fieldset">
         <legend>Browsers &amp; devices</legend>

@@ -63,7 +63,7 @@ const CATALOG = [
 ];
 
 test('FAMILY_ORDER matches the seven required families', () => {
-	assert.deepEqual(FAMILY_ORDER, ['chrome', 'edge', 'firefox', 'opera', 'brave', 'duckduckgo', 'safari']);
+	assert.deepEqual(FAMILY_ORDER, ['edge', 'chrome', 'brave', 'firefox', 'safari', 'opera', 'duckduckgo']);
 });
 
 test('isSelectable: only AVAILABLE rows selectable', () => {

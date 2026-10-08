@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createApplication } from '../server/app.js';
 import { buildReportMarkdown } from '../server/report.js';
+import { launcherCatalog, launcherConfigurations } from './fixtures/launcher-catalog.mjs';
 
 // Real dashboard + HTTP handlers, isolated in-memory storage and a stub model.
 const sessions = new Map();
@@ -15,6 +16,7 @@ const config = { provider:'custom', model:'dashboard-fixture', ready:true, hasAp
 const tenantContext = { organizationId:randomUUID(), projectId:randomUUID(), actorUserId:randomUUID(), actorEmail:'fixture@example.test', actorName:'Fixture owner' };
 const services = {
 	tenantContext,
+	feedback: { async create(input){ return input; }, async get(){ return null; }, async list(){ return []; }, async update(){ return null; }, async remove(){ return null; }, async stats(){ return { total: 0, byCategory: {}, byStatus: {}, byRating: {} }; }, async forRun(){ return null; } },
 	runs: {
 		load(){}, async create(title = 'New test run', options = {}) { const s = {id:randomUUID(),title,mode:'qa',createdAt:Date.now(),updatedAt:Date.now(),status:'idle',messages:[],activities:[],findings:[],todos:[],secretNames:[],...options};sessions.set(s.id,s);return s; },
 		get:id=>sessions.get(id), list:()=>[...sessions.values()], async delete(id){return sessions.delete(id);},
@@ -59,21 +61,42 @@ const screenshot = async (page, name) => {
 try {
 	const page = await browser.newPage({viewport:{width:1440,height:1000}});
 	page.on('pageerror',error=>errors.push(error.message));
+	// Matrix execution is a bounded HTTP fixture; session, SQA and Founder
+	// handlers below still exercise the real application with a stub agent.
+	let matrixRequest;
+	const matrixRun = { id: 'matrix-fixture', status: 'completed', items: [], targetUrl: 'https://example.test/' };
+	await page.route('**/api/qa-configurations*', route => route.fulfill({ json: launcherCatalog() }));
+	await page.route('**/api/qa-matrix-runs', route => {
+		matrixRequest = route.request().postDataJSON();
+		return route.fulfill({ status: 201, json: matrixRun });
+	});
+	await page.route('**/api/matrix-runs/matrix-fixture', route => route.fulfill({ json: { run: matrixRun } }));
 	await page.goto(base);
 	// The decorative entry screen is gone — authentication owns the gate now.
 	await page.locator('#auth-gate').waitFor({state:'hidden'});
 	if (!await page.locator('#qa-start').evaluate(dialog=>dialog.open)) await page.locator('#new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
-	await page.locator('#qa-submit').click();assert.equal(sessions.size,0,'Empty URL cannot launch QA');
+	await page.waitForFunction(()=>document.querySelector('#qa-selection-summary').textContent.includes('3 browser configurations selected'));
+	assert.equal(await page.locator('#qa-submit').isDisabled(),true,'Empty URL cannot launch QA');
 	await page.locator('#qa-target-url').fill('https://example.test/');
-	await page.locator('#qa-device-select').selectOption('iphone-15-pro');
-	await page.locator('#qa-device-landscape').check();
+	await page.locator('#qa-security-authorized').check();
 	await screenshot(page,'qa-launch.png');
 	await page.locator('#qa-submit').click();await page.locator('#qa-start').waitFor({state:'hidden'});
-	await page.waitForFunction(()=>document.querySelector('#chat-title')?.textContent?.includes('example.test'));
-	assert.equal([...sessions.values()][0].device,'iphone-15-pro');assert.equal([...sessions.values()][0].deviceLandscape,true);
-	checks.push('QA launcher validates URL and preserves selected mobile landscape profile');
-	const qaSession = [...sessions.values()][0];
+	assert.deepEqual(matrixRequest.configurationEnvIds, launcherConfigurations.map(row=>row.envId));
+	assert.equal(matrixRequest.targetUrl, 'https://example.test/');
+	assert.ok(matrixRequest.securityAuthorization);
+	await page.locator('#qa-matrix-run-dialog[open]').waitFor();
+	await page.locator('#qa-matrix-run-close').click();
+	checks.push('QA launcher validates URL and sends selected configurations and authorization to the matrix endpoint');
+	const created = await page.request.post(`${base}/api/sessions`, { data: { selectedTests: ['navigation'], scopeSelection: ['navigation'] } });
+	assert.equal(created.status(), 201);
+	const {id: qaId} = await created.json();
+	const qaSession = sessions.get(qaId);
+	await page.request.post(`${base}/api/sessions/${qaId}/message`, { data: { text: targetUrl } });
+	await page.reload();
+	await page.locator('#qa-start').evaluate(dialog=>{ if(dialog.open) dialog.close(); });
+	await page.waitForFunction(()=>document.querySelector('#chat-title')?.textContent?.includes('127.0.0.1'));
+	await page.waitForTimeout(200);
 	streams.get(qaSession.id).end();
 	qaSession.status = 'awaiting_input';
 	qaSession.messages.push({id:randomUUID(),ts:Date.now(),role:'agent',text:'Report progress recovered from the saved session.'});
@@ -82,7 +105,7 @@ try {
 	checks.push('EventSource reconnect reloads state missed during a disconnect');
 	await page.locator('#new-sqa').click();await page.locator('#sqa-start[open]').waitFor();
 	assert.equal(await page.locator('#sqa-submit').isDisabled(),true);
-	for(const [id,value] of [['name','Fixture'],['release','1'],['environment','test'],['url','https://example.test/']]) await page.locator(`#sqa-target-${id}`).fill(value);
+	await page.locator('#sqa-target-url').fill(targetUrl);
 	await page.locator('#sqa-authorization').check();
 	await screenshot(page,'sqa-launch.png');
 	await page.locator('#sqa-submit').click();await page.locator('#sqa-start').waitFor({state:'hidden'});
@@ -117,9 +140,11 @@ try {
 	await page.locator('#founder-submit').click();await page.locator('#founder-start').waitFor({state:'hidden'});
 	await page.locator('#tab-founder').waitFor({state:'visible'});await page.locator('#tab-founder').click();
 	assert.ok([...sessions.values()].some(s=>s.mode==='founder'&&s.founder.scope.authorization.confirmed&&s.founder.scope.target.name==='127.0.0.1'));
+	checks.push('Founder submits with Advanced options closed and derives the product name from its URL');
 	await page.screenshot({path:path.join(output,'desktop.png')});
 	for(const width of [768,390]) {
 		await page.setViewportSize({width,height:844});
+		if (width <= 720) await page.locator('[data-workspace-view="runs"]').click();
 		assert.ok(await page.locator('#new-run').isVisible());assert.ok(await page.locator('#new-sqa').isVisible());assert.ok(await page.locator('#new-founder').isVisible());
 		await page.locator('#new-sqa').click();await page.locator('#sqa-start[open]').waitFor();
 		await screenshot(page,`sqa-${width}.png`);await page.locator('#sqa-cancel').click();

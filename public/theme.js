@@ -15,21 +15,5 @@
 	}
 
 	apply();
-	system.addEventListener('change', () => { if (preference === 'system') apply(); });
-	window.addEventListener('storage', event => {
-		if (event.key !== key && event.key !== null) return;
-		try { if (event.storageArea !== localStorage) return; } catch { return; }
-		preference = normalize(event.newValue);
-		apply();
-	});
-	document.addEventListener('DOMContentLoaded', () => {
-		for (const control of document.querySelectorAll('[data-theme-control]')) {
-			control.addEventListener('change', () => {
-				preference = normalize(control.value);
-				try { localStorage.setItem(key, preference); } catch { /* Keep the choice for this page. */ }
-				apply();
-			});
-		}
-		apply();
-	});
+	// app.js owns the live preference store and all controls after bootstrap.
 })();

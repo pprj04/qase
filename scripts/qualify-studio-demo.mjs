@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { publicQaTestCatalog } from '../server/qaTestCatalog.js';
+import { launcherCatalog } from './fixtures/launcher-catalog.mjs';
 
 // Controlled layout qualification only. This server is local, read-only, and
 // never creates a run or calls a model. It serves the real dashboard assets and
@@ -82,6 +83,7 @@ const json = (response, body, status = 200) => {
 const server = http.createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://127.0.0.1');
 	if (url.pathname.startsWith('/api/')) {
+		if (url.pathname === '/api/qa-configurations') return json(response, launcherCatalog());
 		if (request.method !== 'GET') return json(response, { error: 'Read-only Studio fixture.' }, 405);
 		if (url.pathname === `/api/sessions/${fixtureRunId}/events`) {
 			response.writeHead(200, {
@@ -131,8 +133,8 @@ const browser = await chromium.launch();
 const checks = [];
 const pageErrors = [];
 
-async function open(viewport, studio = true, scenario = 'launcher') {
-	fixtureSession = scenario === 'launcher' ? undefined : demoSession(scenario);
+async function open(viewport, studio = true, scenario = 'launcher', overrides = {}) {
+	fixtureSession = scenario === 'launcher' ? undefined : { ...demoSession(scenario), ...overrides };
 	const page = await browser.newPage({ viewport });
 	page.on('pageerror', error => pageErrors.push(error.message));
 	const route = studio
@@ -143,9 +145,10 @@ async function open(viewport, studio = true, scenario = 'launcher') {
 	if (scenario === 'launcher') {
 		await page.locator('#qa-start[open]').waitFor();
 		await page.waitForFunction(() => !document.querySelector('#qa-tests-fieldset').disabled);
+		await page.waitForFunction(() => document.querySelector('#qa-selection-summary').textContent.includes('3 browser configurations selected'));
 	} else {
 		try {
-			await page.locator('#chat-title').filter({ hasText: 'preview.example.test' }).waitFor();
+			await page.locator('#chat-title').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
 		} catch (error) {
 			console.error(JSON.stringify({
 				scenario,
@@ -203,6 +206,20 @@ try {
 	assert.equal(await running.locator('#composer-running-hint').isVisible(), true);
 	assert.equal(await running.locator('#composer').evaluate(node => node.scrollWidth <= node.clientWidth), true);
 	await running.screenshot({ path: path.join(output, 'studio-running-1440.png'), animations: 'disabled' });
+	assert.equal(await running.locator('body').evaluate(node=>getComputedStyle(node).textTransform), 'none', 'Body does not inherit stray uppercase declarations');
+	assert.equal(await running.locator('.transcript').evaluate(node=>getComputedStyle(node).backgroundColor), 'rgb(255, 255, 255)', 'Light conversation uses the Studio surface');
+	await running.locator('#studio-theme-select').selectOption('dark');
+	assert.deepEqual(await running.locator('[data-theme-control]').evaluateAll(nodes=>nodes.map(n=>n.value)), ['dark', 'dark', 'dark', 'dark']);
+	assert.equal(await running.locator('.transcript').evaluate(node=>getComputedStyle(node).backgroundColor), 'rgb(26, 26, 29)', 'Dark conversation uses the Studio surface');
+	await running.screenshot({ path: path.join(output, 'studio-running-dark-1440.png'), animations: 'disabled' });
+	await running.reload();
+	assert.equal(await running.locator('#studio-theme-select').inputValue(), 'dark', 'Theme survives reload');
+	await running.locator('#studio-theme-select').selectOption('system');
+	await running.emulateMedia({ colorScheme: 'dark' });
+	await running.waitForFunction(()=>document.documentElement.dataset.theme === 'dark');
+	await running.emulateMedia({ colorScheme: 'light' });
+	await running.waitForFunction(()=>document.documentElement.dataset.theme === 'light');
+	checks.push('Light, dark and System stay synchronized across all theme controls and reloads');
 	checks.push('Running fixture exposes progress and evidence while the message composer presents a clean paused state');
 	await running.close();
 
@@ -225,14 +242,59 @@ try {
 	for (const width of [1280, 768, 390, 360]) {
 		const page = await open({ width, height: width <= 390 ? 844 : 900 });
 		const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+		if (overflow) console.error(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(node => node.getBoundingClientRect().right > innerWidth + 1 && node.getBoundingClientRect().width > 0).slice(0, 20).map(node => ({tag: node.tagName, id: node.id, class: node.className, width: node.getBoundingClientRect().width}))));
 		assert.equal(overflow, false, `No horizontal overflow at ${width}px`);
 		assert.equal(await page.locator('#qa-submit').isVisible(), true, `Primary action visible at ${width}px`);
 		await page.screenshot({ path: path.join(output, `studio-launcher-${width}.png`), animations: 'disabled', fullPage: width <= 390 });
+		await page.locator('#qa-customize > summary').click();
+		await page.locator('#qa-matrix-root').scrollIntoViewIfNeeded();
+		assert.equal(await page.locator('#qa-start').evaluate(node=>node.scrollWidth <= node.clientWidth), true, `Expanded setup fits at ${width}px`);
+		assert.equal(await page.locator('#qa-submit').evaluate(node=>{const r=node.getBoundingClientRect();return r.top >= 0 && r.bottom <= innerHeight;}), true, 'Start action remains within viewport');
+		await page.screenshot({ path: path.join(output, `studio-setup-expanded-${width}.png`), animations: 'disabled' });
+		await page.locator('#studio-theme-select').selectOption('dark');
+		await page.screenshot({ path: path.join(output, `studio-setup-dark-${width}.png`), animations: 'disabled' });
+		await page.keyboard.press('Escape');
+		assert.equal(await page.locator('#qa-start').evaluate(node=>node.open), false, 'Escape closes setup');
 		checks.push(`Studio launcher remains usable at ${width}px`);
 		await page.close();
 	}
 
 	assert.deepEqual(pageErrors, [], 'No browser runtime errors');
+	for (const studio of [false, true]) {
+		const mobile = await open({ width: 390, height: 844 }, studio, 'done');
+		assert.equal(await mobile.locator('body').getAttribute('data-workspace-view'), 'results');
+		assert.equal(await mobile.locator('.findings-selection-count').isVisible(), true);
+		for (const [view, panel] of [['agent', '.chat'], ['runs', '.runs'], ['browser', '.viewer'], ['results', '.viewer']]) {
+			await mobile.locator(`[data-workspace-view="${view}"]`).click();
+			assert.equal(await mobile.locator(panel).isVisible(), true);
+			assert.equal(await mobile.locator('.app > .panel:visible').count(), 1, 'One main panel is visible on mobile');
+			if (view === 'browser') assert.ok((await mobile.locator('#stage-inner').boundingBox()).width > 200, 'Browser panel expands the saved preview');
+			const layout = await mobile.evaluate(()=>({width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, viewport: [innerWidth,innerHeight], overflowing: [...document.querySelectorAll('.app, .app > *, .panel > *')].filter(node=>node.getBoundingClientRect().bottom > innerHeight+1 || node.getBoundingClientRect().right > innerWidth+1).map(node=>({id:node.id, class:node.className, bottom:node.getBoundingClientRect().bottom, right:node.getBoundingClientRect().right}))}));
+			await mobile.screenshot({ path: path.join(output, `mobile-${studio ? 'studio' : 'standalone'}-${view}.png`), animations: 'disabled' });
+			assert.ok(layout.width <= 390 && layout.height <= 845, `Mobile ${view} fits: ${JSON.stringify(layout)}`);
+		}
+		await mobile.setViewportSize({ width: 1440, height: 1000 });
+		assert.equal(await mobile.locator('.app > .panel:visible').count(), 3, 'Desktop restores every workspace panel');
+		await mobile.close();
+	}
+	checks.push('Mobile panel navigation, automatic results focus and desktop resize work in both layouts');
+	for (const status of ['awaiting_input', 'interrupted', 'error', 'done']) {
+		const page = await open({ width: 1280, height: 900 }, true, status, status === 'done' ? { findings: [], frame: undefined } : {});
+		if (status === 'interrupted' || status === 'error') {
+			assert.equal(await page.locator('#resume-run').isVisible(), true);
+			await page.locator('#conn-label').filter({hasText: 'updates paused'}).waitFor();
+		}
+		if (status === 'awaiting_input') assert.equal(await page.locator('#composer-input').isEnabled(), true);
+		if (status === 'done') {
+			await page.locator('#stage-note').filter({hasText: 'No saved browser image'}).waitFor();
+			await page.locator('#tab-findings').click();
+			await page.getByText('No findings recorded for this run.', {exact:false}).waitFor();
+		}
+		await page.screenshot({ path: path.join(output, `studio-state-${status}.png`), animations: 'disabled' });
+		await page.close();
+	}
+	checks.push('Waiting, interrupted, error, empty findings and missing-preview states expose honest recovery guidance');
+	assert.deepEqual(pageErrors, [], 'No browser runtime errors after mobile navigation');
 	const result = {
 		passed: true,
 		checks,

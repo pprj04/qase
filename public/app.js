@@ -839,6 +839,28 @@ function populateDeviceSelect(select, initialId) {
 const ENV_PREF_KEY = 'qase.environmentId';
 const envState = { list: [], loaded: false };
 
+function populateEnvironmentSelect(select) {
+	if (!select) return;
+	select.replaceChildren(new Option('Emulate locally (no remote environment)', ''));
+	const saved = pendingEnvironmentId();
+	for (const group of envOptionGroups(envState.list)) {
+		const optgroup = document.createElement('optgroup');
+		optgroup.label = group.platform;
+		for (const { device, envs } of group.devices) {
+			for (const env of envs) {
+				optgroup.append(new Option(`${device} · ${env.osVersion} — ${env.browser} ${env.browserVersion}`, env.envId));
+			}
+		}
+		select.append(optgroup);
+	}
+	select.value = envState.list.some(env => env.envId === saved) ? saved : '';
+	// Dialogs are reopened repeatedly; keep one preference handler per select.
+	select.onchange = () => {
+		if (select.value) localStorage.setItem(ENV_PREF_KEY, select.value);
+		else localStorage.removeItem(ENV_PREF_KEY);
+	};
+}
+
 function envLabel(env) {
 	return `${env.device} · ${env.os} ${env.osVersion} — ${env.browser} ${env.browserVersion}`;
 }
@@ -924,7 +946,7 @@ function renderTestOn(containerId) {
 		box.dataset.empty = 'true';
 		const prompt = document.createElement('span');
 		prompt.className = 'test-on-prompt';
-		prompt.textContent = 'SELECT A DEVICE';
+		prompt.textContent = 'Choose a device';
 		box.append(prompt);
 		return;
 	}
@@ -976,6 +998,7 @@ function applyStageDevice(session) {
 
 
 async function selectSession(id) {
+	if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 	state.shownFounderReport = undefined;
 	state.shownQaResults = undefined;
 	state.sessionId = id;
@@ -991,6 +1014,7 @@ async function selectSession(id) {
 	const session = await api(`/sessions/${id}`);
 	if (state.sessionId !== id) return;
 	applySessionSnapshot(session);
+	if (session.status === 'done' && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	await connect(id);
 	await refreshRuns();
 	void refreshPerformance();
@@ -1567,7 +1591,7 @@ function renderHeader() {
 			?? (context && Number.isFinite(context.percentage) && context.percentage > 0
 				? `${Math.round(context.percentage)}% ctx` : undefined);
 		el.tokenText.classList.remove('is-pending');
-		el.tokenText.textContent = text ?? '';
+		el.tokenText.textContent = text ?? 'Run overview';
 		if (usage && text) {
 			const percentage = context && Number.isFinite(context.percentage) && context.percentage > 0
 				? Math.round(context.percentage) : undefined;
@@ -1673,8 +1697,10 @@ function renderCurrentActivity() {
 }
 
 function setStatus(status) {
+	const justCompleted = status === 'done' && document.body.dataset.runStatus !== 'done';
 	if (state.session) state.session.status = status;
 	document.body.dataset.runStatus = status;
+	if (justCompleted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
 	el.statusChip.dataset.status = status;
@@ -1856,6 +1882,10 @@ function syncStageCollapse(status) {
 }
 
 function toggleStageCollapse() {
+	if (matchMedia('(max-width: 720px)').matches && document.body.dataset.workspaceView === 'results') {
+		setWorkspaceView('browser');
+		return;
+	}
 	if (el.viewer.classList.contains('stage-collapsed')) {
 		state.stageExpanded.add(state.sessionId);
 	} else {
@@ -3096,7 +3126,12 @@ function renderFindings() {
 
 	el.findingsList.replaceChildren();
 	if (findings.length === 0) {
-		el.findingsList.innerHTML = '<div class="feed-empty">No findings yet — they appear here as the agent tests your target.</div>';
+		const empty = document.createElement('div');
+		empty.className = 'feed-empty';
+		empty.textContent = state.session.status === 'done'
+			? 'No findings recorded for this run. Open Report to review completed checks and coverage limits.'
+			: 'No findings yet. They appear here as the agent tests your website.';
+		el.findingsList.append(empty);
 		return;
 	}
 	const sorted = [...findings].sort(
@@ -5129,7 +5164,7 @@ function qaMatrixSetState(fetchState, message) {
 	qaMatrixState.fetchState = fetchState;
 	const matrix = qaUi.matrix;
 	if (!matrix.state) return;
-	matrix.state.hidden = fetchState === 'ready';
+	matrix.state.hidden = fetchState === 'ready' || fetchState === 'error';
 	matrix.state.textContent = message ?? '';
 	matrix.state.dataset.state = fetchState;
 	if (matrix.root) matrix.root.hidden = fetchState !== 'ready';
@@ -5619,9 +5654,14 @@ function syncQaSelectionSummary() {
 		return;
 	}
 	const checks = qaUi.selectedTests.size;
-	const browsers = selectedQaEngines().length;
-	const device = qaUi.deviceSelect.selectedOptions[0]?.textContent ?? 'Selected device';
-	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${browsers} browser${browsers === 1 ? '' : 's'} · ${device}`;
+	const configurations = qaMatrixState.selectedEnvIds.length;
+	const loading = qaMatrixState.fetchState === 'loading';
+	const detail = loading ? 'Loading browsers and devices…'
+		: configurations === 0 ? 'Choose an available browser and device to start.'
+		: configurations > MAX_RUN_CONFIGURATIONS ? `${configurations.toLocaleString()} configurations selected. Narrow your selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`
+		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected`;
+	summary.textContent = `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
+	if (!loading && (configurations === 0 || configurations > MAX_RUN_CONFIGURATIONS)) $('qa-customize').open = true;
 }
 
 function qaTestOption(test) {
@@ -5974,6 +6014,7 @@ if (qaUi.dialog) {
 	$('qa-demo-fill')?.addEventListener('click', () => {
 		if (qaUi.targetUrl) {
 			qaUi.targetUrl.value = demoSiteUrl();
+			syncQaSubmitState();
 			setQaFormError('Demo site loaded — it plants real bugs on purpose (login demo@qase.dev / demo1234).');
 			qaUi.targetUrl.focus();
 		}
@@ -6103,8 +6144,7 @@ if (qaUi.dialog) {
 					selectedTests,
 					securityAuthorization,
 					scopeSelection: scopeValues,
-					environmentId: environmentId || undefined,
-					testCaseId
+					testCaseId: qaUi._testCaseId
 				})
 			});
 			closeQaStart();
@@ -7408,31 +7448,26 @@ function renderRunEnvBlock(session) {
 /* ── ONE Device Picker + activeTestEnvironment store (DX Phase 1) ── */
 const activeTestEnvStore = createActiveTestEnvironmentStore();
 
-/* ── Theme store (#14383) ──
- * theme-bootstrap.js already set data-theme before paint; this store is the
- * runtime source of truth from here on — it re-applies the resolved theme
- * (no-op when bootstrap matched) and keeps the attribute live when the OS
- * preference changes while a 'system' selection is active. */
-const themeStore = createThemeStore({
-	onChange: ({ applied }) => applyThemeToDocument(document, applied)
-});
-applyThemeToDocument(document, themeStore.applied());
-globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
-
-/* ── Theme toggle in Settings (#14384) ──
- * The select reflects the STORED preference (dark/light/system), never the
- * resolved value — "System Default" stays selected even when the OS is dark.
- * Changes apply instantly via the store's onChange; the dialog stays open. */
-if (cfg.theme) {
-	cfg.theme.value = themeStore.preference();
-	cfg.theme.addEventListener('change', () => {
-		themeStore.set(cfg.theme.value);
-		cfg.theme.value = themeStore.preference(); // normalize back (invalid never sticks)
-	});
-	// Re-sync whenever the dialog opens, so edits elsewhere (or a fresh
-	// store) can't desync the select.
-	cfg.dialog?.addEventListener('open', () => { cfg.theme.value = themeStore.preference(); });
+// One live preference for Settings, the sidebar, the entry screen and Studio.
+function syncThemeControls({ preference, applied }) {
+	applyThemeToDocument(document, applied);
+	document.documentElement.style.colorScheme = applied;
+	document.querySelector('meta[name="theme-color"]').content = applied === 'dark' ? '#101012' : '#ffffff';
+	for (const control of document.querySelectorAll('[data-theme-control]')) control.value = preference;
 }
+const themeStore = createThemeStore({
+	onChange: syncThemeControls
+});
+syncThemeControls({ preference: themeStore.preference(), applied: themeStore.applied() });
+globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
+for (const control of document.querySelectorAll('[data-theme-control]')) {
+	control.addEventListener('change', () => themeStore.set(control.value));
+}
+window.addEventListener('storage', event => {
+	if (event.key !== 'qase.theme' && event.key !== null) return;
+	try { if (event.storageArea !== localStorage) return; } catch { return; }
+	themeStore.set(event.newValue);
+});
 /* UI Fix Phase 3: the feature-dock device chip (deviceDrawer.js, non-module
  * script scope boundary) reads the store through this accessor — one source
  * of truth for the selection. */
@@ -7829,6 +7864,29 @@ document.addEventListener('keydown', event => {
 
 const detailTabs = [...document.querySelectorAll('#tabs .tab')];
 
+function setWorkspaceView(view) {
+	if (!['runs', 'agent', 'browser', 'results'].includes(view)) view = 'agent';
+	const nav = document.querySelector('.workspace-mobile-nav');
+	const focusedPanel = document.activeElement?.closest('.panel');
+	document.body.dataset.workspaceView = view;
+	if (view === 'browser' && state.sessionId && matchMedia('(max-width: 720px)').matches) {
+		state.stageExpanded.add(state.sessionId);
+		renderStageCollapse();
+	}
+	for (const button of nav.querySelectorAll('button')) {
+		button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
+	}
+	if (matchMedia('(max-width: 720px)').matches && focusedPanel && getComputedStyle(focusedPanel).display === 'none') {
+		nav.querySelector(`[data-workspace-view="${view}"]`).focus({ preventScroll: true });
+	}
+	requestAnimationFrame(fitStageFrame);
+}
+
+setWorkspaceView('agent');
+for (const button of document.querySelectorAll('.workspace-mobile-nav button')) {
+	button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView));
+}
+
 function activateDetailTab(tab, moveFocus = false) {
 	for (const other of detailTabs) {
 		const active = other === tab;
@@ -7904,14 +7962,6 @@ async function bootWorkspace() {
 		el.chatEmpty.hidden = false;
 		renderWelcomeChecklist();
 		renderRunsEmptyState();
-		await startRun();
-		// No runs yet: don't ambush a brand-new workspace with a blocking modal.
-		// Point at the composer; the QA dialog is one click (New run) away.
-		toast('Welcome! Paste a URL below or press “QA” to start your first run.');
-		// Fresh account: show the welcome checklist behind the launcher dialog.
-		el.transcript.append(el.chatEmpty);
-		el.chatEmpty.hidden = false;
-		renderWelcomeChecklist();
 		await startRun();
 	}
 	void refreshBugs();

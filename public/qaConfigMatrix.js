@@ -13,7 +13,7 @@
  * { configurations: [...], browserFamilies: [...], providers: [...], totals }.
  */
 
-export const FAMILY_ORDER = ['chrome', 'edge', 'firefox', 'opera', 'brave', 'duckduckgo', 'safari'];
+export const FAMILY_ORDER = ['edge', 'chrome', 'brave', 'firefox', 'safari', 'opera', 'duckduckgo'];
 
 const DESELECTION_STORAGE_KEY = 'qase.qaConfigDeselections';
 

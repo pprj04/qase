@@ -1635,6 +1635,7 @@ export function createApplication(options = {}) {
 			const environment = await resolveEnvironmentForRun(services, request.body?.environmentId);
 			const testCase = await resolveTestCaseForRun(services, request.body?.testCaseId, environment?.envId);
 			const cohort = cohortFor(request.auth?.role).cohort;
+			const scopeSelection = normalizeQaScopeSelection(request.body?.scopeSelection);
 			const session = await services.runs.create(
 				engine === 'chromium' ? undefined : `QA — ${engine}`,
 				{
@@ -1643,7 +1644,8 @@ export function createApplication(options = {}) {
 					environmentId: environment?.envId,
 					environmentSnapshot: environment,
 					testCaseId: testCase?.caseNumber,
-					testCaseSnapshot: testCase
+					testCaseSnapshot: testCase,
+					...(scopeSelection ? { scopeSelection } : {})
 				}
 			);
 			track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
@@ -1651,14 +1653,6 @@ export function createApplication(options = {}) {
 		} catch (error) {
 			safeErrorResponse(request, response, error);
 		}
-		const cohort = cohortFor(request.auth?.role).cohort;
-		const scopeSelection = normalizeQaScopeSelection(request.body?.scopeSelection);
-		const session = await services.runs.create(
-			engine === 'chromium' ? undefined : `QA — ${engine}`,
-			{ device, deviceLandscape, engine, ownerUserId: request.auth?.userId, cohort, selectedTests, securityAuthorization, ...(scopeSelection ? { scopeSelection } : {}) }
-		);
-		track('run_created', { mode: session.mode, ...cohortFor(request.auth?.role) });
-		response.status(201).json(session);
 	});
 
 	app.post('/api/sqa/sessions', async (request, response) => {
