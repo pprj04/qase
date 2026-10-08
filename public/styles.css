@@ -42,6 +42,46 @@
   --radius-xl: 16px;  --ease: cubic-bezier(0.2, 0.75, 0.25, 1);
 }
 
+/* ── Light theme override (Studio light palette) ─────────────────
+   Applied when <html data-theme="light">. Dark remains the default;
+   this block only re-declares the same token names with light values. */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel-sidebar: #fafafa;
+  --panel-chat: #ffffff;
+  --panel-viewer: #ffffff;
+  --surface-1: #f5f5f5;
+  --surface-2: #f0f0f1;
+  --surface-3: #e5e5e5;
+  --surface-hover: #ececee;
+  --canvas: #f9fafb;
+  --border: #e5e5e5;
+  --border-strong: #d1d5db;
+  --border-accent: rgba(47, 91, 234, 0.45);
+  --text: #0a0a0a;
+  --text-secondary: #374151;
+  --text-muted: #6b7280;
+  --text-faint: #737373;
+  --accent: #2f5bea;
+  --accent-hover: #1e56f5;
+  --accent-soft: rgba(47, 91, 234, 0.10);
+  --accent-softer: rgba(47, 91, 234, 0.05);
+  --success: #15803d;
+  --success-soft: rgba(22, 163, 74, 0.12);
+  --warning: #b45309;
+  --warning-soft: rgba(217, 119, 6, 0.14);
+  --danger: #e40014;
+  --danger-soft: rgba(228, 0, 20, 0.10);
+  --critical: #be123c;
+  --critical-soft: rgba(225, 29, 72, 0.10);
+  --info: #2563eb;
+  --info-soft: rgba(37, 99, 235, 0.10);
+  --shadow-panel: 0 18px 60px rgba(0, 0, 0, 0.06), 0 1px 0 rgba(0, 0, 0, 0.02) inset;
+  --shadow-float: 0 18px 52px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --shadow-glow-accent: 0 6px 18px rgba(47, 91, 234, 0.22);
+}
+
 /* Self-hosted Geist / Geist Mono (OFL) — Drytis AI Studio typefaces */
 @font-face {
   font-family: "Geist";
@@ -12386,3 +12426,247 @@ select:focus {
 .qmr .qmr-state { color: var(--text-dim, #9aa3b2); padding: 8px 0; }
 .qmr .qmr-retry-load { margin-top: 6px; }
 .qmr .qmr-more { display: block; margin: 12px auto 0; }
+/* ── Theme switch (Stateful Switch, chat panel head) ───────────────
+   role=switch checkbox with a custom track/thumb. The thumb carries a
+   moon/sun glyph so the state is never communicated by color alone. */
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  cursor: pointer;
+}
+
+.theme-switch input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 58px;
+  height: 30px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  transition: background 180ms var(--ease), border-color 180ms var(--ease);
+}
+
+.theme-switch input:hover {
+  border-color: var(--border-strong);
+}
+
+.theme-switch input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.theme-switch-track {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 3px;
+}
+
+.theme-switch-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 180ms var(--ease), background 180ms var(--ease), border-color 180ms var(--ease);
+}
+
+/* ON (aria-checked=true → :checked) = Light Mode: thumb slides right,
+   glyph becomes the sun. */
+.theme-switch input:checked {
+  background: var(--accent-soft);
+  border-color: var(--border-accent);
+}
+
+.theme-switch input:checked + .theme-switch-track {
+  justify-content: flex-end;
+  padding-left: 0;
+  padding-right: 3px;
+}
+
+.theme-switch input:checked + .theme-switch-track .theme-switch-thumb {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Emoji glyph swap via CSS content is not possible on the text node;
+   the glyph is swapped by app.js (applyTheme) — CSS only styles both. */
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-switch input,
+  .theme-switch-thumb {
+    transition: none;
+  }
+}
+
+/* Narrow viewports: keep the switch clear of the chips/buttons. */
+@media (max-width: 720px) {
+  .theme-switch input {
+    width: 46px;
+    height: 26px;
+  }
+  .theme-switch-thumb {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+}
+
+/* Smooth theme swap: applied only during the transition (app.js adds
+   the class for ~200ms around the data-theme change). */
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+  transition: background-color 180ms var(--ease), border-color 180ms var(--ease),
+    color 180ms var(--ease), fill 180ms var(--ease), box-shadow 180ms var(--ease) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-transition,
+  .theme-transition *,
+  .theme-transition *::before,
+  .theme-transition *::after {
+    transition: none !important;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Light theme hardcoded-color sweep (Phase 3).
+   The token layer above already themes everything that reads a var().
+   This block fixes the legacy hardcoded dark values: run-list badges,
+   status chips, token text, progress/findings, tabs, mode badges,
+   transcript paper, empty states, select dropdowns. Scoped to
+   [data-theme="light"] with one extra class so it never affects dark.
+   ──────────────────────────────────────────────────────────────── */
+
+[data-theme="light"] .run-title { color: #3f3f46; }
+[data-theme="light"] .run.is-active .run-title { color: var(--text); }
+[data-theme="light"] .run-progress-steps,
+[data-theme="light"] .progress-steps,
+[data-theme="light"] .progress-pct { color: var(--text-muted); }
+[data-theme="light"] .run-progress-bar,
+[data-theme="light"] .progress-bar { background: var(--surface-3); }
+[data-theme="light"] .panel-foot { border-top-color: var(--border); }
+
+/* Run badges + rating/mode badges: light tints, dark status text */
+[data-theme="light"] .run-badge,
+[data-theme="light"] .run-del { border-color: var(--border); color: var(--text-secondary); }
+[data-theme="light"] .run-rating-badge {
+  color: #854d0e;
+  background: rgba(217, 119, 6, 0.10);
+}
+[data-theme="light"] .run-mode-badge {
+  border-color: rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+[data-theme="light"] .tab-sqa { color: #0369a1; }
+
+/* Header chrome: the chat/viewer header stays intentional dark chrome in
+   both themes, but its status/token controls must stay readable — in light
+   mode flip the header itself so the controls' token colors work. */
+[data-theme="light"] .chat > .panel-head,
+[data-theme="light"] .viewer > .panel-head,
+[data-theme="light"] .runs > .panel-head {
+  background: var(--panel-sidebar);
+  border-bottom-color: var(--border);
+}
+[data-theme="light"] .chat-id h1 { color: var(--text); }
+[data-theme="light"] .chat-target,
+[data-theme="light"] .brand-lockup,
+[data-theme="light"] .brand-lockup .subtle,
+[data-theme="light"] #model-badge { color: var(--text-secondary); }
+
+/* Status chips: near-white chip, status colors from the light tokens */
+[data-theme="light"] .status-chip {
+  background: var(--surface-1);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+[data-theme="light"] .status-chip[data-status="running"] {
+  border-color: rgba(47, 91, 234, 0.35);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+[data-theme="light"] .status-chip[data-status="awaiting_input"] {
+  border-color: rgba(180, 83, 9, 0.35);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+[data-theme="light"] .status-chip[data-status="done"] {
+  border-color: rgba(21, 128, 61, 0.30);
+  background: var(--success-soft);
+  color: var(--success);
+}
+[data-theme="light"] .status-chip[data-status="error"],
+[data-theme="light"] .status-chip[data-status="interrupted"] {
+  border-color: rgba(228, 0, 20, 0.30);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Timer/duration colors */
+[data-theme="light"] .run-duration--live { color: var(--accent); }
+[data-theme="light"] .run-duration--paused { color: var(--warning); }
+
+/* Transcript: paper look instead of dark terminal grid */
+[data-theme="light"] .transcript {
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.016) 1px, transparent 1px),
+    #fbfcfd;
+}
+[data-theme="light"] .empty-state {
+  border-color: var(--border);
+  background: var(--surface-1);
+}
+[data-theme="light"] .empty-state::before { border-color: var(--border-strong); }
+
+/* Tabs + findings + perf comparison */
+[data-theme="light"] .tab:not(.is-active):hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+[data-theme="light"] .progress-findings {
+  border-color: rgba(228, 0, 20, 0.25);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+[data-theme="light"] .perf-compare-list .is-current { color: var(--accent); }
+
+/* Form controls that shipped with a hardcoded dark scheme */
+[data-theme="light"] select,
+[data-theme="light"] .panel-foot select {
+  background: var(--surface-1);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .token-text.is-pending { color: var(--text-muted); }
+
+/* Phase 3 round 2: run-summary strip + brand wordmark (missed in round 1) */
+[data-theme="light"] .run-summary {
+  background: var(--surface-1);
+  border-bottom-color: var(--border);
+}
+[data-theme="light"] .run-summary-mini { background: var(--surface-1); }
+[data-theme="light"] .brand-mark { color: var(--text); }
+
+/* Phase 3 round 3: findings chip — small 9px text needs ≥4.5:1, use a
+   darker red on the light tint (mirrors dark mode's #f5a0a4 pairing). */
+[data-theme="light"] .progress-findings {
+  border-color: rgba(185, 28, 28, 0.30);
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+}
