@@ -8662,13 +8662,13 @@ html.entry-active body {
 #qa-device-select,
 #feedback-category,
 #feedback-comments,
-#feedback-improve {
+#feedback-improvement {
   border-radius: var(--radius-md);
 }
 
 .field textarea,
 #feedback-comments,
-#feedback-improve {
+#feedback-improvement {
   padding: 10px 12px;
   border: 1px solid var(--border);
   background: #202020;
@@ -8682,7 +8682,7 @@ html.entry-active body {
 
 .field textarea:focus,
 #feedback-comments:focus,
-#feedback-improve:focus {
+#feedback-improvement:focus {
   border-color: var(--border-accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }

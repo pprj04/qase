@@ -144,7 +144,10 @@ export function buildFeedbackMessage(feedback, context = {}) {
 	const rating = Math.max(1, Math.min(5, Number(feedback.rating) || 0));
 	const comments = typeof feedback.comments === 'string' && feedback.comments.trim() !== ''
 		? feedback.comments.trim()
-		: '(no description provided)';
+		: undefined;
+	const improvement = typeof feedback.improvement === 'string' && feedback.improvement.trim() !== ''
+		? feedback.improvement.trim()
+		: undefined;
 	const modeLabel = MODE_LABELS[context.mode] ?? 'QASE Test';
 	const shortId = typeof feedback.runId === 'string' && feedback.runId.length >= 8
 		? feedback.runId.slice(0, 8) : '—';
@@ -164,7 +167,10 @@ export function buildFeedbackMessage(feedback, context = {}) {
 		`⭐ Rating: ${rating}/5`,
 		'',
 		'📝 User Feedback:',
-		comments,
+		comments ?? 'Not provided.',
+		'',
+		'🔧 What should we improve?',
+		improvement ?? 'Not provided.',
 		'',
 		`📊 QA Run: ${runLabel}`,
 		...(targetUrl ? [`🌐 Target URL: ${targetUrl}`] : []),
@@ -481,7 +487,7 @@ export function createTelegramNotifier(options = {}) {
 			recipients: config.chatIds.map(chatId => ({ chatId, state: 'pending', attempts: 0 })),
 			// Retain exactly what a retry needs to rebuild the message.
 			replay: {
-				feedback: { id: feedback.id, runId: feedback.runId, rating: feedback.rating, comments: feedback.comments },
+				feedback: { id: feedback.id, runId: feedback.runId, rating: feedback.rating, comments: feedback.comments, improvement: feedback.improvement },
 				context: {
 					mode: context.mode,
 					title: context.title,

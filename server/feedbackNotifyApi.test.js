@@ -159,6 +159,67 @@ test('POST /api/feedback dispatches after save with run context (id, mode, title
 	}
 });
 
+test('improvement field travels end-to-end: POST body → stored record → dispatched feedback', async () => {
+	const harness = makeNotifierHarness();
+	const app = await buildApp(harness.notifier);
+	try {
+		const session = await finishedRun(app.services, { title: 'Improve-flow run' });
+		const response = await fetch(`${app.origin}/api/feedback`, {
+			method: 'POST',
+			headers: app.headers,
+			body: JSON.stringify({
+				runId: session.id,
+				rating: 5,
+				comments: 'The testing was very smooth and the results were accurate.',
+				improvement: 'The test execution report could provide more detailed information about failed test cases.'
+			})
+		});
+		assert.equal(response.status, 201);
+		const record = await response.json();
+		assert.equal(record.improvement, 'The test execution report could provide more detailed information about failed test cases.');
+
+		const stored = await app.services.feedback.forRun(session.id, TENANT.actorUserId);
+		assert.equal(stored.improvement, record.improvement, 'store persists improvement');
+
+		assert.equal(harness.dispatches.length, 1);
+		assert.equal(harness.dispatches[0].feedback.improvement, record.improvement,
+			'notifier receives the improvement field');
+
+		// The message the notifier would build separates both fields.
+		const { buildFeedbackMessage } = await import('./telegramNotifier.js');
+		const message = buildFeedbackMessage(harness.dispatches[0].feedback, harness.dispatches[0].context);
+		assert.match(message, /📝 User Feedback:\nThe testing was very smooth/);
+		assert.match(message, /🔧 What should we improve\?\nThe test execution report could provide/);
+	} finally {
+		await app.close();
+	}
+});
+
+test('improvement-only submissions dispatch with the improvement intact', async () => {
+	const harness = makeNotifierHarness();
+	const app = await buildApp(harness.notifier);
+	try {
+		const session = await finishedRun(app.services, { title: 'Improve-only run' });
+		const response = await fetch(`${app.origin}/api/feedback`, {
+			method: 'POST',
+			headers: app.headers,
+			body: JSON.stringify({
+				runId: session.id,
+				rating: 3,
+				improvement: 'The automation should provide better failure explanations.'
+			})
+		});
+		assert.equal(response.status, 201);
+		const record = await response.json();
+		assert.equal(record.comments, '');
+		assert.equal(record.improvement, 'The automation should provide better failure explanations.');
+		const { feedback } = harness.dispatches[0];
+		assert.equal(feedback.improvement, 'The automation should provide better failure explanations.');
+	} finally {
+		await app.close();
+	}
+});
+
 test('the HTTP response reports feedbackSaved + telegramSent truthfully (awaited result)', async () => {
 	const harness = makeNotifierHarness();
 	const app = await buildApp(harness.notifier);
