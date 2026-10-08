@@ -97,6 +97,13 @@
     <p class="studio-context-note">Context stays available while Qase uses the center workspace.</p>
   </aside>
 
+  <div class="studio-context-resizer" id="studio-context-resizer" role="separator" tabindex="0"
+       aria-label="Resize project context" aria-controls="studio-context"
+       aria-orientation="vertical" aria-valuemin="220" aria-valuemax="340" aria-valuenow="280"
+       title="Drag or use arrow keys to resize project context">
+    <span aria-hidden="true"></span>
+  </div>
+
   <section class="studio-tool-workspace" aria-label="Qase in Drytis Studio">
     <header class="studio-tool-header">
       <div class="studio-tool-identity">
@@ -112,7 +119,14 @@
           <option value="dark">Dark</option>
         </select>
       </label>
-      <button class="studio-context-toggle" id="studio-context-toggle" type="button" aria-controls="studio-context" aria-expanded="true">Hide context</button>
+      <button class="studio-context-toggle" id="studio-context-toggle" type="button"
+              aria-controls="studio-context" aria-expanded="true"
+              aria-label="Hide project context" title="Hide project context">
+        <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+          <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
+          <path d="M7 3v14M12.5 7.25 9.75 10l2.75 2.75"></path>
+        </svg>
+      </button>
     </header>
 
 <div class="app" inert aria-hidden="true">

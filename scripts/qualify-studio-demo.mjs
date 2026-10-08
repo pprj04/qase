@@ -14,6 +14,7 @@ const output = path.resolve('test-results', 'studio-demo');
 await fs.mkdir(output, { recursive: true });
 const fixtureRunId = '12345678-1234-4234-8234-123456789abc';
 let fixtureSession;
+const fixturePosts = [];
 
 const previewSvg = Buffer.from(`
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
@@ -84,7 +85,10 @@ const server = http.createServer(async (request, response) => {
 	const url = new URL(request.url, 'http://127.0.0.1');
 	if (url.pathname.startsWith('/api/')) {
 		if (url.pathname === '/api/qa-configurations') return json(response, launcherCatalog());
-		if (request.method !== 'GET') return json(response, { error: 'Read-only Studio fixture.' }, 405);
+		if (request.method !== 'GET') {
+			fixturePosts.push(url.pathname);
+			return json(response, { error: 'Read-only Studio fixture.' }, 405);
+		}
 		if (url.pathname === `/api/sessions/${fixtureRunId}/events`) {
 			response.writeHead(200, {
 				'content-type': 'text/event-stream',
@@ -169,10 +173,40 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 	return page;
 }
 
+async function paneMetrics(page) {
+	return page.evaluate(() => {
+		const host = document.querySelector('.studio-host-rail').getBoundingClientRect();
+		const context = document.querySelector('#studio-context').getBoundingClientRect();
+		const resizer = document.querySelector('#studio-context-resizer').getBoundingClientRect();
+		const tool = document.querySelector('.studio-tool-workspace').getBoundingClientRect();
+		return {
+			hostRight: host.right,
+			contextLeft: context.left,
+			contextWidth: context.width,
+			resizerWidth: resizer.width,
+			toolLeft: tool.left,
+			toolWidth: tool.width
+		};
+	});
+}
+
+async function dragContextTo(page, requestedWidth) {
+	const context = await page.locator('#studio-context').boundingBox();
+	const resizer = await page.locator('#studio-context-resizer').boundingBox();
+	assert.ok(context && resizer, 'Context and resize handle must be measurable');
+	await page.mouse.move(resizer.x + resizer.width / 2, resizer.y + Math.min(120, resizer.height / 2));
+	await page.mouse.down();
+	await page.mouse.move(context.x + requestedWidth, resizer.y + Math.min(120, resizer.height / 2), { steps: 5 });
+	await page.mouse.up();
+}
+
 try {
 	const standalone = await open({ width: 1440, height: 1000 }, false);
 	assert.equal(await standalone.locator('html').getAttribute('data-qase-layout'), 'standalone');
 	assert.equal(await standalone.locator('.studio-host-rail').isVisible(), false);
+	assert.equal(await standalone.locator('#studio-context-resizer').isVisible(), false);
+	assert.equal(await standalone.locator('#studio-context-toggle').isVisible(), false);
+	assert.equal(await standalone.locator('html').evaluate(node => node.style.getPropertyValue('--studio-context-width')), '');
 	assert.equal(await standalone.locator('#sidebar-collapse-toggle').isVisible(), false);
 	await standalone.locator('#qa-cancel').click();
 	await standalone.screenshot({ path: path.join(output, 'standalone-sidebar-regression-1440.png'), animations: 'disabled' });
@@ -237,19 +271,100 @@ try {
 	await sidebarToggle.focus();
 	await desktop.keyboard.press('Enter');
 	assert.equal(await sidebarToggle.getAttribute('aria-expanded'), 'true', 'Keyboard expands the sidebar');
+	const separator = desktop.locator('#studio-context-resizer');
+	assert.equal(await separator.getAttribute('role'), 'separator');
+	assert.equal(await separator.getAttribute('aria-orientation'), 'vertical');
+	assert.equal(await separator.getAttribute('aria-valuemin'), '220');
+	assert.equal(await separator.getAttribute('aria-valuemax'), '340');
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 280, 'Context uses its comfortable default width');
+	await desktop.screenshot({ path: path.join(output, 'studio-context-default-1440.png'), animations: 'disabled' });
+
+	await separator.focus();
+	await desktop.keyboard.press('Home');
+	assert.equal(await separator.getAttribute('aria-valuenow'), '220');
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 220, 'Home reaches the minimum context width');
+	await desktop.screenshot({ path: path.join(output, 'studio-context-narrow-1440.png'), animations: 'disabled' });
+	await desktop.keyboard.press('ArrowRight');
+	assert.equal(await separator.getAttribute('aria-valuenow'), '228', 'Arrow keys resize in precise steps');
+	await desktop.keyboard.press('Shift+ArrowRight');
+	assert.equal(await separator.getAttribute('aria-valuenow'), '252', 'Shift and Arrow resize in larger steps');
+	await desktop.keyboard.press('End');
+	assert.equal(await separator.getAttribute('aria-valuenow'), '340');
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 340, 'End reaches the maximum context width');
+	await desktop.screenshot({ path: path.join(output, 'studio-context-wide-1440.png'), animations: 'disabled' });
+
+	await dragContextTo(desktop, 180);
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 220, 'Pointer resizing clamps to the minimum');
+	await dragContextTo(desktop, 420);
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 340, 'Pointer resizing clamps to the maximum');
+	await separator.focus();
+	await desktop.keyboard.press('Home');
+	await desktop.keyboard.press('ArrowRight');
+	await desktop.keyboard.press('Shift+ArrowRight');
+	assert.equal(await separator.getAttribute('aria-valuenow'), '252');
+	await desktop.reload();
+	await desktop.locator('.app').waitFor({ state: 'visible' });
+	await desktop.locator('#qa-cancel').click();
+	assert.equal(await desktop.locator('#studio-context-resizer').getAttribute('aria-valuenow'), '252', 'Context width survives reload');
+	const expandedContextMetrics = await paneMetrics(desktop);
 	await desktop.locator('#studio-context-toggle').click();
 	assert.equal(await desktop.locator('#studio-context-toggle').getAttribute('aria-expanded'), 'false');
+	assert.equal(await desktop.locator('#studio-context-toggle').getAttribute('aria-label'), 'Show project context');
 	assert.equal(await desktop.locator('#studio-context').isVisible(), false);
+	assert.equal(await desktop.locator('#studio-context-resizer').isVisible(), false);
+	const collapsedContextMetrics = await paneMetrics(desktop);
+	assert.ok(
+		collapsedContextMetrics.toolWidth > expandedContextMetrics.toolWidth + 250,
+		`Qase immediately receives the released pane width: ${JSON.stringify({ expandedContextMetrics, collapsedContextMetrics })}`
+	);
+	assert.ok(Math.abs(collapsedContextMetrics.toolLeft - collapsedContextMetrics.hostRight) <= 1, 'Collapsed context leaves no empty gutter');
+	await desktop.screenshot({ path: path.join(output, 'studio-context-hidden-1440.png'), animations: 'disabled' });
+	await desktop.reload();
+	await desktop.locator('.app').waitFor({ state: 'visible' });
+	await desktop.locator('#qa-cancel').click();
+	assert.equal(await desktop.locator('html').getAttribute('data-studio-context'), 'collapsed', 'Collapsed context state survives reload');
+	await desktop.locator('#studio-context-toggle').click();
+	assert.equal(await desktop.locator('#studio-context-resizer').getAttribute('aria-valuenow'), '252', 'Restoring context preserves the previous width');
+	assert.equal(Math.round((await paneMetrics(desktop)).contextWidth), 252);
+	await desktop.evaluate(() => {
+		localStorage.setItem('qase.studio.contextWidth', '9999');
+		localStorage.setItem('qase.studio.contextState', 'corrupted');
+	});
+	await desktop.reload();
+	await desktop.locator('.app').waitFor({ state: 'visible' });
+	await desktop.locator('#qa-cancel').click();
+	assert.equal(await desktop.locator('#studio-context-resizer').getAttribute('aria-valuenow'), '280', 'Invalid stored width recovers to the default');
+	assert.equal(await desktop.locator('html').getAttribute('data-studio-context'), 'expanded', 'Invalid stored state recovers safely');
+
+	for (const [buttonId, surfaceId, closeId] of [
+		['new-run', 'qa-start', 'qa-cancel'],
+		['new-sqa', 'sqa-start', 'sqa-cancel'],
+		['new-founder', 'founder-start', 'founder-cancel']
+	]) {
+		await desktop.locator(`#${buttonId}`).click();
+		await desktop.locator(`#${surfaceId}[open]`).waitFor();
+		await desktop.locator(`#${closeId}`).click();
+	}
+	await desktop.locator('#open-bugs').click();
+	assert.equal(await desktop.locator('#bugs-view').isVisible(), true);
+	await desktop.locator('#bugs-close').click();
+	assert.equal(await desktop.locator('#bugs-view').isVisible(), false);
 	checks.push('Studio shell shows host navigation, project context, and a larger Qase center workspace');
 	checks.push('Sidebar expands and collapses by keyboard, persists semantics, and returns meaningful workspace width');
+	checks.push('Context resizes by pointer and keyboard, clamps to 220–340 px, persists, collapses without a gutter, and restores its previous width');
+	checks.push('Test, Quality, Ideas and Bugs mode controls open and close their working surfaces');
 	await desktop.close();
 
 	const tabletSidebar = await open({ width: 768, height: 900 });
 	await tabletSidebar.locator('#qa-cancel').click();
+	assert.equal(await tabletSidebar.locator('#studio-context').isVisible(), false, 'Project context does not squeeze the tablet workspace');
+	assert.equal(await tabletSidebar.locator('#studio-context-resizer').isVisible(), false, 'Desktop resize handle is disabled at tablet width');
+	assert.equal(await tabletSidebar.locator('#studio-context-toggle').isVisible(), false);
 	await tabletSidebar.locator('#sidebar-collapse-toggle').click();
 	assert.equal(await tabletSidebar.locator('#workspace-runs').evaluate(node => Math.round(node.getBoundingClientRect().width)), 56);
 	assert.equal(await tabletSidebar.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false);
 	await tabletSidebar.screenshot({ path: path.join(output, 'studio-sidebar-collapsed-768.png'), animations: 'disabled' });
+	await tabletSidebar.screenshot({ path: path.join(output, 'studio-responsive-768.png'), animations: 'disabled' });
 	await tabletSidebar.locator('#sidebar-collapse-toggle').click();
 	await tabletSidebar.close();
 
@@ -263,6 +378,30 @@ try {
 	assert.equal(await running.locator('#composer-input').isDisabled(), true);
 	assert.equal(await running.locator('#composer-running-hint').isVisible(), true);
 	assert.equal(await running.locator('#composer').evaluate(node => node.scrollWidth <= node.clientWidth), true);
+	await running.locator('#studio-context-resizer').focus();
+	await running.keyboard.press('Home');
+	assert.equal(await running.locator('#studio-context-resizer').getAttribute('aria-valuenow'), '220');
+	const [runningChatWidth, runningViewerWidth] = await running.locator('.chat, .viewer')
+		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+	assert.ok(runningViewerWidth > runningChatWidth * 1.45, 'Live browser receives substantially more width than conversation');
+	const modeDock = await running.locator('.feature-dock').boundingBox();
+	assert.ok(modeDock && modeDock.width <= 76, 'Mode rail remains narrow');
+	for (const modeId of ['new-run', 'new-sqa', 'new-founder', 'open-bugs']) {
+		const mode = running.locator(`#${modeId}`);
+		await mode.focus();
+		assert.equal(await running.evaluate(id => document.activeElement?.id === id, modeId), true, `${modeId} is keyboard reachable`);
+		assert.equal(await mode.locator('.feature-label').isVisible(), true, `${modeId} keeps its readable label`);
+	}
+	const recentRun = running.locator('#run-list .run').first();
+	assert.equal(await recentRun.isVisible(), true);
+	await recentRun.click();
+	assert.equal(await recentRun.getAttribute('aria-current'), 'true', 'Recent test remains selectable');
+	for (const tabId of ['tab-plan', 'tab-findings', 'tab-activity']) {
+		const tab = running.locator(`#${tabId}`);
+		await tab.click();
+		assert.equal(await tab.getAttribute('aria-selected'), 'true', `${tabId} remains accessible beside the live browser`);
+	}
+	await running.screenshot({ path: path.join(output, 'studio-running-context-narrow-1440.png'), animations: 'disabled' });
 	await running.screenshot({ path: path.join(output, 'studio-running-1440.png'), animations: 'disabled' });
 	assert.equal(await running.locator('body').evaluate(node=>getComputedStyle(node).textTransform), 'none', 'Body does not inherit stray uppercase declarations');
 	assert.equal(await running.locator('.transcript').evaluate(node=>getComputedStyle(node).backgroundColor), 'rgb(255, 255, 255)', 'Light conversation uses the Studio surface');
@@ -283,6 +422,8 @@ try {
 
 	const completed = await open({ width: 1440, height: 1000 }, true, 'done');
 	await completed.locator('.viewer.stage-collapsed').waitFor();
+	await completed.locator('#studio-context-resizer').focus();
+	await completed.keyboard.press('Home');
 	assert.equal(await completed.locator('#tab-findings').getAttribute('aria-selected'), 'true');
 	assert.equal(await completed.locator('.findings-selection-count').textContent(), '2 of 2 selected');
 	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
@@ -295,15 +436,24 @@ try {
 	const [stageRight, previewRight] = await completed.locator('#stage, #stage-inner')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().right));
 	assert.ok(stageRight - previewRight <= 16, 'Completed preview thumbnail sits at the upper-right edge');
+	await completed.locator('#stage-toggle').click();
+	assert.equal(await completed.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), false, 'Show preview expands the saved browser image');
+	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Minimize live preview');
+	await completed.locator('#stage-toggle').click();
+	assert.equal(await completed.locator('.viewer').evaluate(node => node.classList.contains('stage-collapsed')), true, 'Minimize preview restores the accepted thumbnail state');
+	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
 	const [chatWidth, viewerWidth] = await completed.locator('.chat, .viewer')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(viewerWidth > chatWidth * 1.45, 'Results receive substantially more width than conversation');
+	await completed.screenshot({ path: path.join(output, 'studio-completed-context-narrow-1440.png'), animations: 'disabled' });
 	await completed.screenshot({ path: path.join(output, 'studio-completed-1440.png'), animations: 'disabled' });
 	checks.push('Completed fixture prioritizes selected findings and moves the saved preview to the upper-right edge');
 	await completed.close();
 
 	for (const width of [1280, 768, 390, 360]) {
 		const page = await open({ width, height: width <= 390 ? 844 : 900 });
+		assert.equal(await page.locator('#studio-context-resizer').isVisible(), width === 1280, `Resize handle adapts at ${width}px`);
+		assert.equal(await page.locator('#studio-context').isVisible(), width === 1280, `Project context adapts at ${width}px`);
 		const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
 		if (overflow) console.error(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(node => node.getBoundingClientRect().right > innerWidth + 1 && node.getBoundingClientRect().width > 0).slice(0, 20).map(node => ({tag: node.tagName, id: node.id, class: node.className, width: node.getBoundingClientRect().width}))));
 		assert.equal(overflow, false, `No horizontal overflow at ${width}px`);
@@ -347,7 +497,13 @@ try {
 			assert.equal(await page.locator('#resume-run').isVisible(), true);
 			await page.locator('#conn-label').filter({hasText: 'updates paused'}).waitFor();
 		}
-		if (status === 'awaiting_input') assert.equal(await page.locator('#composer-input').isEnabled(), true);
+		if (status === 'awaiting_input') {
+			assert.equal(await page.locator('#composer-input').isEnabled(), true);
+			await page.locator('#composer-input').fill('Please continue with the checkout review.');
+			await page.locator('#composer-input').press('Enter');
+			await page.waitForTimeout(100);
+			assert.equal(fixturePosts.includes(`/api/sessions/${fixtureRunId}/message`), true, 'Send input reaches the real message action');
+		}
 		if (status === 'done') {
 			await page.locator('#stage-note').filter({hasText: 'No saved browser image'}).waitFor();
 			await page.locator('#tab-findings').click();

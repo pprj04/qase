@@ -7,6 +7,7 @@
 
 .studio-host-rail,
 .studio-context,
+.studio-context-resizer,
 .studio-tool-header {
 	display: none;
 }
@@ -19,6 +20,7 @@ html[data-qase-layout="studio-mock"] {
 	--studio-host-muted: #60646c;
 	--studio-host-border: #e3e5e8;
 	--studio-host-action: #315ee8;
+	--studio-context-width: 280px;
 	color-scheme: light;
 }
 
@@ -42,7 +44,7 @@ html[data-qase-layout="studio-mock"] body {
 
 html[data-qase-layout="studio-mock"] .studio-demo-shell {
 	display: grid;
-	grid-template-columns: 64px minmax(196px, 232px) minmax(0, 1fr);
+	grid-template-columns: 64px var(--studio-context-width) 7px minmax(0, 1fr);
 	width: 100%;
 	height: 100dvh;
 	min-width: 0;
@@ -122,6 +124,49 @@ html[data-qase-layout="studio-mock"] .studio-context {
 	border-right: 1px solid var(--studio-host-border);
 	background: var(--studio-host-surface);
 	color: var(--studio-host-text);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer {
+	position: relative;
+	display: grid;
+	min-width: 7px;
+	min-height: 0;
+	place-items: center;
+	background: var(--studio-host-surface);
+	cursor: col-resize;
+	touch-action: none;
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer::before {
+	content: "";
+	width: 1px;
+	height: 100%;
+	background: var(--studio-host-border);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer > span {
+	position: absolute;
+	width: 3px;
+	height: 42px;
+	border-radius: 999px;
+	background: transparent;
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer:hover > span,
+html[data-qase-layout="studio-mock"] .studio-context-resizer:focus-visible > span,
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"] .studio-context-resizer > span {
+	background: var(--studio-host-action);
+}
+
+html[data-qase-layout="studio-mock"] .studio-context-resizer:focus-visible {
+	outline: 2px solid var(--studio-host-action);
+	outline-offset: -2px;
+}
+
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"],
+html[data-studio-resizing="true"][data-qase-layout="studio-mock"] body {
+	cursor: col-resize;
+	user-select: none;
 }
 
 .studio-context-head,
@@ -229,6 +274,7 @@ html[data-qase-layout="studio-mock"] .studio-context {
 
 html[data-qase-layout="studio-mock"] .studio-tool-workspace {
 	display: grid;
+	grid-column: 4;
 	grid-template-rows: 48px minmax(0, 1fr);
 	min-width: 0;
 	min-height: 0;
@@ -295,8 +341,11 @@ html[data-qase-layout="studio-mock"] .studio-tool-header {
 }
 
 .studio-context-toggle {
-	min-height: 32px;
-	padding: 5px 9px;
+	display: grid;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	place-items: center;
 	border: 1px solid var(--studio-host-border);
 	border-radius: 7px;
 	background: var(--studio-host-surface);
@@ -305,6 +354,14 @@ html[data-qase-layout="studio-mock"] .studio-tool-header {
 	font: inherit;
 	font-size: 12px;
 	touch-action: manipulation;
+}
+
+.studio-context-toggle svg {
+	fill: none;
+	stroke: currentColor;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+	stroke-width: 1.5;
 }
 
 .studio-context-toggle:hover {
@@ -480,16 +537,25 @@ html[data-qase-layout="studio-mock"][data-qase-sidebar="collapsed"] .panel-foot 
 }
 
 html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
-	grid-template-columns: 64px 0 minmax(0, 1fr);
+	grid-template-columns: 64px 0 0 minmax(0, 1fr);
 }
 
-html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context {
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context,
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context-resizer {
 	display: none;
+}
+
+html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-context-toggle svg {
+	transform: scaleX(-1);
 }
 
 @media (max-width: 1280px) {
 	html[data-qase-layout="studio-mock"] .studio-demo-shell {
-		grid-template-columns: 56px 190px minmax(0, 1fr);
+		grid-template-columns: 56px var(--studio-context-width) 6px minmax(0, 1fr);
+	}
+
+	html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 56px 0 0 minmax(0, 1fr);
 	}
 
 	html[data-qase-layout="studio-mock"] .app {
@@ -508,7 +574,12 @@ html[data-studio-context="collapsed"][data-qase-layout="studio-mock"] .studio-co
 		grid-template-columns: 52px minmax(0, 1fr);
 	}
 
-	html[data-qase-layout="studio-mock"] .studio-context {
+	html[data-studio-context][data-qase-layout="studio-mock"] .studio-demo-shell {
+		grid-template-columns: 52px minmax(0, 1fr);
+	}
+
+	html[data-qase-layout="studio-mock"] .studio-context,
+	html[data-qase-layout="studio-mock"] .studio-context-resizer {
 		display: none;
 	}
 
