@@ -20,14 +20,15 @@ test('the QA launcher exposes a test-selection fieldset with bulk controls', () 
 	assert.match(html, /id="new-sqa"[^>]+aria-label="Start quality review"/);
 });
 
-test('QA frontend defaults to all tests selected and reuses Studio components', () => {
+test('QA frontend defaults to standard tests selected and keeps security opt-in', () => {
 	// Catalog comes from the authenticated API, cached like the SQA catalog.
 	assert.match(app, /api\('\/qa\/catalog'\)/);
 	// Safe DOM construction for the option tiles (sqa-option reused).
 	const qaBlock = app.slice(app.indexOf('function qaTestOption'), app.indexOf('/* ── Settings'));
 	assert.ok(qaBlock.length > 500, 'QA launcher block should be discoverable');
 	assert.doesNotMatch(qaBlock, /\b(?:innerHTML|outerHTML|insertAdjacentHTML)\b/);
-	assert.match(qaBlock, /input\.checked = true;\s*\n\s*input\.defaultChecked = true;/);
+	assert.match(qaBlock, /const selectedByDefault = \(test\.category \?\? 'standard'\) !== 'security'/);
+	assert.match(qaBlock, /input\.checked = selectedByDefault;\s*\n\s*input\.defaultChecked = selectedByDefault;/);
 	assert.match(qaBlock, /name = 'qa-test'/);
 	assert.match(qaBlock, /sqa-option\$\{isAvailable \? '' : ' is-unavailable'\}/);
 	// Selection styles reuse the Studio grid, not new components.
@@ -38,7 +39,7 @@ test('QA frontend defaults to all tests selected and reuses Studio components', 
 test('QA submit is disabled with no selection and selection survives configuration', () => {
 	// Disabled at zero selected tests (or invalid URL, unloaded matrix, over-cap,
 	// or while a run is starting).
-	assert.match(app, /qaUi\.submit\.disabled = selected === 0 \|\| !urlValid \|\| !matrixReady \|\| !withinCap \|\| qaUi\.submit\.dataset\.busy === 'true'/);
+	assert.match(app, /qaUi\.submit\.disabled = selected === 0 \|\| !urlValid \|\| !authorizationReady \|\| !matrixReady \|\| !withinCap \|\| qaUi\.submit\.dataset\.busy === 'true'/);
 	// Guard on submit as well — defense in depth.
 	assert.match(app, /if \(selectedTests\.length === 0\) \{\s*setQaFormError\('Select at least one test\.'\)/);
 	// Bulk controls rewrite every checkbox.

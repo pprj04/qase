@@ -173,7 +173,7 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 	if (scenario === 'launcher') {
 		await page.locator('#qa-start[open]').waitFor();
 		await page.waitForFunction(() => !document.querySelector('#qa-tests-fieldset').disabled);
-		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3 of 3 available configurations selected'));
+		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
 	} else {
 		try {
 			await page.locator('#chat-target').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
@@ -594,14 +594,13 @@ try {
 	const studioLaunch = await open({ width: 1440, height: 1000 }, true, 'launcher');
 	const studioMatrixPostsBefore = fixturePosts.filter(pathname => pathname === '/api/qa-matrix-runs').length;
 	assert.equal(await studioLaunch.locator('#qa-target-url').inputValue(), 'https://preview.example.test/');
-	assert.equal(await studioLaunch.locator('#qa-submit').isDisabled(), true, 'Studio prefill still requires authorization');
-	await studioLaunch.locator('#qa-security-authorized').check();
-	assert.equal(await studioLaunch.locator('#qa-submit').isEnabled(), true, 'Studio uses the shared launcher enablement');
+	assert.equal(await studioLaunch.locator('#qa-security-auth').isHidden(), true, 'Standard Studio QA does not demand security authorization');
+	assert.equal(await studioLaunch.locator('#qa-submit').isEnabled(), true, 'Studio prefill enables the shared standard launcher');
 	await studioLaunch.locator('#qa-submit').click();
 	await studioLaunch.locator('#qa-start').waitFor({ state: 'hidden' });
 	await studioLaunch.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', fixtureRunId);
 	assert.equal(fixturePosts.filter(pathname => pathname === '/api/qa-matrix-runs').length, studioMatrixPostsBefore + 1, 'Studio submits through the shared matrix-run endpoint exactly once');
-	checks.push('Studio project target prefills the shared launcher, retains authorization gating, creates one run, and enters the running workspace');
+	checks.push('Studio project target prefills the shared launcher, creates one standard run, and enters the running workspace');
 	await studioLaunch.evaluate(() => localStorage.removeItem('qase.session'));
 	await studioLaunch.close();
 
