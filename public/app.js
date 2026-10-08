@@ -4236,6 +4236,14 @@ function renderReportFeedbackSection(record) {
 		? record.comments
 		: 'No description provided.';
 
+	const improvement = document.createElement('p');
+	improvement.className = 'report-feedback-improvement';
+	if (record.improvement?.trim()) {
+		const label = document.createElement('strong');
+		label.textContent = 'What should we improve? ';
+		improvement.append(label, document.createTextNode(record.improvement));
+	}
+
 	const meta = document.createElement('p');
 	meta.className = 'report-feedback-meta';
 	const submittedBy = state.user?.displayName ?? state.user?.email ?? 'You';
@@ -4244,7 +4252,7 @@ function renderReportFeedbackSection(record) {
 		: '';
 	meta.textContent = `Submitted By: ${submittedBy}${submittedOn ? ` · Submitted On: ${submittedOn}` : ''}`;
 
-	section.append(heading, stars, description, meta);
+	section.append(heading, stars, description, ...(improvement.childNodes.length ? [improvement] : []), meta);
 	el.reportView.append(section);
 }
 

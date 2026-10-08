@@ -23,7 +23,8 @@ const FEEDBACK = {
 	id: '11111111-2222-4333-8444-555555555555',
 	runId: 'cf5b7e5f-a4fa-4189-85a3-7d07473ad7c0',
 	rating: 5,
-	comments: 'The automation testing was smooth and the results were easy to understand.'
+	comments: 'The automation testing was smooth and the results were easy to understand.',
+	improvement: 'The test execution report could provide more detailed information about failed test cases.'
 };
 
 const CONTEXT = {
@@ -149,6 +150,9 @@ test('buildFeedbackMessage emits the exact agreed format', () => {
 		'📝 User Feedback:',
 		'The automation testing was smooth and the results were easy to understand.',
 		'',
+		'🔧 What should we improve?',
+		'The test execution report could provide more detailed information about failed test cases.',
+		'',
 		'📊 QA Run: Homepage regression sweep (#cf5b7e5f)',
 		'🌐 Target URL: https://qase.dev/',
 		'👤 Submitted By: QA User',
@@ -171,9 +175,45 @@ test('buildFeedbackMessage clamps ratings, defaults missing fields', () => {
 		{ mode: 'sqa', submittedAt: CONTEXT.submittedAt }
 	);
 	assert.match(message, /⭐ Rating: 5\/5/);
-	assert.match(message, /\(no description provided\)/);
+	assert.match(message, /📝 User Feedback:\nNot provided\./);
+	assert.match(message, /🔧 What should we improve\?\nNot provided\./);
 	assert.match(message, /📊 QA Run: SQA #abcd1234/);
 	assert.match(message, /👤 Submitted By: QASE user/);
+});
+
+test('buildFeedbackMessage shows improvement-only feedback with Not provided for comments', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 3, comments: '   ', improvement: 'The automation should provide better failure explanations.' },
+		{ mode: 'qa', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.match(message, /📝 User Feedback:\nNot provided\./);
+	assert.match(message, /🔧 What should we improve\?\nThe automation should provide better failure explanations\./);
+});
+
+test('buildFeedbackMessage keeps both text fields separate and labeled', () => {
+	const message = buildFeedbackMessage(
+		{ id: 'x', runId: 'abcd1234-0000-0000-0000-000000000000', rating: 5, comments: 'General thoughts', improvement: 'Specific suggestion' },
+		{ mode: 'qa', submittedAt: CONTEXT.submittedAt }
+	);
+	const commentsIdx = message.indexOf('📝 User Feedback:\nGeneral thoughts');
+	const improveIdx = message.indexOf('🔧 What should we improve?\nSpecific suggestion');
+	assert.ok(commentsIdx > -1 && improveIdx > -1, 'both sections present');
+	assert.ok(commentsIdx < improveIdx, 'improvement follows general feedback');
+});
+
+test('buildFeedbackMessage preserves multiline and emoji content in both fields', () => {
+	const message = buildFeedbackMessage(
+		{
+			id: 'x',
+			runId: 'abcd1234-0000-0000-0000-000000000000',
+			rating: 4,
+			comments: 'Line one 🎉\nLine two — “special” <chars> & more',
+			improvement: 'Step 1. improve\nStep 2. 🚀 improve'
+		},
+		{ mode: 'qa', submittedAt: CONTEXT.submittedAt }
+	);
+	assert.match(message, /Line one 🎉\nLine two — “special” <chars> & more/);
+	assert.match(message, /Step 1\. improve\nStep 2\. 🚀 improve/);
 });
 
 test('buildFeedbackMessage truncates to 4096 chars', () => {
@@ -433,6 +473,21 @@ test('retryNotification replays a FAILED notification without resending sent cha
 	assert.equal(fetchImpl.calls.length, 1); // only the failed chat retried
 	assert.equal(fetchImpl.calls[0].chatId, '-1002220002222');
 	assert.equal(readLedger(sandbox)[FEEDBACK.id].status, 'SENT');
+});
+
+test('retry replay snapshot retains the improvement field so retries rebuild the full message', async () => {
+	const sandbox = makeLedgerSandbox();
+	const scripts = new Map([
+		['-1002220002222', [jsonResponse(400, '{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}')]]
+	]);
+	const fetchImpl = perChatFetch(scripts);
+	const logger = collectingLogger();
+	const notifier = createTelegramNotifier({
+		environment: VALID_ENV, fetchImpl, logger, ledgerFile: sandbox.ledgerFile, sleep: async () => {}
+	});
+	await notifier.dispatchFeedbackNotification(FEEDBACK, CONTEXT);
+	const entry = readLedger(sandbox)[FEEDBACK.id];
+	assert.equal(entry.replay.feedback.improvement, FEEDBACK.improvement, 'ledger replay carries improvement');
 });
 
 test('retryNotification guards: SENT, in-flight, unknown, non-replayable', async () => {

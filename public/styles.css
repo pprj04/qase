@@ -12527,17 +12527,40 @@ dialog:not([open]) { display: none !important; }
   word-break: break-word;
 }
 
+.report-feedback-improvement {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #c6d4e3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-feedback-improvement strong {
+  color: #e8effa;
+}
+
 .report-feedback-meta {
   margin: 0;
   font-size: 11.5px;
   color: #68798c;
 }
 
-#feedback-improve {
+/* Studio control alignment — shared control surface */
+.field input,
+.field select,
+.field textarea,
+#qa-target-url,
+#qa-device-select,
+#feedback-category,
+#feedback-comments,
+#feedback-improvement {
   border-radius: var(--radius-md);
 }
 
-#feedback-improve {
+.field textarea,
+#feedback-comments,
+#feedback-improvement {
   padding: 10px 12px;
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -12549,7 +12572,9 @@ dialog:not([open]) { display: none !important; }
   transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
 }
 
-#feedback-improve:focus {
+.field textarea:focus,
+#feedback-comments:focus,
+#feedback-improvement:focus {
   border-color: var(--border-accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
