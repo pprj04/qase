@@ -8958,3 +8958,131 @@ html.entry-active body {
     transition: none !important;
   }
 }
+
+/* ────────────────────────────────────────────────────────────────
+   Light theme hardcoded-color sweep (Phase 3).
+   The token layer above already themes everything that reads a var().
+   This block fixes the legacy hardcoded dark values: run-list badges,
+   status chips, token text, progress/findings, tabs, mode badges,
+   transcript paper, empty states, select dropdowns. Scoped to
+   [data-theme="light"] with one extra class so it never affects dark.
+   ──────────────────────────────────────────────────────────────── */
+
+[data-theme="light"] .run-title { color: #3f3f46; }
+[data-theme="light"] .run.is-active .run-title { color: var(--text); }
+[data-theme="light"] .run-progress-steps,
+[data-theme="light"] .progress-steps,
+[data-theme="light"] .progress-pct { color: var(--text-muted); }
+[data-theme="light"] .run-progress-bar,
+[data-theme="light"] .progress-bar { background: var(--surface-3); }
+[data-theme="light"] .panel-foot { border-top-color: var(--border); }
+
+/* Run badges + rating/mode badges: light tints, dark status text */
+[data-theme="light"] .run-badge,
+[data-theme="light"] .run-del { border-color: var(--border); color: var(--text-secondary); }
+[data-theme="light"] .run-rating-badge {
+  color: #854d0e;
+  background: rgba(217, 119, 6, 0.10);
+}
+[data-theme="light"] .run-mode-badge {
+  border-color: rgba(37, 99, 235, 0.25);
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+}
+[data-theme="light"] .tab-sqa { color: #0369a1; }
+
+/* Header chrome: the chat/viewer header stays intentional dark chrome in
+   both themes, but its status/token controls must stay readable — in light
+   mode flip the header itself so the controls' token colors work. */
+[data-theme="light"] .chat > .panel-head,
+[data-theme="light"] .viewer > .panel-head,
+[data-theme="light"] .runs > .panel-head {
+  background: var(--panel-sidebar);
+  border-bottom-color: var(--border);
+}
+[data-theme="light"] .chat-id h1 { color: var(--text); }
+[data-theme="light"] .chat-target,
+[data-theme="light"] .brand-lockup,
+[data-theme="light"] .brand-lockup .subtle,
+[data-theme="light"] #model-badge { color: var(--text-secondary); }
+
+/* Status chips: near-white chip, status colors from the light tokens */
+[data-theme="light"] .status-chip {
+  background: var(--surface-1);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+[data-theme="light"] .status-chip[data-status="running"] {
+  border-color: rgba(47, 91, 234, 0.35);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+[data-theme="light"] .status-chip[data-status="awaiting_input"] {
+  border-color: rgba(180, 83, 9, 0.35);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+[data-theme="light"] .status-chip[data-status="done"] {
+  border-color: rgba(21, 128, 61, 0.30);
+  background: var(--success-soft);
+  color: var(--success);
+}
+[data-theme="light"] .status-chip[data-status="error"],
+[data-theme="light"] .status-chip[data-status="interrupted"] {
+  border-color: rgba(228, 0, 20, 0.30);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Timer/duration colors */
+[data-theme="light"] .run-duration--live { color: var(--accent); }
+[data-theme="light"] .run-duration--paused { color: var(--warning); }
+
+/* Transcript: paper look instead of dark terminal grid */
+[data-theme="light"] .transcript {
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.016) 1px, transparent 1px),
+    #fbfcfd;
+}
+[data-theme="light"] .empty-state {
+  border-color: var(--border);
+  background: var(--surface-1);
+}
+[data-theme="light"] .empty-state::before { border-color: var(--border-strong); }
+
+/* Tabs + findings + perf comparison */
+[data-theme="light"] .tab:not(.is-active):hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+[data-theme="light"] .progress-findings {
+  border-color: rgba(228, 0, 20, 0.25);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+[data-theme="light"] .perf-compare-list .is-current { color: var(--accent); }
+
+/* Form controls that shipped with a hardcoded dark scheme */
+[data-theme="light"] select,
+[data-theme="light"] .panel-foot select {
+  background: var(--surface-1);
+  border-color: var(--border);
+  color: var(--text);
+}
+[data-theme="light"] .token-text.is-pending { color: var(--text-muted); }
+
+/* Phase 3 round 2: run-summary strip + brand wordmark (missed in round 1) */
+[data-theme="light"] .run-summary {
+  background: var(--surface-1);
+  border-bottom-color: var(--border);
+}
+[data-theme="light"] .run-summary-mini { background: var(--surface-1); }
+[data-theme="light"] .brand-mark { color: var(--text); }
+
+/* Phase 3 round 3: findings chip — small 9px text needs ≥4.5:1, use a
+   darker red on the light tint (mirrors dark mode's #f5a0a4 pairing). */
+[data-theme="light"] .progress-findings {
+  border-color: rgba(185, 28, 28, 0.30);
+  background: rgba(185, 28, 28, 0.08);
+  color: #b91c1c;
+}
