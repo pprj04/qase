@@ -17,6 +17,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolveBrowserSupport, BROWSER_SUPPORT_STATUS } from './browserSupportResolution.js';
@@ -187,7 +188,49 @@ export function createLocalMatrixBackend(options = {}) {
 		}
 	}
 
+	/**
+	 * Persist the full run map to disk — debounced + off the event loop.
+	 * updateItem fires ~8x per item; on a 36MB store a synchronous write per
+	 * update starved the entire server (see .drytis/memory/fix-matrix-persist-starvation.md).
+	 * Run creation/termination always persists immediately; item-level churn is
+	 * coalesced. Worst-case loss window on a crash is a few seconds of item status.
+	 */
+	let persistTimer = null;
+	let persistInFlight = false;
+
+	function schedulePersist() {
+		if (persistTimer) return;
+		persistTimer = setTimeout(() => {
+			persistTimer = null;
+			void persistDebounced();
+		}, 500);
+		persistTimer.unref?.();
+	}
+
+	async function persistDebounced() {
+		if (persistInFlight) {
+			schedulePersist(); // a write landed while one was in flight — go again
+			return;
+		}
+		persistInFlight = true;
+		try {
+			await persistAsync();
+		} catch {
+			/* a dashboard that cannot write its state file is still usable */
+		} finally {
+			persistInFlight = false;
+		}
+	}
+
+	async function persistAsync() {
+		await fsPromises.mkdir(stateDir, { recursive: true });
+		const tmp = `${stateFile}.tmp-${process.pid}-${randomUUID()}`;
+		await fsPromises.writeFile(tmp, JSON.stringify([...byId.values()], undefined, '\t'), { mode: 0o600 });
+		await fsPromises.rename(tmp, stateFile);
+	}
+
 	function persistNow() {
+		// Synchronous, only for low-frequency, must-not-lose events (create, terminal).
 		try {
 			fs.mkdirSync(stateDir, { recursive: true });
 			const tmp = `${stateFile}.tmp-${process.pid}-${randomUUID()}`;
@@ -230,7 +273,7 @@ export function createLocalMatrixBackend(options = {}) {
 			const index = run.items.findIndex((item) => item.id === itemId);
 			if (index === -1) return null;
 			run.items[index] = { ...run.items[index], ...patch, updatedAt: new Date().toISOString() };
-			persistNow();
+			schedulePersist();
 			return structuredClone(run.items[index]);
 		}
 	};

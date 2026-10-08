@@ -6,8 +6,8 @@ const SAFE_FIELDS = new Set([
 	// keepalive + run-resume diagnostics
 	'url', 'ip', 'status', 'intervalMs', 'quietAfterMs', 'attempt', 'attempts',
 	'resumed', 'runId', 'reason', 'outcome',
-	// whatsapp notification diagnostics
-	'state', 'recipients', 'notificationId', 'feedbackId'
+	// telegram notification diagnostics
+	'state', 'recipients', 'notificationId', 'feedbackId', 'chatId', 'errorCode', 'endpoint', 'messageId'
 ]);
 
 function safeName(value, label, pattern, maximum) {

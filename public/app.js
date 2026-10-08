@@ -114,6 +114,8 @@ const el = {
 	perfClose: $('perf-close'),
 	perfRestore: $('perf-restore'),
 	perfBody: $('perf-body'),
+	themeSwitch: $('theme-switch'),
+	themeSwitchLabel: $('theme-switch-label'),
 	feedbackModal: $('feedback-modal'),
 	feedbackForm: $('feedback-form'),
 	feedbackClose: $('feedback-close'),
@@ -1541,6 +1543,69 @@ function usageIsPending(session) {
 }
 
 /**
+ * Light/Dark theme preference. The external theme-boot.js in <head> already
+ * applied the stored theme before first paint (no flash), so this module only
+ * needs to sync the Stateful Switch with the live document state, persist
+ * changes, and update the theme-color meta so the browser chrome matches.
+ */
+const THEME_KEY = 'qase.theme';
+
+function readStoredTheme() {
+	try {
+		return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+	} catch {
+		return 'dark';
+	}
+}
+
+function applyTheme(theme, { animate = true } = {}) {
+	const light = theme === 'light';
+	if (animate) {
+		// Drive the global color swap with the .theme-transition class for
+		// ~200ms so only the theme change animates (not page load).
+		document.documentElement.classList.add('theme-transition');
+		setTimeout(() => document.documentElement.classList.remove('theme-transition'), 220);
+	}
+	document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+	try {
+		localStorage.setItem(THEME_KEY, light ? 'light' : 'dark');
+	} catch {
+		/* storage unavailable: theme still applies for this page load */
+	}
+	const meta = document.querySelector('meta[name="theme-color"]');
+	if (meta) meta.setAttribute('content', light ? '#ffffff' : '#05080d');
+	if (el.themeSwitch) {
+		el.themeSwitch.checked = light;
+		el.themeSwitch.setAttribute('aria-checked', String(light));
+		const label = el.themeSwitchLabel || el.themeSwitch.closest('label');
+		if (label) {
+			label.title = light ? 'Switch to Dark Mode' : 'Switch to Light Mode';
+		}
+	}
+	const stateText = document.getElementById('theme-switch-state');
+	if (stateText) stateText.textContent = light ? 'Light Mode' : 'Dark Mode';
+	const thumb = document.querySelector('.theme-switch-thumb');
+	if (thumb) thumb.textContent = light ? '☀️' : '🌙';
+}
+
+function toggleTheme() {
+	applyTheme(readStoredTheme() === 'light' ? 'dark' : 'light');
+}
+
+/**
+ * After a re-render, make sure the switch reflects whatever the boot script
+ * set on <html> — the data-theme attribute is the single source of truth.
+ * (No server-side profile sync: the theme is a device-level preference, kept
+ * in localStorage alongside the other qase.* UI prefs.)
+ */
+function syncThemeFromDocument() {
+	applyTheme(
+		document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
+		{ animate: false }
+	);
+}
+
+/**
  * Collapsed/expanded state for the run-summary section. UI preference, not run
  * state: survives run navigation and the RUNNING→DONE transition, stored in the
  * same localStorage the other UI prefs (device, session) already use.
@@ -2432,21 +2497,21 @@ async function submitFeedback(event) {
 			state.feedback.existing = record;
 			state.feedback.editing = false;
 			// Truthful outcome line: the server now reports whether the
-			// WhatsApp notification was actually dispatched. Feedback is
+			// Telegram notification was actually dispatched. Feedback is
 			// ALWAYS saved first — a notification failure is never presented
 			// as a submission failure (record exists → 201, never 5xx).
-			const sent = record?.whatsappSent === true;
-			const pending = record?.whatsapp?.status === 'PENDING' || record?.whatsapp?.status === 'RETRYING';
-			const failed = record?.whatsapp?.status === 'FAILED';
+			const sent = record?.telegramSent === true;
+			const pending = record?.telegram?.status === 'PENDING' || record?.telegram?.status === 'SENDING';
+			const failed = record?.telegram?.status === 'FAILED';
 			if (sent) {
 				toast('Thank you! Your feedback has been submitted successfully.', 'good');
-				state.feedback.notified = 'WhatsApp notification sent ✓';
+				state.feedback.notified = 'Telegram notification sent ✓';
 			} else if (pending) {
-				toast('Feedback saved. WhatsApp notification is still being delivered.', 'info');
-				state.feedback.notified = 'WhatsApp notification pending — feedback saved.';
+				toast('Feedback saved. Telegram notification is still being delivered.', 'info');
+				state.feedback.notified = 'Telegram notification pending — feedback saved.';
 			} else if (failed) {
-				toast('Feedback saved. WhatsApp notification could not be delivered.', 'info');
-				state.feedback.notified = 'WhatsApp notification failed — feedback saved.';
+				toast('Feedback saved. Telegram notification could not be delivered.', 'info');
+				state.feedback.notified = 'Telegram notification failed — feedback saved.';
 			} else {
 				toast('Thank you! Your feedback has been submitted successfully.', 'good');
 				state.feedback.notified = '';
@@ -5356,10 +5421,16 @@ function qaMatrixConfigurationKey(configuration) {
  * #15163: effective selection = device-scope auto-select-all minus in-session
  * deselections when scoped; catalog selection minus persisted deselections
  * otherwise. Single source of truth for selectedEnvIds.
+ * #15323: the default (non-scoped) catalog selection is capped at
+ * MAX_RUN_CONFIGURATIONS so Start is enabled out of the box — the full
+ * 37k-row default used to exceed the run cap and leave Start permanently
+ * disabled until the user narrowed it by hand. Deselections are applied
+ * BEFORE the cap so explicitly opted-out configurations never occupy slots.
  */
 function qaMatrixEffectiveSelection() {
 	if (!qaMatrixState.deviceScope) {
-		return computeSelection(qaMatrixState.index, qaMatrixStore);
+		return computeSelection(qaMatrixState.index, qaMatrixStore)
+			.slice(0, MAX_RUN_CONFIGURATIONS);
 	}
 	const deviceConfigurations = configurationsForDevice(qaMatrixState.index, qaMatrixState.deviceScope);
 	return defaultSelectionForDevice(deviceConfigurations)
@@ -5581,11 +5652,19 @@ function qaMatrixRender() {
 		.map(provider => `${provider.name}: not configured`);
 	const scopeLabel = qaMatrixScopeLabel();
 	const overCap = summary.total > MAX_RUN_CONFIGURATIONS;
+	// #15323: with the default selection now capped, say so honestly instead
+	// of silently presenting 2,000 as if it were the whole catalog.
+	const cappedNote = !scopeLabel
+		&& summary.availableTotal > MAX_RUN_CONFIGURATIONS
+		&& summary.total === MAX_RUN_CONFIGURATIONS
+		? ` · capped at the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — ${(summary.availableTotal - MAX_RUN_CONFIGURATIONS).toLocaleString()} more available via filters`
+		: '';
 	matrix.summary.textContent = scopeLabel
 		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} of this device's configurations selected`
 		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
 			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
 			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '')
+			+ cappedNote
 			+ (overCap ? ` · over the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — narrow the selection to start` : '');
 	matrix.summary.title = Object.entries(summary.byFamily)
 		.filter(([, count]) => count > 0)
@@ -8041,6 +8120,13 @@ async function bootWorkspace() {
 
 (async function boot() {
 	await window.qaseEntryReady;
+	// Theme switch: restore from localStorage (the head script already
+	// painted the right theme), then sync the switch state.
+	applyTheme(readStoredTheme(), { animate: false });
+	el.themeSwitch?.addEventListener('change', () => {
+		toggleTheme();
+	});
+	syncThemeFromDocument();
 	// Test Execution Timer: one shared second-hand for every live timer view.
 	startTimerInterval();
 	// Performance panel controls: minimize/restore/close are visibility-only.

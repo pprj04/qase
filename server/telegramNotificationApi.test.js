@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createApplication } from './app.js';
 import { createInstanceAccess } from './instanceAccess.js';
-import { createLocalApplicationServices } from './localServices.js';
+const { createLocalApplicationServices } = await import('./localServices.js');
 
 const TENANT = {
 	organizationId: randomUUID(),
@@ -38,7 +38,7 @@ function harness(notifier) {
 			services,
 			access: createInstanceAccess({ tenantContext: TENANT }),
 			authRequired: true,
-			whatsappNotifier: notifier
+			telegramNotifier: notifier
 		});
 		const server = application.app.listen(0, '127.0.0.1', () => {
 			const origin = `http://127.0.0.1:${server.address().port}`;
@@ -60,23 +60,23 @@ function harness(notifier) {
 }
 
 const RECORD_SENT = {
-	notificationId: `WHATSAPP-${FEEDBACK.id}`,
+	notificationId: `TELEGRAM-${FEEDBACK.id}`,
 	feedbackId: FEEDBACK.id,
 	runId: FEEDBACK.runId,
 	status: 'SENT',
-	recipients: [{ to: '+15550000001', state: 'sent', attempts: 1 }],
+	recipients: [{ chatId: '-1001110001111', state: 'sent', attempts: 1 }],
 	createdAt: 1_000,
 	updatedAt: 2_000
 };
 
 const RECORD_FAILED = {
-	notificationId: `WHATSAPP-${FEEDBACK2.id}`,
+	notificationId: `TELEGRAM-${FEEDBACK2.id}`,
 	feedbackId: FEEDBACK2.id,
 	runId: FEEDBACK2.runId,
 	status: 'FAILED',
 	recipients: [
-		{ to: '+15550000001', state: 'sent', attempts: 1 },
-		{ to: '+15550000002', state: 'failed', attempts: 3, upstreamStatus: 503, lastError: 'WhatsApp API returned a server error.' }
+		{ chatId: '-1001110001111', state: 'sent', attempts: 1 },
+		{ chatId: '-1002220002222', state: 'failed', attempts: 3, upstreamStatus: 503, lastError: 'Telegram API returned a server error.' }
 	],
 	createdAt: 3_000,
 	updatedAt: 4_000
@@ -97,7 +97,7 @@ test('GET /api/feedback/notifications lists records for admins only', async () =
 		const payload = await admin.json();
 		assert.equal(payload.enabled, true);
 		assert.equal(payload.notifications.length, 2);
-		assert.ok(payload.note.includes('provider acceptance'));
+		assert.ok(payload.note.includes('Telegram API acceptance'));
 
 		const filtered = await fx.call('owner', '/api/feedback/notifications?status=FAILED');
 		assert.equal((await filtered.json()).notifications.length, 1);
@@ -147,11 +147,8 @@ test('retry guards map to 404/409 and never fake success', async () => {
 		retryNotification: async () => ({ ok: false, reason: 'not_found' })
 	});
 	try {
-		const unknown = await fx.call('owner', '/api/feedback/notifications/WHATSAPP-none/retry', { method: 'POST' });
+		const unknown = await fx.call('owner', '/api/feedback/notifications/TELEGRAM-none/retry', { method: 'POST' });
 		assert.equal(unknown.status, 404);
-
-		const sent = await fx.call('owner', `/api/feedback/notifications/${RECORD_SENT.notificationId}/retry`, { method: 'POST' });
-		assert.equal(sent.status, 404); // constant mock returns not_found; 409 path covered below
 
 		const alreadySent = await harness({
 			buildMessage: () => '',
@@ -167,9 +164,6 @@ test('retry guards map to 404/409 and never fake success', async () => {
 		} finally {
 			await alreadySent.close();
 		}
-
-		const inProgress = await fx.call('owner', '/api/feedback/notifications/x/retry', { method: 'POST' });
-		assert.equal(inProgress.status, 404); // constant mock → not_found
 	} finally {
 		await fx.close();
 	}

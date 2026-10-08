@@ -64,16 +64,23 @@ export function createMatrixOrchestrator(services, hooks) {
 	 * RUNNING — is marked ERROR "interrupted" so no dangling state can be
 	 * mistaken for a live execution or a pass. Idempotent; call once on boot
 	 * (or after attach) before any new matrix run starts.
+	 *
+	 * #14942 hotfix: NEVER touch runs this process is actively orchestrating —
+	 * executeRun() previously called the sweep on every start, so starting run
+	 * B stamped concurrently-live run A (and A's QUEUED items, which wait
+	 * behind the one-browser-at-a-time contract) as `error` while its workers
+	 * kept executing. Only a run that is neither in this process's `running`
+	 * map nor executing an item can genuinely be stale.
 	 */
 	async function resumeRecovery() {
 		const runs = await services.matrix.list();
 		for (const run of runs ?? []) {
-			// #15043 (B1): a cancelled run keeps its cancelled state across
-			// restarts — never flipped to error.
+			if (running.has(run.id)) continue; // live in THIS process — not stale
+			const items = run.items ?? [];
 			if (run.status === 'running') {
 				await services.matrix._setStatus(run.id, 'error', {});
 			}
-			const interrupted = (run.items ?? []).filter((item) => item.status === 'RUNNING');
+			const interrupted = items.filter((item) => item.status === 'RUNNING');
 			if (!interrupted.length && run.status !== 'running') continue;
 			for (const item of interrupted) {
 				await services.matrix.updateItem(run.id, item.id, {
@@ -170,12 +177,26 @@ export function createMatrixOrchestrator(services, hooks) {
 		}
 		await drainQueued(matrixRunId, run);
 
+		// #14942 hotfix: `done` may only mean every item reached a terminal
+		// state. Queued work that never launched (run cancelled mid-drain,
+		// worker exhaustion, earlier corruption) is an honest coverage gap,
+		// not a pass — surface it as an errored run instead.
 		const finalRun = await services.matrix.get(matrixRunId);
 		const counts = statusCounts(finalRun.items);
+		const unfinished = (counts.QUEUED ?? 0) + (counts.PENDING ?? 0) + (counts.RUNNING ?? 0);
 		if (cancelledRuns.has(matrixRunId) || finalRun.status === 'cancelled') {
 			// cancel() already set status/timing; just announce completion.
 			// (Keep the cancellation marker until the run fully settles.)
 			hooks.emit?.(matrixRunId, { type: 'matrix_run_done', matrixRunId, counts, cancelled: true });
+			return;
+		}
+		if (unfinished > 0) {
+			await services.matrix._setStatus(matrixRunId, 'error', {
+				finishedAt: new Date().toISOString(),
+				counts,
+				error: `${unfinished} configuration(s) never reached a terminal state (queued/pending/running) — execution did not complete.`
+			});
+			hooks.emit?.(matrixRunId, { type: 'matrix_run_done', matrixRunId, counts, errored: true });
 			return;
 		}
 		await services.matrix._setStatus(matrixRunId, 'done', { finishedAt: new Date().toISOString(), counts });
