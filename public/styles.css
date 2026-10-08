@@ -8648,6 +8648,19 @@ html.entry-active body {
   word-break: break-word;
 }
 
+.report-feedback-improvement {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #c6d4e3;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.report-feedback-improvement strong {
+  color: #e8effa;
+}
+
 .report-feedback-meta {
   margin: 0;
   font-size: 11.5px;
