@@ -45,6 +45,8 @@ server.on('request', (request, response) => {
 	if (match) streams.set(match[1], response);
 });
 const base = `http://127.0.0.1:${server.address().port}`;
+// Exercise the real preflight against this fixture, without external DNS/model access.
+const targetUrl = `${base}/healthz`;
 const output = path.resolve('test-results','dashboard');fs.mkdirSync(output,{recursive:true});
 const browser = await chromium.launch({executablePath:chromium.executablePath()});
 const errors = [];
@@ -88,12 +90,33 @@ try {
 	assert.ok([...sessions.values()].some(s=>s.mode==='sqa'&&s.sqa.scope.authorization.confirmed));
 	checks.push('SQA scope authorization, launcher API, pending assessment panel');
 	await page.locator('#new-founder').click();await page.locator('#founder-start[open]').waitFor();
-	await page.locator('#founder-target-name').fill('Fixture');await page.locator('#founder-target-url').fill('https://example.test/');await page.locator('#founder-authorization').check();
+	assert.equal(await page.locator('#founder-customize').evaluate(node => node.open), false);
+	await page.locator('#founder-target-url').fill(targetUrl);await page.locator('#founder-authorization').check();
+	const founderReadability = await page.locator('.founder-intro').evaluate(node => {
+		const strong = getComputedStyle(node.querySelector('strong'));
+		const paragraph = getComputedStyle(node.querySelector('p'));
+		const reference = document.createElement('span');
+		reference.style.color = 'var(--text-secondary)';
+		document.body.append(reference);
+		const secondaryText = getComputedStyle(reference).color;
+		reference.remove();
+		return {
+			strongUsesPrimaryText: strong.color === getComputedStyle(document.body).color,
+			paragraphUsesSecondaryText: paragraph.color === secondaryText,
+			strongSize: Number.parseFloat(strong.fontSize),
+			paragraphSize: Number.parseFloat(paragraph.fontSize)
+		};
+	});
+	assert.deepEqual(founderReadability, {
+		strongUsesPrimaryText: true,
+		paragraphUsesSecondaryText: true,
+		strongSize: 14,
+		paragraphSize: 12.5
+	}, 'Founder recommendation uses the readable Studio text hierarchy');
 	await screenshot(page,'founder-launch.png');
 	await page.locator('#founder-submit').click();await page.locator('#founder-start').waitFor({state:'hidden'});
 	await page.locator('#tab-founder').waitFor({state:'visible'});await page.locator('#tab-founder').click();
-	assert.ok([...sessions.values()].some(s=>s.mode==='founder'&&s.founder.scope.authorization.confirmed));
-	checks.push('Founder context, authorization, launcher API, pending review panel');
+	assert.ok([...sessions.values()].some(s=>s.mode==='founder'&&s.founder.scope.authorization.confirmed&&s.founder.scope.target.name==='127.0.0.1'));
 	await page.screenshot({path:path.join(output,'desktop.png')});
 	for(const width of [768,390]) {
 		await page.setViewportSize({width,height:844});

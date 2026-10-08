@@ -213,6 +213,57 @@ body.studio-workspace .msg.credentials .msg-body {
 }
 body.studio-workspace .msg-who { color: var(--text-muted); font-family: var(--font-ui); }
 body.studio-workspace .composer::before { content: none; }
+body.studio-workspace .composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px 8px;
+  padding: 6px;
+}
+body.studio-workspace .composer textarea {
+  grid-column: 1;
+  padding: 9px 10px;
+}
+/* The compound composer supplies the visible focus ring on its container. */
+body.studio-workspace .composer textarea:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+body.studio-workspace .composer #send-btn { grid-column: 2; }
+body.studio-workspace .composer .composer-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 2px 8px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+body.studio-workspace .composer:has(textarea:disabled) {
+  border-color: var(--border);
+  background: var(--surface-2);
+  box-shadow: none;
+}
+body.studio-workspace .composer:focus-within {
+  border-color: transparent;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+body.studio-workspace .composer textarea:disabled {
+  color: var(--text-muted);
+  opacity: 1;
+}
+body.studio-workspace[data-run-status="running"] .composer {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 10px;
+}
+body.studio-workspace[data-run-status="running"] .composer textarea,
+body.studio-workspace[data-run-status="running"] .composer #send-btn { display: none; }
+body.studio-workspace[data-run-status="running"] .composer .composer-hint {
+  padding: 4px 6px;
+}
 body.studio-workspace .empty-state { max-width: 60ch; color: var(--text-secondary); }
 body.studio-workspace .empty-state h2 { font-size: 24px; line-height: 1.25; text-wrap: balance; }
 body.studio-workspace .empty-state p { font-size: 14px; line-height: 1.65; }
@@ -242,6 +293,7 @@ body.studio-workspace .viewer.stage-collapsed { grid-template-rows: 68px 44px 43
 body.studio-workspace .viewer.stage-collapsed .stage {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 4px 12px;
   gap: 12px;
 }
@@ -255,6 +307,9 @@ body.studio-workspace .viewer.stage-collapsed #stage-inner {
 }
 body.studio-workspace .viewer.stage-collapsed .stage-note {
   position: static;
+  order: -1;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-secondary);
   font-family: var(--font-ui);
@@ -470,8 +525,67 @@ body.studio-workspace .qa-customize-body fieldset { margin: 0; min-width: 0; }
 body.studio-workspace .qa-security-auth { padding: 14px; border: 1px solid var(--border-strong); border-radius: 8px; }
 body.studio-workspace .qa-security-auth-confirm span,
 body.studio-workspace .qa-security-auth-scope span { font-size: 13px; line-height: 1.6; }
-body.studio-workspace .qa-security-auth-scope { display: block; margin-top: 12px; }
+body.studio-workspace .qa-security-scope { margin-top: 2px; }
+body.studio-workspace .qa-security-scope > summary {
+  width: max-content;
+  padding: 5px 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+body.studio-workspace .qa-security-scope > summary small { font-size: inherit; }
+body.studio-workspace .qa-security-auth-scope { display: block; margin-top: 6px; }
 body.studio-workspace .qa-security-auth-scope textarea { font: 13px var(--font-ui); }
+body.studio-workspace .founder-intro {
+  padding: 14px;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-1));
+}
+body.studio-workspace .founder-intro > span {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-1));
+  color: var(--accent);
+}
+body.studio-workspace .founder-intro strong {
+  color: var(--text);
+  font: 600 14px/1.35 var(--font-ui);
+}
+body.studio-workspace .founder-intro p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font: 12.5px/1.55 var(--font-ui);
+}
+body.studio-workspace .founder-intro small {
+  margin-top: 7px;
+  color: var(--text-muted);
+  font: 11.5px/1.45 var(--font-ui);
+}
+body.studio-workspace .founder-fieldset {
+  padding: 14px;
+  border-color: var(--border-strong);
+  border-radius: 9px;
+}
+body.studio-workspace .founder-fieldset legend {
+  color: var(--text-secondary);
+  font: 600 12px var(--font-ui);
+}
+body.studio-workspace .founder-modal textarea {
+  border-color: var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: 13px/1.5 var(--font-ui);
+}
+body.studio-workspace .founder-modal textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+body.studio-workspace .founder-authorization {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-1));
+}
 body.studio-workspace summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 body.studio-workspace .toasts .toast { background: var(--surface-1); color: var(--text); }
 body.studio-workspace .skip-link { background: var(--surface-1); color: var(--text); }

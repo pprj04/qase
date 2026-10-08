@@ -1676,6 +1676,7 @@ function setStatus(status) {
 	el.stopRun.textContent = stopping ? 'Stopping…' : 'Stop';
 	el.resumeRun.hidden = !((status === 'interrupted' || status === 'error') && state.sessionId);
 	el.sendBtn.disabled = running;
+	el.composerInput.disabled = running;
 	el.composerHint.hidden = !running;
 	el.livePill.hidden = !running;
 	el.browserDot.className = `dot${running ? ' is-busy' : state.session?.targetUrl ? ' is-live' : ''}`;
@@ -4754,7 +4755,9 @@ function connect(id) {
 		clearTimeout(resyncTimer);
 		if (state.stream !== stream) return;
 		el.connDot.className = 'dot';
-		el.connLabel.textContent = 'reconnecting…';
+		el.connLabel.textContent = state.session?.status === 'done'
+			? 'results ready'
+			: ['error', 'interrupted'].includes(state.session?.status) ? 'updates paused' : 'reconnecting…';
 	};
 	stream.onmessage = event => {
 		if (state.stream !== stream) return;

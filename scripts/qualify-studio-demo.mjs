@@ -174,6 +174,13 @@ try {
 	assert.equal(await desktop.locator('#studio-project-name').textContent(), 'Checkout redesign');
 	assert.equal(await desktop.locator('#studio-project-target').textContent(), 'preview.example.test');
 	assert.equal(await desktop.locator('#qa-target-url').inputValue(), 'https://preview.example.test/');
+	assert.equal(await desktop.locator('#studio-theme-select').isVisible(), true);
+	await desktop.locator('#studio-theme-select').selectOption('dark');
+	assert.equal(await desktop.locator('html').getAttribute('data-theme'), 'dark');
+	await desktop.locator('#studio-theme-select').selectOption('light');
+	assert.equal(await desktop.locator('html').getAttribute('data-theme'), 'light');
+	assert.equal(await desktop.locator('#qa-security-scope').evaluate(node => node.open), false);
+	assert.equal(await desktop.locator('#qa-security-notes').isVisible(), false);
 	const [contextWidth, toolWidth] = await desktop.locator('#studio-context, .studio-tool-workspace')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(toolWidth > contextWidth * 3, 'Qase receives most of the Studio workspace');
@@ -192,8 +199,11 @@ try {
 	assert.equal(await running.locator('#progress-steps').textContent(), '2/4');
 	assert.equal(await running.locator('#count-findings').textContent(), '2');
 	assert.equal(await running.locator('#stage-inner').isVisible(), true);
+	assert.equal(await running.locator('#composer-input').isDisabled(), true);
+	assert.equal(await running.locator('#composer-running-hint').isVisible(), true);
+	assert.equal(await running.locator('#composer').evaluate(node => node.scrollWidth <= node.clientWidth), true);
 	await running.screenshot({ path: path.join(output, 'studio-running-1440.png'), animations: 'disabled' });
-	checks.push('Running fixture exposes browser, progress, current activity, findings, elapsed time, and Stop');
+	checks.push('Running fixture exposes progress and evidence while the message composer presents a clean paused state');
 	await running.close();
 
 	const completed = await open({ width: 1440, height: 1000 }, true, 'done');
@@ -201,11 +211,15 @@ try {
 	assert.equal(await completed.locator('#tab-findings').getAttribute('aria-selected'), 'true');
 	assert.equal(await completed.locator('.findings-selection-count').textContent(), '2 of 2 selected');
 	assert.equal(await completed.locator('#stage-toggle').getAttribute('aria-label'), 'Show live preview');
+	await completed.locator('#conn-label').filter({ hasText: 'results ready' }).waitFor();
+	const [stageRight, previewRight] = await completed.locator('#stage, #stage-inner')
+		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().right));
+	assert.ok(stageRight - previewRight <= 16, 'Completed preview thumbnail sits at the upper-right edge');
 	const [chatWidth, viewerWidth] = await completed.locator('.chat, .viewer')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(viewerWidth > chatWidth * 1.45, 'Results receive substantially more width than conversation');
 	await completed.screenshot({ path: path.join(output, 'studio-completed-1440.png'), animations: 'disabled' });
-	checks.push('Completed fixture prioritizes selected findings and reduces the browser to a saved preview');
+	checks.push('Completed fixture prioritizes selected findings and moves the saved preview to the upper-right edge');
 	await completed.close();
 
 	for (const width of [1280, 768, 390, 360]) {
