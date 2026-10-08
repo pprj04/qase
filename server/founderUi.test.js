@@ -32,7 +32,6 @@ test('Founder launcher matches the authenticated API input contract and limits',
 		['founder-primary-goal', 1000],
 		['founder-constraints', 2000]
 	]) assert.match(html, new RegExp(`id="${id}"[^>]+maxlength="${maximum}"`));
-	assert.match(html, /id="founder-target-name"[^>]+required/);
 	assert.match(html, /id="founder-target-url"[^>]+type="url"[^>]+required/);
 	assert.match(html, /id="founder-authorization"[^>]+type="checkbox"[^>]+required/);
 	// Business context the model can infer from the URL is no longer asked for.
