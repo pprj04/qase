@@ -67,16 +67,21 @@ test('light layer covers the full token surface of the dark root', () => {
 });
 
 test('index.html restores the stored light theme before first paint', () => {
-	const scriptStart = INDEX.indexOf("localStorage.getItem('qase.theme')");
-	assert.ok(scriptStart > -1, 'boot script must read qase.theme');
-	const stylesEnd = INDEX.indexOf('entry-terminal.css');
-	assert.ok(scriptStart > stylesEnd && scriptStart < INDEX.indexOf('<body'), 'boot script must sit after the stylesheets and before <body>');
-	assert.ok(INDEX.slice(stylesEnd, scriptStart).includes('<script>'), 'boot script must be an inline script immediately after the stylesheet links');
-	const script = INDEX.slice(INDEX.indexOf('<script>', stylesEnd), INDEX.indexOf('</script>', stylesEnd));
-	assert.match(script, /data-theme.*light|light.*data-theme/s, 'boot script sets data-theme=light');
-	assert.match(script, /theme-color/, 'boot script patches the theme-color meta');
-	assert.match(script, /color-scheme/, 'boot script patches the color-scheme meta');
-	assert.match(script, /try\s*{/, 'boot script tolerates storage failures (try/catch)');
+	const scriptTag = INDEX.match(/<script src="theme-boot\.js"><\/script>/);
+	assert.ok(scriptTag, 'head must load theme-boot.js');
+	const link = INDEX.indexOf('entry-terminal.css');
+	const scriptAt = INDEX.indexOf('<script src="theme-boot.js"></script>');
+	assert.ok(scriptAt > link && scriptAt < INDEX.indexOf('<body'), 'boot script must sit after the stylesheets and before <body>');
+	assert.doesNotMatch(INDEX.slice(INDEX.indexOf('</title>'), INDEX.indexOf('<body')), /<script>\s*\(/, 'no inline scripts in head (CSP script-src self)');
+});
+
+test('theme-boot.js sets light theme safely, CSP-clean external file', () => {
+	const boot = readFileSync(new URL('../public/theme-boot.js', import.meta.url), 'utf8');
+	assert.match(boot, /localStorage\.getItem\('qase\.theme'\)/, 'reads the stored preference');
+	assert.match(boot, /data-theme.*light|light.*data-theme/s, 'sets data-theme=light');
+	assert.match(boot, /theme-color/, 'patches the theme-color meta');
+	assert.match(boot, /color-scheme/, 'patches the color-scheme meta');
+	assert.match(boot, /try\s*{/, 'tolerates storage failures (try/catch)');
 });
 
 test('dark remains the default: no data-theme in static html, dark metas unchanged', () => {
@@ -119,7 +124,7 @@ test('no server-side dependency: files are static assets only', async () => {
 		const css = await (await fetch(`http://127.0.0.1:${server.address().port}/styles.css`)).text();
 		assert.ok(css.includes('[data-theme="light"]'), 'served stylesheet contains the light layer');
 		const html = await (await fetch(`http://127.0.0.1:${server.address().port}/`)).text();
-		assert.ok(html.includes('qase.theme'), 'served html contains the boot script');
+		assert.ok(html.includes('theme-boot.js'), 'served html loads the boot script');
 	} finally {
 		server.close();
 	}

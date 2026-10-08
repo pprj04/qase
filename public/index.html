@@ -10,21 +10,9 @@
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="bugsView.css">
 <link rel="stylesheet" href="entry-terminal.css">
-<script>
-/* No-flicker theme restore — runs before first paint. Dark is the default. */
-(function () {
-	try {
-		var theme = localStorage.getItem('qase.theme');
-		if (theme === 'light') {
-			document.documentElement.setAttribute('data-theme', 'light');
-			var meta = document.querySelector('meta[name="theme-color"]');
-			if (meta) meta.setAttribute('content', '#ffffff');
-			var scheme = document.querySelector('meta[name="color-scheme"]');
-			if (scheme) scheme.setAttribute('content', 'light');
-		}
-	} catch (error) { /* storage unavailable — stay dark */ }
-})();
-</script>
+<!-- Synchronous, CSP-clean (script-src 'self'): applies the stored theme
+     before first paint so light mode never flashes dark. -->
+<script src="theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body>
