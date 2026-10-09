@@ -297,6 +297,17 @@ try {
 	assert.equal(await standaloneRunning.locator('#live-pill').isVisible(), false);
 	assert.equal(await standaloneRunning.locator('#ldv-exec').isVisible(), false);
 	assert.equal(await standaloneRunning.locator('#ldv-change-device').isVisible(), false);
+	assert.equal(await standaloneRunning.locator('.viewer #theme-toggle').isVisible(), true, 'Standalone appearance control lives in the preview toolbar');
+	assert.equal(await standaloneRunning.locator('.chat #theme-toggle').count(), 0, 'Conversation header does not duplicate appearance controls');
+	assert.equal(await standaloneRunning.locator('.viewer-address-row #stage-toggle').count(), 1, 'Preview sizing stays beside the address bar');
+	const viewerToolbarAlignment = await standaloneRunning.locator('.viewer > .panel-head').evaluate(header => {
+		const toolbar = header.querySelector('.live-device-view-head').getBoundingClientRect();
+		const appearance = header.querySelector('#theme-toggle').getBoundingClientRect();
+		const address = header.querySelector('.viewer-address-row').getBoundingClientRect();
+		return { appearanceRight: Math.round(appearance.right), toolbarRight: Math.round(toolbar.right), addressWidth: Math.round(address.width), toolbarWidth: Math.round(toolbar.width) };
+	});
+	assert.ok(Math.abs(viewerToolbarAlignment.appearanceRight - viewerToolbarAlignment.toolbarRight) <= 1, 'Theme aligns to the right edge of the preview toolbar');
+	assert.ok(Math.abs(viewerToolbarAlignment.addressWidth - viewerToolbarAlignment.toolbarWidth) <= 1, 'Address row follows the toolbar width');
 	const [standaloneChatWidth, standaloneViewerWidth] = await standaloneRunning.locator('.chat, .viewer')
 		.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
 	assert.ok(standaloneViewerWidth > standaloneChatWidth * 1.7, 'Default Qase makes the live browser the running-state hero');
@@ -428,6 +439,8 @@ try {
 		if (width <= 720) {
 			assert.equal(await productRunning.locator('body').getAttribute('data-workspace-view'), 'browser');
 			assert.equal(await productRunning.locator('.app > .panel:visible').count(), 1);
+			const themeTarget = await productRunning.locator('.viewer #theme-toggle').boundingBox();
+			assert.ok(themeTarget && themeTarget.width >= 44 && themeTarget.height >= 44, `Theme action keeps a 44px touch target at ${width}px`);
 		} else {
 			const viewerTop = await productRunning.locator('.viewer').evaluate(node => node.getBoundingClientRect().top);
 			const chatTop = await productRunning.locator('.chat').evaluate(node => node.getBoundingClientRect().top);
@@ -693,6 +706,8 @@ try {
 	}
 	await running.screenshot({ path: path.join(output, 'studio-running-context-narrow-1440.png'), animations: 'disabled' });
 	await running.screenshot({ path: path.join(output, 'studio-running-1440.png'), animations: 'disabled' });
+	assert.equal(await running.locator('.viewer #theme-toggle').isVisible(), false, 'Studio host does not duplicate its appearance control inside Qase');
+	assert.equal(await running.locator('#studio-theme-select').isVisible(), true, 'Studio host retains the visible System, Light and Dark control');
 	assert.equal(await running.locator('body').evaluate(node=>getComputedStyle(node).textTransform), 'none', 'Body does not inherit stray uppercase declarations');
 	assert.equal(await running.locator('.transcript').evaluate(node=>getComputedStyle(node).backgroundColor), 'rgb(255, 255, 255)', 'Light conversation uses the Studio surface');
 	await running.locator('#studio-theme-select').selectOption('dark');

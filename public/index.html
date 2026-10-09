@@ -263,18 +263,6 @@
         </span>
         <button id="resume-run" class="btn btn-ghost btn-sm" hidden>Resume</button>
         <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
-        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
-          <span class="theme-toggle-icon" aria-hidden="true">
-            <svg class="theme-toggle-glyph theme-toggle-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-              <circle cx="12" cy="12" r="3.5"></circle>
-              <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"></path>
-            </svg>
-            <svg class="theme-toggle-glyph theme-toggle-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.5 8.5 0 1 0 20.2 15.2Z"></path>
-            </svg>
-          </span>
-          <span class="theme-toggle-text" id="theme-toggle-text">Light</span>
-        </button>
       </div>
     </header>
 
@@ -404,21 +392,39 @@
     </header>
     <header class="panel-head" data-path="~/qase/browser.preview">
       <div class="live-device-view-head" id="live-device-view-head">
-        <span class="ldv-title" id="ldv-title">Preview</span>
-        <span class="ldv-device" id="ldv-device">—</span>
-        <span class="ldv-badges">
-          <span class="ldv-badge" id="ldv-exec">No device</span>
-          <span class="ldv-badge ldv-live" id="ldv-live">Idle</span>
+        <span class="viewer-head-identity">
+          <span class="ldv-title" id="ldv-title">Preview</span>
+          <span class="ldv-device" id="ldv-device">—</span>
         </span>
-        <button type="button" class="btn btn-ghost btn-sm ldv-change" id="ldv-change-device" title="Change the test device (opens the device picker)">Change</button>
+        <span class="viewer-head-actions">
+          <span class="ldv-badges">
+            <span class="ldv-badge" id="ldv-exec">No device</span>
+            <span class="ldv-badge ldv-live" id="ldv-live">Idle</span>
+          </span>
+          <button type="button" class="btn btn-ghost btn-sm ldv-change" id="ldv-change-device" title="Change the test device (opens the device picker)">Change</button>
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
+            <span class="theme-toggle-icon" aria-hidden="true">
+              <svg class="theme-toggle-glyph theme-toggle-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <circle cx="12" cy="12" r="3.5"></circle>
+                <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"></path>
+              </svg>
+              <svg class="theme-toggle-glyph theme-toggle-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.5 8.5 0 1 0 20.2 15.2Z"></path>
+              </svg>
+            </span>
+            <span class="theme-toggle-text" id="theme-toggle-text">Light</span>
+          </button>
+        </span>
       </div>
-      <div class="urlbar">
-        <span class="dot" id="browser-dot" aria-hidden="true"></span>
-        <span class="url" id="browser-url">about:blank</span>
+      <div class="viewer-address-row">
+        <div class="urlbar">
+          <span class="dot" id="browser-dot" aria-hidden="true"></span>
+          <span class="url" id="browser-url">about:blank</span>
+        </div>
+        <button id="stage-toggle" class="btn btn-sm preview-toggle" type="button" hidden
+                aria-expanded="true" aria-label="Minimize live preview" title="Minimize live preview">⤡</button>
       </div>
       <span class="subtle" id="browser-title"></span>
-      <button id="stage-toggle" class="btn btn-sm preview-toggle" type="button" hidden
-              aria-expanded="true" aria-label="Minimize live preview" title="Minimize live preview">⤡</button>
     </header>
 
     <div class="stage" id="stage">

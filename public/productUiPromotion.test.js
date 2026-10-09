@@ -63,6 +63,9 @@ test('the workspace exposes one polished theme action', () => {
 	assert.match(markup, /id="theme-toggle"[^>]+aria-label="Switch to dark theme"/);
 	assert.match(markup, /id="theme-toggle-text">Light</);
 	assert.doesNotMatch(markup, /id="theme-select"/);
+	assert.ok(markup.indexOf('id="live-device-view-head"') < markup.indexOf('id="theme-toggle"'));
+	assert.ok(markup.indexOf('id="theme-toggle"') < markup.indexOf('id="stage"'));
+	assert.match(embedStyles, /data-qase-layout="studio-mock"[^}]+\.viewer \.theme-toggle[^{]*\{[^}]+display: none/s);
 	assert.match(app, /themeStore\.applied\(\) === 'dark' \? 'light' : 'dark'/);
 });
 
