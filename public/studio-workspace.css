@@ -208,15 +208,8 @@ body.studio-workspace .sidebar-context-action {
 }
 body.studio-workspace .sidebar-context-action:hover { background: var(--surface-hover); color: var(--text); }
 body.studio-workspace .sidebar-context-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-body.studio-workspace[data-run-status="done"] .sidebar-context-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-}
-body.studio-workspace[data-run-status="done"] #sidebar-view-findings { display: none; }
 body.studio-workspace[data-run-status="error"] .sidebar-context-actions,
 body.studio-workspace[data-run-status="interrupted"] .sidebar-context-actions { display: flex; }
-body.studio-workspace[data-run-status="error"] .sidebar-context-actions > :not(#sidebar-view-findings),
-body.studio-workspace[data-run-status="interrupted"] .sidebar-context-actions > :not(#sidebar-view-findings) { display: none; }
 body.studio-workspace .panel-foot {
   flex: 0 0 auto;
   display: grid;
@@ -296,19 +289,30 @@ body.studio-workspace[data-run-status="done"] .app {
 }
 @media (min-width: 721px) {
 html[data-qase-sidebar="collapsed"] body.studio-workspace .app {
-  grid-template-columns: 56px minmax(320px, .95fr) minmax(360px, 1.15fr) 76px;
+  grid-template-columns: 64px minmax(320px, .95fr) minmax(360px, 1.15fr) 76px;
 }
 html[data-qase-sidebar="collapsed"] body.studio-workspace[data-run-status="running"] .app {
-  grid-template-columns: 56px minmax(280px, .7fr) minmax(480px, 1.55fr) 76px;
+  grid-template-columns: 64px minmax(280px, .7fr) minmax(480px, 1.55fr) 76px;
 }
 html[data-qase-sidebar="collapsed"] body.studio-workspace[data-run-status="done"] .app {
-  grid-template-columns: 56px minmax(280px, 320px) minmax(520px, 1fr) 76px;
+  grid-template-columns: 64px minmax(280px, 320px) minmax(520px, 1fr) 76px;
 }
 html[data-qase-sidebar="collapsed"] body.studio-workspace .runs .panel-head {
   gap: 10px;
-  padding: 14px 7px 10px;
+  padding: 12px 8px 10px;
 }
-html[data-qase-sidebar="collapsed"] body.studio-workspace .runs .brand { justify-content: center; }
+html[data-qase-sidebar="collapsed"] body.studio-workspace .runs .brand {
+  display: grid;
+  justify-content: center;
+  justify-items: center;
+  gap: 8px;
+}
+html[data-qase-sidebar="collapsed"] body.studio-workspace .brand-lockup { justify-content: center; }
+html[data-qase-sidebar="collapsed"] body.studio-workspace .brand-mark { display: none; }
+html[data-qase-sidebar="collapsed"] body.studio-workspace .sidebar-collapse-toggle {
+  border-color: var(--border);
+  background: var(--surface-1);
+}
 html[data-qase-sidebar="collapsed"] body.studio-workspace .sidebar-collapse-toggle svg { transform: scaleX(-1); }
 html[data-qase-sidebar="collapsed"] body.studio-workspace .sidebar-start {
   width: 40px;
@@ -950,7 +954,7 @@ body.studio-workspace .skip-link { background: var(--surface-1); color: var(--te
   body.studio-workspace .tabs { display: flex; overflow-x: auto; }
   body.studio-workspace .tab { flex: 0 0 auto; padding-inline: 12px; }
   html[data-qase-sidebar="collapsed"] body.studio-workspace .app {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: 64px minmax(0, 1fr);
     grid-template-rows: minmax(540px, 70dvh) minmax(560px, 70dvh) 76px;
   }
 }
@@ -983,7 +987,18 @@ body.studio-workspace .skip-link { background: var(--surface-1); color: var(--te
   body.studio-workspace .feature-tooltip { display: none; }
   body.studio-workspace .chat { grid-column: 1; grid-row: 3; }
   body.studio-workspace .viewer { grid-column: 1; grid-row: 4; }
-  body.studio-workspace .chat > .panel-head { align-items: flex-start; flex-direction: column; gap: 10px; }
+  body.studio-workspace .chat > .panel-head {
+    position: relative;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 58px;
+  }
+  body.studio-workspace .chat > .panel-head .theme-toggle {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+  }
   body.studio-workspace .panel-head { padding-inline: 14px; }
   body.studio-workspace .tabs { display: flex; overflow-x: auto; }
   body.studio-workspace .tab { flex: 0 0 auto; padding-inline: 12px; }

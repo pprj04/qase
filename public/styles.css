@@ -1030,6 +1030,84 @@ a {
   text-transform: lowercase;
 }
 
+/* One global theme action beside the run state. Detailed Light / Dark /
+   System selection remains available in Settings. */
+.theme-toggle {
+  --theme-icon-bg: #fff3c4;
+  --theme-icon-color: #8a5a00;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  margin: 0;
+  padding: 3px 10px 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font: 600 11.5px/1 var(--font-ui);
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background-color 160ms var(--ease), color 160ms var(--ease);
+}
+
+[data-theme="dark"] .theme-toggle {
+  --theme-icon-bg: rgba(96, 165, 250, 0.16);
+  --theme-icon-color: #bfdbfe;
+}
+
+.theme-toggle:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-toggle-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--theme-icon-bg);
+  color: var(--theme-icon-color);
+}
+
+.theme-toggle-glyph {
+  display: none;
+  width: 14px;
+  height: 14px;
+}
+
+[data-theme="light"] .theme-toggle-sun,
+[data-theme="dark"] .theme-toggle-moon {
+  display: block;
+}
+
+.theme-toggle-text {
+  min-width: 28px;
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .theme-toggle {
+    width: 32px;
+    padding: 3px;
+    justify-content: center;
+  }
+
+  .theme-toggle-text { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle { transition: none; }
+}
+
 /* ── Test Execution Timer ──────────────────────────────────────── */
 .run-timer {
   display: inline-flex;

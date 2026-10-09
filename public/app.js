@@ -623,7 +623,10 @@ function renderRun(run) {
 	const dot = document.createElement('span');
 	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
 	dot.setAttribute('aria-hidden', 'true');
-	meta.append(dot, document.createTextNode(relativeTime(run.updatedAt)));
+	const age = document.createElement('span');
+	age.className = 'run-age';
+	age.textContent = relativeTime(run.updatedAt);
+	meta.append(dot, age);
 	// Per-run timer: live elapsed for running runs (frozen while paused),
 	// stored active duration for finished ones. Each row computes
 	// independently — never a shared clock.
@@ -2065,6 +2068,9 @@ function perfRow(label, value) {
  * header stays available for restoring.
  */
 async function refreshPerformance() {
+	// Performance is no longer a permanent sidebar surface. Keep the analytics
+	// renderer dormant unless another product surface explicitly mounts it.
+	if (!el.perfPanel || !el.perfRestore || !el.perfGrid) return;
 	const aggregate = await api('/analytics/durations').catch(() => undefined);
 	if (!aggregate || !aggregate.runCount) {
 		el.perfPanel.hidden = true;
@@ -7500,6 +7506,16 @@ function syncThemeControls({ preference, applied }) {
 	document.documentElement.style.colorScheme = applied;
 	document.querySelector('meta[name="theme-color"]').content = applied === 'dark' ? '#101012' : '#ffffff';
 	for (const control of document.querySelectorAll('[data-theme-control]')) control.value = preference;
+	const themeToggle = $('theme-toggle');
+	if (themeToggle) {
+		const dark = applied === 'dark';
+		const nextTheme = dark ? 'light' : 'dark';
+		themeToggle.setAttribute('aria-pressed', String(dark));
+		themeToggle.setAttribute('aria-label', `Switch to ${nextTheme} theme`);
+		themeToggle.title = `Switch to ${nextTheme} theme`;
+		const label = $('theme-toggle-text');
+		if (label) label.textContent = dark ? 'Dark' : 'Light';
+	}
 }
 const themeStore = createThemeStore({
 	onChange: syncThemeControls
@@ -7509,6 +7525,9 @@ globalThis.__qaseThemeStore = themeStore; // Settings UI (Phase T2) + tests
 for (const control of document.querySelectorAll('[data-theme-control]')) {
 	control.addEventListener('change', () => themeStore.set(control.value));
 }
+$('theme-toggle')?.addEventListener('click', () => {
+	themeStore.set(themeStore.applied() === 'dark' ? 'light' : 'dark');
+});
 window.addEventListener('storage', event => {
 	if (event.key !== 'qase.theme' && event.key !== null) return;
 	try { if (event.storageArea !== localStorage) return; } catch { return; }
@@ -7860,12 +7879,6 @@ $('sidebar-view-findings')?.addEventListener('click', () => {
 	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	el.viewer.scrollIntoView({ block: 'nearest' });
 });
-$('sidebar-view-report')?.addEventListener('click', () => {
-	activateDetailTab($('tab-report'), true);
-	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
-	el.viewer.scrollIntoView({ block: 'nearest' });
-});
-$('sidebar-retest')?.addEventListener('click', openQaStart);
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
 el.stopRun.onclick = async () => {

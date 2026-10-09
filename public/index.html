@@ -171,12 +171,6 @@
       <button class="sidebar-context-action" id="sidebar-view-findings" type="button" title="View findings">
         <span class="sidebar-control-icon" aria-hidden="true">◇</span><span class="sidebar-control-label">View findings</span>
       </button>
-      <button class="sidebar-context-action" id="sidebar-view-report" type="button" title="View report">
-        <span class="sidebar-control-icon" aria-hidden="true">▤</span><span class="sidebar-control-label">View report</span>
-      </button>
-      <button class="sidebar-context-action" id="sidebar-retest" type="button" title="Retest">
-        <span class="sidebar-control-icon" aria-hidden="true">↻</span><span class="sidebar-control-label">Retest</span>
-      </button>
     </div>
     <details class="sidebar-tools" id="sidebar-tools">
       <summary title="Advanced tools">
@@ -236,29 +230,10 @@
       </div>
     </section>
     </details>
-    <section class="perf-panel" id="perf-panel" aria-label="Test execution performance" hidden>
-      <header class="perf-head">
-        <h2 class="perf-title">⏱ Performance</h2>
-        <div class="perf-actions">
-          <button class="perf-ctl" id="perf-minimize" type="button" aria-expanded="true" aria-controls="perf-body" aria-label="Minimize performance panel" title="Minimize">▾</button>
-          <button class="perf-ctl" id="perf-close" type="button" aria-label="Close performance panel" title="Close">✕</button>
-        </div>
-      </header>
-      <div class="perf-body" id="perf-body">
-        <dl class="perf-grid" id="perf-grid"></dl>
-        <div class="perf-compare" id="perf-compare" hidden>
-          <h3 class="perf-compare-title" id="perf-compare-title">Same-target runs</h3>
-          <ol class="perf-compare-list" id="perf-compare-list"></ol>
-        </div>
-      </div>
-    </section>
-    <button class="btn btn-ghost btn-sm perf-restore" id="perf-restore" type="button" title="Show performance panel" hidden>⏱ Performance</button>
-
     <button class="btn btn-ghost btn-sm perf-restore" id="feedback-restore" type="button" title="Show Feedback Inbox" hidden>💬 Feedback Inbox</button>
     <footer class="panel-foot">
       <span class="dot" id="conn-dot" aria-hidden="true"></span>
       <span id="conn-label" role="status" aria-live="polite">connecting…</span>
-      <label class="theme-control" for="theme-select"><span>Theme</span><select id="theme-select" name="theme" data-theme-control><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <button class="btn btn-ghost btn-sm foot-btn" id="open-profile" type="button">My account</button>
       <button class="btn btn-ghost btn-sm foot-btn" id="sign-out" title="Sign out">Sign out</button>
     </footer>
@@ -284,6 +259,18 @@
         </span>
         <button id="resume-run" class="btn btn-ghost btn-sm" hidden>Resume</button>
         <button id="stop-run" class="btn btn-danger btn-sm" hidden>Stop</button>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-pressed="false" aria-label="Switch to dark theme" title="Switch to dark theme">
+          <span class="theme-toggle-icon" aria-hidden="true">
+            <svg class="theme-toggle-glyph theme-toggle-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <circle cx="12" cy="12" r="3.5"></circle>
+              <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"></path>
+            </svg>
+            <svg class="theme-toggle-glyph theme-toggle-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.2 15.2A8.5 8.5 0 0 1 8.8 3.8 8.5 8.5 0 1 0 20.2 15.2Z"></path>
+            </svg>
+          </span>
+          <span class="theme-toggle-text" id="theme-toggle-text">Light</span>
+        </button>
       </div>
     </header>
 

@@ -58,3 +58,19 @@ test('customer preview and statuses use plain language', () => {
 	assert.match(app, /completed \? 'Complete' : 'Idle'/);
 	assert.doesNotMatch(app.slice(app.indexOf('const statusMap = {'), app.indexOf('const liveLabel =')), /●|◆|✕/);
 });
+
+test('the workspace exposes one polished theme action', () => {
+	assert.match(markup, /id="theme-toggle"[^>]+aria-label="Switch to dark theme"/);
+	assert.match(markup, /id="theme-toggle-text">Light</);
+	assert.doesNotMatch(markup, /id="theme-select"/);
+	assert.match(app, /themeStore\.applied\(\) === 'dark' \? 'light' : 'dark'/);
+});
+
+test('the customer sidebar stays focused and collapses cleanly', () => {
+	for (const removedId of ['sidebar-view-report', 'sidebar-retest', 'perf-panel', 'perf-restore']) {
+		assert.doesNotMatch(markup, new RegExp(`id="${removedId}"`));
+	}
+	assert.match(app, /age\.className = 'run-age'/);
+	assert.match(workspaceStyles, /grid-template-columns: 64px/);
+	assert.match(workspaceStyles, /data-qase-sidebar="collapsed"[^}]+\.brand-mark \{ display: none/);
+});
