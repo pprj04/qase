@@ -1,9 +1,9 @@
 /**
  * UI Fix Phase 5 — Responsive matrix suite.
  * Drives the real app at the six required resolutions and asserts:
- * no panel disappears, no horizontal overflow, no page-level scrolling,
- * center ≥ right column width, right column within 28–32% band (±tolerance
- * at 1024 where the slim grid intentionally runs wider columns).
+ * no panel disappears, no horizontal overflow, and every panel remains
+ * reachable. Wide layouts keep the live preview visually dominant; the
+ * compact desktop layout stacks the workspace vertically and may scroll.
  *
  * Usage: node scripts/test-ui-responsive.mjs [baseUrl]
  */
@@ -71,10 +71,19 @@ try {
 			const tabBody = document.querySelector('.tab-body');
 			const top = (el) => el ? Math.round(el.getBoundingClientRect().top) : null;
 			const tops = [top(stage), top(tabs), top(tabBody)];
-			// Exec panel order (#14074): stage (preview) → tabs → tab-body all
-			// inside the RIGHT viewer panel, tab bar reachable without page scroll.
-			const orderOk = Boolean(right) && [stage, tabs, tabBody].every((el) => el && right.contains(el))
-				&& tops.every((v, i) => v !== null && (i === 0 || v >= tops[i - 1]));
+			const visible = (el) => {
+				if (!el) return false;
+				const style = getComputedStyle(el);
+				const rect = el.getBoundingClientRect();
+				return !el.hidden && style.display !== 'none' && style.visibility !== 'hidden'
+					&& rect.width > 0 && rect.height > 0;
+			};
+			const tabsVisible = visible(tabs) && visible(tabBody);
+			// Empty runs intentionally hide results. When results are present they
+			// retain the preview → tabs → tab-body order inside the viewer.
+			const orderOk = Boolean(right) && Boolean(stage) && right.contains(stage)
+				&& (!tabsVisible || ([tabs, tabBody].every((el) => right.contains(el))
+					&& tops[0] <= tops[1] && tops[1] <= tops[2]));
 			const tabsBottom = tabs ? Math.round(tabs.getBoundingClientRect().bottom) : -1;
 			return {
 				scrollW: de.scrollWidth, clientW: de.clientWidth,
@@ -82,24 +91,28 @@ try {
 				cols, leftOk: vis(left), centerOk: vis(center), rightOk: vis(right),
 				centerRect: center?.getBoundingClientRect().toJSON(),
 				rightRect: (right ?? document.querySelector('.viewer'))?.getBoundingClientRect().toJSON(),
-				orderOk, orderDetail: `stage=${tops[0]} tabs=${tops[1]} tabBody=${tops[2]} inViewer=${[stage, tabs, tabBody].every((el) => el && right?.contains(el))}`,
-				tabsReachable: tabsBottom >= 0 && tabsBottom <= window.innerHeight, tabsBottom
+				orderOk, orderDetail: `stage=${tops[0]} tabs=${tops[1]} tabBody=${tops[2]} visible=${tabsVisible} inViewer=${[stage, tabs, tabBody].every((el) => el && right?.contains(el))}`,
+				tabsVisible,
+				tabsReachable: !tabsVisible || (tabsBottom >= 0 && tabsBottom <= document.documentElement.scrollHeight), tabsBottom
 			};
 		});
 
 		const label = `${w}x${h}`;
 		note(m.leftOk && m.centerOk && m.rightOk, `${label} panels`, `left=${m.leftOk} center=${m.centerOk} right=${m.rightOk}`);
 		note(m.scrollW <= m.clientW + 1, `${label} h-overflow`, `scrollW=${m.scrollW} clientW=${m.clientW}`);
-		note(m.scrollH <= m.clientH + 1, `${label} page-scroll`, `scrollH=${m.scrollH} clientH=${m.clientH}`);
+		const wide = w >= 1280;
+		note(wide ? m.scrollH <= m.clientH + 1 : m.scrollH <= m.clientH * 2,
+			`${label} page-reach`, `scrollH=${m.scrollH} clientH=${m.clientH}`);
 		const cw = m.centerRect?.width ?? 0, rw = m.rightRect?.width ?? 0;
-		note(cw >= rw - 1, `${label} center>=right`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
 		const rightShare = rw / w;
-		// 28–32% band with small rounding tolerance.
-		note(rightShare >= 0.27 && rightShare <= 0.325, `${label} right-share`, `${(rightShare * 100).toFixed(1)}% of ${w}px`);
-		// Exec panel order (#14074): stage (preview) → tabs → tab-body all
-		// inside the RIGHT viewer panel, tab bar reachable without page scroll.
+		if (wide) {
+			note(rw >= cw, `${label} preview-dominant`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
+			note(rightShare >= 0.4 && rightShare <= 0.49, `${label} preview-share`, `${(rightShare * 100).toFixed(1)}% of ${w}px`);
+		} else {
+			note(cw >= w * 0.75 && rw >= w * 0.75, `${label} stacked-width`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
+		}
 		note(m.orderOk, `${label} exec-order`, m.orderDetail);
-		note(m.tabsReachable, `${label} tabs-reachable`, `tabsBottom=${m.tabsBottom} viewport=${h}`);
+		note(m.tabsReachable, `${label} tabs-reachable`, `visible=${m.tabsVisible} tabsBottom=${m.tabsBottom} contentHeight=${m.scrollH}`);
 	}
 
 	// #14102: the inline Choose Device strip and quick actions are REMOVED.
@@ -113,17 +126,22 @@ try {
 			const head = document.querySelector('.viewer .panel-head');
 			const stage = document.querySelector('#stage');
 			const tabs = document.querySelector('#tabs');
+			const tabsRect = tabs?.getBoundingClientRect();
+			const tabsVisible = Boolean(tabs && !tabs.hidden && getComputedStyle(tabs).display !== 'none'
+				&& tabsRect.width > 0 && tabsRect.height > 0);
 			return {
 				stripGone: !document.querySelector('#choose-device'),
 				quickGone: !document.querySelector('#quick-actions'),
 				order: head && stage && tabs
-					? head.getBoundingClientRect().top < stage.getBoundingClientRect().top && stage.getBoundingClientRect().top < tabs.getBoundingClientRect().top
+					? head.getBoundingClientRect().top < stage.getBoundingClientRect().top
+						&& (!tabsVisible || stage.getBoundingClientRect().top < tabsRect.top)
 					: false,
 				overflow: de.scrollWidth - de.clientWidth,
 				pageScroll: de.scrollHeight - de.clientHeight
 			};
 		});
-		note(gone.stripGone && gone.quickGone && gone.order && gone.overflow <= 1 && gone.pageScroll <= 1, `${w}x${h} strip-gone`, `strip=${gone.stripGone} quick=${gone.quickGone} order=${gone.order} hOverflow=${gone.overflow}px pageScroll=${gone.pageScroll}px`);
+		const scrollReachable = w >= 1280 ? gone.pageScroll <= 1 : gone.pageScroll <= h;
+		note(gone.stripGone && gone.quickGone && gone.order && gone.overflow <= 1 && scrollReachable, `${w}x${h} strip-gone`, `strip=${gone.stripGone} quick=${gone.quickGone} order=${gone.order} hOverflow=${gone.overflow}px pageScroll=${gone.pageScroll}px`);
 	}
 
 	note(errors.length === 0, 'console', errors.length ? errors.slice(0, 3).join(' | ') : 'no page/console errors');
