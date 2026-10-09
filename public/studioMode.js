@@ -99,9 +99,9 @@
 			runs: document.getElementById('workspace-runs'),
 			agent: document.getElementById('workspace-agent')
 		};
-		const paneControls = {
-			runs: document.getElementById('runs-pane-control'),
-			agent: document.getElementById('agent-pane-control')
+		const paneResizers = {
+			runs: document.getElementById('runs-pane-resizer'),
+			agent: document.getElementById('agent-pane-resizer')
 		};
 		const paneWidthFromLayout = pane => Math.round(workspacePanels[pane]?.getBoundingClientRect().width || paneWidths[pane].minimum);
 		const minimumViewerWidth = () => {
@@ -117,37 +117,68 @@
 			const available = workspace.getBoundingClientRect().width - otherWidth - dockWidth - minimumViewerWidth();
 			return Math.max(settings.minimum, Math.min(settings.maximum, Math.floor(available)));
 		};
-		const updatePaneControls = () => {
-			for (const [pane, control] of Object.entries(paneControls)) {
-				if (!control) continue;
+		const updatePaneResizers = () => {
+			for (const [pane, resizer] of Object.entries(paneResizers)) {
+				if (!resizer) continue;
 				const width = paneWidthFromLayout(pane);
 				const maximum = maximumPaneWidth(pane);
-				control.dataset.width = String(width);
-				control.title = `${pane === 'runs' ? 'Recent tests' : 'Agent'} panel: ${width}px`;
-				const decrease = control.querySelector('[data-direction="decrease"]');
-				const increase = control.querySelector('[data-direction="increase"]');
-				if (decrease) decrease.disabled = width <= paneWidths[pane].minimum;
-				if (increase) increase.disabled = width >= maximum;
+				resizer.setAttribute('aria-valuenow', String(width));
+				resizer.setAttribute('aria-valuemax', String(maximum));
+				resizer.title = `Drag to resize ${pane === 'runs' ? 'recent tests' : 'agent'} panel`;
 			}
 		};
-		const setPaneWidth = (pane, requestedWidth) => {
+		const setPaneWidth = (pane, requestedWidth, persist = true) => {
 			const settings = paneWidths[pane];
 			const nextWidth = Math.max(settings.minimum, Math.min(maximumPaneWidth(pane), Math.round(requestedWidth)));
 			document.documentElement.style.setProperty(settings.property, `${nextWidth}px`);
-			persistPreference(settings.key, nextWidth);
-			requestAnimationFrame(updatePaneControls);
+			if (persist) persistPreference(settings.key, nextWidth);
+			requestAnimationFrame(updatePaneResizers);
+			return nextWidth;
 		};
-		for (const control of Object.values(paneControls)) {
-			control?.addEventListener('click', event => {
-				const button = event.target.closest('[data-pane-resize]');
-				if (!button || button.disabled) return;
-				const pane = button.dataset.paneResize;
-				const direction = button.dataset.direction === 'increase' ? 1 : -1;
-				setPaneWidth(pane, paneWidthFromLayout(pane) + paneWidths[pane].step * direction);
+		for (const [pane, resizer] of Object.entries(paneResizers)) {
+			if (!resizer) continue;
+			let resizing = false;
+			let startX = 0;
+			let startWidth = 0;
+			const finishResize = event => {
+				if (!resizing) return;
+				resizing = false;
+				delete document.documentElement.dataset.paneResizing;
+				if (event?.pointerId !== undefined && resizer.hasPointerCapture?.(event.pointerId)) {
+					resizer.releasePointerCapture(event.pointerId);
+				}
+				setPaneWidth(pane, paneWidthFromLayout(pane), true);
+			};
+			resizer.addEventListener('pointerdown', event => {
+				if (event.button !== 0 || !matchMedia('(min-width: 1101px)').matches) return;
+				resizing = true;
+				startX = event.clientX;
+				startWidth = paneWidthFromLayout(pane);
+				document.documentElement.dataset.paneResizing = pane;
+				resizer.setPointerCapture?.(event.pointerId);
+				event.preventDefault();
+			});
+			resizer.addEventListener('pointermove', event => {
+				if (!resizing) return;
+				setPaneWidth(pane, startWidth + event.clientX - startX, false);
+				event.preventDefault();
+			});
+			resizer.addEventListener('pointerup', finishResize);
+			resizer.addEventListener('pointercancel', finishResize);
+			resizer.addEventListener('keydown', event => {
+				if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+				const settings = paneWidths[pane];
+				const nextWidth = event.key === 'Home'
+					? settings.minimum
+					: event.key === 'End'
+						? maximumPaneWidth(pane)
+						: paneWidthFromLayout(pane) + (event.key === 'ArrowLeft' ? -settings.step : settings.step);
+				setPaneWidth(pane, nextWidth, true);
+				event.preventDefault();
 			});
 		}
-		requestAnimationFrame(updatePaneControls);
-		window.addEventListener('resize', updatePaneControls, { passive: true });
+		requestAnimationFrame(updatePaneResizers);
+		window.addEventListener('resize', updatePaneResizers, { passive: true });
 
 		if (!enabled) return;
 		const project = document.getElementById('studio-project-name');

@@ -110,17 +110,17 @@ test('completed runs use a focused routed results page', () => {
 	assert.match(embedStyles, /data-qase-layout="studio-mock"[^}]+data-page="results"[^}]+\.app/);
 });
 
-test('desktop pane seams reveal narrow and widen controls on hover or focus', () => {
+test('desktop pane seams resize by drag without visible plus or minus controls', () => {
 	for (const pane of ['runs', 'agent']) {
-		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="decrease"`));
-		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="increase"`));
+		assert.match(markup, new RegExp(`id="${pane}-pane-resizer"[\\s\\S]+role="separator"`));
 	}
+	assert.doesNotMatch(markup, /data-pane-resize=/);
 	assert.match(mode, /qase\.pane\.runs/);
 	assert.match(mode, /qase\.pane\.agent/);
 	assert.match(mode, /setPaneWidth/);
-	assert.match(workspaceStyles, /@media \(min-width: 1101px\)[^{]+\{[\s\S]+\.pane-size-control/);
-	assert.match(workspaceStyles, /\.pane-size-control \{ opacity: 0; \}/);
-	assert.match(workspaceStyles, /\.pane-size-control:is\(:hover, :focus-within\)/);
+	assert.match(mode, /addEventListener\('pointermove'/);
+	assert.match(workspaceStyles, /@media \(min-width: 1101px\)[^{]+\{[\s\S]+\.pane-resizer/);
+	assert.match(workspaceStyles, /cursor: col-resize/);
 });
 
 test('the run header shows one elapsed-time treatment', () => {
