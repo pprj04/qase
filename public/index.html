@@ -14,9 +14,6 @@
 <link rel="stylesheet" href="entry-terminal.css">
 <link rel="stylesheet" href="studio-workspace.css">
 <link rel="stylesheet" href="studio-embed.css">
-<!-- Synchronous, CSP-clean (script-src 'self'): applies the stored theme
-     before first paint so light mode never flashes dark. -->
-<script src="theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a84ff'/><path d='M11 8h10M13 8v7L9.5 22a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L19 15V8' stroke='%23fff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 </head>
 <body class="cli-theme studio-workspace" data-has-run="false">
@@ -1219,6 +1216,8 @@
           <small id="founder-catalog-meta" aria-live="polite">Loading review catalog…</small>
         </div>
       </aside>
+
+      <div class="founder-detected-context" id="founder-detected-context" hidden></div>
 
       <fieldset class="founder-fieldset founder-target-primary">
         <legend>Product to review</legend>

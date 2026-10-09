@@ -1501,6 +1501,30 @@ export function createPostgresRunRepository({
 		return closePromise;
 	}
 
+	async function getFounderProjectState() {
+		return transaction(async client => {
+			const result = await client.query(
+				`SELECT state FROM founder_project_state
+				 WHERE organization_id = $1 AND project_id = $2`,
+				[tenant.organizationId, tenant.projectId]
+			);
+			return result.rows?.[0]?.state ?? undefined;
+		});
+	}
+
+	async function saveFounderProjectState(state) {
+		return transaction(async client => {
+			await client.query(
+				`INSERT INTO founder_project_state (organization_id, project_id, state, updated_at)
+				 VALUES ($1, $2, $3::jsonb, $4)
+				 ON CONFLICT (organization_id, project_id) DO UPDATE SET
+					state = EXCLUDED.state, updated_at = EXCLUDED.updated_at`,
+				[tenant.organizationId, tenant.projectId, JSON.stringify(state), asDate(now(), Date.now())]
+			);
+			return true;
+		});
+	}
+
 	return {
 		bootstrapTenant,
 		loadAll,
@@ -1515,6 +1539,8 @@ export function createPostgresRunRepository({
 		targetDurationHistory,
 		check,
 		close,
+		getFounderProjectState,
+		saveFounderProjectState,
 		get pool() {
 			return pool;
 		}
