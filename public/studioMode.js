@@ -23,6 +23,16 @@
 	const readPreference = (key, fallback) => {
 		try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 	};
+	const paneWidths = Object.freeze({
+		runs: Object.freeze({ minimum: 180, maximum: 320, step: 24, key: 'qase.pane.runs', property: '--qase-runs-user-width' }),
+		agent: Object.freeze({ minimum: 280, maximum: 620, step: 32, key: 'qase.pane.agent', property: '--qase-agent-user-width' })
+	});
+	for (const settings of Object.values(paneWidths)) {
+		const savedWidth = Number(readPreference(settings.key, ''));
+		if (Number.isFinite(savedWidth) && savedWidth >= settings.minimum && savedWidth <= settings.maximum) {
+			document.documentElement.style.setProperty(settings.property, `${Math.round(savedWidth)}px`);
+		}
+	}
 	const sidebarPreference = readPreference(
 		sidebarPreferenceKey,
 		readPreference(legacySidebarPreferenceKey, 'expanded')
@@ -83,6 +93,61 @@
 				setSidebarState('expanded');
 			}
 		});
+
+		const workspace = document.querySelector('.app');
+		const workspacePanels = {
+			runs: document.getElementById('workspace-runs'),
+			agent: document.getElementById('workspace-agent')
+		};
+		const paneControls = {
+			runs: document.getElementById('runs-pane-control'),
+			agent: document.getElementById('agent-pane-control')
+		};
+		const paneWidthFromLayout = pane => Math.round(workspacePanels[pane]?.getBoundingClientRect().width || paneWidths[pane].minimum);
+		const minimumViewerWidth = () => {
+			const status = document.body.dataset.runStatus;
+			return status === 'done' ? 520 : status === 'running' ? 480 : 360;
+		};
+		const maximumPaneWidth = pane => {
+			const settings = paneWidths[pane];
+			if (!workspace) return settings.maximum;
+			const otherPane = pane === 'runs' ? 'agent' : 'runs';
+			const otherWidth = paneWidthFromLayout(otherPane);
+			const dockWidth = Math.round(document.querySelector('.feature-dock')?.getBoundingClientRect().width || 76);
+			const available = workspace.getBoundingClientRect().width - otherWidth - dockWidth - minimumViewerWidth();
+			return Math.max(settings.minimum, Math.min(settings.maximum, Math.floor(available)));
+		};
+		const updatePaneControls = () => {
+			for (const [pane, control] of Object.entries(paneControls)) {
+				if (!control) continue;
+				const width = paneWidthFromLayout(pane);
+				const maximum = maximumPaneWidth(pane);
+				control.dataset.width = String(width);
+				control.title = `${pane === 'runs' ? 'Recent tests' : 'Agent'} panel: ${width}px`;
+				const decrease = control.querySelector('[data-direction="decrease"]');
+				const increase = control.querySelector('[data-direction="increase"]');
+				if (decrease) decrease.disabled = width <= paneWidths[pane].minimum;
+				if (increase) increase.disabled = width >= maximum;
+			}
+		};
+		const setPaneWidth = (pane, requestedWidth) => {
+			const settings = paneWidths[pane];
+			const nextWidth = Math.max(settings.minimum, Math.min(maximumPaneWidth(pane), Math.round(requestedWidth)));
+			document.documentElement.style.setProperty(settings.property, `${nextWidth}px`);
+			persistPreference(settings.key, nextWidth);
+			requestAnimationFrame(updatePaneControls);
+		};
+		for (const control of Object.values(paneControls)) {
+			control?.addEventListener('click', event => {
+				const button = event.target.closest('[data-pane-resize]');
+				if (!button || button.disabled) return;
+				const pane = button.dataset.paneResize;
+				const direction = button.dataset.direction === 'increase' ? 1 : -1;
+				setPaneWidth(pane, paneWidthFromLayout(pane) + paneWidths[pane].step * direction);
+			});
+		}
+		requestAnimationFrame(updatePaneControls);
+		window.addEventListener('resize', updatePaneControls, { passive: true });
 
 		if (!enabled) return;
 		const project = document.getElementById('studio-project-name');

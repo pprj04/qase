@@ -74,3 +74,34 @@ test('the customer sidebar stays focused and collapses cleanly', () => {
 	assert.match(workspaceStyles, /grid-template-columns: 64px/);
 	assert.match(workspaceStyles, /data-qase-sidebar="collapsed"[^}]+\.brand-mark \{ display: none/);
 });
+
+test('launchers keep their final controls reachable at short viewport heights', () => {
+	assert.match(workspaceStyles, /:is\(\.qa-modal, \.sqa-modal, \.founder-modal\)\[open\][^{]+\{[^}]+overflow: hidden/s);
+	assert.match(workspaceStyles, /:is\(\.qa-modal, \.sqa-modal, \.founder-modal\) \.modal-body[^{]+\{[^}]+overflow-y: auto/s);
+	assert.match(workspaceStyles, /:is\(\.qa-modal, \.sqa-modal, \.founder-modal\) \.modal-foot[^{]+\{[^}]+position: static/s);
+});
+
+test('account settings use a structured, independently scrolling surface', () => {
+	for (const section of ['account-profile-heading', 'account-password-heading', 'account-memory-heading']) {
+		assert.match(markup, new RegExp(`id="${section}"`));
+	}
+	assert.match(markup, /class="account-shell"/);
+	assert.match(markup, /class="account-body"/);
+	assert.match(workspaceStyles, /\.account-body[^{]+\{[^}]+overflow-y: auto/s);
+});
+
+test('desktop pane seams expose persistent narrow and widen controls', () => {
+	for (const pane of ['runs', 'agent']) {
+		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="decrease"`));
+		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="increase"`));
+	}
+	assert.match(mode, /qase\.pane\.runs/);
+	assert.match(mode, /qase\.pane\.agent/);
+	assert.match(mode, /setPaneWidth/);
+	assert.match(workspaceStyles, /@media \(min-width: 1101px\)[^{]+\{[\s\S]+\.pane-size-control/);
+});
+
+test('the run header shows one elapsed-time treatment', () => {
+	assert.match(workspaceStyles, /\.run-timer \{ display: none !important; \}/);
+	assert.match(markup, /id="timer-chip"/);
+});

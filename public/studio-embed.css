@@ -282,6 +282,12 @@ html[data-qase-layout="studio-mock"] .studio-tool-workspace {
 	background: var(--studio-host-workspace);
 }
 
+/* The host already owns its context resizer. Product pane-size controls are
+   reserved for standalone Qase where the full viewport can absorb the change. */
+html[data-qase-layout="studio-mock"] body.studio-workspace .pane-size-control {
+	display: none;
+}
+
 html[data-qase-layout="studio-mock"] .studio-tool-header {
 	display: flex;
 	min-width: 0;
