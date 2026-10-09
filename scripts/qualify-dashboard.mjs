@@ -109,6 +109,10 @@ try {
 		return route.fulfill({ status: 201, json: matrixRun });
 	});
 	await page.route('**/api/matrix-runs/matrix-fixture', route => route.fulfill({ json: { run: matrixRun } }));
+	await page.route('**/api/profile', route => route.fulfill({
+		json: { email: 'fixture@example.test', displayName: 'Fixture owner', profile: { timezone: 'Asia/Kolkata' } }
+	}));
+	await page.route('**/api/memory*', route => route.fulfill({ json: [] }));
 	await page.goto(base);
 	// The decorative entry screen is gone — authentication owns the gate now.
 	await page.locator('#auth-gate').waitFor({state:'hidden'});
@@ -128,11 +132,31 @@ try {
 	await page.locator('#new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
 	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
+	const setupPageLayout = await page.locator('#qa-start').evaluate(dialog => {
+		const rect = dialog.getBoundingClientRect();
+		const footer = dialog.querySelector('.modal-foot')?.getBoundingClientRect();
+		return {
+			width: Math.round(rect.width), height: Math.round(rect.height),
+			navVisible: dialog.querySelector('.route-section-nav')?.getBoundingClientRect().width > 0,
+			footerReachable: footer && footer.bottom <= window.innerHeight + 1
+		};
+	});
+	assert.ok(setupPageLayout.width >= 1420 && setupPageLayout.height >= 980, 'Test setup fills the viewport');
+	assert.equal(setupPageLayout.navVisible, true);
+	assert.equal(setupPageLayout.footerReachable, true);
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.locator('[data-page-jump="qa-customize"]').click();
+	assert.equal(await page.locator('#qa-customize').evaluate(node => node.open), true, 'Mobile section navigation opens advanced setup');
+	assert.ok(await page.locator('#qa-submit').isVisible(), 'The primary setup action remains visible on mobile');
+	await screenshot(page, 'start-page-mobile.png');
+	await page.setViewportSize({ width: 1440, height: 1000 });
 	assert.equal(await page.locator('#qa-submit').isDisabled(),true,'Empty URL cannot launch QA');
 	await page.locator('#qa-target-url').fill('https://example.test/');
 	assert.equal(await page.locator('#qa-security-auth').isHidden(), true, 'Standard QA does not demand security authorization');
 	assert.equal(await page.locator('#qa-submit').isEnabled(),true,'A valid URL enables the standard QA run');
-	await page.locator('#qa-customize > summary').click();
+	if (!await page.locator('#qa-customize').evaluate(node => node.open)) {
+		await page.locator('#qa-customize > summary').click();
+	}
 	await page.locator('input[name="qa-test"][value="security_authentication"]').check();
 	assert.equal(await page.locator('#qa-submit').isDisabled(), true, 'Opting into security requires authorization');
 	await page.locator('#qa-security-authorized').check();
@@ -161,6 +185,12 @@ try {
 	assert.equal(await page.locator('#status-chip').textContent(), 'Running');
 	await page.locator('#run-list').filter({ hasText: 'example.test' }).waitFor();
 	await screenshot(page,'start-run-success.png');
+	const paneControl = page.locator('#agent-pane-control');
+	assert.equal(await paneControl.evaluate(node => getComputedStyle(node).opacity), '0', 'Pane resize controls stay quiet at rest');
+	await paneControl.hover();
+	await page.waitForFunction(() => getComputedStyle(document.querySelector('#agent-pane-control')).opacity === '1');
+	await paneControl.locator('button').first().focus();
+	assert.equal(await paneControl.evaluate(node => getComputedStyle(node).opacity), '1', 'Keyboard focus also reveals pane resize controls');
 	checks.push('QA launcher explains disabled states, recovers catalog and backend failures, prevents duplicate creation, selects the created run, and enters the running workspace from both entry points');
 	const created = await page.request.post(`${base}/api/sessions`, { data: { selectedTests: ['navigation'], scopeSelection: ['navigation'] } });
 	assert.equal(created.status(), 201);
@@ -168,7 +198,7 @@ try {
 	const qaSession = sessions.get(qaId);
 	await page.request.post(`${base}/api/sessions/${qaId}/message`, { data: { text: targetUrl } });
 	await page.evaluate(id => localStorage.setItem('qase.session', id), qaId);
-	await page.reload();
+	await page.goto(`${base}/#/runs/${qaId}`);
 	await page.locator('#qa-start').evaluate(dialog=>{ if(dialog.open) dialog.close(); });
 	await page.waitForFunction(()=>document.querySelector('#chat-title')?.textContent?.includes('127.0.0.1'));
 	await page.waitForTimeout(200);
@@ -225,6 +255,62 @@ try {
 		await screenshot(page,`sqa-${width}.png`);await page.locator('#sqa-cancel').click();
 		checks.push(`Mode dock and SQA dialog usable at ${width}px`);
 	}
+	const completedRun = await services.runs.create('Checkout regression', {
+		targetUrl: 'https://shop.example.test/checkout',
+		status: 'done',
+		completedAt: Date.now(),
+		findings: [{
+			id: 'finding-results-page',
+			title: 'Payment error does not explain the next step',
+			severity: 'high', category: 'forms', url: 'https://shop.example.test/checkout',
+			impact: 'Customers cannot tell how to recover.',
+			expected: 'Explain why payment failed and how to retry.',
+			actual: 'A generic error appears with no recovery guidance.',
+			steps: ['Open checkout', 'Submit a declined test payment'],
+			evidence: 'The error region contains no recovery action.'
+		}]
+	});
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await page.goto(`${base}/#/runs/${completedRun.id}/results`);
+	await page.waitForFunction(() => document.querySelector('#results-page-title')?.textContent === 'Checkout regression'
+		&& document.body.dataset.pageLoading !== 'true');
+	await page.locator('#results-page-head').waitFor({ state: 'visible' });
+	assert.equal(await page.locator('#results-page-title').textContent(), 'Checkout regression');
+	assert.equal(await page.locator('#results-page-findings').textContent(), '1 finding');
+	assert.equal(await page.locator('#tab-findings').getAttribute('aria-selected'), 'true');
+	assert.equal(await page.locator('#tab-activity').isHidden(), true);
+	assert.equal(await page.locator('#tab-plan').isHidden(), true);
+	assert.equal(await page.locator('#workspace-agent').isHidden(), true);
+	assert.ok((await page.locator('#workspace-viewer').boundingBox()).width <= 1182);
+	await screenshot(page, 'results-page-desktop.png');
+	await page.setViewportSize({ width: 390, height: 844 });
+	assert.equal(await page.locator('#results-page-head').isVisible(), true);
+	assert.equal(await page.locator('#results-page-new').isVisible(), true);
+	assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), true);
+	await screenshot(page, 'results-page-mobile.png');
+	await page.locator('#results-page-back').click();
+	await page.waitForURL(`**/#/runs/${completedRun.id}`);
+	assert.equal(await page.locator('#workspace-agent').isVisible(), true, 'Run workspace returns to the agent view');
+	checks.push('Completed runs open a focused results page with evidence, responsive actions, and a working return to the run workspace');
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await page.goto(`${base}/#/account`);
+	await page.locator('#profile-dialog[open]').waitFor();
+	assert.equal(await page.locator('#profile-title').textContent(), 'My account');
+	assert.equal(await page.locator('.account-nav').isVisible(), true);
+	await screenshot(page, 'account-page-desktop.png');
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.locator('[data-page-jump="account-memory-heading"]').click();
+	await page.waitForTimeout(400);
+	assert.equal(await page.locator('#account-memory-heading').evaluate(node => document.activeElement === node), true, 'Account section navigation moves keyboard focus');
+	assert.equal(await page.locator('#account-memory-heading').evaluate(node => {
+		const rect = node.getBoundingClientRect();
+		return rect.top >= 0 && rect.bottom <= window.innerHeight;
+	}), true, 'Account section navigation reveals its destination');
+	assert.ok(await page.locator('#memory-form').isVisible(), 'Saved memory form remains reachable on mobile');
+	await screenshot(page, 'account-page-mobile.png');
+	await page.locator('#profile-close').click();
+	await page.waitForURL('**/#/runs');
+	checks.push('Routed Start Testing and My Account pages are full-height, responsive, focus-managed, and return to the workspace');
 	assert.equal((await fetch(`${base}/demo`)).status,404);assert.equal((await fetch(`${base}/readyz`)).status,200);
 	checks.push('Production demo disabled and readiness reachable');
 	// Replay only completed controlled qualification output if available.

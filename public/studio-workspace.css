@@ -1206,8 +1206,8 @@ body.studio-workspace:is([data-run-status="running"], [data-run-status="done"]) 
 body.studio-workspace .head-actions :is(.status-chip, .meta-chip, .theme-toggle, .btn) { min-height: 32px; }
 body.studio-workspace .chat-id { width: 100%; }
 
-/* Small controls sit directly on the two desktop seams. They resize one pane
-   at a time and remain keyboard-operable buttons instead of invisible drags. */
+/* Pane resize actions live on the desktop seams and reveal only on hover or
+   keyboard focus, keeping the workspace quiet without hiding functionality. */
 body.studio-workspace .pane-size-control { display: none; }
 @media (min-width: 1101px) {
   body.studio-workspace .pane-size-control {
@@ -1221,11 +1221,12 @@ body.studio-workspace .pane-size-control { display: none; }
     width: auto;
     margin-top: 162px;
     padding: 2px;
-    border: 1px solid var(--border-strong);
+    border: 1px solid transparent;
     border-radius: 10px;
-    background: var(--surface-1);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, .14);
-    transform: translateX(50%);
+    background: transparent;
+    box-shadow: none;
+    transform: translateX(50%) scale(.96);
+    transition: opacity 140ms ease, transform 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   }
   body.studio-workspace .pane-size-control--runs { grid-column: 1; }
   body.studio-workspace .pane-size-control--agent { grid-column: 2; }
@@ -1255,6 +1256,16 @@ body.studio-workspace .pane-size-control { display: none; }
     font-size: 0;
   }
   html[data-qase-sidebar="collapsed"] body.studio-workspace .pane-size-control--runs { display: none; }
+  @media (hover: hover) and (pointer: fine) {
+    body.studio-workspace .pane-size-control { opacity: 0; }
+    body.studio-workspace .pane-size-control:is(:hover, :focus-within) {
+      opacity: 1;
+      border-color: var(--border-strong);
+      background: var(--surface-1);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .14);
+      transform: translateX(50%) scale(1);
+    }
+  }
 }
 
 @media (max-width: 1100px) {
@@ -1367,4 +1378,445 @@ body.studio-workspace .pane-size-control { display: none; }
 @media (prefers-reduced-motion: reduce) {
   body.studio-workspace .btn { transition: none; }
   body.studio-workspace :is(.modal, .qa-matrix-flash) { animation: none; }
+}
+
+/* Phase 2 — routed tasks are full product pages. The existing forms and API
+   controllers stay shared; only their presentation changes at route level. */
+body.studio-workspace .route-page[open] {
+  inset: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text);
+}
+body.studio-workspace .route-page::backdrop { background: var(--surface-2); }
+body.studio-workspace .route-page-shell {
+  box-sizing: border-box;
+  width: min(1240px, 100%);
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0 auto;
+  overflow: hidden;
+  border-inline: 1px solid var(--border);
+  background: var(--surface-1);
+}
+body.studio-workspace .qa-modal.route-page[open] {
+  width: 100vw;
+  height: 100dvh;
+  max-height: none;
+}
+body.studio-workspace .qa-modal.route-page .modal-inner {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100dvh;
+  max-height: none;
+}
+body.studio-workspace .route-page :is(.modal-head, .account-head) {
+  min-height: 88px;
+  padding: 18px clamp(20px, 4vw, 48px);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+body.studio-workspace .route-page-heading {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 14px;
+}
+body.studio-workspace .route-page-mark {
+  display: grid;
+  flex: 0 0 42px;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 700 17px/1 var(--font-ui);
+}
+body.studio-workspace .route-page-context,
+body.studio-workspace .route-page .account-eyebrow {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font: 550 12px/1.35 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+}
+body.studio-workspace .route-page :is(.modal-head, .account-head) h1 {
+  margin: 0;
+  color: var(--text);
+  font: 650 clamp(20px, 2vw, 25px)/1.2 var(--font-ui);
+  letter-spacing: -.025em;
+  text-wrap: balance;
+}
+body.studio-workspace .route-page .modal-head #qa-start-description {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font: 12.5px/1.45 var(--font-ui);
+}
+body.studio-workspace .route-page-back {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-height: 38px;
+  gap: 7px;
+  margin: 0;
+}
+body.studio-workspace .route-page .modal-body {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 800px);
+  align-items: start;
+  justify-content: center;
+  min-height: 0;
+  gap: clamp(28px, 5vw, 60px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 36px clamp(24px, 5vw, 64px) 52px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+body.studio-workspace .route-page-content {
+  display: grid;
+  min-width: 0;
+  gap: 18px;
+}
+body.studio-workspace .route-page-content :is(h2, h3, h4, details, input),
+body.studio-workspace .account-content :is(h2, h3) { scroll-margin-top: 72px; }
+body.studio-workspace .route-section-nav {
+  position: sticky;
+  top: 0;
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding-top: 3px;
+}
+body.studio-workspace .route-section-nav > p {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font: 600 12px/1.4 var(--font-ui);
+}
+body.studio-workspace .route-section-nav > button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 550 12.5px/1.35 var(--font-ui);
+  text-align: left;
+  touch-action: manipulation;
+}
+body.studio-workspace .route-section-nav > button span {
+  display: grid;
+  flex: 0 0 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+body.studio-workspace .route-section-nav > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+body.studio-workspace .route-section-nav > button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+body.studio-workspace .route-section-nav > small {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font: 11.5px/1.55 var(--font-ui);
+}
+body.studio-workspace .route-page .modal-foot {
+  position: static;
+  flex: 0 0 auto;
+  min-height: 72px;
+  padding: 14px clamp(24px, 5vw, 64px);
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+  box-shadow: 0 -10px 28px color-mix(in srgb, var(--bg) 8%, transparent);
+}
+
+body.studio-workspace .account-dialog.route-page {
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+body.studio-workspace .account-dialog.route-page::backdrop {
+  background: var(--surface-2);
+  backdrop-filter: none;
+}
+body.studio-workspace .account-dialog.route-page .account-shell {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1180px, 100%);
+  height: 100dvh;
+}
+body.studio-workspace .account-dialog.route-page .account-head h1 {
+  margin: 0;
+  color: var(--text);
+  font: 650 clamp(20px, 2vw, 25px)/1.2 var(--font-ui);
+  letter-spacing: -.025em;
+}
+body.studio-workspace .account-dialog.route-page .account-body {
+  grid-template-columns: 200px minmax(0, 760px);
+  align-items: start;
+  justify-content: center;
+  gap: clamp(28px, 5vw, 60px);
+  padding: 36px clamp(24px, 5vw, 64px) 52px;
+}
+body.studio-workspace .account-content {
+  display: grid;
+  min-width: 0;
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+body.studio-workspace .account-dialog.route-page .account-section {
+  gap: 18px;
+  padding: 24px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  scroll-margin-top: 24px;
+}
+body.studio-workspace .account-dialog.route-page .account-section-copy h3 {
+  font-size: 16px;
+  text-wrap: balance;
+}
+body.studio-workspace .account-dialog.route-page .account-status {
+  min-height: 0;
+  padding-inline: clamp(24px, 5vw, 64px);
+}
+
+@media (max-width: 760px) {
+  body.studio-workspace .route-page-shell,
+  body.studio-workspace .account-dialog.route-page .account-shell { border-inline: 0; }
+  body.studio-workspace .route-page :is(.modal-head, .account-head) {
+    align-items: flex-start;
+    min-height: 0;
+    gap: 14px;
+    padding: 16px;
+  }
+  body.studio-workspace .route-page-mark,
+  body.studio-workspace .account-avatar { display: none; }
+  body.studio-workspace .route-page-back { min-height: 36px; padding-inline: 10px; }
+  body.studio-workspace .route-page .modal-body,
+  body.studio-workspace .account-dialog.route-page .account-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    padding: 0 16px 36px;
+  }
+  body.studio-workspace .route-section-nav {
+    z-index: 2;
+    top: 0;
+    display: flex;
+    gap: 6px;
+    margin-inline: -16px;
+    padding: 10px 16px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-1);
+    scrollbar-width: none;
+  }
+  body.studio-workspace .route-section-nav::-webkit-scrollbar { display: none; }
+  body.studio-workspace .route-section-nav > p,
+  body.studio-workspace .route-section-nav > small { display: none; }
+  body.studio-workspace .route-section-nav > button {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 36px;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+  }
+  body.studio-workspace .route-section-nav > button span { display: none; }
+  body.studio-workspace .route-page-content { gap: 14px; }
+  body.studio-workspace .route-page .modal-foot {
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  }
+  body.studio-workspace .account-dialog.route-page .account-body { padding-top: 0; }
+  body.studio-workspace .account-dialog.route-page .account-section { padding-block: 20px; }
+  body.studio-workspace .account-dialog.route-page .account-status { padding-inline: 16px; }
+}
+
+/* Phase 3 — completed runs open as a focused evidence review page. Live run
+   panels remain intact and are one action away through Run workspace. */
+body.studio-workspace .results-page-head { display: none; }
+body.studio-workspace[data-page="results"] {
+  overflow: hidden;
+  background: var(--surface-2);
+}
+body.studio-workspace[data-page="results"] .app {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  background: var(--surface-2);
+}
+body.studio-workspace[data-page="results"] :is(
+  .workspace-mobile-nav,
+  .runs,
+  .chat,
+  .feature-dock,
+  .pane-size-control
+) { display: none; }
+body.studio-workspace[data-page="results"] .viewer {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-rows: auto auto 44px 43px minmax(0, 1fr);
+  width: min(1180px, 100%);
+  height: 100dvh;
+  min-height: 0;
+  margin: 0 auto;
+  overflow: hidden;
+  border-inline: 1px solid var(--border);
+  background: var(--surface-1);
+}
+body.studio-workspace[data-page="results"] .results-page-head {
+  display: flex;
+  grid-row: 1;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 24px;
+  padding: 20px clamp(20px, 4vw, 48px);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+body.studio-workspace[data-page="results"][data-page-loading="true"] .viewer {
+  visibility: hidden;
+}
+body.studio-workspace .results-page-identity { min-width: 0; }
+body.studio-workspace .results-page-identity > p {
+  margin: 0 0 3px;
+  color: var(--text-muted);
+  font: 550 12px/1.35 var(--font-ui);
+}
+body.studio-workspace .results-page-identity h1 {
+  max-width: 58ch;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  font: 650 clamp(21px, 2.1vw, 28px)/1.2 var(--font-ui);
+  letter-spacing: -.025em;
+  text-overflow: ellipsis;
+  text-wrap: balance;
+  white-space: nowrap;
+}
+body.studio-workspace .results-page-meta {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  margin-top: 9px;
+  color: var(--text-muted);
+  font: 12px/1.4 var(--font-ui);
+}
+body.studio-workspace .results-page-meta > span {
+  min-width: 0;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.studio-workspace .results-page-meta #results-page-status {
+  border-color: color-mix(in srgb, #22c55e 35%, var(--border));
+  color: color-mix(in srgb, #15803d 76%, var(--text));
+}
+body.studio-workspace .results-page-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+body.studio-workspace .results-page-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  gap: 6px;
+  margin: 0;
+}
+body.studio-workspace[data-page="results"] .viewer > .panel-head {
+  grid-row: 2;
+  min-height: 58px;
+  padding: 10px clamp(20px, 4vw, 48px);
+  background: var(--surface-2);
+}
+body.studio-workspace[data-page="results"] .viewer > .stage { grid-row: 3; }
+body.studio-workspace[data-page="results"] .viewer .live-device-view-head { display: none; }
+body.studio-workspace[data-page="results"] .viewer.stage-collapsed .stage {
+  padding-inline: clamp(20px, 4vw, 48px);
+  background: var(--surface-2);
+}
+body.studio-workspace[data-page="results"] .tabs {
+  grid-row: 4;
+  padding-inline: clamp(20px, 4vw, 48px);
+  overflow-x: auto;
+  border-top: 0;
+  background: var(--surface-1);
+  scrollbar-width: none;
+}
+body.studio-workspace[data-page="results"] :is(#tab-activity, #tab-plan) { display: none; }
+body.studio-workspace[data-page="results"] .tabs::-webkit-scrollbar { display: none; }
+body.studio-workspace[data-page="results"] .tab-body {
+  grid-row: 5;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+body.studio-workspace[data-page="results"] .tab-pane.is-active {
+  width: min(900px, 100%);
+  margin-inline: auto;
+}
+body.studio-workspace[data-page="results"] :is(#pane-findings, #pane-report, #pane-bugs) .feed {
+  padding: 24px clamp(20px, 4vw, 48px) 48px;
+}
+
+@media (max-width: 760px) {
+  body.studio-workspace[data-page="results"] .viewer { border-inline: 0; }
+  body.studio-workspace[data-page="results"] .results-page-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+  }
+  body.studio-workspace .results-page-identity h1 { font-size: 21px; }
+  body.studio-workspace .results-page-meta { overflow-x: auto; scrollbar-width: none; }
+  body.studio-workspace .results-page-meta::-webkit-scrollbar { display: none; }
+  body.studio-workspace .results-page-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  body.studio-workspace .results-page-actions .btn {
+    justify-content: center;
+    width: 100%;
+  }
+  body.studio-workspace .results-page-actions #results-page-new { grid-column: 1 / -1; }
+  body.studio-workspace[data-page="results"] .viewer > .panel-head { padding-inline: 16px; }
+  body.studio-workspace[data-page="results"] .tabs { padding-inline: 8px; }
+  body.studio-workspace[data-page="results"] :is(#pane-findings, #pane-report, #pane-bugs) .feed { padding: 18px 16px 36px; }
 }

@@ -85,12 +85,32 @@ test('account settings use a structured, independently scrolling surface', () =>
 	for (const section of ['account-profile-heading', 'account-password-heading', 'account-memory-heading']) {
 		assert.match(markup, new RegExp(`id="${section}"`));
 	}
-	assert.match(markup, /class="account-shell"/);
+	assert.match(markup, /class="account-shell route-page-shell"/);
 	assert.match(markup, /class="account-body"/);
 	assert.match(workspaceStyles, /\.account-body[^{]+\{[^}]+overflow-y: auto/s);
 });
 
-test('desktop pane seams expose persistent narrow and widen controls', () => {
+test('routed setup and account screens present as full product pages', () => {
+	assert.match(markup, /id="qa-start" data-route-page="new-run"/);
+	assert.match(markup, /id="profile-dialog" class="account-dialog route-page" data-route-page="account"/);
+	assert.match(markup, /aria-label="Test setup sections"/);
+	assert.match(markup, /aria-label="Account sections"/);
+	assert.match(markup, /id="account-page-content"/);
+	assert.match(workspaceStyles, /\.route-page\[open\][^{]+\{[^}]+height: 100dvh/s);
+	assert.match(workspaceStyles, /\.account-dialog\.route-page \.account-body[^{]+\{[^}]+grid-template-columns: 200px/s);
+});
+
+test('completed runs use a focused routed results page', () => {
+	assert.match(markup, /class="results-page-head" id="results-page-head"/);
+	assert.match(markup, /id="results-page-back"/);
+	assert.match(app, /session\.status === 'done' \? 'results' : 'run'/);
+	assert.match(app, /renderResultsPageHeader\(\)/);
+	assert.match(workspaceStyles, /data-page="results"[^}]+\.app[^{]+\{[^}]+grid-template-columns: minmax\(0, 1fr\)/s);
+	assert.match(workspaceStyles, /data-page="results"[^}]+\.viewer[^{]+\{[^}]+width: min\(1180px, 100%\)/s);
+	assert.match(embedStyles, /data-qase-layout="studio-mock"[^}]+data-page="results"[^}]+\.app/);
+});
+
+test('desktop pane seams reveal narrow and widen controls on hover or focus', () => {
 	for (const pane of ['runs', 'agent']) {
 		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="decrease"`));
 		assert.match(markup, new RegExp(`data-pane-resize="${pane}" data-direction="increase"`));
@@ -99,6 +119,8 @@ test('desktop pane seams expose persistent narrow and widen controls', () => {
 	assert.match(mode, /qase\.pane\.agent/);
 	assert.match(mode, /setPaneWidth/);
 	assert.match(workspaceStyles, /@media \(min-width: 1101px\)[^{]+\{[\s\S]+\.pane-size-control/);
+	assert.match(workspaceStyles, /\.pane-size-control \{ opacity: 0; \}/);
+	assert.match(workspaceStyles, /\.pane-size-control:is\(:hover, :focus-within\)/);
 });
 
 test('the run header shows one elapsed-time treatment', () => {

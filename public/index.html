@@ -396,6 +396,22 @@
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
   <aside class="panel viewer" id="workspace-viewer" aria-label="Live browser and test results">
+    <header class="results-page-head" id="results-page-head">
+      <div class="results-page-identity">
+        <p>Test results</p>
+        <h1 id="results-page-title" tabindex="-1">Results</h1>
+        <div class="results-page-meta" aria-label="Result summary">
+          <span id="results-page-status">Complete</span>
+          <span id="results-page-findings">0 findings</span>
+          <span id="results-page-target"></span>
+        </div>
+      </div>
+      <div class="results-page-actions">
+        <button class="btn btn-ghost btn-sm" id="results-page-all" type="button">All tests</button>
+        <button class="btn btn-ghost btn-sm" id="results-page-back" type="button"><span aria-hidden="true">←</span> Run workspace</button>
+        <button class="btn btn-primary btn-sm" id="results-page-new" type="button">Start new test</button>
+      </div>
+    </header>
     <header class="panel-head" data-path="~/qase/browser.preview">
       <div class="live-device-view-head" id="live-device-view-head">
         <span class="ldv-title" id="ldv-title">Preview</span>
@@ -869,16 +885,28 @@
 <!-- Standard QA run launcher. Mirrors the SQA/Founder start pattern so
      device and landscape choices are explicit per run instead of implicit
      from the mode dock. -->
-<dialog class="modal qa-modal" id="qa-start" aria-labelledby="qa-start-title" aria-describedby="qa-start-description">
-  <form class="modal-inner" id="qa-form">
+<dialog class="modal qa-modal route-page" id="qa-start" data-route-page="new-run" aria-labelledby="qa-start-title" aria-describedby="qa-start-description">
+  <form class="modal-inner route-page-shell" id="qa-form">
     <header class="modal-head" data-path="~/qase/qa/new">
-      <div>
-        <h2 id="qa-start-title" tabindex="-1">Test your website</h2>
+      <div class="route-page-heading">
+        <span class="route-page-mark" aria-hidden="true">Q</span>
+        <div>
+        <p class="route-page-context">New test run</p>
+        <h1 id="qa-start-title" tabindex="-1">Test your website</h1>
         <p id="qa-start-description">Find broken flows and collect evidence in real browsers.</p>
+        </div>
       </div>
-      <button class="btn btn-ghost btn-sm" type="button" id="qa-close">Close</button>
+      <button class="btn btn-ghost btn-sm route-page-back" type="button" id="qa-close"><span aria-hidden="true">←</span> Back to tests</button>
     </header>
     <div class="modal-body">
+      <nav class="route-section-nav" aria-label="Test setup sections">
+        <p>Test setup</p>
+        <button type="button" data-page-jump="qa-target-url"><span>1</span> Website</button>
+        <button type="button" data-page-jump="qa-recommended-title"><span>2</span> Coverage</button>
+        <button type="button" data-page-jump="qa-customize"><span>3</span> Devices &amp; checks</button>
+        <small>Your recommended setup is ready. Customize only what this run needs.</small>
+      </nav>
+      <div class="route-page-content" id="qa-page-content">
       <label class="field">
         <span>Website URL</span>
         <input id="qa-target-url" name="targetUrl" type="url" required maxlength="2048" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://example.com">
@@ -1015,6 +1043,7 @@
             </details>
           </div>
       <div class="test-result" id="qa-form-error" role="alert" aria-live="assertive"></div>
+      </div>
     </div>
     <footer class="modal-foot">
       <button class="btn btn-ghost" type="button" id="qa-cancel">Cancel</button>
@@ -1521,24 +1550,32 @@
   </div>
 </dialog>
 
-<dialog id="profile-dialog" class="account-dialog" aria-labelledby="profile-title">
-  <div class="account-shell">
+<dialog id="profile-dialog" class="account-dialog route-page" data-route-page="account" aria-labelledby="profile-title">
+  <div class="account-shell route-page-shell">
     <header class="account-head">
       <div class="account-identity">
         <span class="account-avatar" aria-hidden="true">Q</span>
         <div>
-          <p class="account-eyebrow">Private workspace</p>
-          <h2 id="profile-title" tabindex="-1">My account</h2>
+          <p class="account-eyebrow">Account settings</p>
+          <h1 id="profile-title" tabindex="-1">My account</h1>
           <p id="profile-email" class="account-email"></p>
         </div>
       </div>
-      <button type="button" id="profile-close" class="account-close" aria-label="Close account settings" title="Close">×</button>
+      <button type="button" id="profile-close" class="btn btn-ghost btn-sm route-page-back"><span aria-hidden="true">←</span> Back to tests</button>
     </header>
 
     <div class="account-body">
+      <nav class="route-section-nav account-nav" aria-label="Account sections">
+        <p>Settings</p>
+        <button type="button" data-page-jump="account-profile-heading"><span aria-hidden="true">01</span> Profile</button>
+        <button type="button" data-page-jump="account-password-heading"><span aria-hidden="true">02</span> Password</button>
+        <button type="button" data-page-jump="account-memory-heading"><span aria-hidden="true">03</span> Saved memory</button>
+        <small>Changes apply only to your Qase workspace.</small>
+      </nav>
+      <div class="account-content" id="account-page-content">
       <section class="account-section" aria-labelledby="account-profile-heading">
         <div class="account-section-copy">
-          <h3 id="account-profile-heading">Profile</h3>
+          <h3 id="account-profile-heading" tabindex="-1">Profile</h3>
           <p>Update the name and timezone shown across your workspace.</p>
         </div>
         <form id="profile-form" class="account-form">
@@ -1552,7 +1589,7 @@
 
       <section class="account-section" aria-labelledby="account-password-heading">
         <div class="account-section-copy">
-          <h3 id="account-password-heading">Password</h3>
+          <h3 id="account-password-heading" tabindex="-1">Password</h3>
           <p>Changing your password signs out all active sessions.</p>
         </div>
         <form id="password-form" class="account-form">
@@ -1566,7 +1603,7 @@
 
       <section class="account-section" aria-labelledby="account-memory-heading">
         <div class="account-section-copy">
-          <h3 id="account-memory-heading">Saved memory</h3>
+          <h3 id="account-memory-heading" tabindex="-1">Saved memory</h3>
           <p>Store preferences and context used by your agents. Never add credentials.</p>
         </div>
         <ul id="profile-memory" class="account-memory-list"></ul>
@@ -1576,6 +1613,7 @@
           <div class="account-actions"><button class="btn btn-primary" type="submit">Save memory</button></div>
         </form>
       </section>
+      </div>
     </div>
 
     <footer class="account-status"><p id="profile-message" role="status" aria-live="polite"></p></footer>

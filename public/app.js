@@ -1027,7 +1027,7 @@ async function selectSession(id, { updateRoute = true } = {}) {
 	await refreshRuns();
 	void refreshPerformance();
 	if (updateRoute && pageRouter.started) {
-		await pageRouter.navigate({ name: 'run', runId: id });
+		await pageRouter.navigate({ name: session.status === 'done' ? 'results' : 'run', runId: id });
 	}
 }
 
@@ -6864,9 +6864,23 @@ function closePageDialog(dialog) {
 	if (dialog?.open) dialog.close();
 }
 
+function renderResultsPageHeader() {
+	const session = state.session;
+	if (!session) return;
+	const findings = session.findings?.length ?? 0;
+	$('results-page-title').textContent = session.title || 'Test results';
+	$('results-page-status').textContent = session.status === 'done' ? 'Complete' : 'Results available';
+	$('results-page-findings').textContent = `${findings} finding${findings === 1 ? '' : 's'}`;
+	let target = '';
+	try { target = session.targetUrl ? new URL(session.targetUrl).host : ''; } catch { target = session.targetUrl ?? ''; }
+	$('results-page-target').textContent = target;
+	$('results-page-target').hidden = !target;
+}
+
 async function applyPageRoute(route) {
 	if (!workspaceBooted || !el.authGate?.hidden) return;
 	document.body.dataset.page = route.name;
+	document.body.dataset.pageLoading = 'true';
 	document.querySelector('.app')?.setAttribute('aria-busy', 'true');
 	if (route.name !== 'new-run') closePageDialog(qaUi.dialog);
 	if (route.name !== 'account') closePageDialog(profileDialog);
@@ -6899,12 +6913,21 @@ async function applyPageRoute(route) {
 			if (state.sessionId !== route.runId) await selectSession(route.runId, { updateRoute: false });
 			if (route.name === 'results') {
 				const hasFindings = Boolean(state.session?.findings?.length);
-				activateDetailTab(hasFindings ? $('tab-findings') : $('tab-report'));
-				if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
-				focusPageHeading(hasFindings ? $('tab-findings') : $('tab-report'));
+				const resultTab = state.session?.mode === 'sqa' && !$('tab-sqa').hidden
+					? $('tab-sqa')
+					: state.session?.mode === 'founder' && !$('tab-founder').hidden
+						? $('tab-founder')
+						: hasFindings ? $('tab-findings') : $('tab-report');
+				renderResultsPageHeader();
+				state.stageExpanded.delete(route.runId);
+				renderStageCollapse();
+				activateDetailTab(resultTab);
+				setWorkspaceView('results');
+				focusPageHeading($('results-page-title'));
 				document.title = `Results — ${state.session?.title ?? 'Qase'}`;
 			} else {
 				if (matchMedia('(max-width: 720px)').matches && state.session?.status === 'running') setWorkspaceView('browser');
+				else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('agent');
 				else if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 				focusPageHeading(el.chatTitle);
 				document.title = `${state.session?.title ?? 'Test run'} — Qase`;
@@ -6932,12 +6955,29 @@ async function applyPageRoute(route) {
 		});
 		return;
 	} finally {
+		delete document.body.dataset.pageLoading;
 		document.querySelector('.app')?.removeAttribute('aria-busy');
 		if (pageRouteNotice?.dataset.state !== 'error') setPageRouteNotice();
 	}
 }
 
 const pageRouter = createPageRouter({ onRoute: applyPageRoute });
+
+document.addEventListener('click', event => {
+	const jump = event.target.closest('[data-page-jump]');
+	if (!jump) return;
+	const target = document.getElementById(jump.dataset.pageJump);
+	if (!target) return;
+	if (target instanceof HTMLDetailsElement) target.open = true;
+	const focusTarget = target instanceof HTMLDetailsElement
+		? target.querySelector('summary')
+		: target;
+	target.scrollIntoView({
+		behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+		block: 'start'
+	});
+	focusTarget?.focus({ preventScroll: true });
+});
 
 function renderAuthMode() {
 	if (!el.authGate) return;
@@ -7982,7 +8022,8 @@ $('empty-start')?.addEventListener('click', () => { void startRun(); });
 $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
 el.progressFindings?.addEventListener('click', () => {
 	activateDetailTab($('tab-findings'), true);
-	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	if (state.session?.status === 'done' && pageRouter.started) void pageRouter.navigate({ name: 'results', runId: state.sessionId });
+	else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	el.viewer.scrollIntoView({ block: 'nearest' });
 });
 
@@ -7990,9 +8031,15 @@ el.newRun.onclick = openQaStart;
 $('sidebar-new-run').onclick = openQaStart;
 $('sidebar-view-findings')?.addEventListener('click', () => {
 	activateDetailTab($('tab-findings'), true);
-	if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	if (state.session?.status === 'done' && pageRouter.started) void pageRouter.navigate({ name: 'results', runId: state.sessionId });
+	else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
 	el.viewer.scrollIntoView({ block: 'nearest' });
 });
+$('results-page-back')?.addEventListener('click', () => {
+	if (state.sessionId) void pageRouter.navigate({ name: 'run', runId: state.sessionId });
+});
+$('results-page-all')?.addEventListener('click', () => { void pageRouter.navigate({ name: 'runs' }); });
+$('results-page-new')?.addEventListener('click', openQaStart);
 el.newSqa.onclick = openSqaStart;
 el.newFounder.onclick = openFounderStart;
 el.stopRun.onclick = async () => {
@@ -8168,7 +8215,7 @@ async function bootWorkspace() {
 		if (target) {
 			await selectSession(target.id, { updateRoute: false });
 			if (initialRoute.name === 'runs') {
-				initialRoute = { name: 'run', runId: target.id };
+				initialRoute = { name: state.session?.status === 'done' ? 'results' : 'run', runId: target.id };
 				await pageRouter.navigate(initialRoute, { replace: true, applyRoute: false });
 			}
 		} else {
