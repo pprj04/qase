@@ -173,7 +173,7 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 	if (scenario === 'launcher') {
 		await page.locator('#qa-start[open]').waitFor();
 		await page.waitForFunction(() => !document.querySelector('#qa-tests-fieldset').disabled);
-		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
+		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
 	} else {
 		try {
 			await page.locator('#chat-target').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
@@ -331,6 +331,10 @@ try {
 	assert.equal(await standaloneCompleted.locator('.finding.is-fixed').count(), 0);
 	await standaloneCompleted.screenshot({ path: path.join(output, 'qase-default-completed-1440.png'), animations: 'disabled' });
 	await standaloneCompleted.screenshot({ path: path.join(output, 'product-completed-findings-1440.png'), animations: 'disabled' });
+	if (!await standaloneCompleted.locator('#sidebar-collapse-toggle').isVisible()) {
+		await standaloneCompleted.locator('#results-page-back').click();
+		await standaloneCompleted.locator('#sidebar-collapse-toggle').waitFor({ state: 'visible' });
+	}
 	await standaloneCompleted.locator('#sidebar-collapse-toggle').click();
 	assert.equal(await standaloneCompleted.locator('.run-age').isVisible(), false, 'Collapsed run rail hides timestamp text');
 	const [collapsedBrandBox, collapsedToggleBox] = await Promise.all([
@@ -748,6 +752,10 @@ try {
 		await completed.locator('#feedback-modal[open]').waitFor();
 		await completed.locator('#feedback-cancel').click();
 	}
+	if (!await completed.locator('#sidebar-new-run').isVisible()) {
+		await completed.locator('#results-page-back').click();
+		await completed.locator('#sidebar-new-run').waitFor({ state: 'visible' });
+	}
 	await completed.locator('#sidebar-new-run').click();
 	await completed.locator('#qa-start[open]').waitFor();
 	await completed.locator('#qa-cancel').click();
@@ -824,8 +832,12 @@ try {
 		const mobile = await open({ width: 390, height: 844 }, studio, 'done');
 		assert.equal(await mobile.locator('body').getAttribute('data-workspace-view'), 'results');
 		assert.equal(await mobile.locator('.findings-selection-count').isVisible(), true);
+		if (!await mobile.locator('button[data-workspace-view="agent"]').isVisible()) {
+			await mobile.locator('#results-page-back').click();
+			await mobile.locator('button[data-workspace-view="agent"]').waitFor({ state: 'visible' });
+		}
 		for (const [view, panel] of [['agent', '.chat'], ['runs', '.runs'], ['browser', '.viewer'], ['results', '.viewer']]) {
-			await mobile.locator(`[data-workspace-view="${view}"]`).click();
+			await mobile.locator(`button[data-workspace-view="${view}"]`).click();
 			assert.equal(await mobile.locator(panel).isVisible(), true);
 			assert.equal(await mobile.locator('.app > .panel:visible').count(), 1, 'One main panel is visible on mobile');
 			if (view === 'browser') assert.ok((await mobile.locator('#stage-inner').boundingBox()).width > 200, 'Browser panel expands the saved preview');

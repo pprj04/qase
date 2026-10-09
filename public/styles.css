@@ -632,6 +632,11 @@ a {
   animation: dot-breathe 1.8s ease-in-out infinite;
 }
 
+.dot.is-warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.12);
+}
+
 .run-badge {
   display: inline-flex;
   align-items: center;
@@ -832,6 +837,7 @@ a {
 
 .mini-status[data-status="running"] { color: var(--accent); }
 .mini-status[data-status="done"] { color: var(--text-secondary); }
+.mini-status[data-status="blocked"] { color: var(--warning); }
 
 .run-summary-toggle {
   margin-left: auto;
@@ -1163,6 +1169,16 @@ a {
   color: #86dcbb;
 }
 
+.run-timer[data-state="blocked"] {
+  border-color: rgba(217, 119, 6, 0.3);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.run-timer[data-state="blocked"] .run-timer-clock {
+  color: var(--text);
+}
+
 .run-timer[data-state="completed"] .run-timer-clock,
 .run-timer[data-state="failed"] .run-timer-clock,
 .run-timer[data-state="cancelled"] .run-timer-clock {
@@ -1358,6 +1374,12 @@ a {
   border-color: rgba(91, 208, 150, 0.27);
   background: var(--success-soft);
   color: #8ce0b6;
+}
+
+.status-chip[data-status="blocked"] {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .status-chip[data-status="error"] {
@@ -10365,6 +10387,12 @@ background:var(--surface-2);}
   border-color: rgba(22, 163, 74, 0.28);
   background: rgba(22, 163, 74, 0.08);
   color: #15803d;
+}
+.cli-theme .status-chip[data-status="blocked"],
+.status-chip[data-status="blocked"] {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 .cli-theme .status-chip[data-status="error"],
 .status-chip[data-status="error"] {

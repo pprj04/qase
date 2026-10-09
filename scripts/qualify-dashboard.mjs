@@ -104,7 +104,19 @@ try {
 		successfulMatrixSessionId = created.id;
 		matrixRun = {
 			id: 'matrix-fixture', status: 'running', targetUrl: matrixRequest.targetUrl,
-			items: [{ id: 'matrix-item-fixture', status: 'RUNNING', sessionId: created.id }]
+			itemCount: matrixRequest.configurationEnvIds.length,
+			items: matrixRequest.configurationEnvIds.map((envId, index) => {
+				const configuration = launcherConfigurations.find(row => row.envId === envId);
+				return {
+					id: `matrix-item-${index}`, ordinal: index, environmentId: envId,
+					platform: configuration.platform, device: configuration.device,
+					os: configuration.os, osVersion: configuration.osVersion,
+					browser: configuration.browserCode, browserCode: configuration.browserCode,
+					browserVersion: configuration.browserVersion,
+					status: index === 0 ? 'RUNNING' : 'QUEUED',
+					sessionId: index === 0 ? created.id : null, artifactRefs: [], defects: []
+				};
+			})
 		};
 		return route.fulfill({ status: 201, json: matrixRun });
 	});
@@ -122,16 +134,27 @@ try {
 	assert.equal(await page.locator('#qa-submit').isDisabled(), true, 'Catalog failure cannot launch an invented configuration');
 	assert.match(await page.locator('#qa-matrix-error-text').textContent(), /temporarily unavailable/i);
 	await page.locator('#qa-matrix-retry').click();
-	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
 	assert.ok(catalogRequestCount >= 2, 'The launcher catalog can recover through its visible retry action');
 	await page.locator('#qa-cancel').click();
 	await page.locator('#sidebar-new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
-	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
 	await page.locator('#qa-cancel').click();
 	await page.locator('#new-run').click();
 	await page.locator('#qa-start[open]').waitFor();
-	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 of this device\'s configurations selected'));
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
+	const braveConfiguration = page.locator('.qa-matrix-version input[value="fixture-brave"]');
+	await braveConfiguration.evaluate(input => {
+		input.checked = false;
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+	});
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('2/3 configurations selected'));
+	await page.locator('.qa-matrix-version input[value="fixture-brave"]').evaluate(input => {
+		input.checked = true;
+		input.dispatchEvent(new Event('change', { bubbles: true }));
+	});
+	await page.waitForFunction(()=>document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
 	const setupPageLayout = await page.locator('#qa-start').evaluate(dialog => {
 		const rect = dialog.getBoundingClientRect();
 		const footer = dialog.querySelector('.modal-foot')?.getBoundingClientRect();
@@ -183,6 +206,12 @@ try {
 	assert.equal(matrixRequest.securityAuthorization, undefined);
 	await page.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', successfulMatrixSessionId);
 	assert.equal(await page.locator('#status-chip').textContent(), 'Running');
+	await page.locator('#qa-matrix-run-dialog[open]').waitFor();
+	assert.match(await page.locator('#qa-matrix-run-body .qmr-subtitle').textContent(), /Runs one browser at a time/);
+	assert.equal(await page.locator('#qa-matrix-run-body .qmr-row').count(), 3, 'Every selected browser is visible on the configuration board');
+	assert.equal(await page.locator('#qa-matrix-run-body .qmr-st-running').count(), 1);
+	assert.equal(await page.locator('#qa-matrix-run-body .qmr-st-queued').count(), 2);
+	await page.locator('#qa-matrix-run-close').click();
 	await page.locator('#run-list').filter({ hasText: 'example.test' }).waitFor();
 	await screenshot(page,'start-run-success.png');
 	const paneResizer = page.locator('#agent-pane-resizer');
@@ -298,6 +327,29 @@ try {
 	await page.waitForURL(`**/#/runs/${completedRun.id}`);
 	assert.equal(await page.locator('#workspace-agent').isVisible(), true, 'Run workspace returns to the agent view');
 	checks.push('Completed runs open a focused results page with evidence, responsive actions, and a working return to the run workspace');
+	const blockedRun = await services.runs.create('Restricted checkout', {
+		targetUrl: 'https://shop.example.test/restricted',
+		status: 'done',
+		startedAt: Date.now() - 30_000,
+		completedAt: Date.now(),
+		report: {
+			verdict: 'blocked',
+			summary: 'Testing could not proceed past the sign-in screen.',
+			covered: [],
+			notCovered: ['Checkout: valid test credentials were unavailable.'],
+			recommendations: ['Provide a dedicated test account and retry this configuration.']
+		}
+	});
+	await page.goto(`${base}/#/runs/${blockedRun.id}`);
+	await page.waitForFunction(() => document.querySelector('#status-chip')?.dataset.status === 'blocked');
+	assert.equal(await page.locator('#status-chip').textContent(), 'Blocked');
+	assert.equal(await page.locator('#chat-title').textContent(), 'Testing blocked');
+	assert.match(await page.locator('#current-activity-state').textContent(), /could not proceed/i);
+	assert.equal(await page.locator('#run-timer').getAttribute('data-state'), 'blocked');
+	await page.goto(`${base}/#/runs/${blockedRun.id}/results`);
+	await page.waitForFunction(() => document.querySelector('#results-page-status')?.dataset.status === 'blocked');
+	assert.equal(await page.locator('#results-page-status').textContent(), 'Blocked');
+	checks.push('A run that could not test is presented as Blocked throughout the workspace and results page, never as Complete');
 	await page.setViewportSize({ width: 1440, height: 1000 });
 	await page.goto(`${base}/#/account`);
 	await page.locator('#profile-dialog[open]').waitFor();

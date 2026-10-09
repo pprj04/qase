@@ -54,6 +54,7 @@ import {
 } from './bulkProgress.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
 import { createPageRouter, routeHash } from './pageRouter.js';
+import { blockedRunReason, runPresentationLabel, runPresentationStatus } from './runPresentation.js';
 
 /**
  * Qase dashboard.
@@ -594,6 +595,7 @@ async function loadRunRatingBadges(runs) {
 }
 
 function renderRun(run) {
+	const displayStatus = runPresentationStatus(run);
 	const row = document.createElement('div');
 	row.className = 'run-row';
 	row.setAttribute('role', 'listitem');
@@ -618,14 +620,15 @@ function renderRun(run) {
 		title.append(' ', chip);
 	}
 	const accessibleTitle = title.textContent || 'Untitled test';
-	const accessibleStatus = run.status === 'done' ? 'Completed' : run.status === 'running' ? 'Running' : String(run.status || 'Idle');
+	const accessibleStatus = runPresentationLabel(run);
 	node.title = `${accessibleTitle} · ${accessibleStatus}`;
 	node.setAttribute('aria-label', `${accessibleTitle}, ${accessibleStatus}`);
+	node.dataset.status = displayStatus;
 
 	const meta = document.createElement('div');
 	meta.className = 'run-meta';
 	const dot = document.createElement('span');
-	dot.className = `dot${run.status === 'running' ? ' is-busy' : run.status === 'done' ? ' is-live' : ''}`;
+	dot.className = `dot${displayStatus === 'running' ? ' is-busy' : displayStatus === 'done' ? ' is-live' : displayStatus === 'blocked' ? ' is-warning' : ''}`;
 	dot.setAttribute('aria-hidden', 'true');
 	const age = document.createElement('span');
 	age.className = 'run-age';
@@ -942,7 +945,7 @@ function renderTestOn(containerId) {
 			name.textContent = 'Full device matrix';
 			const line = document.createElement('span');
 			line.className = 'test-on-line';
-			line.textContent = `${summaryCount.toLocaleString()} configurations · all compatible browsers`;
+			line.textContent = `${summaryCount.toLocaleString()} selected configurations · browsers run one at a time`;
 			box.append(name, line);
 			return;
 		}
@@ -1577,15 +1580,16 @@ function setRunSummaryCollapsed(collapsed) {
 function renderMiniSummary() {
 	const session = state.session;
 	const usage = session?.tokenUsage;
+	const displayStatus = runPresentationStatus(session);
 	const mini = miniSummaryText({
 		usage,
-		status: session?.status,
+		status: displayStatus,
 		progress: runProgress(),
 		findings: session?.findings?.length ?? 0,
 	});
 	el.miniTokens.textContent = mini.tokens;
 	el.miniStatus.textContent = mini.status;
-	el.miniStatus.dataset.status = session?.status ?? '';
+	el.miniStatus.dataset.status = displayStatus;
 	el.miniProgress.textContent = mini.progress;
 	el.miniFindings.textContent = mini.findings;
 }
@@ -1622,9 +1626,11 @@ function renderHeader() {
 		return;
 	}
 	const targetName = (session.targetUrl ? hostOf(session.targetUrl) : session.title) || 'this website';
+	const displayStatus = runPresentationStatus(session);
 	el.chatTitle.textContent = session.status === 'running'
 		? `Testing ${targetName}`
-		: session.status === 'done' ? 'Testing complete' : targetName;
+		: displayStatus === 'blocked' ? 'Testing blocked'
+			: session.status === 'done' ? 'Testing complete' : targetName;
 	// Keep the engine visible in the header for non-chromium runs (the run
 	// list already carries an engine pill in its meta row).
 	if (session.engine && session.engine !== 'chromium') {
@@ -1691,7 +1697,9 @@ function renderCurrentActivity() {
 		el.currentActivityState.textContent = label || 'Working…';
 		el.currentActivity.hidden = false;
 	} else if (session?.status === 'done') {
-		el.currentActivityState.textContent = 'Testing complete';
+		el.currentActivityState.textContent = runPresentationStatus(session) === 'blocked'
+			? `Testing could not proceed — ${truncate(blockedRunReason(session), 160)}`
+			: 'Testing complete';
 		el.currentActivity.hidden = false;
 	} else {
 		el.currentActivityState.textContent = '';
@@ -1709,11 +1717,13 @@ function setStatus(status) {
 	if (justStarted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('browser');
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
-	el.statusChip.dataset.status = status;
+	const displayStatus = runPresentationStatus(state.session);
+	el.statusChip.dataset.status = displayStatus;
 	el.statusChip.textContent = stopping ? 'Stopping…' : status === 'awaiting_input'
 		? 'waiting for you'
 		: status === 'running' ? 'Running'
-			: status === 'done' ? 'Complete'
+			: displayStatus === 'blocked' ? 'Blocked'
+				: status === 'done' ? 'Complete'
 				: stoppedByUser ? 'Stopped'
 					: status === 'interrupted' ? 'Paused'
 						: status === 'error' ? 'Needs attention'
@@ -1856,8 +1866,10 @@ function renderStageCollapse() {
 		if (previewAvailable) {
 			const count = state.session?.findings?.length ?? 0;
 			const result = count === 1 ? '1 finding' : `${count} findings`;
-			el.stageNote.textContent = state.session?.status === 'done'
-				? `Run complete · ${result} · Open preview`
+			el.stageNote.textContent = runPresentationStatus(state.session) === 'blocked'
+				? `Run blocked · Review report · Open preview`
+				: state.session?.status === 'done'
+					? `Run complete · ${result} · Open preview`
 				: 'Run ended · Open saved preview';
 			el.stage.setAttribute('role', 'button');
 			el.stage.setAttribute('tabindex', '0');
@@ -1990,7 +2002,11 @@ function updateRunTimer() {
 	const label = paused ? 'Paused' : (TIMER_LABELS[session.status] ?? 'Elapsed');
 	el.runTimerLabel.textContent = session.cancelledAt ? 'Duration (cancelled)' : label;
 	el.runTimerLabel.dataset.state = session.status;
-	if (session.status === 'done') {
+	if (runPresentationStatus(session) === 'blocked') {
+		el.runTimer.dataset.state = 'blocked';
+		el.runTimerLabel.dataset.state = 'blocked';
+		el.runTimerLabel.textContent = '⚠ Testing Blocked';
+	} else if (session.status === 'done') {
 		el.runTimer.dataset.state = 'completed';
 		el.runTimerLabel.textContent = '✓ Test Completed';
 	} else if (session.status === 'error') {
@@ -4953,6 +4969,8 @@ function handleEvent(event) {
 		case 'report':
 			session.report = event.report;
 			renderReport();
+			renderHeader();
+			updateRunTimer();
 			toast('Report published.', 'good');
 			break;
 
@@ -5051,6 +5069,7 @@ function handleEvent(event) {
 					failureReason: event.timing.failureReason
 				});
 			}
+			renderHeader();
 			updateRunTimer();
 			if (session.mode === 'sqa') {
 				renderSqa();
@@ -5402,11 +5421,15 @@ function qaMatrixScopeLabel() {
 	const deviceConfigurations = configurationsForDevice(qaMatrixState.index, scope);
 	const first = deviceConfigurations[0];
 	if (!first) return null;
+	const selected = new Set(qaMatrixState.selectedEnvIds);
 	const families = compatibleBrowserFamilies(deviceConfigurations);
+	const selectedFamilies = new Set(deviceConfigurations
+		.filter(configuration => selected.has(configuration.envId))
+		.map(configuration => configuration.browserCode));
 	const selectedCount = qaMatrixState.selectedEnvIds.length;
 	const osLabel = scope.osVersion ? `${first.os} ${scope.osVersion}` : `${first.os} (all versions)`;
 	const orientation = scope.orientation ?? (first.deviceType === 'desktop' ? 'landscape' : 'portrait');
-	return `${first.manufacturer ? `${first.manufacturer} ` : ''}${scope.device} · ${osLabel} · ${orientation} · ${families.length} browser${families.length === 1 ? '' : 's'} · ${selectedCount.toLocaleString()} config${selectedCount === 1 ? '' : 's'}`;
+	return `${first.manufacturer ? `${first.manufacturer} ` : ''}${scope.device} · ${osLabel} · ${orientation} · ${selectedFamilies.size}/${families.length} browsers selected · ${selectedCount.toLocaleString()} run${selectedCount === 1 ? '' : 's'}`;
 }
 
 function qaMatrixRender() {
@@ -5561,7 +5584,10 @@ function qaMatrixRender() {
 							if (isSelectable(version)) {
 								versionInput.checked = selected.has(key);
 								versionInput.addEventListener('change', () => {
-									if (versionInput.checked) qaMatrixStore.reselect(key);
+									if (scopeRows) {
+										if (versionInput.checked) qaMatrixState.deviceScopeSessionDeselections.delete(key);
+										else qaMatrixState.deviceScopeSessionDeselections.add(key);
+									} else if (versionInput.checked) qaMatrixStore.reselect(key);
 									else qaMatrixStore.deselect(key);
 									qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
 									qaMatrixRender();
@@ -5595,11 +5621,11 @@ function qaMatrixRender() {
 	const scopeLabel = qaMatrixScopeLabel();
 	const overCap = summary.total > MAX_RUN_CONFIGURATIONS;
 	matrix.summary.textContent = scopeLabel
-		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} of this device's configurations selected`
+		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} configurations selected · Runs one browser at a time`
 		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
 			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
 			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '')
-			+ (overCap ? ` · over the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — narrow the selection to start` : '');
+			+ (overCap ? ` · over the ${MAX_RUN_CONFIGURATIONS.toLocaleString()}-configuration run limit — narrow the selection to start` : ' · Runs one browser at a time');
 	matrix.summary.title = Object.entries(summary.byFamily)
 		.filter(([, count]) => count > 0)
 		.map(([code, count]) => `${code}: ${count}`)
@@ -5735,7 +5761,7 @@ function syncQaSelectionSummary() {
 	const detail = loading ? 'Loading browsers and devices…'
 		: configurations === 0 ? 'Choose an available browser and device to start.'
 		: configurations > MAX_RUN_CONFIGURATIONS ? `${configurations.toLocaleString()} configurations selected. Narrow your selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} or fewer.`
-		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected`;
+		: `${configurations.toLocaleString()} browser configuration${configurations === 1 ? '' : 's'} selected · runs one at a time`;
 	summary.textContent = blockedReason
 		? `${checks} check${checks === 1 ? '' : 's'} selected · ${blockedReason}`
 		: `${checks} check${checks === 1 ? '' : 's'} selected · ${detail}`;
@@ -6225,14 +6251,17 @@ if (qaUi.dialog) {
 			const createdSessionId = await waitForFirstMatrixSession(matrixRun);
 			if (createdSessionId) {
 				await selectSession(createdSessionId);
-				toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} configuration${selectedEnvIds.length === 1 ? '' : 's'} queued.`);
+				toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} browser configuration${selectedEnvIds.length === 1 ? '' : 's'} queued to run one at a time.`);
 			} else {
 				// The matrix run is authoritative even when an execution provider
 				// cannot produce a session promptly. Keep its honest status visible;
 				// never fabricate a selected/running session.
 				toast('QA run created. Review browser and device status for details.');
-				openQaMatrixRunDialog(matrixRun?.id);
 			}
+			// The configuration board is the honest parent view for a matrix run.
+			// Show it after every launch so one active browser is never mistaken
+			// for the whole selection; queued browsers remain visible beside it.
+			openQaMatrixRunDialog(matrixRun?.id);
 			// Optional follow-on flows: the QA run is already underway; each
 			// checked option opens the existing dialog prefilled with the same
 			// target for the user to confirm — nothing starts automatically.
@@ -6869,7 +6898,11 @@ function renderResultsPageHeader() {
 	if (!session) return;
 	const findings = session.findings?.length ?? 0;
 	$('results-page-title').textContent = session.title || 'Test results';
-	$('results-page-status').textContent = session.status === 'done' ? 'Complete' : 'Results available';
+	const displayStatus = runPresentationStatus(session);
+	$('results-page-status').textContent = displayStatus === 'blocked'
+		? 'Blocked'
+		: session.status === 'done' ? 'Complete' : 'Results available';
+	$('results-page-status').dataset.status = displayStatus;
 	$('results-page-findings').textContent = `${findings} finding${findings === 1 ? '' : 's'}`;
 	let target = '';
 	try { target = session.targetUrl ? new URL(session.targetUrl).host : ''; } catch { target = session.targetUrl ?? ''; }
@@ -7623,7 +7656,8 @@ function renderRunEnvBlock(session) {
 		const rawLevel = session?.runtimeFacts?.executionLevel
 			?? (snap?.executionProvider === 'local' ? 'SIMULATED' : hasEnv ? 'VIRTUAL_DEVICE' : 'Not recorded');
 		const level = String(rawLevel).toLowerCase().replaceAll('_', ' ').replace(/^./, value => value.toUpperCase());
-		const runState = session?.status === 'done' ? 'Complete'
+		const runState = runPresentationStatus(session) === 'blocked' ? 'Blocked'
+			: session?.status === 'done' ? 'Complete'
 			: session?.status === 'running' ? 'Running'
 				: session?.status === 'interrupted' ? 'Paused' : String(session?.status ?? 'Unknown');
 		executionLine.textContent = `Execution: ${level} · ${runState}`;
@@ -7957,7 +7991,7 @@ el.composer.onsubmit = async event => {
 	const text = el.composerInput.value.trim();
 	if (!text) return;
 	if (!state.sessionId) {
-		openQaStart();
+		await openQaStart();
 		try {
 			const target = new URL(text);
 			if (!['http:', 'https:'].includes(target.protocol)) throw new TypeError('Unsupported target protocol');
