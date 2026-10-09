@@ -239,14 +239,9 @@
     </footer>
   </aside>
 
-  <div class="pane-size-control pane-size-control--runs" id="runs-pane-control"
-       role="group" aria-label="Resize recent tests panel">
-    <button type="button" data-pane-resize="runs" data-direction="decrease"
-            aria-label="Narrow recent tests panel" title="Narrow recent tests panel">−</button>
-    <span class="pane-size-grip" aria-hidden="true">⋮</span>
-    <button type="button" data-pane-resize="runs" data-direction="increase"
-            aria-label="Widen recent tests panel" title="Widen recent tests panel">+</button>
-  </div>
+  <div class="pane-resizer pane-resizer--runs" id="runs-pane-resizer"
+       role="separator" aria-label="Resize recent tests panel" aria-orientation="vertical"
+       aria-valuemin="180" aria-valuemax="320" tabindex="0"></div>
 
   <!-- ── Middle: agent chat ─────────────────────────────────────── -->
   <main class="panel chat" id="workspace-agent" aria-label="Agent conversation">
@@ -385,14 +380,9 @@
     </form>
   </main>
 
-  <div class="pane-size-control pane-size-control--agent" id="agent-pane-control"
-       role="group" aria-label="Resize agent panel">
-    <button type="button" data-pane-resize="agent" data-direction="decrease"
-            aria-label="Narrow agent panel" title="Narrow agent panel">−</button>
-    <span class="pane-size-grip" aria-hidden="true">⋮</span>
-    <button type="button" data-pane-resize="agent" data-direction="increase"
-            aria-label="Widen agent panel" title="Widen agent panel">+</button>
-  </div>
+  <div class="pane-resizer pane-resizer--agent" id="agent-pane-resizer"
+       role="separator" aria-label="Resize agent panel" aria-orientation="vertical"
+       aria-valuemin="280" aria-valuemax="620" tabindex="0"></div>
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
   <aside class="panel viewer" id="workspace-viewer" aria-label="Live browser and test results">

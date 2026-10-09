@@ -1206,66 +1206,44 @@ body.studio-workspace:is([data-run-status="running"], [data-run-status="done"]) 
 body.studio-workspace .head-actions :is(.status-chip, .meta-chip, .theme-toggle, .btn) { min-height: 32px; }
 body.studio-workspace .chat-id { width: 100%; }
 
-/* Pane resize actions live on the desktop seams and reveal only on hover or
-   keyboard focus, keeping the workspace quiet without hiding functionality. */
-body.studio-workspace .pane-size-control { display: none; }
+/* Desktop panels resize directly from their seams. The hit area is wider than
+   the visible divider, so the layout stays clean while dragging remains easy. */
+body.studio-workspace .pane-resizer { display: none; }
 @media (min-width: 1101px) {
-  body.studio-workspace .pane-size-control {
+  body.studio-workspace .pane-resizer {
     z-index: 40;
-    align-self: start;
+    align-self: stretch;
     justify-self: end;
-    display: flex;
-    flex-direction: row;
-    align-items: center;
+    display: block;
     grid-row: 1;
-    width: auto;
-    margin-top: 162px;
-    padding: 2px;
-    border: 1px solid transparent;
-    border-radius: 10px;
-    background: transparent;
-    box-shadow: none;
-    transform: translateX(50%) scale(.96);
-    transition: opacity 140ms ease, transform 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
-  }
-  body.studio-workspace .pane-size-control--runs { grid-column: 1; }
-  body.studio-workspace .pane-size-control--agent { grid-column: 2; }
-  body.studio-workspace .pane-size-control button {
-    display: grid;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    place-items: center;
+    width: 10px;
+    min-height: 0;
     border: 0;
-    border-radius: 6px;
     background: transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font: 600 15px/1 var(--font-ui);
-    touch-action: manipulation;
+    transform: translateX(50%);
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+    outline: none;
   }
-  body.studio-workspace .pane-size-control button:hover { background: var(--surface-hover); color: var(--text); }
-  body.studio-workspace .pane-size-control button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  body.studio-workspace .pane-size-control button:disabled { opacity: .32; cursor: default; }
-  body.studio-workspace .pane-size-grip {
-    width: 1px;
-    height: 14px;
-    overflow: hidden;
-    background: var(--border);
-    color: transparent;
-    font-size: 0;
+  body.studio-workspace .pane-resizer::after {
+    position: absolute;
+    inset: 0 auto 0 50%;
+    width: 2px;
+    background: transparent;
+    content: "";
+    transform: translateX(-50%);
+    transition: background-color 120ms ease;
   }
-  html[data-qase-sidebar="collapsed"] body.studio-workspace .pane-size-control--runs { display: none; }
-  @media (hover: hover) and (pointer: fine) {
-    body.studio-workspace .pane-size-control { opacity: 0; }
-    body.studio-workspace .pane-size-control:is(:hover, :focus-within) {
-      opacity: 1;
-      border-color: var(--border-strong);
-      background: var(--surface-1);
-      box-shadow: 0 4px 14px rgba(0, 0, 0, .14);
-      transform: translateX(50%) scale(1);
-    }
+  body.studio-workspace .pane-resizer:is(:hover, :focus-visible)::after,
+  html[data-pane-resizing] body.studio-workspace .pane-resizer::after {
+    background: color-mix(in srgb, var(--accent) 64%, transparent);
   }
+  body.studio-workspace .pane-resizer--runs { grid-column: 1; }
+  body.studio-workspace .pane-resizer--agent { grid-column: 2; }
+  html[data-qase-sidebar="collapsed"] body.studio-workspace .pane-resizer--runs { display: none; }
+  html[data-pane-resizing] { cursor: col-resize; user-select: none; }
+  html[data-pane-resizing] body { cursor: col-resize; }
 }
 
 @media (max-width: 1100px) {
@@ -1679,7 +1657,7 @@ body.studio-workspace[data-page="results"] :is(
   .runs,
   .chat,
   .feature-dock,
-  .pane-size-control
+  .pane-resizer
 ) { display: none; }
 body.studio-workspace[data-page="results"] .viewer {
   grid-column: 1;
