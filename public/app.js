@@ -5414,7 +5414,10 @@ function qaMatrixSetDeviceScope(scope) {
 	qaMatrixState.selectedEnvIds = qaMatrixEffectiveSelection();
 }
 
-/** #15163: readable scope label for the summary — null when unscoped. */
+/**
+ * Customer-readable device scope summary. Browser count means distinct
+ * browser families; run count includes every selected browser/version pair.
+ */
 function qaMatrixScopeLabel() {
 	if (!qaMatrixState.deviceScope) return null;
 	const scope = qaMatrixState.deviceScope;
@@ -5422,14 +5425,14 @@ function qaMatrixScopeLabel() {
 	const first = deviceConfigurations[0];
 	if (!first) return null;
 	const selected = new Set(qaMatrixState.selectedEnvIds);
-	const families = compatibleBrowserFamilies(deviceConfigurations);
 	const selectedFamilies = new Set(deviceConfigurations
 		.filter(configuration => selected.has(configuration.envId))
 		.map(configuration => configuration.browserCode));
 	const selectedCount = qaMatrixState.selectedEnvIds.length;
 	const osLabel = scope.osVersion ? `${first.os} ${scope.osVersion}` : `${first.os} (all versions)`;
 	const orientation = scope.orientation ?? (first.deviceType === 'desktop' ? 'landscape' : 'portrait');
-	return `${first.manufacturer ? `${first.manufacturer} ` : ''}${scope.device} · ${osLabel} · ${orientation} · ${selectedFamilies.size}/${families.length} browsers selected · ${selectedCount.toLocaleString()} run${selectedCount === 1 ? '' : 's'}`;
+	const browserCount = selectedFamilies.size;
+	return `1 device · ${browserCount.toLocaleString()} browser${browserCount === 1 ? '' : 's'} · ${selectedCount.toLocaleString()} run${selectedCount === 1 ? '' : 's'} · ${first.manufacturer ? `${first.manufacturer} ` : ''}${scope.device} · ${osLabel} · ${orientation}`;
 }
 
 function qaMatrixRender() {
@@ -5523,13 +5526,10 @@ function qaMatrixRender() {
 				const activeScopeKey = qaMatrixState.deviceScope
 					? `${qaMatrixState.deviceScope.manufacturer ?? ''}|${qaMatrixState.deviceScope.platform}|${qaMatrixState.deviceScope.device}`
 					: null;
-				if (deviceKey === activeScopeKey) deviceRow.classList.add('is-scoped');
-				// #15163: clicking a device row scopes the whole run
-				// configuration to that device and auto-selects ALL its
-				// compatible browsers — no manual ticking required.
-				deviceRow.classList.add('is-clickable');
-				deviceRow.setAttribute('role', 'button');
-				deviceRow.tabIndex = 0;
+				const isActiveScope = deviceKey === activeScopeKey;
+				if (isActiveScope) deviceRow.classList.add('is-scoped');
+				// Device selection is an explicit action. Metadata and browser
+				// controls must never silently select every compatible browser.
 				const activateScope = () => {
 					qaMatrixSetDeviceScope({
 						platform: device.platform,
@@ -5539,19 +5539,9 @@ function qaMatrixRender() {
 					qaMatrixRender();
 					syncQaSubmitState();
 				};
-				deviceRow.addEventListener('click', (event) => {
-					// Version-checkbox clicks keep their own semantics.
-					if (event.target.closest('label')) return;
-					activateScope();
-				});
-				deviceRow.addEventListener('keydown', (event) => {
-					if (event.key === 'Enter' || event.key === ' ') {
-						event.preventDefault();
-						activateScope();
-					}
-				});
 				const badges = document.createElement('span');
 				badges.className = 'qa-matrix-badges';
+				badges.setAttribute('aria-label', 'Device capabilities');
 				for (const executionType of device.executionTypes) {
 					const badge = document.createElement('span');
 					badge.className = `qa-matrix-badge badge-${executionType}`;
@@ -5560,9 +5550,22 @@ function qaMatrixRender() {
 				}
 				const deviceLine = document.createElement('div');
 				deviceLine.className = 'qa-matrix-device-line';
+				const deviceIdentity = document.createElement('span');
+				deviceIdentity.className = 'qa-matrix-device-identity';
 				const deviceName = document.createElement('span');
+				deviceName.className = 'qa-matrix-device-name';
 				deviceName.textContent = `${device.manufacturer ? `${device.manufacturer} ` : ''}${device.device}`;
-				deviceLine.append(deviceName, badges);
+				deviceIdentity.append(deviceName, badges);
+				const selectDevice = document.createElement('button');
+				selectDevice.type = 'button';
+				selectDevice.className = `qa-matrix-device-select btn btn-ghost btn-sm${isActiveScope ? ' is-selected' : ''}`;
+				selectDevice.textContent = isActiveScope ? 'Selected' : 'Select device';
+				selectDevice.setAttribute('aria-pressed', String(isActiveScope));
+				selectDevice.title = isActiveScope
+					? 'Selected device. Use the browser checkboxes below to adjust this run.'
+					: 'Select this device and its compatible browsers.';
+				selectDevice.addEventListener('click', activateScope);
+				deviceLine.append(deviceIdentity, selectDevice);
 				deviceRow.append(deviceLine);
 				for (const os of device.osVersions) {
 					const osRow = document.createElement('div');
@@ -5621,7 +5624,7 @@ function qaMatrixRender() {
 	const scopeLabel = qaMatrixScopeLabel();
 	const overCap = summary.total > MAX_RUN_CONFIGURATIONS;
 	matrix.summary.textContent = scopeLabel
-		? `${scopeLabel} · ${summary.total.toLocaleString()}/${summary.availableTotal.toLocaleString()} configurations selected · Runs one browser at a time`
+		? `${scopeLabel} · Runs one browser at a time${overCap ? ` · Narrow the selection to ${MAX_RUN_CONFIGURATIONS.toLocaleString()} runs or fewer` : ''}`
 		: `${summary.total.toLocaleString()} of ${summary.availableTotal.toLocaleString()} available configurations selected`
 			+ (summary.unavailable > 0 ? ` · ${summary.unavailable.toLocaleString()} unavailable` : '')
 			+ (providerNotes.length > 0 ? ` · ${providerNotes.join(', ')}` : '')

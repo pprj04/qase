@@ -173,7 +173,7 @@ async function open(viewport, studio = true, scenario = 'launcher', overrides = 
 	if (scenario === 'launcher') {
 		await page.locator('#qa-start[open]').waitFor();
 		await page.waitForFunction(() => !document.querySelector('#qa-tests-fieldset').disabled);
-		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('3/3 configurations selected'));
+		await page.waitForFunction(() => document.querySelector('#qa-matrix-summary').textContent.includes('1 device · 3 browsers · 3 runs'));
 	} else {
 		try {
 			await page.locator('#chat-target').filter({ hasText: 'preview.example.test' }).waitFor({ state: 'attached' });
