@@ -53,6 +53,7 @@ import {
 	createBatchTracker, activeBatchRunId
 } from './bulkProgress.js';
 import { formatTokens, hostOf, list, markdown, miniSummaryText, paragraph, relativeTime, section, tokenSummaryText, truncate } from './uiPrimitives.js';
+import { createPageRouter, routeHash } from './pageRouter.js';
 
 /**
  * Qase dashboard.
@@ -433,7 +434,7 @@ const bugsView = createBugsView({
 bugsView.bind();
 
 el.bugsClose = $('bugs-close');
-el.bugsClose.onclick = () => setBugsViewOpen(false);
+el.bugsClose.onclick = () => pageRouter.leave({ name: 'runs' });
 
 // The SSE stream is per-run, so findings filed by agents in OTHER runs never
 // reach the open backlog view. While it is open, poll on a slow cadence via
@@ -457,7 +458,10 @@ function setBugsViewOpen(open) {
 	}
 }
 
-el.openBugs.onclick = () => setBugsViewOpen(!state.bugsViewOpen);
+el.openBugs.onclick = () => {
+	if (state.bugsViewOpen) pageRouter.leave({ name: 'runs' });
+	else void pageRouter.navigate({ name: 'bugs' });
+};
 /* ── Bugs tab (Phase 6) ──────────────────────────────────────────── */
 
 const bugView = createBugView({
@@ -1000,7 +1004,7 @@ function applyStageDevice(session) {
 }
 
 
-async function selectSession(id) {
+async function selectSession(id, { updateRoute = true } = {}) {
 	if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 	state.shownFounderReport = undefined;
 	state.shownQaResults = undefined;
@@ -1022,6 +1026,9 @@ async function selectSession(id) {
 	await connect(id);
 	await refreshRuns();
 	void refreshPerformance();
+	if (updateRoute && pageRouter.started) {
+		await pageRouter.navigate({ name: 'run', runId: id });
+	}
 }
 
 let _runEnvHook = null;
@@ -5931,9 +5938,9 @@ function applyStudioTarget(input) {
 	return context;
 }
 
-function openQaStartWithDemo() {
+async function openQaStartWithDemo() {
 	if (!qaUi.dialog) return;
-	openQaStart();
+	await openQaStart();
 	if (qaUi.targetUrl) {
 		qaUi.targetUrl.value = demoSiteUrl();
 		setQaFormError('Demo site loaded — it plants real bugs on purpose (login demo@qase.dev / demo1234).');
@@ -5952,7 +5959,11 @@ async function markOnboarded() {
 	} catch { /* cosmetic — onboarding state does not block a run */ }
 }
 
-function openQaStart() {
+async function openQaStart() {
+	return pageRouter.navigate({ name: 'new-run' });
+}
+
+function showQaStartPage() {
 	if (!qaUi.dialog) return;
 	setQaFormError();
 	qaUi.form.reset();
@@ -6019,7 +6030,11 @@ function openQaStart() {
 		});
 }
 
-function closeQaStart() {
+function closeQaStart({ updateRoute = true } = {}) {
+	if (updateRoute) {
+		pageRouter.leave({ name: 'runs' });
+		return;
+	}
 	if (qaUi.dialog?.open) qaUi.dialog.close();
 }
 
@@ -6061,8 +6076,12 @@ if (qaUi.dialog) {
 	}, true);
 	// URL typing re-evaluates Start gating live (#15013).
 	qaUi.targetUrl?.addEventListener('input', () => syncQaSubmitState());
-	qaUi.close.onclick = closeQaStart;
-	qaUi.cancel.onclick = closeQaStart;
+	qaUi.close.onclick = () => closeQaStart();
+	qaUi.cancel.onclick = () => closeQaStart();
+	qaUi.dialog.addEventListener('cancel', event => {
+		event.preventDefault();
+		closeQaStart();
+	});
 	$('qa-demo-fill')?.addEventListener('click', () => {
 		if (qaUi.targetUrl) {
 			qaUi.targetUrl.value = demoSiteUrl();
@@ -6201,7 +6220,7 @@ if (qaUi.dialog) {
 					testCaseId: qaUi._testCaseId
 				})
 			});
-			closeQaStart();
+				closeQaStart({ updateRoute: false });
 			void markOnboarded();
 			const createdSessionId = await waitForFirstMatrixSession(matrixRun);
 			if (createdSessionId) {
@@ -6824,6 +6843,101 @@ async function openSettings() {
 
 let authRegisterMode = false;
 let workspaceBooted = false;
+const pageRouteNotice = $('page-route-notice');
+const pageRouteMessage = $('page-route-message');
+const pageRouteRetry = $('page-route-retry');
+
+function setPageRouteNotice(message = '', { state: noticeState = 'loading', retry } = {}) {
+	if (!pageRouteNotice || !pageRouteMessage || !pageRouteRetry) return;
+	pageRouteMessage.textContent = message;
+	pageRouteNotice.dataset.state = noticeState;
+	pageRouteNotice.hidden = !message;
+	pageRouteRetry.hidden = typeof retry !== 'function';
+	pageRouteRetry.onclick = typeof retry === 'function' ? retry : null;
+}
+
+function focusPageHeading(node) {
+	requestAnimationFrame(() => node?.focus({ preventScroll: true }));
+}
+
+function closePageDialog(dialog) {
+	if (dialog?.open) dialog.close();
+}
+
+async function applyPageRoute(route) {
+	if (!workspaceBooted || !el.authGate?.hidden) return;
+	document.body.dataset.page = route.name;
+	document.querySelector('.app')?.setAttribute('aria-busy', 'true');
+	if (route.name !== 'new-run') closePageDialog(qaUi.dialog);
+	if (route.name !== 'account') closePageDialog(profileDialog);
+	if (route.name !== 'bugs' && state.bugsViewOpen) setBugsViewOpen(false);
+
+	try {
+		if (route.name === 'new-run') {
+			setPageRouteNotice('Preparing test setup…');
+			showQaStartPage();
+			document.title = 'Start testing — Qase';
+			focusPageHeading($('qa-start-title'));
+			return;
+		}
+		if (route.name === 'account') {
+			setPageRouteNotice('Loading account settings…');
+			await showAccountPage();
+			document.title = 'My account — Qase';
+			focusPageHeading($('profile-title'));
+			return;
+		}
+		if (route.name === 'bugs') {
+			setPageRouteNotice('Loading bug tracker…');
+			setBugsViewOpen(true);
+			document.title = 'Bug tracker — Qase';
+			focusPageHeading($('bugs-title'));
+			return;
+		}
+		if (route.name === 'run' || route.name === 'results') {
+			setPageRouteNotice(route.name === 'results' ? 'Loading test results…' : 'Loading test run…');
+			if (state.sessionId !== route.runId) await selectSession(route.runId, { updateRoute: false });
+			if (route.name === 'results') {
+				const hasFindings = Boolean(state.session?.findings?.length);
+				activateDetailTab(hasFindings ? $('tab-findings') : $('tab-report'));
+				if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+				focusPageHeading(hasFindings ? $('tab-findings') : $('tab-report'));
+				document.title = `Results — ${state.session?.title ?? 'Qase'}`;
+			} else {
+				if (matchMedia('(max-width: 720px)').matches && state.session?.status === 'running') setWorkspaceView('browser');
+				else if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
+				focusPageHeading(el.chatTitle);
+				document.title = `${state.session?.title ?? 'Test run'} — Qase`;
+			}
+			return;
+		}
+
+		const narrow = matchMedia('(max-width: 720px)').matches;
+		setWorkspaceView(narrow && state.session?.status === 'done'
+			? 'results'
+			: narrow && state.session?.status === 'running'
+				? 'browser'
+				: 'agent');
+		document.title = 'Qase — autonomous QA agent';
+		focusPageHeading(el.chatTitle);
+	} catch (error) {
+		const message = route.name === 'account'
+			? 'Account settings could not be loaded.'
+			: route.name === 'bugs'
+				? 'The bug tracker could not be loaded.'
+				: 'That test run could not be opened.';
+		setPageRouteNotice(`${message} Try again or return to your runs.`, {
+			state: 'error',
+			retry: () => void applyPageRoute(route)
+		});
+		return;
+	} finally {
+		document.querySelector('.app')?.removeAttribute('aria-busy');
+		if (pageRouteNotice?.dataset.state !== 'error') setPageRouteNotice();
+	}
+}
+
+const pageRouter = createPageRouter({ onRoute: applyPageRoute });
 
 function renderAuthMode() {
 	if (!el.authGate) return;
@@ -8020,14 +8134,17 @@ async function bootWorkspace() {
 	const runs = await api('/sessions').catch(() => []);
 	const launchParameters = new URLSearchParams(window.location.search);
 	const requestedRunId = launchParameters.get('run');
+	let initialRoute = pageRouter.current();
+	let selectedInitialRun = false;
 	if (requestedRunId && RUN_ID_PATTERN.test(requestedRunId)) {
 		try {
-			await selectSession(requestedRunId.toLowerCase());
+			const runId = requestedRunId.toLowerCase();
+			await selectSession(runId, { updateRoute: false });
+			selectedInitialRun = true;
+			initialRoute = { name: 'run', runId };
 			launchParameters.delete('run');
 			const query = launchParameters.toString();
-			window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
-			el.composerInput.focus();
-			return;
+			window.history.replaceState({ qaseRoute: true, qasePushed: false }, '', `${window.location.pathname}${query ? `?${query}` : ''}${routeHash(initialRoute)}`);
 		} catch {
 			// A stale or cross-project launch handle cannot select a run. Fall back
 			// to the user's own latest visible run without leaking whether it exists.
@@ -8036,20 +8153,39 @@ async function bootWorkspace() {
 			window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
 		}
 	}
-	const remembered = localStorage.getItem('qase.session');
-	const target = runs.find(run => run.id === remembered) ?? runs[0];
-
-	if (target) {
-		await selectSession(target.id);
-	} else {
-		// Fresh account: show the concise empty state behind the launcher dialog.
-		el.transcript.append(el.chatEmpty);
-		el.chatEmpty.hidden = false;
-		renderRunsEmptyState();
-		await startRun();
+	if (!selectedInitialRun && (initialRoute.name === 'run' || initialRoute.name === 'results')) {
+		try {
+			await selectSession(initialRoute.runId, { updateRoute: false });
+			selectedInitialRun = true;
+		} catch {
+			initialRoute = { name: 'runs' };
+			await pageRouter.navigate(initialRoute, { replace: true, applyRoute: false });
+		}
 	}
+	if (!selectedInitialRun) {
+		const remembered = localStorage.getItem('qase.session');
+		const target = runs.find(run => run.id === remembered) ?? runs[0];
+		if (target) {
+			await selectSession(target.id, { updateRoute: false });
+			if (initialRoute.name === 'runs') {
+				initialRoute = { name: 'run', runId: target.id };
+				await pageRouter.navigate(initialRoute, { replace: true, applyRoute: false });
+			}
+		} else {
+			// Fresh account: prepare the empty workspace without forcing a dialog on
+			// direct links such as Account or Bugs.
+			el.transcript.append(el.chatEmpty);
+			el.chatEmpty.hidden = false;
+			renderRunsEmptyState();
+			if (initialRoute.name === 'runs') {
+				initialRoute = { name: 'new-run' };
+				await pageRouter.navigate(initialRoute, { replace: true, applyRoute: false });
+			}
+		}
+	}
+	await pageRouter.start();
 	void refreshBugs();
-	el.composerInput.focus();
+	if (pageRouter.current().name === 'runs') el.composerInput.focus();
 }
 
 (async function boot() {
@@ -8137,12 +8273,21 @@ function renderPilotBanner() {
 
 $('auth-show-password').onchange = event => { el.authPassword.type = event.target.checked ? 'text' : 'password'; };
 const profileDialog = $('profile-dialog');
-$('profile-close').onclick = () => profileDialog.close();
+$('profile-close').onclick = () => pageRouter.leave({ name: 'runs' });
+profileDialog.addEventListener('cancel', event => {
+  event.preventDefault();
+  pageRouter.leave({ name: 'runs' });
+});
 profileDialog.addEventListener('close', () => { $('password-form').reset(); });
 async function refreshMemory() {
   const entries = await api('/memory');
   $('profile-memory').replaceChildren();
-  if (!entries.length) $('profile-memory').textContent = 'No saved memory yet.';
+	  if (!entries.length) {
+	    const empty = document.createElement('li');
+	    empty.className = 'is-empty';
+	    empty.textContent = 'No saved memory yet.';
+	    $('profile-memory').append(empty);
+	  }
   for (const entry of entries) {
     const item = document.createElement('li');
     item.textContent = entry.key + ': ' + entry.value + ' ';
@@ -8157,11 +8302,12 @@ async function accountAction(button, work) {
   try { await work(); } catch(error) { $('profile-message').textContent = error.message; }
   finally { button.disabled = false; }
 }
-$('open-profile').onclick = () => accountAction($('open-profile'), async () => {
+async function showAccountPage() {
   const user = await api('/profile');
   $('profile-name').value = user.displayName; $('profile-timezone').value = user.profile.timezone; $('profile-email').textContent = user.email;
   profileDialog.showModal(); await refreshMemory();
-});
+}
+$('open-profile').onclick = () => { void pageRouter.navigate({ name: 'account' }); };
 $('profile-form').onsubmit = event => { event.preventDefault(); accountAction(event.submitter, async () => {
   state.user = await api('/profile', { method:'PUT', body:JSON.stringify({displayName:$('profile-name').value,profile:{timezone:$('profile-timezone').value}}) });
   $('profile-message').textContent = 'Profile saved.';

@@ -239,11 +239,20 @@
     </footer>
   </aside>
 
+  <div class="pane-size-control pane-size-control--runs" id="runs-pane-control"
+       role="group" aria-label="Resize recent tests panel">
+    <button type="button" data-pane-resize="runs" data-direction="decrease"
+            aria-label="Narrow recent tests panel" title="Narrow recent tests panel">−</button>
+    <span class="pane-size-grip" aria-hidden="true">⋮</span>
+    <button type="button" data-pane-resize="runs" data-direction="increase"
+            aria-label="Widen recent tests panel" title="Widen recent tests panel">+</button>
+  </div>
+
   <!-- ── Middle: agent chat ─────────────────────────────────────── -->
   <main class="panel chat" id="workspace-agent" aria-label="Agent conversation">
     <header class="panel-head" data-path="~/qase/agent.log">
       <div class="chat-id">
-        <h1 id="chat-title">No run selected</h1>
+        <h1 id="chat-title" tabindex="-1">No run selected</h1>
         <p class="subtle" id="chat-target">Start a run and send a URL to test</p>
       </div>
       <div class="head-actions">
@@ -375,6 +384,15 @@
       <p class="composer-hint" id="composer-running-hint" hidden>Agent is working. You can reply when it pauses.</p>
     </form>
   </main>
+
+  <div class="pane-size-control pane-size-control--agent" id="agent-pane-control"
+       role="group" aria-label="Resize agent panel">
+    <button type="button" data-pane-resize="agent" data-direction="decrease"
+            aria-label="Narrow agent panel" title="Narrow agent panel">−</button>
+    <span class="pane-size-grip" aria-hidden="true">⋮</span>
+    <button type="button" data-pane-resize="agent" data-direction="increase"
+            aria-label="Widen agent panel" title="Widen agent panel">+</button>
+  </div>
 
   <!-- ── Right: live browser + activity ─────────────────────────── -->
   <aside class="panel viewer" id="workspace-viewer" aria-label="Live browser and test results">
@@ -516,12 +534,17 @@
 
 </div>
 
+<div class="page-route-notice" id="page-route-notice" role="status" aria-live="polite" hidden>
+  <span id="page-route-message"></span>
+  <button class="btn btn-ghost btn-sm" id="page-route-retry" type="button" hidden>Try again</button>
+</div>
+
 <!-- ── Bug tracker ─────────────────────────────────────────────── -->
 <section class="bugs-view" id="bugs-view" hidden aria-labelledby="bugs-title">
   <header class="bugs-head">
     <div class="bugs-head-id">
       <p class="bugs-eyebrow"><span aria-hidden="true">❯</span> qase bugs --all</p>
-      <h2 id="bugs-title">Bug tracker</h2>
+      <h2 id="bugs-title" tabindex="-1">Bug tracker</h2>
       <p class="subtle" id="bugs-subtitle">Every finding from every run, one backlog</p>
     </div>
     <div class="bugs-head-actions">
@@ -850,7 +873,7 @@
   <form class="modal-inner" id="qa-form">
     <header class="modal-head" data-path="~/qase/qa/new">
       <div>
-        <h2 id="qa-start-title">Test your website</h2>
+        <h2 id="qa-start-title" tabindex="-1">Test your website</h2>
         <p id="qa-start-description">Find broken flows and collect evidence in real browsers.</p>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" id="qa-close">Close</button>
@@ -1499,14 +1522,64 @@
 </dialog>
 
 <dialog id="profile-dialog" class="account-dialog" aria-labelledby="profile-title">
-  <header><div><p class="auth-eyebrow">YOUR PRIVATE WORKSPACE</p><h2 id="profile-title">My account</h2></div><button type="button" id="profile-close" class="btn btn-ghost">Close</button></header>
-  <p id="profile-email" class="auth-copy"></p>
-  <form id="profile-form"><label for="profile-name">Display name</label><input id="profile-name" required maxlength="120" autocomplete="name"><label for="profile-timezone">Timezone</label><input id="profile-timezone" required maxlength="100" placeholder="Asia/Kolkata"><button class="btn btn-primary" type="submit">Save profile</button></form>
-  <hr><h3>Change password</h3><p class="auth-copy">Changing your password signs out all sessions.</p>
-  <form id="password-form"><label for="current-password">Current password</label><input id="current-password" type="password" required maxlength="200" autocomplete="current-password"><label for="new-password">New password</label><input id="new-password" type="password" required minlength="12" maxlength="200" autocomplete="new-password"><button class="btn btn-primary" type="submit">Update password</button></form>
-  <hr><h3>Saved memory</h3><p class="auth-copy">Preferences and context used by your agents. Never add credentials.</p><ul id="profile-memory"></ul>
-  <form id="memory-form"><label for="memory-key">Name</label><input id="memory-key" required maxlength="80" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}" placeholder="preferred-browser"><label for="memory-value">Value</label><textarea id="memory-value" required maxlength="4000"></textarea><button class="btn btn-primary" type="submit">Save memory</button></form>
-  <p id="profile-message" role="status" aria-live="polite"></p>
+  <div class="account-shell">
+    <header class="account-head">
+      <div class="account-identity">
+        <span class="account-avatar" aria-hidden="true">Q</span>
+        <div>
+          <p class="account-eyebrow">Private workspace</p>
+          <h2 id="profile-title" tabindex="-1">My account</h2>
+          <p id="profile-email" class="account-email"></p>
+        </div>
+      </div>
+      <button type="button" id="profile-close" class="account-close" aria-label="Close account settings" title="Close">×</button>
+    </header>
+
+    <div class="account-body">
+      <section class="account-section" aria-labelledby="account-profile-heading">
+        <div class="account-section-copy">
+          <h3 id="account-profile-heading">Profile</h3>
+          <p>Update the name and timezone shown across your workspace.</p>
+        </div>
+        <form id="profile-form" class="account-form">
+          <div class="account-field-grid">
+            <label for="profile-name"><span>Display name</span><input id="profile-name" name="displayName" required maxlength="120" autocomplete="name"></label>
+            <label for="profile-timezone"><span>Timezone</span><input id="profile-timezone" name="timezone" required maxlength="100" autocomplete="off" spellcheck="false" placeholder="Asia/Kolkata"></label>
+          </div>
+          <div class="account-actions"><button class="btn btn-primary" type="submit">Save profile</button></div>
+        </form>
+      </section>
+
+      <section class="account-section" aria-labelledby="account-password-heading">
+        <div class="account-section-copy">
+          <h3 id="account-password-heading">Password</h3>
+          <p>Changing your password signs out all active sessions.</p>
+        </div>
+        <form id="password-form" class="account-form">
+          <div class="account-field-grid">
+            <label for="current-password"><span>Current password</span><input id="current-password" name="currentPassword" type="password" required maxlength="200" autocomplete="current-password"></label>
+            <label for="new-password"><span>New password</span><input id="new-password" name="newPassword" type="password" required minlength="12" maxlength="200" autocomplete="new-password"><small>Use at least 12 characters.</small></label>
+          </div>
+          <div class="account-actions"><button class="btn btn-primary" type="submit">Update password</button></div>
+        </form>
+      </section>
+
+      <section class="account-section" aria-labelledby="account-memory-heading">
+        <div class="account-section-copy">
+          <h3 id="account-memory-heading">Saved memory</h3>
+          <p>Store preferences and context used by your agents. Never add credentials.</p>
+        </div>
+        <ul id="profile-memory" class="account-memory-list"></ul>
+        <form id="memory-form" class="account-form account-memory-form">
+          <label for="memory-key"><span>Name</span><input id="memory-key" name="memoryKey" required maxlength="80" pattern="[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}" autocomplete="off" spellcheck="false" placeholder="preferred-browser"></label>
+          <label for="memory-value"><span>Value</span><textarea id="memory-value" name="memoryValue" required maxlength="4000" rows="3" autocomplete="off" placeholder="The preference or context to remember…"></textarea></label>
+          <div class="account-actions"><button class="btn btn-primary" type="submit">Save memory</button></div>
+        </form>
+      </section>
+    </div>
+
+    <footer class="account-status"><p id="profile-message" role="status" aria-live="polite"></p></footer>
+  </div>
 </dialog>
 <script src="entry.js" type="module"></script>
 <script src="entry-motion.js" type="module"></script>
