@@ -52,7 +52,8 @@ test('empty Qase view keeps one primary launcher and routes composer URLs into s
 });
 
 test('tablet and mobile move directly to the primary execution surface', () => {
-	assert.match(workspaceStyles, /min-width: 721px[\s\S]*data-run-status="running"[\s\S]*\.viewer \{ grid-row: 1; \}/);
+	assert.match(workspaceStyles, /max-width: 1100px[\s\S]*\.workspace-mobile-nav/);
+	assert.match(app, /function isCompactWorkspace\(\) \{ return matchMedia\('\(max-width: 1100px\)'\)\.matches; \}/);
 	assert.match(app, /justStarted[\s\S]*setWorkspaceView\('browser'\)/);
 	assert.match(app, /justCompleted[\s\S]*setWorkspaceView\('results'\)/);
 });

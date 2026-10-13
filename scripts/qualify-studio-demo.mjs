@@ -161,9 +161,9 @@ const browser = await chromium.launch();
 const checks = [];
 const pageErrors = [];
 
-async function open(viewport, studio = true, scenario = 'launcher', overrides = {}) {
+async function open(viewport, studio = true, scenario = 'launcher', overrides = {}, deviceOptions = {}) {
 	fixtureSession = scenario === 'launcher' ? undefined : { ...demoSession(scenario), ...overrides };
-	const page = await browser.newPage({ viewport });
+	const page = await browser.newPage({ viewport, ...deviceOptions });
 	page.on('pageerror', error => pageErrors.push(error.message));
 	const route = studio
 		? '/?studio=mock&project=Checkout%20redesign&target=https%3A%2F%2Fpreview.example.test%2F'
@@ -226,6 +226,77 @@ async function assertVisibleControlsNamed(page, context) {
 }
 
 try {
+	if (process.argv.includes('--tablet-only')) {
+		const sizes = [[768, 1024], [810, 1080], [820, 1180], [834, 1194], [1024, 1366],
+			[1024, 768], [1080, 810], [1112, 834], [1180, 820], [1194, 834], [1366, 1024]];
+		for (const studio of [false, true]) {
+			const layout = studio ? 'studio' : 'standalone';
+			const page = await open({ width: 820, height: 1180 }, studio, 'running', {}, { hasTouch: true, isMobile: true });
+			for (const [width, height] of sizes) {
+				await page.setViewportSize({ width, height });
+				await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+				const bounds = await page.evaluate(() => ({
+					width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight,
+					viewport: [innerWidth, innerHeight],
+					panels: [...document.querySelectorAll('.app > .panel')].filter(panel => getComputedStyle(panel).display !== 'none')
+						.map(panel => ({ id: panel.id, rect: panel.getBoundingClientRect().toJSON() }))
+				}));
+				assert.ok(bounds.width <= width + 1 && bounds.height <= height + 1, `Tablet ${layout} ${width}x${height} fits without page overflow: ${JSON.stringify(bounds)}`);
+				if (width <= 1100) {
+					assert.equal(bounds.panels.length, 1, 'Compact tablet workspace shows one full-height panel');
+					assert.equal(bounds.panels[0].id, 'workspace-viewer', 'Running tablet opens the live browser');
+					assert.ok(bounds.panels[0].rect.width >= width - (studio ? 54 : 2), 'Tablet content uses the available width');
+					assert.equal(await page.locator('.workspace-mobile-nav').isVisible(), true);
+					assert.equal(await page.locator('#stage').isVisible(), true);
+				} else {
+					assert.equal(bounds.panels.length, 3, 'Wide landscape restores the desktop panels');
+				}
+				if (width === 820 || width === 1180) await page.screenshot({ path: path.join(output, `tablet-${layout}-running-${width}.png`), animations: 'disabled' });
+			}
+			await page.setViewportSize({ width: 834, height: 1194 });
+			for (const view of ['runs', 'agent', 'browser', 'results']) {
+				await page.locator(`button[data-workspace-view="${view}"]`).click();
+				assert.equal(await page.locator('.app > .panel:visible').count(), 1);
+				assert.equal(await page.locator(`button[data-workspace-view="${view}"]`).getAttribute('aria-pressed'), 'true');
+			}
+			await page.locator('button[data-workspace-view="agent"]').click();
+			const inputFont = await page.locator('#composer-input').evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+			assert.ok(inputFont >= 16, 'Tablet input typography avoids automatic Safari zoom');
+			await page.setViewportSize({ width: 1194, height: 834 });
+			await page.setViewportSize({ width: 834, height: 1194 });
+			assert.equal(await page.locator('body').getAttribute('data-workspace-view'), 'agent', 'Rotation preserves the selected panel');
+			if (!studio) {
+				await page.setViewportSize({ width: 1366, height: 1024 });
+				await page.locator('#agent-pane-resizer').press('End');
+				await page.setViewportSize({ width: 834, height: 1194 });
+				await page.setViewportSize({ width: 1112, height: 834 });
+				await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+				assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Remembered desktop pane widths are clamped after tablet rotation');
+			}
+			await page.close();
+			for (const status of ['error', 'awaiting_input', 'done']) {
+				const statePage = await open({ width: 820, height: 1180 }, studio, status,
+					{ frame: status === 'done' ? demoSession('done').frame : undefined }, { hasTouch: true, isMobile: true });
+				const expectedView = status === 'done' ? 'results' : 'agent';
+				assert.equal(await statePage.locator('body').getAttribute('data-workspace-view'), expectedView);
+				assert.equal(await statePage.locator('.app > .panel:visible').count(), 1);
+				if (status === 'error') {
+					const resumeBox = await statePage.locator('#resume-run').boundingBox();
+					assert.ok(resumeBox && resumeBox.height >= 44, 'Recovery stays visible and touch sized on iPad');
+					await statePage.screenshot({ path: path.join(output, `tablet-${layout}-error-820.png`), animations: 'disabled' });
+				}
+				if (status === 'done') {
+					await statePage.goto(`${base}/${studio ? '?studio=mock' : ''}#/runs/${fixtureRunId}/results`);
+					await statePage.locator('#results-page-head').waitFor({ state: 'visible' });
+					await statePage.locator('#tab-findings').waitFor({ state: 'visible' });
+					assert.ok(await statePage.locator('#findings-list').isVisible());
+					await statePage.screenshot({ path: path.join(output, `tablet-${layout}-results-820.png`), animations: 'disabled' });
+				}
+				await statePage.close();
+			}
+			checks.push(`Tablet ${layout}: 11 portrait/landscape sizes, touch navigation, rotation, and error/waiting/completed states`);
+		}
+	} else {
 	const standalone = await open({ width: 1440, height: 1000 }, false);
 	assert.equal(await standalone.locator('html').getAttribute('data-qase-layout'), 'standalone');
 	assert.equal(await standalone.locator('.studio-host-rail').isVisible(), false);
@@ -413,7 +484,7 @@ try {
 		const standaloneMobile = await open({ width, height: 844 }, false);
 		await standaloneMobile.locator('#qa-cancel').click();
 		assert.equal(await standaloneMobile.getByRole('button', { name: 'Start testing', exact: true }).count(), 1, `Default Qase has one visible mobile Start testing action at ${width}px`);
-		assert.equal(await standaloneMobile.locator('#sidebar-collapse-toggle').isVisible(), width > 720, 'Sidebar collapse adapts to the mobile breakpoint');
+		assert.equal(await standaloneMobile.locator('#sidebar-collapse-toggle').isVisible(), width > 1100, 'Compact navigation replaces the desktop sidebar on phones and tablets');
 		assert.equal(await standaloneMobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Default Qase has no horizontal overflow at ${width}px`);
 		await standaloneMobile.screenshot({ path: path.join(output, `qase-default-empty-${width}.png`), animations: 'disabled' });
 		await standaloneMobile.close();
@@ -436,15 +507,11 @@ try {
 				.map(node => ({ id: node.id, className: String(node.className), right: Math.round(node.getBoundingClientRect().right), width: Math.round(node.getBoundingClientRect().width) }))
 		}));
 		assert.equal(runningLayout.fits, true, `Running Qase has no horizontal overflow at ${width}px: ${JSON.stringify(runningLayout)}`);
-		if (width <= 720) {
+		if (width <= 1100) {
 			assert.equal(await productRunning.locator('body').getAttribute('data-workspace-view'), 'browser');
 			assert.equal(await productRunning.locator('.app > .panel:visible').count(), 1);
 			const themeTarget = await productRunning.locator('.viewer #theme-toggle').boundingBox();
 			assert.ok(themeTarget && themeTarget.width >= 44 && themeTarget.height >= 44, `Theme action keeps a 44px touch target at ${width}px`);
-		} else {
-			const viewerTop = await productRunning.locator('.viewer').evaluate(node => node.getBoundingClientRect().top);
-			const chatTop = await productRunning.locator('.chat').evaluate(node => node.getBoundingClientRect().top);
-			if (width === 768) assert.ok(viewerTop < chatTop, 'Default Qase puts the browser first at tablet width');
 		}
 		if (width === 768) await productRunning.screenshot({ path: path.join(output, 'product-running-768.png'), animations: 'disabled', fullPage: true });
 		await productRunning.close();
@@ -454,7 +521,7 @@ try {
 		const productCompleted = await open({ width, height: width <= 390 ? 844 : 900 }, false, 'done');
 		assert.equal(await productCompleted.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Completed Qase has no horizontal overflow at ${width}px`);
 		assert.equal(await productCompleted.locator('#tab-findings').getAttribute('aria-selected'), 'true');
-		if (width <= 720) {
+		if (width <= 1100) {
 			assert.equal(await productCompleted.locator('body').getAttribute('data-workspace-view'), 'results');
 			assert.equal(await productCompleted.locator('.app > .panel:visible').count(), 1);
 		}
@@ -638,12 +705,13 @@ try {
 	assert.equal(await tabletSidebar.locator('#studio-context').isVisible(), false, 'Project context does not squeeze the tablet workspace');
 	assert.equal(await tabletSidebar.locator('#studio-context-resizer').isVisible(), false, 'Desktop resize handle is disabled at tablet width');
 	assert.equal(await tabletSidebar.locator('#studio-context-toggle').isVisible(), false);
-	await tabletSidebar.locator('#sidebar-collapse-toggle').click();
-	assert.equal(await tabletSidebar.locator('#workspace-runs').evaluate(node => Math.round(node.getBoundingClientRect().width)), 64);
+	await tabletSidebar.locator('button[data-workspace-view="runs"]').click();
+	assert.equal(await tabletSidebar.locator('#workspace-runs').isVisible(), true);
+	assert.equal(await tabletSidebar.locator('.app > .panel:visible').count(), 1, 'Tablet navigation opens run history at full usable width');
 	assert.equal(await tabletSidebar.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false);
 	await tabletSidebar.screenshot({ path: path.join(output, 'studio-sidebar-collapsed-768.png'), animations: 'disabled' });
 	await tabletSidebar.screenshot({ path: path.join(output, 'studio-responsive-768.png'), animations: 'disabled' });
-	await tabletSidebar.locator('#sidebar-collapse-toggle').click();
+	await tabletSidebar.locator('button[data-workspace-view="agent"]').click();
 	await tabletSidebar.close();
 
 	const running = await open({ width: 1440, height: 1000 }, true, 'running');
@@ -801,16 +869,17 @@ try {
 	await completed.close();
 
 	const tabletRunning = await open({ width: 768, height: 900 }, true, 'running');
-	const tabletViewerTop = await tabletRunning.locator('.viewer').evaluate(node => node.getBoundingClientRect().top);
-	const tabletChatTop = await tabletRunning.locator('.chat').evaluate(node => node.getBoundingClientRect().top);
-	assert.ok(tabletViewerTop < tabletChatTop, 'Tablet puts the live browser before conversation while running');
+	assert.equal(await tabletRunning.locator('body').getAttribute('data-workspace-view'), 'browser');
+	assert.equal(await tabletRunning.locator('.app > .panel:visible').count(), 1, 'Tablet focuses the live browser rather than stacking two tall panels');
 	assert.equal(await tabletRunning.locator('#studio-context-resizer').isVisible(), false);
+	await tabletRunning.locator('button[data-workspace-view="results"]').click();
 	assert.equal(await tabletRunning.locator('#tabs .tab').evaluateAll(nodes => nodes
 		.filter(node => node.getClientRects().length > 0)
 		.every((node, index, visibleNodes) => {
 		if (index === 0) return true;
 		return node.getBoundingClientRect().left >= visibleNodes[index - 1].getBoundingClientRect().right - 1;
 	})), true, 'Tablet tabs remain separated and horizontally reachable');
+	await tabletRunning.locator('button[data-workspace-view="browser"]').click();
 	await tabletRunning.screenshot({ path: path.join(output, 'studio-running-768.png'), animations: 'disabled', fullPage: true });
 	await tabletRunning.close();
 
@@ -894,14 +963,15 @@ try {
 		await page.close();
 	}
 	checks.push('Waiting, interrupted, error, empty findings and missing-preview states expose honest recovery guidance');
-	assert.deepEqual(pageErrors, [], 'No browser runtime errors after mobile navigation');
+	}
+	assert.deepEqual(pageErrors, [], 'No browser runtime errors after responsive navigation');
 	const result = {
 		passed: true,
 		checks,
 		pageErrors,
 		limitations: 'Controlled local browser fixture. It verifies run creation UI and lifecycle transitions without calling a model or claiming exact hosted Studio parity.'
 	};
-	await fs.writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
+	await fs.writeFile(path.join(output, process.argv.includes('--tablet-only') ? 'tablet-result.json' : 'result.json'), JSON.stringify(result, null, 2));
 	console.log(JSON.stringify(result, null, 2));
 } finally {
 	await browser.close();

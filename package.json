@@ -26,6 +26,7 @@
     "test:browser": "node scripts/test-browser.mjs",
     "test:dashboard": "node scripts/qualify-dashboard.mjs",
     "test:studio-demo": "node scripts/qualify-studio-demo.mjs",
+    "test:tablet": "node scripts/qualify-studio-demo.mjs --tablet-only",
     "qualify:agent": "node scripts/qualify-agent.mjs",
     "install-browser": "playwright install chromium firefox webkit",
     "package": "node scripts/package.mjs",
