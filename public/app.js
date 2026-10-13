@@ -1025,7 +1025,7 @@ async function selectSession(id, { updateRoute = true } = {}) {
 	const session = await api(`/sessions/${id}`);
 	if (state.sessionId !== id) return;
 	applySessionSnapshot(session);
-	if (session.status === 'done' && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	if (session.status === 'done' && isCompactWorkspace()) setWorkspaceView('results');
 	await connect(id);
 	await refreshRuns();
 	void refreshPerformance();
@@ -1713,8 +1713,11 @@ function setStatus(status) {
 	const justStarted = status === 'running' && previousStatus !== 'running';
 	if (state.session) state.session.status = status;
 	document.body.dataset.runStatus = status;
-	if (justCompleted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
-	if (justStarted && matchMedia('(max-width: 720px)').matches) setWorkspaceView('browser');
+	if (justCompleted && isCompactWorkspace()) setWorkspaceView('results');
+	if (justStarted && isCompactWorkspace()) setWorkspaceView('browser');
+	if (['error', 'awaiting_input'].includes(status) && previousStatus !== status && isCompactWorkspace()) {
+		setWorkspaceView('agent');
+	}
 	const stopping = status === 'running' && state.stopRequests.has(state.sessionId);
 	const stoppedByUser = status === 'interrupted' && state.session?.statusDetail === 'Stopped by user.';
 	const displayStatus = runPresentationStatus(state.session);
@@ -1914,7 +1917,7 @@ function syncStageCollapse(status) {
 }
 
 function toggleStageCollapse() {
-	if (matchMedia('(max-width: 720px)').matches && document.body.dataset.workspaceView === 'results') {
+	if (isCompactWorkspace() && document.body.dataset.workspaceView === 'results') {
 		setWorkspaceView('browser');
 		return;
 	}
@@ -6974,8 +6977,8 @@ async function applyPageRoute(route) {
 				focusPageHeading($('results-page-title'));
 				document.title = `Results — ${state.session?.title ?? 'Qase'}`;
 			} else {
-				if (matchMedia('(max-width: 720px)').matches && state.session?.status === 'running') setWorkspaceView('browser');
-				else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('agent');
+				if (isCompactWorkspace() && state.session?.status === 'running') setWorkspaceView('browser');
+				else if (isCompactWorkspace()) setWorkspaceView('agent');
 				else if (document.body.dataset.workspaceView === 'runs') setWorkspaceView('agent');
 				focusPageHeading(el.chatTitle);
 				document.title = `${state.session?.title ?? 'Test run'} — Qase`;
@@ -6983,7 +6986,7 @@ async function applyPageRoute(route) {
 			return;
 		}
 
-		const narrow = matchMedia('(max-width: 720px)').matches;
+		const narrow = isCompactWorkspace();
 		setWorkspaceView(narrow && state.session?.status === 'done'
 			? 'results'
 			: narrow && state.session?.status === 'running'
@@ -8085,7 +8088,7 @@ $('empty-demo')?.addEventListener('click', openQaStartWithDemo);
 el.progressFindings?.addEventListener('click', () => {
 	activateDetailTab($('tab-findings'), true);
 	if (state.session?.status === 'done' && pageRouter.started) void pageRouter.navigate({ name: 'results', runId: state.sessionId });
-	else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	else if (isCompactWorkspace()) setWorkspaceView('results');
 	el.viewer.scrollIntoView({ block: 'nearest' });
 });
 
@@ -8094,7 +8097,7 @@ $('sidebar-new-run').onclick = openQaStart;
 $('sidebar-view-findings')?.addEventListener('click', () => {
 	activateDetailTab($('tab-findings'), true);
 	if (state.session?.status === 'done' && pageRouter.started) void pageRouter.navigate({ name: 'results', runId: state.sessionId });
-	else if (matchMedia('(max-width: 720px)').matches) setWorkspaceView('results');
+	else if (isCompactWorkspace()) setWorkspaceView('results');
 	el.viewer.scrollIntoView({ block: 'nearest' });
 });
 $('results-page-back')?.addEventListener('click', () => {
@@ -8172,25 +8175,28 @@ document.addEventListener('keydown', event => {
 
 const detailTabs = [...document.querySelectorAll('#tabs .tab')];
 
+function isCompactWorkspace() { return matchMedia('(max-width: 1100px)').matches; }
+
 function setWorkspaceView(view) {
 	if (!['runs', 'agent', 'browser', 'results'].includes(view)) view = 'agent';
 	const nav = document.querySelector('.workspace-mobile-nav');
 	const focusedPanel = document.activeElement?.closest('.panel');
 	document.body.dataset.workspaceView = view;
-	if (view === 'browser' && state.sessionId && matchMedia('(max-width: 720px)').matches) {
+	if (view === 'browser' && state.sessionId && isCompactWorkspace()) {
 		state.stageExpanded.add(state.sessionId);
 		renderStageCollapse();
 	}
 	for (const button of nav.querySelectorAll('button')) {
 		button.setAttribute('aria-pressed', String(button.dataset.workspaceView === view));
 	}
-	if (matchMedia('(max-width: 720px)').matches && focusedPanel && getComputedStyle(focusedPanel).display === 'none') {
+	if (isCompactWorkspace() && focusedPanel && getComputedStyle(focusedPanel).display === 'none') {
 		nav.querySelector(`[data-workspace-view="${view}"]`).focus({ preventScroll: true });
 	}
 	requestAnimationFrame(fitStageFrame);
 }
 
 setWorkspaceView('agent');
+matchMedia('(max-width: 1100px)').addEventListener('change', () => setWorkspaceView(document.body.dataset.workspaceView));
 for (const button of document.querySelectorAll('.workspace-mobile-nav button')) {
 	button.addEventListener('click', () => setWorkspaceView(button.dataset.workspaceView));
 }

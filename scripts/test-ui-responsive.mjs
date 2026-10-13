@@ -3,7 +3,7 @@
  * Drives the real app at the six required resolutions and asserts:
  * no panel disappears, no horizontal overflow, and every panel remains
  * reachable. Wide layouts keep the live preview visually dominant; the
- * compact desktop layout stacks the workspace vertically and may scroll.
+ * compact workspace uses panel navigation and fits within the viewport.
  *
  * Usage: node scripts/test-ui-responsive.mjs [baseUrl]
  */
@@ -89,6 +89,8 @@ try {
 				scrollW: de.scrollWidth, clientW: de.clientWidth,
 				scrollH: de.scrollHeight, clientH: de.clientHeight,
 				cols, leftOk: vis(left), centerOk: vis(center), rightOk: vis(right),
+				visiblePanelCount: [left, center, right].filter(vis).length,
+				navigationVisible: vis(document.querySelector('.workspace-mobile-nav')),
 				centerRect: center?.getBoundingClientRect().toJSON(),
 				rightRect: (right ?? document.querySelector('.viewer'))?.getBoundingClientRect().toJSON(),
 				orderOk, orderDetail: `stage=${tops[0]} tabs=${tops[1]} tabBody=${tops[2]} visible=${tabsVisible} inViewer=${[stage, tabs, tabBody].every((el) => el && right?.contains(el))}`,
@@ -98,18 +100,20 @@ try {
 		});
 
 		const label = `${w}x${h}`;
-		note(m.leftOk && m.centerOk && m.rightOk, `${label} panels`, `left=${m.leftOk} center=${m.centerOk} right=${m.rightOk}`);
+		const compact = w <= 1100;
+		note(compact ? m.visiblePanelCount === 1 && m.navigationVisible : m.leftOk && m.centerOk && m.rightOk,
+			`${label} panels`, `left=${m.leftOk} center=${m.centerOk} right=${m.rightOk} navigation=${m.navigationVisible}`);
 		note(m.scrollW <= m.clientW + 1, `${label} h-overflow`, `scrollW=${m.scrollW} clientW=${m.clientW}`);
 		const wide = w >= 1280;
-		note(wide ? m.scrollH <= m.clientH + 1 : m.scrollH <= m.clientH * 2,
+		note(m.scrollH <= m.clientH + 1,
 			`${label} page-reach`, `scrollH=${m.scrollH} clientH=${m.clientH}`);
 		const cw = m.centerRect?.width ?? 0, rw = m.rightRect?.width ?? 0;
 		const rightShare = rw / w;
 		if (wide) {
 			note(rw >= cw, `${label} preview-dominant`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
 			note(rightShare >= 0.4 && rightShare <= 0.49, `${label} preview-share`, `${(rightShare * 100).toFixed(1)}% of ${w}px`);
-		} else {
-			note(cw >= w * 0.75 && rw >= w * 0.75, `${label} stacked-width`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
+		} else if (compact) {
+			note(Math.max(cw, rw) >= w * 0.95 || m.leftOk, `${label} focused-width`, `center=${Math.round(cw)}px right=${Math.round(rw)}px`);
 		}
 		note(m.orderOk, `${label} exec-order`, m.orderDetail);
 		note(m.tabsReachable, `${label} tabs-reachable`, `visible=${m.tabsVisible} tabsBottom=${m.tabsBottom} contentHeight=${m.scrollH}`);
@@ -129,18 +133,19 @@ try {
 			const tabsRect = tabs?.getBoundingClientRect();
 			const tabsVisible = Boolean(tabs && !tabs.hidden && getComputedStyle(tabs).display !== 'none'
 				&& tabsRect.width > 0 && tabsRect.height > 0);
+			const viewerVisible = getComputedStyle(document.querySelector('.viewer')).display !== 'none';
 			return {
 				stripGone: !document.querySelector('#choose-device'),
 				quickGone: !document.querySelector('#quick-actions'),
-				order: head && stage && tabs
+				order: !viewerVisible || (head && stage && tabs
 					? head.getBoundingClientRect().top < stage.getBoundingClientRect().top
 						&& (!tabsVisible || stage.getBoundingClientRect().top < tabsRect.top)
-					: false,
+					: false),
 				overflow: de.scrollWidth - de.clientWidth,
 				pageScroll: de.scrollHeight - de.clientHeight
 			};
 		});
-		const scrollReachable = w >= 1280 ? gone.pageScroll <= 1 : gone.pageScroll <= h;
+		const scrollReachable = gone.pageScroll <= 1;
 		note(gone.stripGone && gone.quickGone && gone.order && gone.overflow <= 1 && scrollReachable, `${w}x${h} strip-gone`, `strip=${gone.stripGone} quick=${gone.quickGone} order=${gone.order} hOverflow=${gone.overflow}px pageScroll=${gone.pageScroll}px`);
 	}
 
