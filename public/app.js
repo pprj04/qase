@@ -1842,6 +1842,7 @@ function setStatus(status) {
 	el.stopRun.disabled = stopping;
 	el.stopRun.textContent = stopping ? 'Stopping…' : 'Stop';
 	el.resumeRun.hidden = !((status === 'interrupted' || status === 'error') && state.sessionId);
+	$('run-configurations').hidden = !state.session?.matrixRunId;
 	el.sendBtn.disabled = running;
 	el.composerInput.disabled = running;
 	el.composerHint.hidden = !running;
@@ -6204,6 +6205,10 @@ function firstMatrixSessionId(run) {
 		?? null;
 }
 
+// Only launches still waiting for their first session may automatically leave
+// the progress board. Opening it later to inspect the queue is deliberate.
+let pendingQaMatrixLaunchId = null;
+
 /** A matrix run is created before its first underlying QA session. Wait for
  * that real session so the product can select it and enter the shared running
  * workspace. A bounded fallback leaves slow/blocked matrices on their honest
@@ -6379,22 +6384,29 @@ if (qaUi.dialog) {
 					testCaseId: qaUi._testCaseId
 				})
 			});
-				closeQaStart({ updateRoute: false });
 			void markOnboarded();
+			qaUi.submit.textContent = 'Opening live test…';
 			const createdSessionId = await waitForFirstMatrixSession(matrixRun);
+			closeQaStart({ updateRoute: false });
 			if (createdSessionId) {
-				await selectSession(createdSessionId);
-				toast(`QA run started — ${selectedEnvIds.length.toLocaleString()} browser configuration${selectedEnvIds.length === 1 ? '' : 's'} queued to run one at a time.`);
+				try {
+					await selectSession(createdSessionId);
+					toast(`QA run opened — ${selectedEnvIds.length.toLocaleString()} browser configuration${selectedEnvIds.length === 1 ? '' : 's'} scheduled to run one at a time.`);
+				} catch (error) {
+					// Creation succeeded. Keep its progress reachable instead of
+					// reporting a failed create and inviting a duplicate submission.
+					await pageRouter.navigate({ name: 'runs' });
+					toast(`The run was created, but its live view could not open: ${error?.message ?? error}`);
+					openQaMatrixRunDialog(matrixRun?.id);
+				}
 			} else {
-				// The matrix run is authoritative even when an execution provider
-				// cannot produce a session promptly. Keep its honest status visible;
-				// never fabricate a selected/running session.
-				toast('QA run created. Review browser and device status for details.');
+				await pageRouter.navigate({ name: 'runs' });
+				pendingQaMatrixLaunchId = matrixRun?.id;
+				toast('Run progress shows browser preparation and any launch blockers. No additional device selection is needed.');
+				openQaMatrixRunDialog(matrixRun?.id);
 			}
-			// The configuration board is the honest parent view for a matrix run.
-			// Show it after every launch so one active browser is never mistaken
-			// for the whole selection; queued browsers remain visible beside it.
-			openQaMatrixRunDialog(matrixRun?.id);
+			// A successful launch stays on the live test. The queue remains
+			// available through Run progress without covering the browser.
 			// Optional follow-on flows: the QA run is already underway; each
 			// checked option opens the existing dialog prefilled with the same
 			// target for the user to confirm — nothing starts automatically.
@@ -7577,6 +7589,16 @@ const qaMatrixResultsView = $('qa-matrix-run-dialog') ? createQaMatrixResultsVie
 		await selectSession(sessionId).catch(fail);
 	},
 	toast,
+	onRunUpdated: (run) => {
+		if (run?.id !== pendingQaMatrixLaunchId) return;
+		const sessionId = firstMatrixSessionId(run);
+		if (!sessionId) return;
+		closeQaMatrixRunDialog();
+		void selectSession(sessionId).catch(error => {
+			toast(`The run was created, but its live view could not open: ${error?.message ?? error}`);
+			openQaMatrixRunDialog(run.id);
+		});
+	},
 	onRunFinished: () => {}
 }) : null;
 
@@ -7584,11 +7606,12 @@ const qaMatrixResultsView = $('qa-matrix-run-dialog') ? createQaMatrixResultsVie
 function openQaMatrixRunDialog(matrixRunId) {
 	const dialog = $('qa-matrix-run-dialog');
 	if (!dialog || !qaMatrixResultsView || !matrixRunId) return;
-	dialog.showModal();
+	if (!dialog.open) dialog.showModal();
 	void qaMatrixResultsView.load(matrixRunId);
 }
 
 function closeQaMatrixRunDialog() {
+	pendingQaMatrixLaunchId = null;
 	const dialog = $('qa-matrix-run-dialog');
 	if (dialog?.open) dialog.close();
 	qaMatrixResultsView?.stop();
@@ -7597,6 +7620,8 @@ function closeQaMatrixRunDialog() {
 if ($('qa-matrix-run-close')) {
 	$('qa-matrix-run-close').onclick = closeQaMatrixRunDialog;
 }
+$('qa-matrix-run-dialog')?.addEventListener('cancel', () => closeQaMatrixRunDialog());
+$('run-configurations')?.addEventListener('click', () => openQaMatrixRunDialog(state.session?.matrixRunId));
 // The view renders its own Cancel-run button (it knows live run status).
 
 /* ── Phase 11: run-target dialog + quick actions + presets ────────── */

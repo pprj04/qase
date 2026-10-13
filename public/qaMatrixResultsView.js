@@ -19,7 +19,7 @@ import {
 
 const ROW_PAGE_SIZE = 50;
 
-export function createQaMatrixResultsView({ container, api, selectSession, toast, onRunFinished }) {
+export function createQaMatrixResultsView({ container, api, selectSession, toast, onRunFinished, onRunUpdated }) {
 	if (!container) return null;
 
 	const state = {
@@ -141,6 +141,7 @@ export function createQaMatrixResultsView({ container, api, selectSession, toast
 			stateEl.hidden = true;
 			renderAll();
 			schedulePolling();
+			onRunUpdated?.(run);
 		} catch (error) {
 			state.status = 'error';
 			stateEl.textContent = `Could not load the QA run (${error?.message ?? 'network error'}).`;

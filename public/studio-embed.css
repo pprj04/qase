@@ -288,6 +288,12 @@ html[data-qase-layout="studio-mock"] body.studio-workspace .pane-resizer {
 	display: none;
 }
 
+/* Studio owns appearance in its host toolbar. The shared Qase control remains
+   available in standalone mode without appearing twice when embedded. */
+html[data-qase-layout="studio-mock"] body.studio-workspace .viewer .theme-toggle {
+	display: none;
+}
+
 html[data-qase-layout="studio-mock"] .studio-tool-header {
 	display: flex;
 	min-width: 0;
