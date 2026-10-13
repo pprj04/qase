@@ -74,6 +74,8 @@ try {
 	let rejectNextMatrixRequest = false;
 	let successfulMatrixSessionId;
 	let catalogRequestCount = 0;
+	let matrixReadCount = 0;
+	let deferMatrixSession = false;
 	let failNextCatalogRequest = true;
 	let matrixRun = { id: 'matrix-fixture', status: 'pending', items: [], targetUrl: 'https://example.test/' };
 	await page.route('**/api/qa-configurations*', route => {
@@ -101,6 +103,7 @@ try {
 		created.status = 'running';
 		created.runStartedAt = Date.now();
 		created.updatedAt = Date.now();
+		created.matrixRunId = 'matrix-fixture';
 		successfulMatrixSessionId = created.id;
 		matrixRun = {
 			id: 'matrix-fixture', status: 'running', targetUrl: matrixRequest.targetUrl,
@@ -118,9 +121,19 @@ try {
 				};
 			})
 		};
-		return route.fulfill({ status: 201, json: matrixRun });
+		matrixReadCount = 0;
+		return route.fulfill({ status: 201, json: {
+			...matrixRun, status: 'pending',
+			items: matrixRun.items.map(item => ({ ...item, status: 'QUEUED', sessionId: null }))
+		} });
 	});
-	await page.route('**/api/matrix-runs/matrix-fixture', route => route.fulfill({ json: { run: matrixRun } }));
+	await page.route('**/api/matrix-runs/matrix-fixture', route => {
+		matrixReadCount += 1;
+		const run = deferMatrixSession || matrixReadCount === 1
+			? { ...matrixRun, status: 'pending', items: matrixRun.items.map(item => ({ ...item, status: 'QUEUED', sessionId: null })) }
+			: matrixRun;
+		return route.fulfill({ json: { run } });
+	});
 	await page.route('**/api/profile', route => route.fulfill({
 		json: { email: 'fixture@example.test', displayName: 'Fixture owner', profile: { timezone: 'Asia/Kolkata' } }
 	}));
@@ -227,14 +240,35 @@ try {
 	assert.equal(matrixRequest.securityAuthorization, undefined);
 	await page.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', successfulMatrixSessionId);
 	assert.equal(await page.locator('#status-chip').textContent(), 'Running');
+	assert.equal(await page.locator('#qa-matrix-run-dialog').evaluate(dialog => dialog.open), false, 'The live run is not covered by a device/configuration board after launch');
+	assert.equal(new URL(page.url()).hash, `#/runs/${successfulMatrixSessionId}`, 'The launcher navigates to the actual test session');
+	assert.ok(matrixReadCount >= 2, 'The launcher waits for the server to create the session instead of stopping at batch creation');
+	await page.locator('#run-configurations').click();
 	await page.locator('#qa-matrix-run-dialog[open]').waitFor();
 	assert.match(await page.locator('#qa-matrix-run-body .qmr-subtitle').textContent(), /Runs one browser at a time/);
 	assert.equal(await page.locator('#qa-matrix-run-body .qmr-row').count(), 3, 'Every selected browser is visible on the configuration board');
 	assert.equal(await page.locator('#qa-matrix-run-body .qmr-st-running').count(), 1);
 	assert.equal(await page.locator('#qa-matrix-run-body .qmr-st-queued').count(), 2);
 	await page.locator('#qa-matrix-run-close').click();
+	assert.equal(await page.locator('#qa-matrix-run-dialog').evaluate(dialog => dialog.open), false);
+	assert.equal(await page.locator('#status-chip').textContent(), 'Running', 'Closing queue progress returns to the running test');
 	await page.locator('#run-list').filter({ hasText: 'example.test' }).waitFor();
 	await screenshot(page,'start-run-success.png');
+	// An engine health check can outlast the initial launcher wait. The
+	// progress board must still hand off automatically when a session appears.
+	deferMatrixSession = true;
+	await page.locator('#sidebar-new-run').click();
+	await page.locator('#qa-start[open]').waitFor();
+	await page.locator('#qa-target-url').fill('https://example.test/');
+	await page.locator('#qa-submit').click();
+	await page.locator('#qa-matrix-run-dialog[open]').waitFor({ timeout: 25_000 });
+	assert.equal(await page.locator('#qa-start').evaluate(dialog => dialog.open), false, 'Slow preparation leaves the setup page');
+	assert.match(await page.locator('#qa-matrix-run-sub').textContent(), /No further device selection is needed/);
+	deferMatrixSession = false;
+	await page.locator('#qa-matrix-run-dialog').waitFor({ state: 'hidden', timeout: 10_000 });
+	await page.waitForFunction(id => localStorage.getItem('qase.session') === id && document.body.dataset.runStatus === 'running', successfulMatrixSessionId);
+	assert.equal(new URL(page.url()).hash, `#/runs/${successfulMatrixSessionId}`, 'Late sessions open without requiring a device row click');
+	checks.push('Immediate and delayed QA launches open the live test automatically; configuration progress is available on demand');
 	const paneResizer = page.locator('#agent-pane-resizer');
 	assert.equal(await paneResizer.evaluate(node => getComputedStyle(node).cursor), 'col-resize', 'Panel seam uses the standard resize cursor');
 	assert.equal(await paneResizer.locator('button').count(), 0, 'Panel seam has no plus or minus buttons');

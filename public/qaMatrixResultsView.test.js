@@ -203,3 +203,23 @@ test('view.stop halts polling; a finished run does not schedule more', async () 
 	h.view.stop();
 	assert.equal(typeof h.view.stop, 'function');
 });
+
+test('a late session is delivered to the launcher and its handoff can stop polling', async (t) => {
+	const run = fixtureRun();
+	run.status = 'running';
+	run.items = [{ id: 'late-item', status: 'QUEUED', sessionId: null }];
+	const updates = [];
+	const view = createQaMatrixResultsView({
+		container: new Element('div'),
+		api: async () => ({ run }),
+		onRunUpdated: snapshot => {
+			updates.push(snapshot.items[0].sessionId);
+			if (snapshot.items[0].sessionId) view.stop();
+		}
+	});
+	t.after(() => view.stop());
+	await view.load(run.id);
+	run.items[0] = { ...run.items[0], status: 'RUNNING', sessionId: 'late-session' };
+	await view.load(run.id, { keepView: true });
+	assert.deepEqual(updates, [null, 'late-session']);
+});
